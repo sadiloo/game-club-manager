@@ -17,6 +17,8 @@ public sealed class AccountSnapshot
 
     public bool GraceMinuteEnabled { get; set; } = true;
 
+    public bool ApplyDiscountsToPc { get; set; }
+
     public long PcReal { get; set; }
 
     public long PcGift { get; set; }
@@ -103,6 +105,7 @@ public static class AccountCodec
             UnlimitedDebt = account.Settings.Debt.MaxDebtToman is null,
             MaxDebtToman = account.Settings.Debt.MaxDebtToman ?? 0,
             GraceMinuteEnabled = account.Settings.GraceMinuteEnabled,
+            ApplyDiscountsToPc = account.Settings.ApplyDiscountsToPc,
             PcReal = account.Pc.RealToman,
             PcGift = account.Pc.GiftToman,
             NonPcReal = account.NonPc.RealToman,
@@ -118,7 +121,12 @@ public static class AccountCodec
             : snapshot.MaxDebtToman == 0
                 ? DebtPolicy.None
                 : DebtPolicy.Limited(snapshot.MaxDebtToman);
-        var settings = new WalletSettings((WalletMode)snapshot.WalletMode, snapshot.AllowPcWhileInDebt, debt, snapshot.GraceMinuteEnabled);
+        var settings = new WalletSettings(
+            (WalletMode)snapshot.WalletMode,
+            snapshot.AllowPcWhileInDebt,
+            debt,
+            snapshot.GraceMinuteEnabled,
+            snapshot.ApplyDiscountsToPc);
         var packages = new List<TimePackage>();
         foreach (var package in snapshot.Packages ?? [])
         {
