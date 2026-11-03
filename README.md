@@ -87,7 +87,7 @@ Invoice collection order is fixed: priced segments, then the grace waiver, then 
 
 `PilotSeed` is the pilot branch's starting data, not a rule in the engine. PC normal is 80,000 toman/hour and PC VIP is 110,000. Both have their own 00:00–08:30 band, at 100,000 and 130,000, and both follow special days the same way a console group does. The pilot rounding setting is on, step 5,000, direction up, and it applies only to the counter remainder. `example-normal` in the tests is still a separate fixture used where a rate needs to divide like the PS5 1-player price.
 
-`LevelLadder` is cafe data: name, strictly ascending lifetime-hour threshold, and a percent from 0 to 100. `LevelLadder.ExampleSeed` (also `GameTimerReference.ExampleLevelSeed`) is an optional Bronze 5% … Titan 28% starter. The hour numbers on that seed are placeholders. `Resolve(lifetimeHours)` picks the highest row the customer has reached. Hours below the first threshold are no level.
+`LevelLadder` is cafe data and is fully editable. `Create` takes the whole list: change a name, the whole-hour threshold, or the percent, and add or remove rows. The first level must be 0 hours, later thresholds must be strictly higher, percents must be 0–100, and names must be unique. An invalid list throws `BillingException` (`invalid_level`). `LevelLadder.Default` (also `ExampleSeed` and `GameTimerReference.ExampleLevelSeed`) is the ladder a new branch starts with: Bronze 5% at 0 hours, Silver 8% at 30, Gold 12% at 80, Platinum 16% at 150, Diamond 20% at 300, Titan 28% at 500. `Resolve(lifetimeHours)` picks the highest row reached.
 
 `DiscountPolicy` adds the level percent and the birthday percent, caps that sum at `MaxCombinedPercent` (default **100**), and applies it to time charges only. Birthdays are Jalali. `Birthday` defaults to the exact Jalali day. `DaysOnAndAfter(7)` is that day plus the next six. `DaysAround(7)` is three days before, the day, and three days after, and can cross a Jalali month. `WholeMonth` is the whole Jalali birth month (all of Mehr, not a Gregorian month). Esfand 30 is observed on Esfand 29 when the Jalali year is not a leap year.
 
@@ -185,7 +185,7 @@ A code is either a percent or a fixed toman amount, not both, and it is a third 
 
 If discounts would push a part below zero, the code is reduced first, then the birthday, then the level. The payable total is never negative. A 100% level plus a 50% time code on an 80,000 time charge with a 20,000 buffet item leaves the buffet: payable 20,000. The code does not eat the buffet unless its scope includes buffet.
 
-Levels are not hard-coded. Build a `LevelLadder` with whatever rows the cafe wants. `LevelLadder.ExampleSeed` is only a starter: Bronze 5% from 0 hours, Silver 8% from 30, Gold 12% from 80, Platinum 16% from 150, Diamond 20% from 300, Titan 28% from 500. Pass `Resolve(lifetimeHours)` into the invoice. The invoice does not look the name up by itself.
+Levels are not hard-coded in the invoice. A branch stores its `LevelLadder` and passes `Resolve(lifetimeHours)` in. The default ladder is Bronze 5% from 0 hours, Silver 8% from 30, Gold 12% from 80, Platinum 16% from 150, Diamond 20% from 300, and Titan 28% from 500. Replace that list when the cafe wants different rows. The invoice does not look the name up by itself.
 
 ## Rounding (PA-8)
 
@@ -265,8 +265,8 @@ Also read, and not a tariff: service `ABC_1` «خسارت انداختن دست�
 
 ## Owner answers already applied
 
-Live prices are PS5 only. Bands are per group. Every started minute is billed. Birthdays, birthday windows, and special days are Solar Hijri. Level and birthday discounts add, with a 100% cap, on time only. Levels are cafe-configurable; the Bronze…Titan list is only a seed. A group-restricted code discounts buffet and services only when a matching time line is on the invoice. PC charges stop at zero. The branch chooses a shared wallet or separate PC and non-PC balances. Console debt blocks PC play only in the shared mode, and only while `AllowPcWhileInDebt` is off.
+Live prices are PS5 only. Bands are per group. Every started minute is billed. Birthdays, birthday windows, and special days are Solar Hijri. Level and birthday discounts add, with a 100% cap, on time only. Levels are cafe-configurable. The Bronze…Titan list, with thresholds 0/30/80/150/300/500 hours, is the default ladder. A group-restricted code discounts buffet and services only when a matching time line is on the invoice. PC charges stop at zero. The branch chooses a shared wallet or separate PC and non-PC balances. Console debt blocks PC play only in the shared mode, and only while `AllowPcWhileInDebt` is off.
 
 ## Still open
 
-1. The example level seed's hour thresholds (0, 30, 80, 150, 300, 500) are placeholders. Replace them with the cafe's real ladder when you have it.
+Nothing in the billing rules is waiting on a level-ladder decision. `LevelLadder.Default` is the product default, and a cafe replaces it through `LevelLadder.Create`.

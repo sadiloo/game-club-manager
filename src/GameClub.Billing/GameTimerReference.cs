@@ -35,11 +35,8 @@ public static class GameTimerReference
     /// <summary>Buffet sheet service ABC_1, "خسارت انداختن دسته".</summary>
     public const long ControllerDamageFineToman = 900_000;
 
-    /// <summary>
-    /// Optional example ladder (Bronze 5% … Titan 28%) with placeholder hour thresholds.
-    /// The customer sheet had the columns but no rows. Edit it; do not treat the hours as live data.
-    /// </summary>
-    public static LevelLadder ExampleLevelSeed => LevelLadder.ExampleSeed;
+    /// <summary>The default customer ladder. Same object as <see cref="LevelLadder.Default"/>.</summary>
+    public static LevelLadder ExampleLevelSeed => LevelLadder.Default;
 
     public static TimeBand SpecialHours { get; } = new(SpecialBandId, Ps5GroupId, "Special hours 00:00–08:30", SpecialStart, SpecialEnd);
 

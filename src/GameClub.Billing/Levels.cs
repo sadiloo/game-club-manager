@@ -8,10 +8,12 @@ namespace GameClub.Billing;
 public sealed record CustomerLevel(string Name, long MinimumLifetimeHours, int DiscountPercent);
 
 /// <summary>
-/// The cafe's customer levels. Thresholds must be strictly ascending. The level
-/// for a visit is the highest row whose threshold is less than or equal to the
-/// lifetime hours the caller passes in. Hours below the first threshold have no level.
-/// <see cref="ExampleSeed"/> is an optional starting ladder, not a tariff from Game Timer.
+/// The cafe's customer levels. An admin edits the ladder by passing a new list to
+/// <see cref="Create"/>: change a name, the whole-hour threshold, or the percent, and add or remove rows.
+/// The first level is 0 hours. Later thresholds are strictly higher. Percents are 0–100 and names are unique.
+/// <see cref="Resolve"/> returns the highest row the customer has reached. With a valid ladder that is never null
+/// for a non-negative hour count.
+/// <see cref="Default"/> is the ladder a new branch starts with (Bronze 5% … Titan 28%). It is not a Game Timer tariff.
 /// </summary>
 public sealed class LevelLadder
 {
@@ -25,7 +27,12 @@ public sealed class LevelLadder
     {
         if (levels is null || levels.Count == 0)
         {
-            throw new BillingException("invalid_level", "A level ladder needs at least one level.");
+            throw new BillingException(BillingErrors.InvalidLevel, "A level ladder needs at least one level.");
+        }
+
+        if (levels[0].MinimumLifetimeHours != 0)
+        {
+            throw new BillingException(BillingErrors.InvalidLevel, "The first level must start at 0 hours.");
         }
 
         var names = new HashSet<string>(StringComparer.Ordinal);
@@ -34,28 +41,28 @@ public sealed class LevelLadder
         {
             if (string.IsNullOrWhiteSpace(level.Name))
             {
-                throw new BillingException("invalid_level", "A level name is required.");
+                throw new BillingException(BillingErrors.InvalidLevel, "A level name is required.");
             }
 
             if (!names.Add(level.Name))
             {
-                throw new BillingException("invalid_level", $"Duplicate level name '{level.Name}'.");
+                throw new BillingException(BillingErrors.InvalidLevel, $"Duplicate level name '{level.Name}'.");
             }
 
             if (level.MinimumLifetimeHours < 0)
             {
-                throw new BillingException("invalid_level", $"Level '{level.Name}' has a negative hour threshold.");
+                throw new BillingException(BillingErrors.InvalidLevel, $"Level '{level.Name}' has a negative hour threshold.");
             }
 
             if (level.DiscountPercent is < 0 or > 100)
             {
-                throw new BillingException("invalid_level", $"Level '{level.Name}' percent must be between 0 and 100.");
+                throw new BillingException(BillingErrors.InvalidLevel, $"Level '{level.Name}' percent must be between 0 and 100.");
             }
 
             if (previous is long prior && level.MinimumLifetimeHours <= prior)
             {
                 throw new BillingException(
-                    "invalid_level",
+                    BillingErrors.InvalidLevel,
                     $"Level '{level.Name}' threshold {level.MinimumLifetimeHours} is not strictly above {prior}.");
             }
 
@@ -66,11 +73,11 @@ public sealed class LevelLadder
     }
 
     /// <summary>
-    /// Optional seed in the shape of the product brief (Bronze 5% … Titan 28%).
-    /// The hour thresholds are placeholders so a new cafe has something to edit.
-    /// They were not in the Game Timer export.
+    /// Default ladder for a new branch: Bronze 5% at 0 hours, Silver 8% at 30, Gold 12% at 80,
+    /// Platinum 16% at 150, Diamond 20% at 300, Titan 28% at 500. Replace it with <see cref="Create"/>
+    /// when the cafe wants different rows. The hours are whole hours and are the product default, not a Game Timer export.
     /// </summary>
-    public static LevelLadder ExampleSeed { get; } = Create(
+    public static LevelLadder Default { get; } = Create(
     [
         new CustomerLevel("Bronze", 0, 5),
         new CustomerLevel("Silver", 30, 8),
@@ -80,11 +87,14 @@ public sealed class LevelLadder
         new CustomerLevel("Titan", 500, 28),
     ]);
 
+    /// <summary>Same object as <see cref="Default"/>.</summary>
+    public static LevelLadder ExampleSeed => Default;
+
     public CustomerLevel? Resolve(long lifetimeHours)
     {
         if (lifetimeHours < 0)
         {
-            throw new BillingException("invalid_level", "Lifetime hours cannot be negative.");
+            throw new BillingException(BillingErrors.InvalidLevel, "Lifetime hours cannot be negative.");
         }
 
         CustomerLevel? match = null;

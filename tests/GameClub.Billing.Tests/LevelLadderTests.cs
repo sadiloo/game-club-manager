@@ -5,9 +5,16 @@ namespace GameClub.Billing.Tests;
 public class LevelLadderTests
 {
     [Fact]
-    public void Example_seed_is_labeled_and_a_custom_ladder_follows_lifetime_hours()
+    public void Default_ladder_is_bronze_through_titan_and_a_cafe_can_replace_it()
     {
-        var seed = LevelLadder.ExampleSeed;
+        var seed = LevelLadder.Default;
+        Assert.Same(seed, LevelLadder.ExampleSeed);
+        Assert.Same(seed, GameTimerReference.ExampleLevelSeed);
+        Assert.Equal(
+            new[] { "Bronze", "Silver", "Gold", "Platinum", "Diamond", "Titan" },
+            seed.Levels.Select(level => level.Name).ToArray());
+        Assert.Equal(new long[] { 0, 30, 80, 150, 300, 500 }, seed.Levels.Select(level => level.MinimumLifetimeHours).ToArray());
+        Assert.Equal(new[] { 5, 8, 12, 16, 20, 28 }, seed.Levels.Select(level => level.DiscountPercent).ToArray());
         Assert.Equal("Bronze", seed.Resolve(0)!.Name);
         Assert.Equal(5, seed.Resolve(29)!.DiscountPercent);
         Assert.Equal("Silver", seed.Resolve(30)!.Name);
@@ -23,9 +30,12 @@ public class LevelLadderTests
         Assert.Equal("همیشگی", cafe.Resolve(10)!.Name);
         Assert.Equal(12, cafe.Resolve(39)!.DiscountPercent);
         Assert.Equal(20, cafe.Resolve(40)!.DiscountPercent);
-        var lateStart = LevelLadder.Create([new CustomerLevel("only", 5, 10)]);
-        Assert.Null(lateStart.Resolve(4));
-        Assert.Equal(10, lateStart.Resolve(5)!.DiscountPercent);
+
+        var added = LevelLadder.Create(cafe.Levels.Append(new CustomerLevel("طلایی", 80, 25)).ToArray());
+        Assert.Equal(4, added.Levels.Count);
+        Assert.Equal(25, added.Resolve(80)!.DiscountPercent);
+        var removed = LevelLadder.Create([cafe.Levels[0]]);
+        Assert.Equal("تازه‌وارد", Assert.Single(removed.Levels).Name);
 
         var resolved = cafe.Resolve(40)!;
         var invoice = InvoiceCalculator.Calculate(new InvoiceRequest(
@@ -44,12 +54,28 @@ public class LevelLadderTests
     [Fact]
     public void Level_ladder_rejects_bad_thresholds_and_percents()
     {
+        var notZero = Assert.Throws<BillingException>(() => LevelLadder.Create(
+            [new CustomerLevel("only", 5, 10)]));
+        Assert.Equal(BillingErrors.InvalidLevel, notZero.Code);
+
         var descending = Assert.Throws<BillingException>(() => LevelLadder.Create(
         [
-            new CustomerLevel("A", 10, 5),
+            new CustomerLevel("A", 0, 5),
             new CustomerLevel("B", 10, 8),
+            new CustomerLevel("C", 10, 9),
         ]));
-        Assert.Equal("invalid_level", descending.Code);
+        Assert.Equal(BillingErrors.InvalidLevel, descending.Code);
+
+        var duplicate = Assert.Throws<BillingException>(() => LevelLadder.Create(
+        [
+            new CustomerLevel("A", 0, 5),
+            new CustomerLevel("A", 10, 8),
+        ]));
+        Assert.Equal(BillingErrors.InvalidLevel, duplicate.Code);
+
+        var blank = Assert.Throws<BillingException>(() => LevelLadder.Create(
+            [new CustomerLevel("  ", 0, 5)]));
+        Assert.Equal(BillingErrors.InvalidLevel, blank.Code);
 
         var percent = Assert.Throws<BillingException>(() => LevelLadder.Create(
             [new CustomerLevel("A", 0, 101)]));
