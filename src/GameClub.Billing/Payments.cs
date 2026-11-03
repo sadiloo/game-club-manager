@@ -6,6 +6,9 @@ public enum PaymentMethod
     CardReader = 1,
     CardToCard = 2,
     Wallet = 3,
+
+    /// <summary>The PC money balance. It can pay PC time lines only, and it is never rounded.</summary>
+    PcBalance = 4,
 }
 
 /// <summary>
@@ -354,5 +357,359 @@ public readonly record struct WalletPocket
 
         var owed = -balance;
         return owed >= maxDebt ? 0 : maxDebt - owed;
+    }
+}
+
+/// <summary>
+/// One invoice line after grace and discounts. <see cref="NetToman"/> is the amount a payer may cover.
+/// A PC balance may cover a line only when <see cref="IsPcTime"/> is true.
+/// </summary>
+public sealed record PayableLine(string? GroupId, bool IsPcTime, bool IsTimeCharge, long NetToman);
+
+public sealed record LineShare(int LineIndex, int TenderIndex, PaymentMethod Method, long AmountToman);
+
+/// <summary>
+/// Exact balance shares, then one rounding of the counter remainder.
+/// Wallet and PC amounts are never rounded. A zero counter remainder is not lifted to the step.
+/// </summary>
+public sealed record AllocationResult(
+    bool IsValid,
+    long ExactNetToman,
+    long BalanceAppliedToman,
+    long CounterExactToman,
+    long RoundingToman,
+    long PayableToman,
+    IReadOnlyList<long> CounterRemainderByLine,
+    IReadOnlyList<LineShare> Shares,
+    IReadOnlyList<TenderResult> Tenders,
+    IReadOnlyList<PaymentError> Errors,
+    IReadOnlyList<MemberWallet> RemainingWallets);
+
+/// <summary>
+/// Pipeline after the invoice net is known: PC balance, then wallet, each pro rata by largest remainder
+/// (a tie goes to the earlier line), then one rounding of what the counter still owes.
+/// </summary>
+public static class PaymentAllocator
+{
+    public static AllocationResult Allocate(
+        IReadOnlyList<PayableLine> lines,
+        IReadOnlyList<Tender> tenders,
+        RoundingPolicy rounding,
+        IReadOnlyList<MemberWallet>? wallets = null,
+        DebtPolicy? walletDebt = null)
+    {
+        if (lines is null)
+        {
+            throw new BillingException(BillingErrors.InvalidInvoice, "Invoice lines are required.");
+        }
+
+        if (tenders is null)
+        {
+            throw new BillingException(BillingErrors.InvalidPayment, "Tenders are required.");
+        }
+
+        walletDebt ??= DebtPolicy.None;
+        var remaining = new long[lines.Count];
+        long exact = 0;
+        for (var i = 0; i < lines.Count; i++)
+        {
+            if (lines[i].NetToman < 0)
+            {
+                throw new BillingException(BillingErrors.InvalidMoney, "A line net cannot be negative.");
+            }
+
+            remaining[i] = lines[i].NetToman;
+            exact = MoneyMath.CheckedAdd(exact, lines[i].NetToman);
+        }
+
+        var pockets = new Dictionary<string, WalletPocket>(StringComparer.Ordinal);
+        foreach (var wallet in wallets ?? [])
+        {
+            if (string.IsNullOrWhiteSpace(wallet.MemberId))
+            {
+                throw new BillingException(BillingErrors.InvalidPayment, "Wallet member id is required.");
+            }
+
+            if (wallet.GiftCreditToman < 0)
+            {
+                throw new BillingException(BillingErrors.InvalidMoney, $"Wallet '{wallet.MemberId}' has negative gift credit.");
+            }
+
+            if (!Bcl.TryAdd(pockets, wallet.MemberId, wallet.ToPocket()))
+            {
+                throw new BillingException(BillingErrors.InvalidPayment, $"Duplicate wallet '{wallet.MemberId}'.");
+            }
+        }
+
+        var shares = new List<LineShare>();
+        var results = new TenderResult[tenders.Count];
+        var errors = new List<PaymentError>();
+        var order = BalanceFirst(tenders);
+        foreach (var index in order)
+        {
+            var tender = tenders[index];
+            if (tender.AmountToman < 0)
+            {
+                errors.Add(new PaymentError(PaymentErrors.NegativeAmount, $"Tender {index} is negative."));
+                results[index] = new TenderResult(index, tender.Method, tender.AmountToman, tender.MemberId, 0, 0, false);
+                continue;
+            }
+
+            if (tender.Method is PaymentMethod.Cash or PaymentMethod.CardReader or PaymentMethod.CardToCard)
+            {
+                results[index] = new TenderResult(index, tender.Method, tender.AmountToman, tender.MemberId, 0, 0, true);
+                continue;
+            }
+
+            if (tender.Method == PaymentMethod.PcBalance)
+            {
+                var drawn = AllocateProRata(lines, remaining, index, tender.Method, tender.AmountToman, PcTimeOnly, shares);
+                results[index] = new TenderResult(index, tender.Method, drawn, tender.MemberId, 0, drawn, drawn > 0 || tender.AmountToman == 0);
+                continue;
+            }
+
+            if (tender.Method != PaymentMethod.Wallet)
+            {
+                errors.Add(new PaymentError(PaymentErrors.NegativeAmount, $"Tender {index} has an unknown method."));
+                results[index] = new TenderResult(index, tender.Method, tender.AmountToman, tender.MemberId, 0, 0, false);
+                continue;
+            }
+
+            if (tender.MemberId is not string memberId || string.IsNullOrWhiteSpace(memberId))
+            {
+                errors.Add(new PaymentError(PaymentErrors.WalletMissingMember, $"Tender {index} is a wallet payment without a member."));
+                results[index] = new TenderResult(index, tender.Method, tender.AmountToman, tender.MemberId, 0, 0, false);
+                continue;
+            }
+
+            if (!pockets.TryGetValue(memberId, out var pocket))
+            {
+                errors.Add(new PaymentError(PaymentErrors.UnknownWallet, $"No wallet for member '{memberId}'."));
+                results[index] = new TenderResult(index, tender.Method, tender.AmountToman, memberId, 0, 0, false);
+                continue;
+            }
+
+            var offer = tender.AmountToman;
+            var coverable = Coverable(lines, remaining, _ => true);
+            var draw = offer < coverable ? offer : coverable;
+            if (!pocket.TrySpend(draw, walletDebt, out var updated, out var gift, out var real))
+            {
+                errors.Add(new PaymentError(PaymentErrors.InsufficientWallet, $"Wallet '{memberId}' cannot cover {draw} toman."));
+                results[index] = new TenderResult(index, tender.Method, tender.AmountToman, memberId, 0, 0, false);
+                continue;
+            }
+
+            pockets[memberId] = updated;
+            AllocateProRata(lines, remaining, index, tender.Method, draw, _ => true, shares);
+            results[index] = new TenderResult(index, tender.Method, draw, memberId, gift, real, true);
+        }
+
+        long counterTime = 0;
+        long counterOther = 0;
+        var counterByLine = new long[lines.Count];
+        for (var i = 0; i < lines.Count; i++)
+        {
+            counterByLine[i] = remaining[i];
+            if (lines[i].IsTimeCharge)
+            {
+                counterTime = MoneyMath.CheckedAdd(counterTime, remaining[i]);
+            }
+            else
+            {
+                counterOther = MoneyMath.CheckedAdd(counterOther, remaining[i]);
+            }
+        }
+
+        var counterExact = MoneyMath.CheckedAdd(counterTime, counterOther);
+        long roundingDelta = 0;
+        long counterRounded = counterExact;
+        if (rounding.Enabled && counterExact > 0)
+        {
+            if (rounding.Scope == RoundingScope.TimeChargesOnly)
+            {
+                var (roundedTime, delta) = MoneyMath.Round(counterTime, rounding);
+                roundingDelta = delta;
+                counterRounded = MoneyMath.CheckedAdd(roundedTime, counterOther);
+            }
+            else
+            {
+                (counterRounded, roundingDelta) = MoneyMath.Round(counterExact, rounding);
+            }
+        }
+
+        long balanceApplied = 0;
+        long counterTendered = 0;
+        foreach (var result in results)
+        {
+            if (result is null || !result.Accepted)
+            {
+                continue;
+            }
+
+            if (result.Method is PaymentMethod.Cash or PaymentMethod.CardReader or PaymentMethod.CardToCard)
+            {
+                counterTendered = MoneyMath.CheckedAdd(counterTendered, result.AmountToman);
+            }
+            else
+            {
+                balanceApplied = MoneyMath.CheckedAdd(balanceApplied, result.AmountToman);
+            }
+        }
+
+        if (counterTendered != counterRounded)
+        {
+            errors.Add(new PaymentError(
+                PaymentErrors.SumMismatch,
+                $"Counter tenders {counterTendered} toman against rounded remainder {counterRounded}."));
+        }
+
+        var payable = MoneyMath.CheckedAdd(balanceApplied, counterRounded);
+        var remainingWallets = new List<MemberWallet>();
+        foreach (var pair in pockets)
+        {
+            remainingWallets.Add(MemberWallet.FromPocket(pair.Key, pair.Value));
+        }
+
+        remainingWallets.Sort((left, right) => string.CompareOrdinal(left.MemberId, right.MemberId));
+        var tenderList = new List<TenderResult>();
+        foreach (var result in results)
+        {
+            if (result is not null)
+            {
+                tenderList.Add(result);
+            }
+        }
+
+        return new AllocationResult(
+            errors.Count == 0,
+            exact,
+            balanceApplied,
+            counterExact,
+            roundingDelta,
+            payable,
+            counterByLine,
+            shares,
+            tenderList,
+            errors,
+            remainingWallets);
+    }
+
+    private static List<int> BalanceFirst(IReadOnlyList<Tender> tenders)
+    {
+        var pc = new List<int>();
+        var wallet = new List<int>();
+        var counter = new List<int>();
+        for (var i = 0; i < tenders.Count; i++)
+        {
+            switch (tenders[i].Method)
+            {
+                case PaymentMethod.PcBalance:
+                    pc.Add(i);
+                    break;
+                case PaymentMethod.Wallet:
+                    wallet.Add(i);
+                    break;
+                default:
+                    counter.Add(i);
+                    break;
+            }
+        }
+
+        pc.AddRange(wallet);
+        pc.AddRange(counter);
+        return pc;
+    }
+
+    private static bool PcTimeOnly(PayableLine line) => line.IsPcTime && line.IsTimeCharge;
+
+    private static long Coverable(IReadOnlyList<PayableLine> lines, long[] remaining, Func<PayableLine, bool> allowed)
+    {
+        long total = 0;
+        for (var i = 0; i < lines.Count; i++)
+        {
+            if (allowed(lines[i]))
+            {
+                total = MoneyMath.CheckedAdd(total, remaining[i]);
+            }
+        }
+
+        return total;
+    }
+
+    private static long AllocateProRata(
+        IReadOnlyList<PayableLine> lines,
+        long[] remaining,
+        int tenderIndex,
+        PaymentMethod method,
+        long offer,
+        Func<PayableLine, bool> allowed,
+        List<LineShare> shares)
+    {
+        var eligible = new List<int>();
+        long total = 0;
+        for (var i = 0; i < lines.Count; i++)
+        {
+            if (allowed(lines[i]) && remaining[i] > 0)
+            {
+                eligible.Add(i);
+                total = MoneyMath.CheckedAdd(total, remaining[i]);
+            }
+        }
+
+        if (offer <= 0 || total <= 0)
+        {
+            return 0;
+        }
+
+        var pay = offer < total ? offer : total;
+        var floors = new long[lines.Count];
+        var frac = new long[lines.Count];
+        long assigned = 0;
+        foreach (var index in eligible)
+        {
+            var weight = remaining[index];
+            floors[index] = pay * weight / total;
+            frac[index] = pay * weight % total;
+            assigned += floors[index];
+        }
+
+        var left = pay - assigned;
+        var order = new List<int>(eligible);
+        order.Sort((leftIndex, rightIndex) =>
+        {
+            var byFraction = frac[rightIndex].CompareTo(frac[leftIndex]);
+            return byFraction != 0 ? byFraction : leftIndex.CompareTo(rightIndex);
+        });
+        var cursor = 0;
+        while (left > 0 && order.Count > 0)
+        {
+            var index = order[cursor % order.Count];
+            if (floors[index] < remaining[index])
+            {
+                floors[index]++;
+                left--;
+            }
+
+            cursor++;
+            if (cursor > order.Count * (left + 2))
+            {
+                break;
+            }
+        }
+
+        long drawn = 0;
+        foreach (var index in eligible)
+        {
+            if (floors[index] <= 0)
+            {
+                continue;
+            }
+
+            remaining[index] -= floors[index];
+            drawn += floors[index];
+            shares.Add(new LineShare(index, tenderIndex, method, floors[index]));
+        }
+
+        return drawn;
     }
 }

@@ -99,7 +99,7 @@ public class InvariantAndReferenceTests
             foreach (var line in charge.Lines)
             {
                 Assert.True(line.AmountToman >= 0);
-                Assert.Equal(TehranTime.WholeSeconds(line.Start, line.End), line.ActiveSeconds);
+                Assert.True(line.ActiveSeconds <= TehranTime.WholeSeconds(line.Start, line.End));
             }
 
             var invoice = InvoiceCalculator.Calculate(new InvoiceRequest(

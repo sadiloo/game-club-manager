@@ -36,12 +36,10 @@ public sealed record SessionCharge(
     long TotalAmountToman);
 
 /// <summary>
-/// Prices a session from one running active clock. Billed minutes are
-/// <see cref="MoneyMath.BilledMinutes"/> of the total played time, so a pause, a controller
-/// change, a band edge, or midnight does not round up on its own. Each billing block is
-/// priced at the rate in force where that block starts, including a block that crosses
-/// 08:30 or midnight. Contiguous same-rate pieces, including pieces the caller already
-/// split, are charged once. A pause stays a gap: lines do not cross it.
+/// Prices a session from one running active clock. Minutes are the ceiling of the total
+/// played time, pauses excluded, and are never rounded half-up. Each minute is priced at
+/// the rate where that minute starts. Consecutive minutes that share a rate, player count,
+/// and band are one line, including across a pause, and that line's toman is rounded once.
 /// </summary>
 public static class SessionPricer
 {
@@ -421,15 +419,14 @@ public static class SessionPricer
 
         public bool CanMerge(SliceDraft next)
         {
-            return StationId == next.StationId
-                && GroupId == next.GroupId
+            // A pause is not a new line. Consecutive play at the same rate, player count,
+            // and band is one line, even when the wall clock has a gap or crosses midnight.
+            return GroupId == next.GroupId
                 && Mode == next.Mode
                 && PlayerCount == next.PlayerCount
                 && HourlyRateToman == next.HourlyRateToman
                 && Source == next.Source
-                && BandId == next.BandId
-                && End == next.Start
-                && TehranTime.Date(Start) == TehranTime.Date(next.Start);
+                && BandId == next.BandId;
         }
 
         public SliceDraft Merge(SliceDraft next)

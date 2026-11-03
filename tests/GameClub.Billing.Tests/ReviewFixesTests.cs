@@ -20,6 +20,7 @@ public class ReviewFixesTests
 
         Assert.Equal(600, charge.TotalActiveSeconds);
         Assert.Equal(10, charge.TotalBilledMinutes);
+        Assert.Equal(18_333, Assert.Single(charge.Lines).AmountToman);
         Assert.Equal(charge.Lines.Sum(line => line.AmountToman), charge.TotalAmountToman);
         foreach (var line in charge.Lines)
         {
@@ -62,8 +63,8 @@ public class ReviewFixesTests
         var inside = SessionPricer.Price(
             CafeFixture.Session("in", CafeFixture.Play("a", T.At(2026, 6, 2, 23, 30), T.At(2026, 6, 3, 0, 30), "ps5-1", CafeFixture.Ps5, 1)),
             card);
-        Assert.Equal(2, inside.Lines.Count);
-        Assert.All(inside.Lines, line => Assert.Equal(RateSource.TimeBand, line.Source));
+        var insideLine = Assert.Single(inside.Lines);
+        Assert.Equal(RateSource.TimeBand, insideLine.Source);
         Assert.Equal(160_000, inside.TotalAmountToman);
 
         var leaving = SessionPricer.Price(
@@ -328,7 +329,7 @@ public class ReviewFixesTests
         var charge = CafeFixture.Price(CafeFixture.Session(
             "night",
             CafeFixture.Play("a", T.At(2026, 6, 2, 23, 0), T.At(2026, 6, 3, 1, 0), "example-pc-1", CafeFixture.ExampleNormal, 1)));
-        Assert.Equal(2, charge.Lines.Count);
+        Assert.Single(charge.Lines);
         var settled = AccountSettlement.Settle(charge, account);
         Assert.Equal(60, settled.PackageMinutesConsumed);
         Assert.Equal(110_000, settled.MoneyConsumedToman);

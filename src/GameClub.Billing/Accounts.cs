@@ -434,6 +434,13 @@ public static class AccountSettlement
         Dictionary<string, long> remainingMinutes)
     {
         var marks = new SortedSet<DateTimeOffset> { slice.Start, slice.End };
+        var midnight = TehranTime.NextMidnight(slice.Start);
+        while (midnight < slice.End)
+        {
+            marks.Add(midnight);
+            midnight = TehranTime.NextMidnight(midnight);
+        }
+
         var date = TehranTime.Date(slice.Start);
         foreach (var package in packages)
         {

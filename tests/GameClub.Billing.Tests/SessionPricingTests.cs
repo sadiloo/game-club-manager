@@ -140,7 +140,7 @@ public class SessionPricingTests
         Assert.Equal(5_400, charge.TotalActiveSeconds);
         Assert.Equal(90, charge.TotalBilledMinutes);
         Assert.Equal(165_000, charge.TotalAmountToman);
-        Assert.DoesNotContain(charge.Lines, line => line.Start < T.At(2026, 6, 2, 11, 0) && line.End > T.At(2026, 6, 2, 10, 30));
+        Assert.Single(charge.Lines);
 
         var across = CafeFixture.Price(new Session(
             "across",
