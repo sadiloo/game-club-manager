@@ -28,10 +28,9 @@ public enum ConsumptionOrder
 }
 
 /// <summary>
-/// How far a PC account may go into debt. <see cref="MaxDebtToman"/> null means unlimited
-/// (the default). Zero means the balance stops at zero and the rest is uncovered.
-/// A positive value is the largest debt, so the balance cannot go below minus that amount.
-/// Gift credit is not part of this balance.
+/// How far a console or table wallet charge may push a balance below zero.
+/// PC play never uses this to go further negative. Null <see cref="MaxDebtToman"/> means unlimited.
+/// Zero refuses to go below zero. A positive value is the deepest allowed debt.
 /// </summary>
 public sealed record DebtPolicy(long? MaxDebtToman)
 {
@@ -50,14 +49,13 @@ public sealed record DebtPolicy(long? MaxDebtToman)
     }
 }
 
-public sealed record AccountPolicy(ConsumptionOrder Order, DebtPolicy Debt)
+/// <summary>
+/// PC sessions always stop at a zero balance. Debt is not a PC-account option;
+/// a shared wallet that is already negative blocks PC play instead of going further into debt.
+/// </summary>
+public sealed record AccountPolicy(ConsumptionOrder Order)
 {
-    public static AccountPolicy Default { get; } = new(ConsumptionOrder.PackagesThenMoney, DebtPolicy.Unlimited);
-
-    public AccountPolicy(ConsumptionOrder order)
-        : this(order, DebtPolicy.Unlimited)
-    {
-    }
+    public static AccountPolicy Default { get; } = new(ConsumptionOrder.PackagesThenMoney);
 }
 
 public sealed record PackageDraw(string PackageId, string SegmentId, DateTimeOffset SliceStart, long Minutes);
@@ -103,13 +101,14 @@ public sealed record RemainingTimeEstimate(
     long EligiblePackageMinutes,
     long MoneyBalanceToman,
     long? MoneyMinutes,
-    long TotalMinutes);
+    long TotalMinutes,
+    bool BlockedByDebt = false);
 
 /// <summary>
-/// Applies a priced session to a PC account. Logout is just the session end the caller
-/// already used when pricing: nothing after that instant is settled, and whatever
-/// package minutes remain stay on the account. Money still due after the consumption
-/// order is charged to the balance and may make it negative, down to <see cref="DebtPolicy"/>.
+/// Applies a priced session to a PC account. The balance never goes negative: money
+/// still due after packages is uncovered and the station should log the client out.
+/// A balance that is already negative (console debt on the shared wallet) blocks the
+/// session: packages are not consumed and the balance is left unchanged.
 /// </summary>
 public static class AccountSettlement
 {
@@ -126,6 +125,19 @@ public static class AccountSettlement
             .ToArray();
 
         long money = account.MoneyBalanceToman;
+        if (money < 0)
+        {
+            return new Settlement(
+                charge.TotalAmountToman,
+                0,
+                0,
+                0,
+                charge.TotalAmountToman,
+                account,
+                [],
+                []);
+        }
+
         long packageMinutes = 0;
         long packageCovered = 0;
         long moneyConsumed = 0;
@@ -178,7 +190,7 @@ public static class AccountSettlement
         if (part.BilledMinutes == 0)
         {
             var before = moneyConsumed;
-            ChargeBalance(ref money, part.AmountToman, policy.Debt, ref moneyConsumed, ref uncovered);
+            ChargeUpToZero(ref money, part.AmountToman, ref moneyConsumed, ref uncovered);
             var dustPaid = moneyConsumed - before;
             if (dustPaid > 0)
             {
@@ -204,7 +216,7 @@ public static class AccountSettlement
             packageMinutes += taken;
             packageCovered += coveredValue;
             var before = moneyConsumed;
-            ChargeBalance(ref money, moneyDue, policy.Debt, ref moneyConsumed, ref uncovered);
+            ChargeUpToZero(ref money, moneyDue, ref moneyConsumed, ref uncovered);
             var paid = moneyConsumed - before;
             if (paid > 0)
             {
@@ -242,7 +254,7 @@ public static class AccountSettlement
             packageMinutes += taken;
             packageCovered += coveredValue;
             var beforeDebt = moneyConsumed;
-            ChargeBalance(ref money, shortfall, policy.Debt, ref moneyConsumed, ref uncovered);
+            ChargeUpToZero(ref money, shortfall, ref moneyConsumed, ref uncovered);
             var debtPaid = moneyConsumed - beforeDebt;
             if (debtPaid > 0)
             {
@@ -251,38 +263,18 @@ public static class AccountSettlement
         }
     }
 
-    /// <summary>
-    /// Charges <paramref name="due"/> to the balance. Positive balance is used first;
-    /// the rest becomes debt down to the policy floor. Anything past that floor is uncovered.
-    /// </summary>
-    private static void ChargeBalance(ref long balance, long due, DebtPolicy debt, ref long consumed, ref long uncovered)
+    /// <summary>PC money stops at zero. A non-positive balance pays nothing and leaves the remainder uncovered.</summary>
+    private static void ChargeUpToZero(ref long balance, long due, ref long consumed, ref long uncovered)
     {
         if (due <= 0)
         {
             return;
         }
 
-        long capacity = debt.MaxDebtToman switch
-        {
-            null => due,
-            0 => balance > 0 ? balance : 0,
-            long maxDebt => CapacityAboveFloor(balance, maxDebt),
-        };
-        var paid = Math.Min(due, capacity);
+        var paid = balance > 0 ? Math.Min(balance, due) : 0;
         balance -= paid;
         consumed += paid;
         uncovered += due - paid;
-    }
-
-    private static long CapacityAboveFloor(long balance, long maxDebt)
-    {
-        if (balance >= 0)
-        {
-            return checked(balance + maxDebt);
-        }
-
-        var owed = -balance;
-        return owed >= maxDebt ? 0 : maxDebt - owed;
     }
 
     private static long DrawPackages(
@@ -543,10 +535,10 @@ public static class RemainingTimeEstimator
     /// <summary>
     /// Estimate of play time if the member starts now on this group, mode, and player count.
     /// Package minutes that are eligible at <paramref name="at"/> are counted 1:1.
-    /// Money is converted at the rate in force at <paramref name="at"/> only — the next
-    /// band or midnight is not projected. A zero rate is free: money minutes are null
-    /// because the balance does not buy time, and <see cref="RemainingTimeEstimate.TotalMinutes"/>
-    /// is just the eligible package minutes.
+    /// Money is converted at the rate in force at <paramref name="at"/> only. A zero balance
+    /// contributes no money minutes, so the client can log out when the estimate hits zero.
+    /// A negative shared balance blocks PC play: <see cref="RemainingTimeEstimate.TotalMinutes"/>
+    /// is zero and packages are not counted until the debt is cleared. A zero hourly rate is free.
     /// </summary>
     public static RemainingTimeEstimate Estimate(
         PcAccount account,
@@ -560,6 +552,23 @@ public static class RemainingTimeEstimator
     {
         specialDays ??= SpecialDayCalendar.Empty;
         policy ??= BillingPolicy.Default;
+        if (account.MoneyBalanceToman < 0)
+        {
+            return new RemainingTimeEstimate(
+                groupId,
+                mode,
+                playerCount,
+                at,
+                0,
+                RateSource.BaseTariff,
+                false,
+                0,
+                account.MoneyBalanceToman,
+                0,
+                0,
+                true);
+        }
+
         var quote = RateResolver.Resolve(rates, specialDays, at, groupId, mode, playerCount);
         long packageMinutes = 0;
         foreach (var package in account.Packages)

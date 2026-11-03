@@ -179,43 +179,148 @@ public sealed record WeekdayTariff(DayOfWeek Day, string GroupId, PlayMode Mode,
 public readonly record struct RateQuote(long HourlyRateToman, RateSource Source, string? BandId);
 
 /// <summary>
-/// A cafe-defined holiday or other special day. There is no built-in official calendar.
-/// Several dates may share one <see cref="RateTableId"/>. Rates on that table are per group.
+/// A cafe-defined holiday or other special day on the Solar Hijri calendar.
+/// There is no built-in official list. A day is either one Jalali date or a yearly
+/// month/day such as 1 Farvardin. Several rules may share one rate table.
+/// Rates on that table are per group. A one-off date wins over a yearly rule on the same day.
+/// A yearly Esfand 30 is observed on Esfand 29 when the Jalali year is not a leap year.
 /// </summary>
-public sealed record SpecialDay(DateOnly Date, string Name, string RateTableId);
+public sealed record SpecialDay
+{
+    private SpecialDay(string name, string rateTableId, JalaliDate? date, int? month, int? day)
+    {
+        Name = name;
+        RateTableId = rateTableId;
+        Date = date;
+        Month = month;
+        Day = day;
+    }
 
-/// <summary>User-maintained set of special days. The cafe adds and removes dates; nothing is hard-coded.</summary>
+    public string Name { get; }
+
+    public string RateTableId { get; }
+
+    /// <summary>Set for a one-off Jalali date. Null when the rule repeats every year.</summary>
+    public JalaliDate? Date { get; }
+
+    /// <summary>Jalali month of a yearly rule. Null for a one-off date.</summary>
+    public int? Month { get; }
+
+    /// <summary>Jalali day of a yearly rule. Null for a one-off date.</summary>
+    public int? Day { get; }
+
+    public bool IsRecurring => Date is null;
+
+    public static SpecialDay Once(JalaliDate date, string name, string rateTableId)
+    {
+        RequireLabel(name, rateTableId);
+        return new SpecialDay(name, rateTableId, date, null, null);
+    }
+
+    public static SpecialDay EveryYear(int month, int day, string name, string rateTableId)
+    {
+        RequireLabel(name, rateTableId);
+        if (month is < JalaliMonth.Farvardin or > JalaliMonth.Esfand)
+        {
+            throw new BillingException("invalid_date", $"Jalali month {month} is outside 1–12.");
+        }
+
+        if (day < 1 || day > 31)
+        {
+            throw new BillingException("invalid_date", $"Jalali day {day} is outside 1–31.");
+        }
+
+        // Esfand 30 is a legal anniversary even though it exists only in leap years.
+        if (!(month == JalaliMonth.Esfand && day == 30))
+        {
+            JalaliCalendar.EnsureExists(1404, month, day);
+        }
+
+        return new SpecialDay(name, rateTableId, null, month, day);
+    }
+
+    public bool Matches(JalaliDate on)
+    {
+        if (Date is JalaliDate once)
+        {
+            return once == on;
+        }
+
+        var observed = JalaliCalendar.ObservedAnniversary(Month!.Value, Day!.Value, on.Year);
+        return on.Month == observed.Month && on.Day == observed.Day;
+    }
+
+    private static void RequireLabel(string name, string rateTableId)
+    {
+        if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(rateTableId))
+        {
+            throw new BillingException("invalid_tariff", "A special day needs a name and a rate table id.");
+        }
+    }
+}
+
+/// <summary>User-maintained Jalali special days. The cafe adds and removes them; nothing is hard-coded.</summary>
 public sealed class SpecialDayCalendar
 {
-    private readonly Dictionary<DateOnly, SpecialDay> _days;
+    private readonly SpecialDay[] _days;
 
     public SpecialDayCalendar(IEnumerable<SpecialDay>? days = null)
     {
-        _days = [];
-        if (days is null)
+        var list = new List<SpecialDay>();
+        var oneOffs = new HashSet<JalaliDate>();
+        var yearly = new HashSet<(int Month, int Day)>();
+        foreach (var day in days ?? [])
         {
-            return;
-        }
-
-        foreach (var day in days)
-        {
-            if (string.IsNullOrWhiteSpace(day.Name) || string.IsNullOrWhiteSpace(day.RateTableId))
+            if (day.Date is JalaliDate once)
             {
-                throw new BillingException("invalid_tariff", "A special day needs a name and a rate table id.");
+                if (!oneOffs.Add(once))
+                {
+                    throw new BillingException("invalid_tariff", $"Two one-off special days are set on {once}.");
+                }
+            }
+            else if (!yearly.Add((day.Month!.Value, day.Day!.Value)))
+            {
+                throw new BillingException("invalid_tariff", $"Two yearly special days are set on month {day.Month} day {day.Day}.");
             }
 
-            if (!_days.TryAdd(day.Date, day))
-            {
-                throw new BillingException("invalid_tariff", $"Two special days are set on {day.Date:yyyy-MM-dd}.");
-            }
+            list.Add(day);
         }
+
+        _days = list.ToArray();
     }
 
     public static SpecialDayCalendar Empty { get; } = new();
 
-    public SpecialDay? On(DateOnly date) => _days.TryGetValue(date, out var day) ? day : null;
+    /// <summary>
+    /// The special day in force on this Tehran civil date, or null.
+    /// A one-off Jalali date wins when a yearly rule falls on the same day.
+    /// </summary>
+    public SpecialDay? On(DateOnly tehranDate)
+    {
+        var on = JalaliDate.FromGregorian(tehranDate);
+        SpecialDay? oneOff = null;
+        SpecialDay? recurring = null;
+        foreach (var day in _days)
+        {
+            if (!day.Matches(on))
+            {
+                continue;
+            }
 
-    public IReadOnlyCollection<SpecialDay> Days => _days.Values;
+            if (day.IsRecurring)
+            {
+                recurring = day;
+            }
+            else
+            {
+                oneOff = day;
+            }
+        }
+
+        return oneOff ?? recurring;
+    }
+
+    public IReadOnlyCollection<SpecialDay> Days => _days;
 }
 
 public sealed class RateCard

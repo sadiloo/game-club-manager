@@ -22,7 +22,11 @@ Money is a `long` in toman. Nothing in the library reads the clock, and nothing 
 
 نرخ یک لحظه به این ترتیب انتخاب می‌شود: **روز خاصِ همان گروه > روز هفته > بازهٔ ساعتیِ همان گروه > نرخ پایه**. هر گروه بازهٔ ساعتی خودش را دارد؛ بازهٔ PS5 روی گروه دیگر اثر نمی‌گذارد. اگر برای لایهٔ بالاتر نرخی تعریف نشده باشد، به لایهٔ بعدی برمی‌گردد. سانسِ طولانی، حتی اگر از نیمه‌شب یا از مرز «ساعات خاص» رد شود، خودش تکه‌تکه می‌شود.
 
-تخفیف سطح مشتری و تخفیف تولد با هم جمع می‌شوند (سقف پیش‌فرض ۱۰۰٪) و فقط روی زمان بازی اعمال می‌شوند. کد تخفیف جداست و محدودهٔ آن قابل تنظیم است: زمان، بوفه، خدمات ویژه، یا ترکیبی از آن‌ها. مبلغ نهایی منفی نمی‌شود. هر دقیقهٔ شروع‌شده حساب می‌شود. اگر موجودی پول کافی نباشد، حساب منفی (بدهکار) می‌شود؛ سقف بدهی اختیاری است و پیش‌فرض نامحدود است. کیف پول، اعتبار هدیه و واقعی را مثل یک موجودی و به نسبت مصرف می‌کند و سهم هر کدام را جدا نشان می‌دهد. تعطیلات فهرست ثابت ندارند؛ کافه خودش روزهای خاص و جدول نرخ هر گروه را وارد می‌کند.
+تولد، «کل ماه تولد»، پنجرهٔ تخفیف تولد، و روزهای خاص با تقویم شمسی (جلالی) و به وقت تهران حساب می‌شوند. مثلاً کل مهر، یا هر سال ۱ فروردین. تولد ۳۰ اسفند در سال غیرکبیسه روی ۲۹ اسفند دیده می‌شود.
+
+تخفیف سطح و تولد جمع می‌شوند (سقف پیش‌فرض ۱۰۰٪) و فقط روی زمان بازی‌اند. سطح‌ها را خود کافه می‌سازد (نام، حداقل ساعت کل، درصد). کد تخفیف محدودهٔ جدا دارد. اگر کد به یک گروه محدود باشد و بوفه یا خدمات را هم شامل شود، آن بخش فقط وقتی تخفیف می‌گیرد که حداقل یک سطر زمان از همان گروه در فاکتور باشد؛ وگرنه کد اعمال نمی‌شود.
+
+حالت کیف پول تنظیم شعبه است. در حالت مشترک یک موجودی برای PC و کنسول است؛ بدهی کنسول موجودی را منفی می‌کند و به‌طور پیش‌فرض PC را می‌بندد. اگر `AllowPcWhileInDebt` روشن باشد، PC هنوز می‌تواند دقیقه‌های بسته را مصرف کند ولی پول را منفی‌تر نمی‌کند. در حالت جدا، موجودی PC هرگز منفی نمی‌شود و کیف پول کنسول/میز جداست؛ بدهی کنسول روی ورود PC اثر ندارد. شارژ باید بگوید کدام موجودی را پر می‌کند.
 
 فقط نرخ PS5 از Game Timer موجود است. گروه ناشناخته خطا می‌دهد و رایگان حساب نمی‌شود.
 
@@ -35,7 +39,8 @@ Money is a `long` in toman. Nothing in the library reads the clock, and nothing 
 | `PlayMode` | `Offline` is priced by player/controller count 1–4. `Online` and `Vr` are a single rate; the count is recorded but does not select the tariff. |
 | `TimeBand` | Half-open local interval `[start, end)` **for one station group**. `end <= start` wraps midnight. Bands of the same group must not overlap. Another group's bands are ignored. Gaps use that group's base tariff. |
 | `RateCard` | Base rates, per-group band rates, per-weekday rates, and special-day rate tables keyed by group. |
-| `SpecialDay` / `SpecialDayCalendar` | Cafe-defined dates. No built-in holiday list. Each date points at a rate table; the same table can price groups differently, and several dates can share a table. |
+| `JalaliDate` | Stored Solar Hijri year/month/day. A Gregorian Tehran date is converted with `JalaliDate.FromGregorian` at the edge. |
+| `SpecialDay` / `SpecialDayCalendar` | Cafe-defined Jalali rules: one date, or every year on a Jalali month/day (1 Farvardin). A one-off wins over a yearly rule on the same day. No built-in holiday list. |
 | `PlaySegment` | One stretch at one station, group, mode, and player count. |
 | `Session` | Ordered segments plus pause intervals. |
 | `TimePackage` / `PcAccount` | Remaining package minutes and a money balance. |
@@ -78,11 +83,13 @@ Sessions may cross midnight, cross several days, and run longer than 24 hours. A
 | `PartialUnits` (Ceiling) | What happens to an incomplete block. Ceiling bills it as a full block. Floor drops it. Nearest rounds an exact half up, so 30 seconds of a 1-minute block is billed and 29 seconds are not. |
 | `Remainder` (Nearest) | The toman remainder of dividing by 60, as above. |
 
-`AccountPolicy` spends package minutes before money. `DebtPolicy` defaults to **unlimited**: a short money balance becomes a negative debt. `DebtPolicy.None` stops at zero. `DebtPolicy.Limited(amount)` refuses to go below minus that amount, and the rest is `UncoveredToman`. The resulting balance, including a negative one, is on the updated account (`DebtToman` is the positive size of that debt).
+`WalletSettings` is the branch choice. `WalletMode.Shared` (the default) keeps one pocket for PC and for console or tables. Console debt makes that pocket negative. `AllowPcWhileInDebt` defaults to false: PC time, including packages, is blocked and the estimate is zero. Set it true and PC may still spend package minutes, but a PC charge never pushes the balance further negative, so money minutes stay zero while the pocket is negative. `WalletMode.Separate` keeps a PC balance that never goes negative and a non-PC wallet that may. Console debt does not affect PC login. `TopUp` names the target: `Shared` in shared mode, or `Pc` / `NonPc` in separate mode. `DebtPolicy` limits only the pocket a console or table charge draws: unlimited by default, `Limited(amount)` is the deepest debt, and `None` refuses to go below zero. A PC session's unpaid remainder is `UncoveredToman`.
 
-`DiscountPolicy` adds the level percent and the birthday percent, caps that sum at `MaxCombinedPercent` (default **100**), and applies it to time charges only. `Birthday` defaults to the exact day. `BirthdayWindow.DaysOnAndAfter(7)` is the birthday plus the next six days. `BirthdayWindow.DaysAround(7)` is three days before, the day, and three days after. An even span puts the extra day after the birthday. `BirthdayWindow.WholeMonth` is the birth month. February 29 is observed on February 28 in a non-leap year.
+`LevelLadder` is cafe data: name, strictly ascending lifetime-hour threshold, and a percent from 0 to 100. `LevelLadder.ExampleSeed` (also `GameTimerReference.ExampleLevelSeed`) is an optional Bronze 5% … Titan 28% starter. The hour numbers on that seed are placeholders. `Resolve(lifetimeHours)` picks the highest row the customer has reached. Hours below the first threshold are no level.
 
-A discount code's `ChargeScope` defaults to time. Combine `Time`, `Buffet`, and `Services` when the code should cover more than one part.
+`DiscountPolicy` adds the level percent and the birthday percent, caps that sum at `MaxCombinedPercent` (default **100**), and applies it to time charges only. Birthdays are Jalali. `Birthday` defaults to the exact Jalali day. `DaysOnAndAfter(7)` is that day plus the next six. `DaysAround(7)` is three days before, the day, and three days after, and can cross a Jalali month. `WholeMonth` is the whole Jalali birth month (all of Mehr, not a Gregorian month). Esfand 30 is observed on Esfand 29 when the Jalali year is not a leap year.
+
+A discount code's `ChargeScope` defaults to time. Combine `Time`, `Buffet`, and `Services` when the code should cover more than one part. If the code also lists station groups, buffet and services are discounted only when at least one time line is in an allowed group. Otherwise the code is `not_eligible` and those lines stay full price.
 
 `RoundingPolicy` is **off** by default. A branch turns it on with a step, a direction, and a scope.
 
@@ -137,9 +144,9 @@ Default consumption is package minutes, then money. `MoneyThenPackages` is the o
 
 If a priced line straddles a package window, settlement splits that line at the window and allocates the original toman and billed minutes in proportion to the seconds (the tail gets the rounding remainder). The session total does not change. A package with no window, or a line that already ended on the boundary, is all-or-nothing.
 
-`RemainingTimeEstimator.Estimate` answers "if they start **now** on this group". Eligible package minutes are counted 1:1. The money balance is converted with the rate in force at that instant only — the next band is not projected, which is why the same balance is a different number of minutes on an ordinary example group versus an example VIP group. A zero or negative balance contributes no money minutes. A zero hourly rate is free: money minutes are null, because the balance is not what is buying the time.
+`RemainingTimeEstimator.Estimate` answers "if they start **now** on this group". Package minutes count 1:1 when PC play is allowed. Money converts at the rate in force at that instant only, which is why the same positive balance is a different length on an ordinary example group and on an example VIP group. At zero money the money portion of the estimate is zero. In shared mode, a negative balance with `AllowPcWhileInDebt` false sets `BlockedByDebt` and the total to zero; the packages stay stored. With the flag true, the estimate is only the package minutes and the money balance is still shown as negative. In separate mode the PC balance is what the estimate reads, even when the non-PC wallet is negative. A zero hourly rate is free: money minutes are null.
 
-Money still due after packages (or after the positive balance, when money is configured first) is posted to the account. By default the balance may go negative and that debt is visible. A later visit on the same account adds to the debt. A limited policy stops at the floor and returns the remainder as uncovered, for the counter.
+Money still due on a PC session after packages is uncovered. That balance stops at zero. Console and table invoices are what may leave their wallet negative.
 
 The account tests use an example ordinary rate of 110,000 and an example VIP rate of 220,000. Those are not live tariffs. With a 220,000 toman balance the ordinary estimate is 120 minutes and the example VIP estimate is 60, before any package minutes.
 
@@ -164,20 +171,20 @@ The birthday window is the cafe's, not a flag on the invoice. It is checked agai
 
 | Window | Meaning |
 | --- | --- |
-| Exact day (**default**) | The birthday month and day. |
-| `DaysOnAndAfter(N)` | The birthday and the next N−1 days. N = 7 is one week starting on the birthday. |
+| Exact Jalali day (**default**) | The birthday's Jalali month and day. |
+| `DaysOnAndAfter(N)` | That Jalali day and the next N−1 days. A window can cross into the next Jalali month, for example 28 Mehr plus five days reaches 2 Aban. |
 | `DaysAround(N)` | N days with the birthday inside. Odd N is centered. Even N puts the extra day after the birthday. |
-| Whole birth month | Any day in the birth month. |
+| Whole birth month | Every day of the Jalali birth month. All of Mehr is month 7. |
 
-A line outside the window gets the level percent only. February 29 is observed on February 28 when the year is not a leap year.
+A line outside the window gets the level percent only. The stored birthday is a `JalaliDate`. Convert a Gregorian birth date once with `JalaliDate.FromGregorian` before saving it. Esfand 30 is observed on Esfand 29 in a non-leap Jalali year (1375 is a leap year in `PersianCalendar`; 1404 is not).
 
 Customer discounts apply to **time charges only**. Buffet and fixed services are not reduced by level or birthday. A 900,000 toman controller-damage fine stays 900,000.
 
-A code is either a percent or a fixed toman amount, not both, and it is a third line. Its scope is `ChargeScope`: time (the default), buffet, services, or any combination such as time and buffet together. A fixed code cannot exceed that scope's gross. `ValidFrom` is inclusive and `ValidUntil` is exclusive, compared with `IssuedAt`. Outside the window the code is ignored (`outside_window`). A group or weekday restriction filters **time** lines only; buffet and services included in the scope are still discounted in full. If the scope base is zero, the code is `not_eligible`.
+A code is either a percent or a fixed toman amount, not both, and it is a third line. Its scope is `ChargeScope`: time (the default), buffet, services, or any combination such as time and buffet together. A fixed code cannot exceed that scope's gross. `ValidFrom` is inclusive and `ValidUntil` is exclusive, compared with `IssuedAt`. Outside the window the code is ignored (`outside_window`). A group restriction limits which time lines are discounted. Buffet and services in the scope are discounted only when at least one time line belongs to an allowed group; if none does, the code is `not_eligible` and buffet and services stay full price. A weekday restriction still filters time lines only. If the scope base is zero, the code is `not_eligible`.
 
 If discounts would push a part below zero, the code is reduced first, then the birthday, then the level. The payable total is never negative. A 100% level plus a 50% time code on an 80,000 time charge with a 20,000 buffet item leaves the buffet: payable 20,000. The code does not eat the buffet unless its scope includes buffet.
 
-Suggested level names from the product brief, **not** from the export (the sheet had the columns and no data rows): Bronze 5%, Silver 8%, Gold 12%, Platinum 16%, Diamond 20%, Titan 28%. Pass the percent in; the engine does not look the name up.
+Levels are not hard-coded. Build a `LevelLadder` with whatever rows the cafe wants. `LevelLadder.ExampleSeed` is only a starter: Bronze 5% from 0 hours, Silver 8% from 30, Gold 12% from 80, Platinum 16% from 150, Diamond 20% from 300, Titan 28% from 500. Pass `Resolve(lifetimeHours)` into the invoice. The invoice does not look the name up by itself.
 
 ## Rounding (PA-8)
 
@@ -209,11 +216,11 @@ A fixed code of 61,300 on a 200,000 time charge produces 138,700 and only then r
 - no negative tender
 - wallet tenders name a known member
 - the requested sum equals the payable total (`sum_mismatch`, difference = tendered − payable)
-- each wallet tender fits in that member's gift + real balance, in tender order, so two draws on one wallet see the running balance
+- each wallet tender fits the pocket's debt policy, in tender order, so two draws on one wallet see the running balance
 
 A failed wallet draw does not partially consume it. Method totals and per-tender gift/real splits are both returned.
 
-Gift and real credit are **one balance**. There is no gift-first or real-first order, and gift credit does not expire. The ledger still reports both parts. The gift toman is `tender × gift / (gift + real)`, floored; the rest of that tender is real, so the two parts add up to the tender. If either side is already zero, the whole tender comes from the other side. A 30,000 tender on a wallet with 10,000 gift and 50,000 real draws 5,000 gift and 25,000 real. A wallet tender cannot go negative. Debt is only the PC account balance.
+Gift and real credit are one pocket. There is no gift-first or real-first order, and gift credit does not expire. The positive part of a tender is split in proportion (gift share floored, leftover toman on real). A console or table charge may continue past zero on the pocket that pays it: the shared pocket, or the non-PC pocket when the branch is separate. The extra toman is debt on real credit. `DebtPolicy.Unlimited` is the default. `Limited` rejects a charge that would pass the floor, without a partial draw. `None` refuses to go below zero. A 30,000 tender on 10,000 gift and 50,000 real still draws 5,000 gift and 25,000 real. PC settlement never drives its pocket further negative.
 
 ## What was taken from Game Timer 4.3
 
@@ -244,26 +251,23 @@ Also read, and not a tariff: service `ABC_1` «خسارت انداختن دست�
 - Tehran is a fixed offset. Historical daylight-saving dates before 2022 are out of scope; passing one still uses `+03:30`.
 - Sub-second ticks are truncated. A started minute is billed. That is the confirmed default.
 - Unknown tariffs fail loudly. Only PS5 rates are loaded from Game Timer. Example groups in tests are labeled `example-*` and are not live prices.
-- Time bands belong to one station group. Special days are dates the cafe adds, each pointing at a rate table that can differ by group. They replace the band for the keys they define; they are not a multiplier on it.
+- Time bands belong to one station group. Special days are Jalali: one date, or every year on a Jalali month and day. A one-off wins when both hit the same day. They replace the band for the keys they define.
+- Birthdays and "whole month" use the Solar Hijri calendar via `PersianCalendar`. The stored form is `JalaliDate`. Esfand 30 is observed on Esfand 29 in a non-leap Jalali year.
 - Same-rate caller splits may differ by at most the ceiling cost of **one** granularity block (at the PS5 1-player rate, 1,834 toman). Whole-minute splits of a single rate match exactly.
 - Package minutes are minutes, not "toman of face value".
-- The remaining-time estimate does not look ahead to the next band. The prepaid amount planner does. A negative balance contributes zero minutes to the estimate.
-- Level and birthday percents are summed and capped at 100% by default, on time only. Codes are separate and choose their own scope. Codes are judged at `IssuedAt`. The birthday window uses each time line's service date.
-- Debt defaults to unlimited. The PC-account balance may go negative, and that figure is returned on the account. A cap is optional. Wallet tenders stay funded; they are not the debt balance.
-- Wallet gift and real credit move in proportion. The floored gift share can be one toman short of an even split; that toman is reported as real. Gift credit does not expire.
-- Customer level names are input. The Bronze…Titan ladder on `GameTimerReference.SuggestedLevels` is still only a suggestion.
+- The remaining-time estimate does not look ahead to the next band. The prepaid amount planner does. In the default shared mode a negative balance blocks PC play and the estimate is zero.
+- `WalletMode.Shared` is the default: one pocket. Console debt blocks PC play unless `AllowPcWhileInDebt` is on, and even then PC only spends package minutes. `WalletMode.Separate` keeps console debt off the PC balance. Top-ups name which pocket. PC settlement stops at zero either way.
+- Level and birthday percents are summed and capped at 100% by default, on time only. The ladder is cafe data. Codes are separate. A group-restricted code discounts buffet and services only when a matching time line is present.
+- Wallet gift and real credit move in proportion. The floored gift share can be one toman short of an even split; that toman is reported as real. Gift credit does not expire. Debt beyond the positive balance sits on real credit.
 - Rounding a tiny amount up to a large step is allowed when rounding is on (100 with step 5,000 becomes 5,000). Zero stays zero.
 - Malformed input throws `BillingException`. An unbalanced payment is a result with error codes, not an exception.
 
 ## Owner answers already applied
 
-Live prices are PS5 only. Bands are per group. Every started minute is billed. Level and birthday discounts add, with a 100% cap, on time only; codes choose a scope. The birthday window is the exact day, N days on-and-after or around, or the birth month. Wallets spend gift and real as one proportional balance. A short PC-account balance becomes debt, unlimited unless a cap is set. Holidays are whatever dates the cafe enters.
+Live prices are PS5 only. Bands are per group. Every started minute is billed. Birthdays, birthday windows, and special days are Solar Hijri. Level and birthday discounts add, with a 100% cap, on time only. Levels are cafe-configurable; the Bronze…Titan list is only a seed. A group-restricted code discounts buffet and services only when a matching time line is on the invoice. PC charges stop at zero. The branch chooses a shared wallet or separate PC and non-PC balances. Console debt blocks PC play only in the shared mode, and only while `AllowPcWhileInDebt` is off.
 
 ## Still open
 
-1. May a member's wallet tender go into debt as well, or is debt only the PC account (what this build does)?
-2. Is observing February 29 on February 28, in a non-leap year, the right birthday rule?
-3. When a code includes buffet or services and also has a group restriction, the restriction filters time lines only. Should that code leave buffet and services undiscounted unless the time lines matched?
-4. The level ladder's minimum hours were not in the export. The suggested percents are not a confirmed table.
-5. A prepaid amount that cannot buy a full minute still grants no time. Say if a grace minute is wanted.
-6. Game Timer's nearest-100-toman step is still not offered. Say if a 100 toman rounding step should sit beside 1,000 / 5,000 / 10,000.
+1. A prepaid amount that cannot buy a full minute still grants no time. Say if a grace minute is wanted.
+2. Game Timer's nearest-100-toman step is still not offered. Say if a 100 toman rounding step should sit beside 1,000 / 5,000 / 10,000.
+3. The example level seed's hour thresholds (0, 30, 80, 150, 300, 500) are placeholders. Replace them with the cafe's real ladder when you have it.

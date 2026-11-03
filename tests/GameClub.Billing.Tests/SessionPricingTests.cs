@@ -183,8 +183,8 @@ public class SessionPricingTests
             .Build();
         var specialDays = new SpecialDayCalendar(
         [
-            new SpecialDay(new DateOnly(2026, 6, 6), "Festival", "festival"),
-            new SpecialDay(new DateOnly(2026, 6, 7), "Local event", "local-event"),
+            SpecialDay.Once(JalaliDate.FromGregorian(new DateOnly(2026, 6, 6)), "Festival", "festival"),
+            SpecialDay.Once(JalaliDate.FromGregorian(new DateOnly(2026, 6, 7)), "Local event", "local-event"),
         ]);
 
         var fridaySpecial = Price(card, specialDays, T.At(2026, 6, 5, 1, 0), T.At(2026, 6, 5, 2, 0), 1);
@@ -238,6 +238,35 @@ public class SessionPricingTests
         Assert.Equal(RateSource.SpecialDay, crossing.Lines[1].Source);
         Assert.Equal(50_000, crossing.Lines[1].AmountToman);
         Assert.Equal(150_000, crossing.TotalAmountToman);
+    }
+
+    [Fact]
+    public void Recurring_Jalali_new_year_applies_every_year_and_a_one_off_wins_that_day()
+    {
+        var card = new RateCardBuilder()
+            .AddBase(CafeFixture.Ps5, PlayMode.Offline, 1, GameTimerReference.Ps5OnePlayerHourly)
+            .AddSpecialRate("nowruz", CafeFixture.Ps5, PlayMode.Offline, 1, 50_000)
+            .AddSpecialRate("opening", CafeFixture.Ps5, PlayMode.Offline, 1, 40_000)
+            .Build();
+        var yearly = new SpecialDayCalendar(
+            [SpecialDay.EveryYear(JalaliMonth.Farvardin, 1, "Nowruz", "nowruz")]);
+        var withOneOff = new SpecialDayCalendar(
+        [
+            SpecialDay.EveryYear(JalaliMonth.Farvardin, 1, "Nowruz", "nowruz"),
+            SpecialDay.Once(new JalaliDate(1405, JalaliMonth.Farvardin, 1), "Opening", "opening"),
+        ]);
+
+        Assert.Equal(new DateOnly(2025, 3, 21), new JalaliDate(1404, JalaliMonth.Farvardin, 1).ToGregorian());
+        Assert.Equal(new DateOnly(2026, 3, 21), new JalaliDate(1405, JalaliMonth.Farvardin, 1).ToGregorian());
+
+        Assert.Equal(50_000, HourOn(card, yearly, new JalaliDate(1404, 1, 1)).TotalAmountToman);
+        Assert.Equal(50_000, HourOn(card, yearly, new JalaliDate(1405, 1, 1)).TotalAmountToman);
+        Assert.Equal(110_000, HourOn(card, yearly, new JalaliDate(1405, 1, 2)).TotalAmountToman);
+        Assert.Equal(RateSource.SpecialDay, HourOn(card, yearly, new JalaliDate(1405, 1, 1)).Lines[0].Source);
+
+        Assert.Equal(40_000, HourOn(card, withOneOff, new JalaliDate(1405, 1, 1)).TotalAmountToman);
+        Assert.Equal("opening", HourOn(card, withOneOff, new JalaliDate(1405, 1, 1)).Lines[0].BandId);
+        Assert.Equal(50_000, HourOn(card, withOneOff, new JalaliDate(1404, 1, 1)).TotalAmountToman);
     }
 
     [Fact]
@@ -340,6 +369,16 @@ public class SessionPricingTests
     {
         return SessionPricer.Price(
             CafeFixture.Session("s", CafeFixture.Play("a", start, end, "ps5-1", CafeFixture.Ps5, players, mode)),
+            card,
+            specialDays);
+    }
+
+    private static SessionCharge HourOn(RateCard card, SpecialDayCalendar specialDays, JalaliDate day)
+    {
+        var gregorian = day.ToGregorian();
+        var start = TehranTime.At(gregorian.Year, gregorian.Month, gregorian.Day, 10, 0);
+        return SessionPricer.Price(
+            CafeFixture.Session("s", CafeFixture.Play("a", start, start.AddHours(1), "ps5-1", CafeFixture.Ps5, 1)),
             card,
             specialDays);
     }

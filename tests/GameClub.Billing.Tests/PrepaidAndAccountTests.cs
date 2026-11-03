@@ -193,32 +193,57 @@ public class PrepaidAndAccountTests
     }
 
     [Fact]
-    public void Insufficient_balance_becomes_visible_debt_up_to_an_optional_cap()
+    public void Pc_charges_stop_at_zero_and_a_negative_shared_balance_blocks_pc_play()
     {
-        var account = new PcAccount("member-1", 50_000, []);
-        var settled = Settle(account, T.At(2026, 6, 2, 18, 0), T.At(2026, 6, 2, 19, 0));
-        Assert.Equal(220_000, settled.MoneyConsumedToman);
+        var account = new PcAccount("member-1", 50_000, [new TimePackage("hours", 120, 200_000)]);
+        var settled = SettlePc(account, T.At(2026, 6, 2, 10, 0), T.At(2026, 6, 2, 12, 0));
+        Assert.Equal(120, settled.PackageMinutesConsumed);
+        Assert.Equal(0, settled.MoneyConsumedToman);
         Assert.Equal(0, settled.UncoveredToman);
-        Assert.Equal(-170_000, settled.UpdatedAccount.MoneyBalanceToman);
-        Assert.Equal(170_000, settled.DebtToman);
-        Assert.Equal(settled.GrossToman, settled.PackageCoveredToman + settled.MoneyConsumedToman + settled.UncoveredToman);
+        Assert.Equal(50_000, settled.UpdatedAccount.MoneyBalanceToman);
 
-        var charge = CafeFixture.Price(CafeFixture.Session(
-            "vip",
-            CafeFixture.Play("a", T.At(2026, 6, 2, 18, 0), T.At(2026, 6, 2, 19, 0), "example-vip-1", CafeFixture.ExampleVip, 1)));
-        var capped = AccountSettlement.Settle(charge, account, new AccountPolicy(ConsumptionOrder.PackagesThenMoney, DebtPolicy.Limited(100_000)));
-        Assert.Equal(150_000, capped.MoneyConsumedToman);
-        Assert.Equal(-100_000, capped.UpdatedAccount.MoneyBalanceToman);
-        Assert.Equal(70_000, capped.UncoveredToman);
-
-        var stopped = AccountSettlement.Settle(charge, account, new AccountPolicy(ConsumptionOrder.PackagesThenMoney, DebtPolicy.None));
+        var moneyOnly = new PcAccount("member-2", 50_000, []);
+        var stopped = SettlePc(moneyOnly, T.At(2026, 6, 2, 10, 0), T.At(2026, 6, 2, 11, 0));
         Assert.Equal(50_000, stopped.MoneyConsumedToman);
+        Assert.Equal(60_000, stopped.UncoveredToman);
         Assert.Equal(0, stopped.UpdatedAccount.MoneyBalanceToman);
-        Assert.Equal(170_000, stopped.UncoveredToman);
+        Assert.Equal(0, stopped.DebtToman);
 
-        var deeper = AccountSettlement.Settle(charge, settled.UpdatedAccount);
-        Assert.Equal(-390_000, deeper.UpdatedAccount.MoneyBalanceToman);
-        Assert.Equal(390_000, deeper.DebtToman);
+        var console = PaymentSplitter.Split(80_000, [
+            new Tender(PaymentMethod.Wallet, 80_000, "member-2"),
+        ], [new MemberWallet("member-2", 30_000, 0)]);
+        Assert.True(console.IsValid);
+        Assert.Equal(-50_000, console.RemainingWallets.Single().BalanceToman);
+        Assert.Equal(50_000, console.RemainingWallets.Single().DebtToman);
+
+        var capped = PaymentSplitter.Split(80_000, [
+            new Tender(PaymentMethod.Wallet, 80_000, "member-2"),
+        ], [new MemberWallet("member-2", 30_000, 0)], DebtPolicy.Limited(40_000));
+        Assert.False(capped.IsValid);
+        Assert.Contains(capped.Errors, error => error.Code == PaymentErrors.InsufficientWallet);
+        Assert.Equal(30_000, capped.RemainingWallets.Single().BalanceToman);
+
+        var inDebt = new PcAccount("member-2", -50_000, [new TimePackage("hours", 120, 200_000)]);
+        var blockedEstimate = RemainingTimeEstimator.Estimate(
+            inDebt, CafeFixture.ExampleNormal, PlayMode.Offline, 1, T.At(2026, 6, 2, 10, 0), CafeFixture.Card());
+        Assert.True(blockedEstimate.BlockedByDebt);
+        Assert.Equal(0, blockedEstimate.TotalMinutes);
+        Assert.Equal(0, blockedEstimate.MoneyMinutes);
+
+        var blocked = SettlePc(inDebt, T.At(2026, 6, 2, 10, 0), T.At(2026, 6, 2, 11, 0));
+        Assert.Equal(0, blocked.PackageMinutesConsumed);
+        Assert.Equal(0, blocked.MoneyConsumedToman);
+        Assert.Equal(110_000, blocked.UncoveredToman);
+        Assert.Equal(-50_000, blocked.UpdatedAccount.MoneyBalanceToman);
+        Assert.Equal(120, blocked.UpdatedAccount.Packages[0].RemainingMinutes);
+    }
+
+    private static Settlement SettlePc(PcAccount account, DateTimeOffset start, DateTimeOffset end)
+    {
+        var charge = CafeFixture.Price(CafeFixture.Session(
+            "pc",
+            CafeFixture.Play("a", start, end, "example-pc-1", CafeFixture.ExampleNormal, 1)));
+        return AccountSettlement.Settle(charge, account);
     }
 
     private static Settlement Settle(PcAccount account, DateTimeOffset start, DateTimeOffset end)

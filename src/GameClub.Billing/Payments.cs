@@ -14,7 +14,12 @@ public enum PaymentMethod
 /// the result still reports each part. Gift credit does not expire. A wallet
 /// tender cannot go negative; PC-account debt is a separate balance.
 /// </summary>
-public sealed record MemberWallet(string MemberId, long RealCreditToman, long GiftCreditToman);
+public sealed record MemberWallet(string MemberId, long RealCreditToman, long GiftCreditToman)
+{
+    public long BalanceToman => RealCreditToman + GiftCreditToman;
+
+    public long DebtToman => BalanceToman < 0 ? -BalanceToman : 0;
+}
 
 public sealed record Tender(PaymentMethod Method, long AmountToman, string? MemberId = null);
 
@@ -55,7 +60,8 @@ public static class PaymentSplitter
     public static SplitPayment Split(
         long payableToman,
         IReadOnlyList<Tender> tenders,
-        IReadOnlyList<MemberWallet>? wallets = null)
+        IReadOnlyList<MemberWallet>? wallets = null,
+        DebtPolicy? walletDebt = null)
     {
         if (payableToman < 0)
         {
@@ -63,6 +69,7 @@ public static class PaymentSplitter
         }
 
         ArgumentNullException.ThrowIfNull(tenders);
+        walletDebt ??= DebtPolicy.Unlimited;
         var errors = new List<PaymentError>();
         var balances = new Dictionary<string, (long Real, long Gift)>(StringComparer.Ordinal);
         foreach (var wallet in wallets ?? [])
@@ -72,9 +79,9 @@ public static class PaymentSplitter
                 throw new BillingException("invalid_payment", "Wallet member id is required.");
             }
 
-            if (wallet.RealCreditToman < 0 || wallet.GiftCreditToman < 0)
+            if (wallet.GiftCreditToman < 0)
             {
-                throw new BillingException("invalid_money", $"Wallet '{wallet.MemberId}' has a negative balance.");
+                throw new BillingException("invalid_money", $"Wallet '{wallet.MemberId}' has negative gift credit. Debt is carried on real credit.");
             }
 
             if (!balances.TryAdd(wallet.MemberId, (wallet.RealCreditToman, wallet.GiftCreditToman)))
@@ -116,7 +123,8 @@ public static class PaymentSplitter
                 continue;
             }
 
-            if (!TryDraw(ref balance, tender.AmountToman, out var giftDrawn, out var realDrawn))
+            var pocket = new WalletPocket(balance.Real, balance.Gift);
+            if (!pocket.TrySpend(tender.AmountToman, walletDebt, out var updated, out var giftDrawn, out var realDrawn))
             {
                 errors.Add(new PaymentError(
                     PaymentErrors.InsufficientWallet,
@@ -125,6 +133,7 @@ public static class PaymentSplitter
                 continue;
             }
 
+            balance = (updated.RealToman, updated.GiftToman);
             balances[tender.MemberId] = balance;
             results.Add(new TenderResult(i, tender.Method, tender.AmountToman, tender.MemberId, giftDrawn, realDrawn, true));
         }
@@ -150,38 +159,72 @@ public static class PaymentSplitter
 
         return new SplitPayment(errors.Count == 0, payableToman, tendered, difference, errors, totals, results, remaining);
     }
+}
+
+/// <summary>
+/// Real and gift credit of one pocket. Debt sits on real credit. Gift credit does not go negative.
+/// </summary>
+public readonly record struct WalletPocket(long RealToman, long GiftToman)
+{
+    public long TotalToman => RealToman + GiftToman;
+
+    public long DebtToman => TotalToman < 0 ? -TotalToman : 0;
 
     /// <summary>
-    /// Gift and real are one balance. The gift portion is <c>amount × gift / (gift + real)</c>,
-    /// floored; the rest of the tender is real, so the two parts sum to the tender.
-    /// When one side is already zero, the whole tender comes from the other side.
+    /// Spends <paramref name="amount"/>. The positive part is split in proportion
+    /// (gift share floored, leftover toman on real). Anything beyond that is debt on real credit,
+    /// down to <paramref name="debt"/>. A spend that would pass the floor is rejected whole.
     /// </summary>
-    private static bool TryDraw(
-        ref (long Real, long Gift) balance,
-        long amount,
-        out long giftDrawn,
-        out long realDrawn)
+    public bool TrySpend(long amount, DebtPolicy debt, out WalletPocket updated, out long giftDrawn, out long realDrawn)
     {
-        var total = balance.Real + balance.Gift;
-        if (amount > total)
+        var capacity = Capacity(TotalToman, debt);
+        if (amount < 0 || amount > capacity)
         {
+            updated = this;
             giftDrawn = 0;
             realDrawn = 0;
             return false;
         }
 
-        if (balance.Gift == 0 || balance.Real == 0)
+        var positiveGift = GiftToman > 0 ? GiftToman : 0;
+        var positiveReal = RealToman > 0 ? RealToman : 0;
+        var positive = positiveGift + positiveReal;
+        var fromPositive = amount < positive ? amount : positive;
+        if (positive == 0 || positiveGift == 0 || positiveReal == 0)
         {
-            giftDrawn = balance.Real == 0 ? amount : 0;
-            realDrawn = amount - giftDrawn;
+            giftDrawn = positiveReal == 0 ? fromPositive : 0;
+            realDrawn = fromPositive - giftDrawn;
         }
         else
         {
-            giftDrawn = amount * balance.Gift / total;
-            realDrawn = amount - giftDrawn;
+            giftDrawn = fromPositive * positiveGift / positive;
+            realDrawn = fromPositive - giftDrawn;
         }
 
-        balance = (balance.Real - realDrawn, balance.Gift - giftDrawn);
+        realDrawn += amount - fromPositive;
+        updated = new WalletPocket(RealToman - realDrawn, GiftToman - giftDrawn);
         return true;
+    }
+
+    private static long Capacity(long balance, DebtPolicy debt)
+    {
+        if (debt.MaxDebtToman is null)
+        {
+            return long.MaxValue;
+        }
+
+        if (debt.MaxDebtToman == 0)
+        {
+            return balance > 0 ? balance : 0;
+        }
+
+        var maxDebt = debt.MaxDebtToman.Value;
+        if (balance >= 0)
+        {
+            return checked(balance + maxDebt);
+        }
+
+        var owed = -balance;
+        return owed >= maxDebt ? 0 : maxDebt - owed;
     }
 }

@@ -36,19 +36,10 @@ public static class GameTimerReference
     public const long ControllerDamageFineToman = 900_000;
 
     /// <summary>
-    /// Suggested level ladder from the product brief (Bronze 5% … Titan 28%).
-    /// The customer sheet in Game Timer has the columns but the exported rows did not
-    /// include the actual thresholds. Do not treat this table as extracted data.
+    /// Optional example ladder (Bronze 5% … Titan 28%) with placeholder hour thresholds.
+    /// The customer sheet had the columns but no rows. Edit it; do not treat the hours as live data.
     /// </summary>
-    public static readonly (string Name, int Percent)[] SuggestedLevels =
-    [
-        ("Bronze", 5),
-        ("Silver", 8),
-        ("Gold", 12),
-        ("Platinum", 16),
-        ("Diamond", 20),
-        ("Titan", 28),
-    ];
+    public static LevelLadder ExampleLevelSeed => LevelLadder.ExampleSeed;
 
     public static TimeBand SpecialHours { get; } = new(SpecialBandId, Ps5GroupId, "Special hours 00:00–08:30", SpecialStart, SpecialEnd);
 

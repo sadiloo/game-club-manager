@@ -21,10 +21,10 @@ public class InvariantAndReferenceTests
         Assert.Equal(105, threePlayer.TotalBilledMinutes);
         Assert.Equal(280_000, threePlayer.TotalAmountToman);
 
-        Assert.Equal(5, GameTimerReference.SuggestedLevels[0].Percent);
-        Assert.Equal("Bronze", GameTimerReference.SuggestedLevels[0].Name);
-        Assert.Equal(28, GameTimerReference.SuggestedLevels[^1].Percent);
-        Assert.Equal("Titan", GameTimerReference.SuggestedLevels[^1].Name);
+        Assert.Equal(5, GameTimerReference.ExampleLevelSeed.Levels[0].DiscountPercent);
+        Assert.Equal("Bronze", GameTimerReference.ExampleLevelSeed.Levels[0].Name);
+        Assert.Equal(28, GameTimerReference.ExampleLevelSeed.Levels[^1].DiscountPercent);
+        Assert.Equal("Titan", GameTimerReference.ExampleLevelSeed.Levels[^1].Name);
     }
 
     [Fact]
@@ -114,7 +114,7 @@ public class InvariantAndReferenceTests
                 new CustomerPricing(
                     "Bronze",
                     rng.Next(0, 30),
-                    rng.Next(2) == 0 ? new DateOnly(1990, 6, 2) : new DateOnly(1990, 1, 1),
+                    JalaliDate.FromGregorian(rng.Next(2) == 0 ? new DateOnly(1990, 6, 2) : new DateOnly(1990, 1, 1)),
                     rng.Next(0, 20)),
                 null,
                 DiscountPolicy.Default,
@@ -134,9 +134,9 @@ public class InvariantAndReferenceTests
                 var opening = rng.Next(0, 500_000);
                 var settled = AccountSettlement.Settle(charge, new PcAccount("m", opening, [new TimePackage("p", rng.Next(0, 90), 200_000)]));
                 Assert.Equal(charge.TotalAmountToman, settled.PackageCoveredToman + settled.MoneyConsumedToman + settled.UncoveredToman);
-                Assert.Equal(0, settled.UncoveredToman);
+                Assert.True(settled.UpdatedAccount.MoneyBalanceToman >= 0);
+                Assert.True(settled.MoneyConsumedToman <= opening);
                 Assert.Equal(opening - settled.MoneyConsumedToman, settled.UpdatedAccount.MoneyBalanceToman);
-                Assert.Equal(settled.UpdatedAccount.MoneyBalanceToman < 0 ? -settled.UpdatedAccount.MoneyBalanceToman : 0, settled.DebtToman);
                 Assert.True(settled.PackageMinutesConsumed >= 0);
             }
         }

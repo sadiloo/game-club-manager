@@ -61,7 +61,7 @@ public enum BirthdayWindowKind
     /// <summary>A span of <see cref="BirthdayWindow.Days"/> calendar days. See <see cref="BirthdayWindowAnchor"/>.</summary>
     DayWindow = 1,
 
-    /// <summary>Every day of the birth month.</summary>
+    /// <summary>Every day of the Jalali birth month. All of Mehr is month 7, not a Gregorian month.</summary>
     BirthMonth = 2,
 }
 
@@ -78,7 +78,10 @@ public enum BirthdayWindowAnchor
 }
 
 /// <summary>
-/// Per-cafe birthday discount window. February 29 is observed on February 28 in non-leap years.
+/// Per-cafe birthday discount window on the Solar Hijri calendar.
+/// Whole month means the Jalali birth month, such as all of Mehr.
+/// A birthday on Esfand 30 is observed on Esfand 29 when that Jalali year is not a leap year.
+/// The date passed to Includes is the Tehran civil date of the service.
 /// </summary>
 public sealed record BirthdayWindow(BirthdayWindowKind Kind, int Days = 1, BirthdayWindowAnchor Anchor = BirthdayWindowAnchor.OnAndAfter)
 {
@@ -98,43 +101,32 @@ public sealed record BirthdayWindow(BirthdayWindowKind Kind, int Days = 1, Birth
         }
     }
 
-    public bool Includes(DateOnly birthDate, DateOnly day)
+    public bool Includes(JalaliDate birthDate, DateOnly tehranDate)
     {
         EnsureValid();
+        var on = JalaliDate.FromGregorian(tehranDate);
         if (Kind == BirthdayWindowKind.BirthMonth)
         {
-            return day.Month == birthDate.Month;
+            return on.Month == birthDate.Month;
         }
 
         if (Kind == BirthdayWindowKind.ExactDay)
         {
-            return day == ObservedBirthday(day.Year, birthDate.Month, birthDate.Day);
+            return on == birthDate.ObservedIn(on.Year);
         }
 
-        for (var year = day.Year - 1; year <= day.Year + 1; year++)
+        for (var year = on.Year - 1; year <= on.Year + 1; year++)
         {
-            var birthday = ObservedBirthday(year, birthDate.Month, birthDate.Day);
+            var birthday = birthDate.ObservedIn(year).ToGregorian();
             var before = Anchor == BirthdayWindowAnchor.Around ? (Days - 1) / 2 : 0;
             var after = Anchor == BirthdayWindowAnchor.Around ? Days - 1 - before : Days - 1;
-            if (day >= birthday.AddDays(-before) && day <= birthday.AddDays(after))
+            if (tehranDate >= birthday.AddDays(-before) && tehranDate <= birthday.AddDays(after))
             {
                 return true;
             }
         }
 
         return false;
-    }
-
-    /// <summary>February 29 is observed on February 28 when the year is not a leap year.</summary>
-    public static DateOnly ObservedBirthday(int year, int month, int day)
-    {
-        if (month == 2 && day == 29 && !DateTime.IsLeapYear(year))
-        {
-            return new DateOnly(year, 2, 28);
-        }
-
-        var last = DateTime.DaysInMonth(year, month);
-        return new DateOnly(year, month, day > last ? last : day);
     }
 }
 
@@ -194,16 +186,18 @@ public sealed record BuffetLine(string ItemId, string Name, int Quantity, long U
 public sealed record ServiceLine(string ServiceId, string Name, long AmountToman);
 
 /// <summary>
-/// Level percent and birthday percent are separate. <see cref="BirthDate"/> is the customer's birthday;
-/// the cafe's <see cref="BirthdayWindow"/> decides whether a service date qualifies. A null birth date means no birthday discount.
+/// Level percent and birthday percent are separate. <see cref="BirthDate"/> is a Solar Hijri date
+/// (year, month, and day). Convert a Gregorian birth date with <see cref="JalaliDate.FromGregorian"/>
+/// before storing it. The cafe's <see cref="BirthdayWindow"/> decides whether a Tehran service date qualifies.
+/// A null birth date means no birthday discount.
 /// </summary>
-public sealed record CustomerPricing(string? LevelName, int LevelPercent, DateOnly? BirthDate, int BirthdayPercent);
+public sealed record CustomerPricing(string? LevelName, int LevelPercent, JalaliDate? BirthDate, int BirthdayPercent);
 
 /// <summary>
 /// One code per invoice. Set either <see cref="Percent"/> or <see cref="FixedToman"/>, not both.
 /// <see cref="ValidFrom"/> is inclusive and <see cref="ValidUntil"/> is exclusive, compared to the invoice instant.
 /// <see cref="Scope"/> chooses time, buffet, services, or a combination. The default is time only.
-/// Group and weekday restrictions filter time lines only; buffet and services in scope are discounted in full.
+/// A group restriction filters time lines. Buffet and services in scope are discounted only when the invoice has at least one time line in an allowed group; otherwise the code does not apply. Weekday restrictions still filter time lines only.
 /// </summary>
 public sealed record DiscountCode(
     string Code,
@@ -361,7 +355,7 @@ public static class InvoiceCalculator
         var cap = request.Discount.MaxCombinedPercent;
         long eligible = 0;
         long other = timeGross;
-        if (customer?.BirthDate is DateOnly birth && birthdayPercent > 0)
+        if (customer?.BirthDate is JalaliDate birth && birthdayPercent > 0)
         {
             eligible = 0;
             other = 0;
@@ -449,7 +443,13 @@ public static class InvoiceCalculator
             return (DiscountRejection.OutsideWindow, null, 0, 0, 0);
         }
 
-        var restricted = code.AllowedGroupIds is { Count: > 0 } || code.AllowedWeekdays is { Count: > 0 };
+        var groupRestricted = code.AllowedGroupIds is { Count: > 0 };
+        if (groupRestricted && !HasMatchingGroupLine(request.TimeCharges, code))
+        {
+            return (DiscountRejection.NotEligible, null, 0, 0, 0);
+        }
+
+        var restricted = groupRestricted || code.AllowedWeekdays is { Count: > 0 };
         var timeBase = code.Scope.HasFlag(ChargeScope.Time)
             ? restricted ? EligibleTime(request.TimeCharges, code) : timeGross
             : 0;
@@ -523,6 +523,19 @@ public static class InvoiceCalculator
                     break;
             }
         }
+    }
+
+    private static bool HasMatchingGroupLine(IReadOnlyList<TimeChargeLine> lines, DiscountCode code)
+    {
+        foreach (var line in lines)
+        {
+            if (line.GroupId is not null && code.AllowedGroupIds!.Contains(line.GroupId))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static long EligibleTime(IReadOnlyList<TimeChargeLine> lines, DiscountCode code)
