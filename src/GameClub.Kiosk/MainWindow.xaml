@@ -1,0 +1,53 @@
+<Window x:Class="GameClub.Kiosk.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="گیم‌نت"
+        WindowStyle="None"
+        WindowState="Maximized"
+        ResizeMode="NoResize"
+        Background="{StaticResource Bg}"
+        Foreground="{StaticResource Ink}"
+        FontFamily="Tahoma"
+        FontSize="18"
+        FlowDirection="RightToLeft"
+        KeyDown="Window_KeyDown">
+  <Grid Margin="32">
+    <StackPanel x:Name="LockView" VerticalAlignment="Center" HorizontalAlignment="Center" Width="420">
+      <TextBlock Text="گیم‌نت" FontSize="42" FontWeight="Bold" Foreground="{StaticResource Gold}" HorizontalAlignment="Center"/>
+      <TextBlock x:Name="LockHint" Text="برای شروع، نام کاربری و گذرواژه را وارد کنید." Foreground="{StaticResource Muted}" Margin="0,8,0,24" TextAlignment="Center" TextWrapping="Wrap"/>
+      <TextBlock Text="نام کاربری"/>
+      <TextBox x:Name="UserBox" Height="40" Margin="0,6,0,14" Padding="8" Background="{StaticResource Card}" Foreground="{StaticResource Ink}" BorderBrush="{StaticResource Gold}"/>
+      <TextBlock Text="گذرواژه"/>
+      <PasswordBox x:Name="PasswordBox" Height="40" Margin="0,6,0,14" Padding="8" Background="{StaticResource Card}" Foreground="{StaticResource Ink}" BorderBrush="{StaticResource Gold}"/>
+      <Button x:Name="LoginButton" Content="ورود" Height="46" Background="{StaticResource Gold}" Foreground="#1A1408" FontWeight="Bold" Click="Login_Click"/>
+      <TextBlock x:Name="LockMessage" Foreground="{StaticResource Danger}" Margin="0,16,0,0" TextWrapping="Wrap" TextAlignment="Center"/>
+    </StackPanel>
+
+    <DockPanel x:Name="PlayView" Visibility="Collapsed">
+      <DockPanel DockPanel.Dock="Top" Margin="0,0,0,20">
+        <Button x:Name="LogoutButton" DockPanel.Dock="Left" Content="خروج" Width="120" Height="44" Margin="12,0,0,0" Click="Logout_Click" Background="{StaticResource Card}" Foreground="{StaticResource Ink}"/>
+        <StackPanel>
+          <TextBlock x:Name="MemberName" FontSize="28" FontWeight="Bold"/>
+          <TextBlock x:Name="MoneyText" FontSize="36" Foreground="{StaticResource Gold}" Margin="0,6,0,0"/>
+          <TextBlock x:Name="TimeText" FontSize="22" Foreground="{StaticResource Muted}"/>
+          <TextBlock x:Name="GraceText" FontSize="20" Foreground="{StaticResource Danger}" Visibility="Collapsed"/>
+          <TextBlock x:Name="OfflineText" Foreground="{StaticResource Muted}" Visibility="Collapsed" Text="آفلاین — زمان از روی همین سیستم حساب می‌شود."/>
+        </StackPanel>
+      </DockPanel>
+      <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <WrapPanel x:Name="GameList"/>
+      </ScrollViewer>
+    </DockPanel>
+
+    <Border x:Name="AdminView" Visibility="Collapsed" Background="#CC12141A" HorizontalAlignment="Center" VerticalAlignment="Center" Padding="28" CornerRadius="8" BorderBrush="{StaticResource Gold}" BorderThickness="1">
+      <StackPanel Width="360">
+        <TextBlock Text="ورود مدیر" FontSize="24" Foreground="{StaticResource Gold}"/>
+        <TextBlock Text="گذرواژهٔ مدیر" Margin="0,12,0,6"/>
+        <PasswordBox x:Name="AdminPassword" Height="40" Padding="8"/>
+        <Button Content="باز کردن" Height="42" Margin="0,12,0,0" Click="AdminUnlock_Click" Background="{StaticResource Gold}"/>
+        <Button Content="انصراف" Height="42" Margin="0,8,0,0" Click="AdminCancel_Click"/>
+        <TextBlock x:Name="AdminMessage" Foreground="{StaticResource Danger}" Margin="0,10,0,0" TextWrapping="Wrap"/>
+      </StackPanel>
+    </Border>
+  </Grid>
+</Window>

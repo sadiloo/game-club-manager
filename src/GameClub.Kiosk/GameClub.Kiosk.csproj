@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>GameClub.Kiosk</RootNamespace>
+    <AssemblyName>GameClub.Kiosk</AssemblyName>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Description>Windows kiosk shell for a gaming cafe. .NET Framework 4.8 so it runs on Windows 7 SP1 and later.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="8.0.24" />
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies.net48" Version="1.0.3" PrivateAssets="all" />
+    <ProjectReference Include="..\GameClub.Kiosk.Core\GameClub.Kiosk.Core.csproj" />
+  </ItemGroup>
+
+</Project>
