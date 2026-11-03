@@ -23,8 +23,8 @@ public class InvariantAndReferenceTests
 
         Assert.Equal(5, GameTimerReference.ExampleLevelSeed.Levels[0].DiscountPercent);
         Assert.Equal("Bronze", GameTimerReference.ExampleLevelSeed.Levels[0].Name);
-        Assert.Equal(28, GameTimerReference.ExampleLevelSeed.Levels[^1].DiscountPercent);
-        Assert.Equal("Titan", GameTimerReference.ExampleLevelSeed.Levels[^1].Name);
+        Assert.Equal(28, GameTimerReference.ExampleLevelSeed.Levels[GameTimerReference.ExampleLevelSeed.Levels.Count - 1].DiscountPercent);
+        Assert.Equal("Titan", GameTimerReference.ExampleLevelSeed.Levels[GameTimerReference.ExampleLevelSeed.Levels.Count - 1].Name);
     }
 
     [Fact]
@@ -44,15 +44,9 @@ public class InvariantAndReferenceTests
     }
 
     [Fact]
-    public void Same_rate_splits_stay_within_one_rounded_minute()
+    public void Same_rate_splits_match_the_unsplit_session()
     {
         var policy = BillingPolicy.Default;
-        // One extra billed minute can cost the ceiling of the hourly rate, which is 1 toman
-        // above the nearest charge of a lone minute (1,834 vs 1,833 at the PS5 1-player rate).
-        var oneMinute = MoneyMath.ChargeForMinutes(
-            GameTimerReference.Ps5OnePlayerHourly,
-            policy.GranularityMinutes,
-            RateRemainderMode.Ceiling);
         var rng = new Random(20261103);
         for (var i = 0; i < 40; i++)
         {
@@ -70,9 +64,9 @@ public class InvariantAndReferenceTests
                 CafeFixture.Play("b", mid, end, "ps5-1", CafeFixture.Ps5, 1)), policy);
 
             Assert.Equal(whole.TotalActiveSeconds, split.TotalActiveSeconds);
+            Assert.Equal(whole.TotalBilledMinutes, split.TotalBilledMinutes);
+            Assert.Equal(whole.TotalAmountToman, split.TotalAmountToman);
             Assert.Equal(length, whole.TotalActiveSeconds);
-            var delta = Math.Abs(whole.TotalAmountToman - split.TotalAmountToman);
-            Assert.True(delta <= oneMinute, $"Split at {splitAt}s of {length}s changed the total by {delta}, above one minute ({oneMinute}).");
         }
 
         var partialWhole = CafeFixture.Price(CafeFixture.Session(
@@ -82,9 +76,10 @@ public class InvariantAndReferenceTests
             "p2",
             CafeFixture.Play("a", T.At(2026, 6, 2, 10, 0), T.At(2026, 6, 2, 10, 0, 15), "ps5-1", CafeFixture.Ps5, 1),
             CafeFixture.Play("b", T.At(2026, 6, 2, 10, 0, 15), T.At(2026, 6, 2, 10, 0, 30), "ps5-1", CafeFixture.Ps5, 1)));
+        Assert.Equal(1, partialWhole.TotalBilledMinutes);
         Assert.Equal(1_833, partialWhole.TotalAmountToman);
-        Assert.Equal(3_666, partialSplit.TotalAmountToman);
-        Assert.True(partialSplit.TotalAmountToman - partialWhole.TotalAmountToman <= oneMinute);
+        Assert.Equal(1, partialSplit.TotalBilledMinutes);
+        Assert.Equal(1_833, partialSplit.TotalAmountToman);
     }
 
     [Fact]
@@ -114,7 +109,7 @@ public class InvariantAndReferenceTests
                 new CustomerPricing(
                     "Bronze",
                     rng.Next(0, 30),
-                    JalaliDate.FromGregorian(rng.Next(2) == 0 ? new DateOnly(1990, 6, 2) : new DateOnly(1990, 1, 1)),
+                    JalaliDate.FromGregorian(rng.Next(2) == 0 ? new LocalDate(1990, 6, 2) : new LocalDate(1990, 1, 1)),
                     rng.Next(0, 20)),
                 null,
                 DiscountPolicy.Default,
@@ -133,7 +128,7 @@ public class InvariantAndReferenceTests
             {
                 var opening = rng.Next(0, 500_000);
                 var settled = AccountSettlement.Settle(charge, new PcAccount("m", opening, [new TimePackage("p", rng.Next(0, 90), 200_000)]));
-                Assert.Equal(charge.TotalAmountToman, settled.PackageCoveredToman + settled.MoneyConsumedToman + (settled.Grace?.WaivedToman ?? 0) + settled.UncoveredToman);
+                Assert.Equal(charge.TotalAmountToman, settled.PackageCoveredToman + settled.MoneyConsumedToman + settled.DiscountToman + (settled.Grace?.WaivedToman ?? 0) + settled.UncoveredToman);
                 Assert.True(settled.UpdatedAccount.MoneyBalanceToman >= 0);
                 Assert.True(settled.MoneyConsumedToman <= opening);
                 Assert.Equal(opening - settled.MoneyConsumedToman, settled.UpdatedAccount.MoneyBalanceToman);

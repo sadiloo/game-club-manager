@@ -48,7 +48,7 @@ public sealed class StationDirectory
                 throw new BillingException("invalid_tariff", "Station group id is required.");
             }
 
-            if (!_groups.TryAdd(group.Id, group))
+            if (!Bcl.TryAdd(_groups, group.Id, group))
             {
                 throw new BillingException("invalid_tariff", $"Duplicate station group '{group.Id}'.");
             }
@@ -67,7 +67,7 @@ public sealed class StationDirectory
                 throw new BillingException("invalid_tariff", $"Station '{station.Id}' references unknown group '{station.GroupId}'.");
             }
 
-            if (!_stations.TryAdd(station.Id, station))
+            if (!Bcl.TryAdd(_stations, station.Id, station))
             {
                 throw new BillingException("invalid_tariff", $"Duplicate station '{station.Id}'.");
             }
@@ -102,11 +102,11 @@ public sealed class StationDirectory
 /// When <c>End &lt;= Start</c> the band wraps midnight. Another group's bands do not
 /// split or reprice this group's sessions.
 /// </summary>
-public sealed record TimeBand(string Id, string GroupId, string Name, TimeOnly Start, TimeOnly End)
+public sealed record TimeBand(string Id, string GroupId, string Name, TimeOfDay Start, TimeOfDay End)
 {
     public bool WrapsMidnight => SecondOfDay(End) <= SecondOfDay(Start);
 
-    public bool Contains(TimeOnly time)
+    public bool Contains(TimeOfDay time)
     {
         var t = SecondOfDay(time);
         var start = SecondOfDay(Start);
@@ -124,7 +124,7 @@ public sealed record TimeBand(string Id, string GroupId, string Name, TimeOnly S
         return t >= start || t < end;
     }
 
-    internal static int SecondOfDay(TimeOnly time) => (time.Hour * 3600) + (time.Minute * 60) + time.Second;
+    internal static int SecondOfDay(TimeOfDay time) => time.SecondOfDay;
 }
 
 public readonly record struct TariffKey(string GroupId, PlayMode Mode, int? PlayerCount)
@@ -214,6 +214,11 @@ public sealed record SpecialDay
     public static SpecialDay Once(JalaliDate date, string name, string rateTableId)
     {
         RequireLabel(name, rateTableId);
+        if (date.IsEmpty)
+        {
+            throw new BillingException(BillingErrors.InvalidDate, "A one-off special day needs a Jalali date.");
+        }
+
         return new SpecialDay(name, rateTableId, date, null, null);
     }
 
@@ -222,18 +227,15 @@ public sealed record SpecialDay
         RequireLabel(name, rateTableId);
         if (month is < JalaliMonth.Farvardin or > JalaliMonth.Esfand)
         {
-            throw new BillingException("invalid_date", $"Jalali month {month} is outside 1–12.");
+            throw new BillingException(BillingErrors.InvalidDate, $"Jalali month {month} is outside 1–12.");
         }
 
-        if (day < 1 || day > 31)
+        // Months 1–6 have 31 days, 7–11 have 30, and Esfand allows day 30 as an anniversary
+        // even though that day exists only in a leap year. No sample year is hard-coded.
+        var maxDay = month <= 6 ? 31 : 30;
+        if (day < 1 || day > maxDay)
         {
-            throw new BillingException("invalid_date", $"Jalali day {day} is outside 1–31.");
-        }
-
-        // Esfand 30 is a legal anniversary even though it exists only in leap years.
-        if (!(month == JalaliMonth.Esfand && day == 30))
-        {
-            JalaliCalendar.EnsureExists(1404, month, day);
+            throw new BillingException(BillingErrors.InvalidDate, $"Jalali day {day} is not valid in month {month}.");
         }
 
         return new SpecialDay(name, rateTableId, null, month, day);
@@ -295,7 +297,7 @@ public sealed class SpecialDayCalendar
     /// The special day in force on this Tehran civil date, or null.
     /// A one-off Jalali date wins when a yearly rule falls on the same day.
     /// </summary>
-    public SpecialDay? On(DateOnly tehranDate)
+    public SpecialDay? On(LocalDate tehranDate)
     {
         var on = JalaliDate.FromGregorian(tehranDate);
         SpecialDay? oneOff = null;
@@ -337,7 +339,7 @@ public sealed class RateCard
         Dictionary<(DayOfWeek Day, TariffKey Key), long> weekdayRates,
         Dictionary<(string TableId, TariffKey Key), long> specialRates)
     {
-        Bands = bands;
+        Bands = new System.Collections.ObjectModel.ReadOnlyCollection<TimeBand>(bands.ToArray());
         _base = baseRates;
         _bands = bandRates;
         _weekdays = weekdayRates;
@@ -354,7 +356,7 @@ public sealed class RateCard
 
     public bool TrySpecial(string rateTableId, TariffKey key, out long hourly) => _special.TryGetValue((rateTableId, key), out hourly);
 
-    public TimeBand? BandAt(string groupId, TimeOnly time)
+    public TimeBand? BandAt(string groupId, TimeOfDay time)
     {
         TimeBand? found = null;
         foreach (var band in Bands)
@@ -409,7 +411,7 @@ public sealed class RateCardBuilder
     {
         var key = TariffKey.Create(groupId, mode, playerCount);
         RequireRate(hourlyRateToman);
-        if (!_base.TryAdd(key, hourlyRateToman))
+        if (!Bcl.TryAdd(_base, key, hourlyRateToman))
         {
             throw new BillingException("invalid_tariff", $"Duplicate base rate for {Describe(key)}.");
         }
@@ -421,7 +423,7 @@ public sealed class RateCardBuilder
     {
         var key = TariffKey.Create(groupId, mode, playerCount);
         RequireRate(hourlyRateToman);
-        if (!_bandRates.TryAdd((bandId, key), hourlyRateToman))
+        if (!Bcl.TryAdd(_bandRates, (bandId, key), hourlyRateToman))
         {
             throw new BillingException("invalid_tariff", $"Duplicate band rate '{bandId}' for {Describe(key)}.");
         }
@@ -433,7 +435,7 @@ public sealed class RateCardBuilder
     {
         var key = TariffKey.Create(groupId, mode, playerCount);
         RequireRate(hourlyRateToman);
-        if (!_weekdays.TryAdd((day, key), hourlyRateToman))
+        if (!Bcl.TryAdd(_weekdays, (day, key), hourlyRateToman))
         {
             throw new BillingException("invalid_tariff", $"Duplicate {day} rate for {Describe(key)}.");
         }
@@ -450,7 +452,7 @@ public sealed class RateCardBuilder
 
         var key = TariffKey.Create(groupId, mode, playerCount);
         RequireRate(hourlyRateToman);
-        if (!_special.TryAdd((rateTableId, key), hourlyRateToman))
+        if (!Bcl.TryAdd(_special, (rateTableId, key), hourlyRateToman))
         {
             throw new BillingException("invalid_tariff", $"Duplicate special rate '{rateTableId}' for {Describe(key)}.");
         }
@@ -539,9 +541,10 @@ public sealed class RateCardBuilder
 public static class RateResolver
 {
     /// <summary>
-    /// Precedence is the cafe's special day for this group, then weekday, then that
-    /// group's own hour band, then the base tariff. A missing rate falls through.
-    /// Bands of other groups are ignored. Online and VR ignore player count.
+    /// Precedence is the cafe's special day for this group, then that group's own
+    /// special-hours band, then the weekday rate, then the base tariff.
+    /// A missing rate falls through. Bands of other groups are ignored.
+    /// Online and VR ignore player count. Thursday 02:00 on PS5 is the band, not the weekday.
     /// </summary>
     public static RateQuote Resolve(
         RateCard card,
@@ -551,7 +554,7 @@ public static class RateResolver
         PlayMode mode,
         int playerCount)
     {
-        TehranTime.Ensure(instant);
+        instant = TehranTime.Ensure(instant);
         var key = TariffKey.ForSegment(groupId, mode, playerCount);
         var date = TehranTime.Date(instant);
         var time = TehranTime.TimeOfDay(instant);
@@ -562,15 +565,15 @@ public static class RateResolver
             return new RateQuote(specialRate, RateSource.SpecialDay, special.RateTableId);
         }
 
-        if (card.TryWeekday(date.DayOfWeek, key, out var weekdayRate))
-        {
-            return new RateQuote(weekdayRate, RateSource.Weekday, null);
-        }
-
         var band = card.BandAt(groupId, time);
         if (band is not null && card.TryBand(band.Id, key, out var bandRate))
         {
             return new RateQuote(bandRate, RateSource.TimeBand, band.Id);
+        }
+
+        if (card.TryWeekday(date.DayOfWeek, key, out var weekdayRate))
+        {
+            return new RateQuote(weekdayRate, RateSource.Weekday, null);
         }
 
         if (card.TryBase(key, out var baseRate))

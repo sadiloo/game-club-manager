@@ -26,12 +26,22 @@ public enum TopUpTarget
 /// <see cref="AllowPcWhileInDebt"/> matters only in <see cref="WalletMode.Shared"/>:
 /// false (the default) blocks PC play while the shared balance is negative;
 /// true lets PC use package minutes, and PC still cannot push the balance further negative.
-/// <see cref="Debt"/> is how far a console or table charge may go. PC play never uses it to go further into debt.
+/// <see cref="Debt"/> is how far a console or table charge may go. The default is no debt.
+/// PC play never uses it to go further into debt.
+/// <see cref="ApplyDiscountsToPc"/> defaults to false. When it is false, a PC debit is the
+/// post-grace amount before level, birthday, and code discounts. When it is true, those
+/// time discounts reduce the PC debit and the remaining-time estimate, and the invoice
+/// payable equals that debit. Grace is waived before the percents either way.
 /// </summary>
-public sealed record WalletSettings(WalletMode Mode, bool AllowPcWhileInDebt, DebtPolicy Debt, bool GraceMinuteEnabled = true)
+public sealed record WalletSettings(
+    WalletMode Mode,
+    bool AllowPcWhileInDebt,
+    DebtPolicy Debt,
+    bool GraceMinuteEnabled = true,
+    bool ApplyDiscountsToPc = false)
 {
     public WalletSettings(WalletMode mode, bool allowPcWhileInDebt = false)
-        : this(mode, allowPcWhileInDebt, DebtPolicy.Unlimited, true)
+        : this(mode, allowPcWhileInDebt, DebtPolicy.None, true, false)
     {
         EnsureValid();
     }
@@ -47,7 +57,7 @@ public sealed record WalletSettings(WalletMode Mode, bool AllowPcWhileInDebt, De
         if (Mode == WalletMode.Separate && AllowPcWhileInDebt)
         {
             throw new BillingException(
-                "invalid_policy",
+                BillingErrors.InvalidPolicy,
                 "AllowPcWhileInDebt applies only when PC and console share one wallet.");
         }
     }
@@ -74,7 +84,7 @@ public sealed record CustomerAccount(
         Settings.EnsureValid();
         if (realToman < 0 || giftToman < 0)
         {
-            throw new BillingException("invalid_topup", "A top-up cannot be negative.");
+            throw new BillingException(BillingErrors.InvalidTopUp, "A top-up cannot be negative.");
         }
 
         return (Settings.Mode, target) switch
@@ -83,7 +93,7 @@ public sealed record CustomerAccount(
             (WalletMode.Separate, TopUpTarget.Pc) => this with { Pc = Pc.Add(realToman, giftToman) },
             (WalletMode.Separate, TopUpTarget.NonPc) => this with { NonPc = NonPc.Add(realToman, giftToman) },
             _ => throw new BillingException(
-                "invalid_topup",
+                BillingErrors.InvalidTopUp,
                 $"Top-up target {target} does not match wallet mode {Settings.Mode}."),
         };
     }
@@ -91,13 +101,14 @@ public sealed record CustomerAccount(
     /// <summary>
     /// Charges a console or table invoice to the wallet that pays those stations.
     /// Shared mode uses the one wallet. Separate mode uses <see cref="NonPc"/> and leaves the PC balance alone.
+    /// The pocket stops at <see cref="WalletSettings.Debt"/>. The default debt policy is none.
     /// </summary>
     public NonPcCharge ChargeNonPc(long amountToman)
     {
         Settings.EnsureValid();
         if (amountToman < 0)
         {
-            throw new BillingException("invalid_money", "A console charge cannot be negative.");
+            throw new BillingException(BillingErrors.InvalidMoney, "A console charge cannot be negative.");
         }
 
         var pocket = Settings.Mode == WalletMode.Shared ? Pc : NonPc;
@@ -115,20 +126,37 @@ public sealed record CustomerAccount(
 
 public readonly record struct NonPcCharge(bool Accepted, CustomerAccount Account, long GiftDrawnToman, long RealDrawnToman);
 
-public sealed record PcPlayResult(Settlement Settlement, CustomerAccount Account);
+public sealed record PcPlayResult(
+    Settlement Settlement,
+    CustomerAccount Account,
+    long GiftDrawnToman = 0,
+    long RealDrawnToman = 0,
+    Invoice? ChargeInvoice = null);
 
 public static class CustomerPlay
 {
-    public static PcPlayResult Settle(SessionCharge charge, CustomerAccount account, AccountPolicy? policy = null)
+    public static PcPlayResult Settle(
+        SessionCharge charge,
+        CustomerAccount account,
+        AccountPolicy? policy = null,
+        BillingPolicy? billing = null,
+        CustomerPricing? pricing = null,
+        DiscountCode? code = null,
+        DiscountPolicy? discounts = null,
+        RoundingPolicy? rounding = null,
+        DateTimeOffset? issuedAt = null)
     {
         account.Settings.EnsureValid();
+        billing ??= BillingPolicy.Default;
         var money = account.Pc.TotalToman;
         if (BlocksPackages(account, money))
         {
             var blocked = AccountSettlement.Settle(
                 charge,
                 new PcAccount(account.Id, money, account.Packages),
-                policy);
+                policy,
+                billing,
+                graceMinuteEnabled: false);
             return new PcPlayResult(blocked, account);
         }
 
@@ -137,12 +165,65 @@ public static class CustomerPlay
             charge,
             new PcAccount(account.Id, spendable, account.Packages),
             policy,
-            graceMinuteEnabled: account.Settings.GraceMinuteEnabled);
-        var pocket = account.Pc;
-        if (settled.MoneyConsumedToman > 0
-            && !pocket.TrySpend(settled.MoneyConsumedToman, DebtPolicy.None, out pocket, out _, out _))
+            billing,
+            account.Settings.GraceMinuteEnabled);
+
+        var debit = settled.MoneyConsumedToman;
+        long discount = 0;
+        Invoice? invoice = null;
+        var graceWaived = settled.Grace?.WaivedToman ?? 0;
+        if (debit > 0 || graceWaived > 0)
         {
-            throw new BillingException("invalid_money", "PC charge exceeded the positive balance.");
+            var when = issuedAt ?? (charge.Lines.Count > 0 ? charge.Lines[charge.Lines.Count - 1].End : default);
+            if (when == default)
+            {
+                throw new BillingException(BillingErrors.InvalidInvoice, "A PC charge needs an invoice time.");
+            }
+
+            when = TehranTime.Ensure(when);
+            var accounted = debit + graceWaived;
+            string? group = null;
+            LocalDate? date = null;
+            if (charge.Lines.Count > 0)
+            {
+                group = charge.Lines[0].GroupId;
+                date = TehranTime.Date(charge.Lines[0].Start);
+                for (var i = 1; i < charge.Lines.Count; i++)
+                {
+                    if (!string.Equals(charge.Lines[i].GroupId, group, StringComparison.Ordinal))
+                    {
+                        group = null;
+                        break;
+                    }
+                }
+            }
+
+            var apply = account.Settings.ApplyDiscountsToPc;
+            invoice = InvoiceCalculator.Calculate(new InvoiceRequest(
+                [new TimeChargeLine("PC time", accounted, group, date, date?.DayOfWeek)],
+                [],
+                [],
+                apply ? pricing : null,
+                apply ? code : null,
+                discounts ?? DiscountPolicy.Default,
+                rounding ?? RoundingPolicy.Off,
+                when,
+                settled.Grace));
+            if (invoice.PayableToman > debit)
+            {
+                throw new BillingException(BillingErrors.InvalidMoney, "PC invoice payable is above the post-grace balance.");
+            }
+
+            discount = debit - invoice.PayableToman;
+            debit = invoice.PayableToman;
+        }
+
+        var pocket = account.Pc;
+        long giftDrawn = 0;
+        long realDrawn = 0;
+        if (debit > 0 && !pocket.TrySpend(debit, DebtPolicy.None, out pocket, out giftDrawn, out realDrawn))
+        {
+            throw new BillingException(BillingErrors.InvalidMoney, "PC charge exceeded the positive balance.");
         }
 
         var updated = account with
@@ -152,9 +233,11 @@ public static class CustomerPlay
         };
         var visible = settled with
         {
+            MoneyConsumedToman = debit,
+            DiscountToman = discount,
             UpdatedAccount = new PcAccount(account.Id, pocket.TotalToman, settled.UpdatedAccount.Packages),
         };
-        return new PcPlayResult(visible, updated);
+        return new PcPlayResult(visible, updated, giftDrawn, realDrawn, invoice);
     }
 
     public static RemainingTimeEstimate Estimate(
@@ -165,10 +248,19 @@ public static class CustomerPlay
         DateTimeOffset at,
         RateCard rates,
         SpecialDayCalendar? specialDays = null,
-        BillingPolicy? policy = null)
+        BillingPolicy? policy = null,
+        CustomerPricing? pricing = null,
+        DiscountCode? code = null,
+        DiscountPolicy? discounts = null)
     {
         account.Settings.EnsureValid();
         var money = account.Pc.TotalToman;
+        PcTimeDiscount? timeDiscount = null;
+        if (account.Settings.ApplyDiscountsToPc)
+        {
+            timeDiscount = DiscountFor(pricing, code, discounts, groupId, at);
+        }
+
         if (BlocksPackages(account, money))
         {
             return RemainingTimeEstimator.Estimate(
@@ -192,8 +284,76 @@ public static class CustomerPlay
             rates,
             specialDays,
             policy,
-            account.Settings.GraceMinuteEnabled);
+            account.Settings.GraceMinuteEnabled,
+            timeDiscount);
         return estimate with { MoneyBalanceToman = money };
+    }
+
+    internal static PcTimeDiscount DiscountFor(
+        CustomerPricing? pricing,
+        DiscountCode? code,
+        DiscountPolicy? discounts,
+        string groupId,
+        DateTimeOffset at)
+    {
+        var policy = discounts ?? DiscountPolicy.Default;
+        policy.Birthday.EnsureValid();
+        var level = pricing?.LevelPercent ?? 0;
+        var birthday = 0;
+        if (pricing?.BirthDate is JalaliDate birth && !birth.IsEmpty && pricing.BirthdayPercent > 0)
+        {
+            if (policy.Birthday.Includes(birth, TehranTime.Date(at)))
+            {
+                birthday = pricing.BirthdayPercent;
+            }
+        }
+
+        var combined = level + birthday;
+        if (combined > policy.MaxCombinedPercent)
+        {
+            combined = policy.MaxCombinedPercent;
+        }
+
+        if (combined < 0)
+        {
+            combined = 0;
+        }
+
+        var codePercent = 0;
+        long fixedToman = 0;
+        if (code is not null && code.Scope.HasFlag(ChargeScope.Time) && CodeApplies(code, groupId, at))
+        {
+            codePercent = code.Percent;
+            fixedToman = code.FixedToman;
+        }
+
+        return new PcTimeDiscount(combined, codePercent, fixedToman);
+    }
+
+    private static bool CodeApplies(DiscountCode code, string groupId, DateTimeOffset at)
+    {
+        at = TehranTime.Ensure(at);
+        if (code.ValidFrom is DateTimeOffset from && at < TehranTime.Ensure(from))
+        {
+            return false;
+        }
+
+        if (code.ValidUntil is DateTimeOffset until && at >= TehranTime.Ensure(until))
+        {
+            return false;
+        }
+
+        if (code.AllowedGroupIds is { Count: > 0 } groups && !groups.Contains(groupId))
+        {
+            return false;
+        }
+
+        if (code.AllowedWeekdays is { Count: > 0 } days && !days.Contains(TehranTime.Date(at).DayOfWeek))
+        {
+            return false;
+        }
+
+        return true;
     }
 
     private static bool BlocksPackages(CustomerAccount account, long pcMoney)
@@ -208,6 +368,8 @@ internal static class WalletPocketMath
 {
     public static WalletPocket Add(this WalletPocket pocket, long realToman, long giftToman)
     {
-        return new WalletPocket(pocket.RealToman + realToman, pocket.GiftToman + giftToman);
+        var real = MoneyMath.CheckedAdd(pocket.RealToman, realToman);
+        var gift = MoneyMath.CheckedAdd(pocket.GiftToman, giftToman);
+        return new WalletPocket(real, gift);
     }
 }

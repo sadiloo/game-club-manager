@@ -29,7 +29,7 @@ public class LevelLadderTests
 
         var resolved = cafe.Resolve(40)!;
         var invoice = InvoiceCalculator.Calculate(new InvoiceRequest(
-            [new TimeChargeLine("time", 100_000, CafeFixture.Ps5, new DateOnly(2026, 6, 2), DayOfWeek.Tuesday)],
+            [new TimeChargeLine("time", 100_000, CafeFixture.Ps5, new LocalDate(2026, 6, 2), DayOfWeek.Tuesday)],
             [],
             [],
             new CustomerPricing(resolved.Name, resolved.DiscountPercent, null, 0),

@@ -6,7 +6,7 @@ The repository had no application code, only a title, so this is a new solution 
 
 ```text
 GameClub.slnx
-src/GameClub.Billing/          net10.0 class library
+src/GameClub.Billing/          netstandard2.0 and net10.0 class library
 tests/GameClub.Billing.Tests/  xUnit
 ```
 
@@ -20,13 +20,13 @@ Money is a `long` in toman. Nothing in the library reads the clock, and nothing 
 
 این کتابخانه فقط محاسبهٔ قیمت و زمان است. مبلغ‌ها تومان و عدد صحیح‌اند. ساعت را خودِ برنامه می‌دهد (از ساعت سیستم خوانده نمی‌شود) و همیشه به وقت تهران با اختلاف `+۰۳:۳۰` تفسیر می‌شود. ایران از ۲۰۲۲ ساعت تابستانی ندارد و این موتور هم تعویض ساعت را اعمال نمی‌کند.
 
-نرخ یک لحظه به این ترتیب انتخاب می‌شود: **روز خاصِ همان گروه > روز هفته > بازهٔ ساعتیِ همان گروه > نرخ پایه**. هر گروه بازهٔ ساعتی خودش را دارد؛ بازهٔ PS5 روی گروه دیگر اثر نمی‌گذارد. اگر برای لایهٔ بالاتر نرخی تعریف نشده باشد، به لایهٔ بعدی برمی‌گردد. سانسِ طولانی، حتی اگر از نیمه‌شب یا از مرز «ساعات خاص» رد شود، خودش تکه‌تکه می‌شود.
+نرخ یک لحظه به این ترتیب انتخاب می‌شود: **روز خاصِ همان گروه > بازهٔ ساعتیِ همان گروه > روز هفته > نرخ پایه**. اگر روز خاص برای آن تعداد بازیکن نرخ نداشته باشد، به لایهٔ بعدی برمی‌گردد و فقط وقتی هیچ نرخی نیست خطا می‌دهد. هر گروه بازهٔ ساعتی خودش را دارد؛ بازهٔ PS5 روی گروه دیگر اثر نمی‌گذارد. اگر برای لایهٔ بالاتر نرخی تعریف نشده باشد، به لایهٔ بعدی برمی‌گردد. سانسِ طولانی، حتی اگر از نیمه‌شب یا از مرز «ساعات خاص» رد شود، خودش تکه‌تکه می‌شود.
 
 تولد، «کل ماه تولد»، پنجرهٔ تخفیف تولد، و روزهای خاص با تقویم شمسی (جلالی) و به وقت تهران حساب می‌شوند. مثلاً کل مهر، یا هر سال ۱ فروردین. تولد ۳۰ اسفند در سال غیرکبیسه روی ۲۹ اسفند دیده می‌شود.
 
 تخفیف سطح و تولد جمع می‌شوند (سقف پیش‌فرض ۱۰۰٪) و فقط روی زمان بازی‌اند. سطح‌ها را خود کافه می‌سازد (نام، حداقل ساعت کل، درصد). کد تخفیف محدودهٔ جدا دارد. اگر کد به یک گروه محدود باشد و بوفه یا خدمات را هم شامل شود، آن بخش فقط وقتی تخفیف می‌گیرد که حداقل یک سطر زمان از همان گروه در فاکتور باشد؛ وگرنه کد اعمال نمی‌شود.
 
-حالت کیف پول تنظیم شعبه است. در حالت مشترک یک موجودی برای PC و کنسول است؛ بدهی کنسول موجودی را منفی می‌کند و به‌طور پیش‌فرض PC را می‌بندد. اگر `AllowPcWhileInDebt` روشن باشد، PC هنوز می‌تواند دقیقه‌های بسته را مصرف کند ولی پول را منفی‌تر نمی‌کند. در حالت جدا، موجودی PC هرگز منفی نمی‌شود و کیف پول کنسول/میز جداست؛ بدهی کنسول روی ورود PC اثر ندارد. شارژ باید بگوید کدام موجودی را پر می‌کند.
+حالت کیف پول تنظیم شعبه است. در حالت مشترک یک موجودی برای PC و کنسول است. بدهی به‌طور پیش‌فرض خاموش است؛ کنسول موجودی را منفی نمی‌کند مگر شعبه سقف بدهی بگذارد. اگر موجودی منفی باشد، PC به‌طور پیش‌فرض بسته می‌شود. اگر `AllowPcWhileInDebt` روشن باشد، PC هنوز می‌تواند دقیقه‌های بسته را مصرف کند ولی پول را منفی‌تر نمی‌کند. در حالت جدا، موجودی PC هرگز منفی نمی‌شود و کیف پول کنسول/میز جداست؛ بدهی کنسول روی ورود PC اثر ندارد. شارژ باید بگوید کدام موجودی را پر می‌کند.
 
 فقط نرخ PS5 از Game Timer موجود است. گروه ناشناخته خطا می‌دهد و رایگان حساب نمی‌شود.
 
@@ -53,12 +53,11 @@ A segment is what the caller already knows: the controller count changed, the me
 
 `SessionPricer.Price` takes the session, a rate card, a holiday calendar, and a `BillingPolicy`.
 
-1. Reject overlapping segments, a reversed interval, a player count outside 1–4 for offline play, or an instant whose offset is not `+03:30`.
+1. Reject overlapping segments, a reversed interval, or a player count outside 1–4 for offline play. Any offset is rebuilt from its UTC instant at a fixed `+03:30`. A `DateTimeKind.Local` value is rejected so the machine offset is never used.
 2. Subtract pauses. A pause cuts every segment it overlaps. Time outside the session is ignored. Overlapping pauses are safe.
-3. Split each active stretch at Tehran midnight and at the edges of **that segment's group** bands. A band that belongs to another group is not a boundary.
-4. Resolve the rate at the start of each piece (see precedence).
-5. Merge pieces of the **same caller segment** when they are contiguous, on the same Tehran date, and resolved to the same rate. A band edge that does not change the price is not an extra rounded minute. Pieces the caller already split stay separate, even at the same rate.
-6. Turn each merged piece's active seconds into billed minutes, then into toman.
+3. Count billed minutes on the session's running active clock. The total is `ceil` of the played time (for the default policy), so a pause, a controller change, a band edge, or midnight does not add a minute by itself. Six hundred seconds with three pauses is 10 minutes.
+4. Each billing block is priced at the rate where that block starts. A minute that crosses 08:30 or midnight stays entirely in the band where it started. Lines still split when the rate or the Tehran date changes, and they do not cross a pause.
+5. Contiguous pieces at the same rate, including pieces the caller already split, are one line. Each line is `hourly × minutes / 60`, rounded half-up **once**. Sixty PS5 minutes are exactly 110,000, not 60 × 1,833.
 
 The charge for a piece is integer division:
 
@@ -83,7 +82,7 @@ Sessions may cross midnight, cross several days, and run longer than 24 hours. A
 | `PartialUnits` (Ceiling) | What happens to an incomplete block. Ceiling bills it as a full block. Floor drops it. Nearest rounds an exact half up, so 30 seconds of a 1-minute block is billed and 29 seconds are not. |
 | `Remainder` (Nearest) | The toman remainder of dividing by 60, as above. |
 
-`WalletSettings` is the branch choice. `WalletMode.Shared` (the default) keeps one pocket for PC and for console or tables. Console debt makes that pocket negative. `AllowPcWhileInDebt` defaults to false: PC time, including packages, is blocked and the estimate is zero. Set it true and PC may still spend package minutes, but a PC charge never pushes the balance further negative, so money minutes stay zero while the pocket is negative. `WalletMode.Separate` keeps a PC balance that never goes negative and a non-PC wallet that may. Console debt does not affect PC login. `TopUp` names the target: `Shared` in shared mode, or `Pc` / `NonPc` in separate mode. `DebtPolicy` limits only the pocket a console or table charge draws: unlimited by default, `Limited(amount)` is the deepest debt, and `None` refuses to go below zero. A PC session's unpaid remainder is `UncoveredToman`. `GraceMinuteEnabled` defaults to true: if the PC balance is still above zero but below the price of the next minute, that minute is granted and the shortfall is a grace line (not debt, and the balance is not taken below zero). Further time stays uncovered. Set the flag false to stop as soon as the next minute cannot be paid. Rounding accepts any positive toman step, including 100.
+`WalletSettings` is the branch choice. `WalletMode.Shared` (the default) keeps one pocket for PC and for console or tables. `AllowPcWhileInDebt` defaults to false: PC time, including packages, is blocked while that pocket is negative, and the estimate is zero. Set it true and PC may still spend package minutes, but a PC charge never pushes the balance further negative, so money minutes stay zero while the pocket is negative. `WalletMode.Separate` keeps a PC balance that never goes negative and a non-PC wallet that may. Console debt does not affect PC login. `TopUp` names the target: `Shared` in shared mode, or `Pc` / `NonPc` in separate mode. `DebtPolicy` limits only the pocket a console or table charge draws. The default is `None`: the charge is refused rather than going below zero. `Limited(amount)` is the deepest debt, and `Unlimited` has no floor. A PC session's unpaid remainder is `UncoveredToman`. `GraceMinuteEnabled` defaults to true: if the PC balance is still above zero but below the price of one clock minute, that minute is granted and the shortfall is a grace line (not debt, and the balance is not taken below zero). The grant is one minute even when the billing block is 5 or 15 minutes. Further time stays uncovered. Set the flag false to stop as soon as the next minute cannot be paid. Grace is taken off the time charge before level, birthday, and code percents. `ApplyDiscountsToPc` defaults to false: the PC debit is that post-grace amount, and the remaining-time estimate uses the full minute price. Set it true and those time discounts reduce both the debit and the estimate, and the invoice payable equals the wallet debit. Rounding accepts any positive toman step, including 100, and that step is applied once to the invoice total after the per-line half-up.
 
 `LevelLadder` is cafe data: name, strictly ascending lifetime-hour threshold, and a percent from 0 to 100. `LevelLadder.ExampleSeed` (also `GameTimerReference.ExampleLevelSeed`) is an optional Bronze 5% … Titan 28% starter. The hour numbers on that seed are placeholders. `Resolve(lifetimeHours)` picks the highest row the customer has reached. Hours below the first threshold are no level.
 
@@ -100,11 +99,11 @@ Wallet draws do not order gift before real or the reverse. They take both as one
 For one instant, one group, and one tariff key `(group, mode, player count)`:
 
 1. **Special day**, if the cafe put that Tehran date on the calendar and the date's rate table has a rate for this group and key.
-2. **Weekday**, if that day has a rate for the key.
-3. **This group's time band**, if local time falls in one of its bands and that band has a rate for the key.
+2. **This group's time band**, if local time falls in one of its bands and that band has a rate for the key.
+3. **Weekday**, if that day has a rate for the key.
 4. **Base tariff**.
 
-A missing rate falls through. A special day does not need a copy of every mode, and it does not need a rate for every group: a group with no row on that table keeps its weekday, band, or base rate. PS5's 00:00–08:30 band does not split or reprice any other group. If nothing matches, pricing throws `BillingException` with code `tariff_not_found` rather than charging zero. Only PS5 rates are live; other groups in tests use rates marked as examples.
+A missing rate falls through, including a special day that has no row for this player count. A special day does not need a copy of every mode, and it does not need a rate for every group. PS5's 00:00–08:30 band does not split or reprice any other group. If nothing matches, pricing throws `BillingException` with code `tariff_not_found` rather than charging zero. Only PS5 rates are live; other groups in tests use rates marked as examples.
 
 Worked PS5 1-player figures from the owner's sheet:
 
@@ -118,7 +117,7 @@ Worked PS5 1-player figures from the owner's sheet:
 
 The band is half-open: 08:30 is already the day rate.
 
-Weekday and special-day rates replace the band for the keys they define. They are not multiplied by it. On a Friday whose 1-player rate is 100,000, 01:00–02:00 costs 100,000 even though special hours would have been 160,000. A 2-player rate that was not overridden still uses the band. A started minute is billed (partial blocks round up). That default is what the cafe confirmed; floor and nearest remain available on `BillingPolicy` if a branch ever needs them.
+A special day replaces the band only for the keys it defines. Inside the band, the band replaces the weekday. They are not multiplied. Thursday 02:00–03:00 PS5 1-player is **160,000** even when Thursday has a weekday rate. Friday 10:00, outside the band, still uses the Friday rate. A 2-player key missing from the special-day table uses the band, then the weekday, then the base. A started minute is billed (partial blocks round up). That default is what the cafe confirmed; floor and nearest remain available on `BillingPolicy` if a branch ever needs them.
 
 ## Prepaid limits
 
@@ -129,10 +128,9 @@ Weekday and special-day rates replace the band for the keys they define. They ar
 Example, PS5 1 player, budget 160,000, start 08:00:
 
 - 08:00–08:30 at 160,000 costs 80,000.
-- The remaining 80,000 buys **43 minutes** at 110,000 (78,833 toman). The 44th minute would be 80,667.
-- End is **09:13**. Unused **1,167**. Consumed 158,833, which is under the budget.
-
-The walk stops after 366 days if a zero rate never exhausts the budget.
+- The remaining 80,000 buys **43 minutes** at 110,000 (78,833 toman).
+- The leftover 1,167 is below one minute (1,833), so the default grace minute runs to **09:14** and waives the shortfall. The grace line stores the full minute tariff.
+- A zero hourly rate is unlimited. The planner does not walk a year looking for the end.
 
 ## PC accounts
 
@@ -220,7 +218,7 @@ A fixed code of 61,300 on a 200,000 time charge produces 138,700 and only then r
 
 A failed wallet draw does not partially consume it. Method totals and per-tender gift/real splits are both returned.
 
-Gift and real credit are one pocket. There is no gift-first or real-first order, and gift credit does not expire. The positive part of a tender is split in proportion (gift share floored, leftover toman on real). A console or table charge may continue past zero on the pocket that pays it: the shared pocket, or the non-PC pocket when the branch is separate. The extra toman is debt on real credit. `DebtPolicy.Unlimited` is the default. `Limited` rejects a charge that would pass the floor, without a partial draw. `None` refuses to go below zero. A 30,000 tender on 10,000 gift and 50,000 real still draws 5,000 gift and 25,000 real. PC settlement never drives its pocket further negative.
+Gift and real credit are one pocket. There is no gift-first or real-first order, and gift credit does not expire. The positive part of a tender keeps the gift ratio from the last top-up, so many small draws take the same gift as one draw of the sum. Leftover toman sit on real. A console or table charge may continue past zero on the pocket that pays it: the shared pocket, or the non-PC pocket when the branch is separate. The extra toman is debt on real credit only when the branch allows debt. `DebtPolicy.None` is the default and refuses to go below zero. `Limited` rejects a charge that would pass the floor, without a partial draw. `Unlimited` has no floor. A 30,000 tender on 10,000 gift and 50,000 real still draws 5,000 gift and 25,000 real. PC settlement never drives its pocket further negative.
 
 ## What was taken from Game Timer 4.3
 
@@ -248,12 +246,12 @@ Also read, and not a tariff: service `ABC_1` «خسارت انداختن دست�
 
 ## Decisions
 
-- Tehran is a fixed offset. Historical daylight-saving dates before 2022 are out of scope; passing one still uses `+03:30`.
+- Tehran is computed from the UTC instant at a fixed `+03:30`. The offset on the input is not trusted, and a local `DateTime` is rejected. Historical daylight-saving dates before 2022 are out of scope.
 - Sub-second ticks are truncated. A started minute is billed. That is the confirmed default.
 - Unknown tariffs fail loudly. Only PS5 rates are loaded from Game Timer. Example groups in tests are labeled `example-*` and are not live prices.
 - Time bands belong to one station group. Special days are Jalali: one date, or every year on a Jalali month and day. A one-off wins when both hit the same day. They replace the band for the keys they define.
 - Birthdays and "whole month" use the Solar Hijri calendar via `PersianCalendar`. The stored form is `JalaliDate`. Esfand 30 is observed on Esfand 29 in a non-leap Jalali year.
-- Same-rate caller splits may differ by at most the ceiling cost of **one** granularity block (at the PS5 1-player rate, 1,834 toman). Whole-minute splits of a single rate match exactly.
+- Same-rate caller splits match the unsplit session exactly, in minutes and in toman. Each line rounds `hourly × minutes / 60` once. The optional toman step then rounds the invoice total once.
 - Package minutes are minutes, not "toman of face value".
 - The remaining-time estimate does not look ahead to the next band. The prepaid amount planner does. In the default shared mode a negative balance blocks PC play and the estimate is zero.
 - `WalletMode.Shared` is the default: one pocket. Console debt blocks PC play unless `AllowPcWhileInDebt` is on, and even then PC only spends package minutes. `WalletMode.Separate` keeps console debt off the PC balance. Top-ups name which pocket. PC settlement stops at zero either way.

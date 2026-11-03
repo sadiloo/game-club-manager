@@ -11,7 +11,7 @@ public class WalletModeTests
     {
         var blocked = new CustomerAccount(
             "m",
-            WalletSettings.Shared,
+            WalletSettings.Shared.WithDebt(DebtPolicy.Unlimited),
             new WalletPocket(30_000, 0),
             new WalletPocket(0, 0),
             [new TimePackage("hours", 120, 200_000)]);
@@ -30,7 +30,7 @@ public class WalletModeTests
         Assert.Equal(-50_000, play.Account.PcMoneyToman);
         Assert.Equal(120, play.Account.Packages[0].RemainingMinutes);
 
-        var allowed = blocked with { Settings = new WalletSettings(WalletMode.Shared, allowPcWhileInDebt: true) };
+        var allowed = blocked with { Settings = new WalletSettings(WalletMode.Shared, true, DebtPolicy.Unlimited) };
         var allowedDebt = allowed.ChargeNonPc(80_000).Account;
         var packageEstimate = CustomerPlay.Estimate(allowedDebt, CafeFixture.ExampleNormal, PlayMode.Offline, 1, At, CafeFixture.Card());
         Assert.False(packageEstimate.BlockedByDebt);
@@ -61,7 +61,7 @@ public class WalletModeTests
     {
         var account = new CustomerAccount(
             "m",
-            WalletSettings.Separate,
+            WalletSettings.Separate.WithDebt(DebtPolicy.Unlimited),
             new WalletPocket(50_000, 0),
             new WalletPocket(30_000, 0),
             []);

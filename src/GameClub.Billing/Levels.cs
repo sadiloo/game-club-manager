@@ -1,8 +1,9 @@
 namespace GameClub.Billing;
 
 /// <summary>
-/// One row of a cafe-edited level ladder. <see cref="MinimumLifetimeHours"/> is the
-/// lifetime play time required to reach this row. The percent is 0–100.
+/// One row of a cafe-edited level ladder. <see cref="MinimumLifetimeHours"/> is a
+/// whole number of lifetime hours (a <c>long</c>, not a fraction of an hour).
+/// The percent is 0–100.
 /// </summary>
 public sealed record CustomerLevel(string Name, long MinimumLifetimeHours, int DiscountPercent);
 

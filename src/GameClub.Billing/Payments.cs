@@ -9,16 +9,54 @@ public enum PaymentMethod
 }
 
 /// <summary>
-/// A member wallet. Gift and real credit are one spendable balance: a draw takes
-/// them in proportion (gift share floored, leftover toman assigned to real) and
-/// the result still reports each part. Gift credit does not expire. A wallet
-/// tender cannot go negative; PC-account debt is a separate balance.
+/// A member wallet. Gift and real credit are one spendable balance. The basis fields
+/// keep the ratio from the last top-up so many small draws match one large draw.
+/// Gift credit does not expire and does not go negative. Debt sits on real credit.
 /// </summary>
-public sealed record MemberWallet(string MemberId, long RealCreditToman, long GiftCreditToman)
+public sealed record MemberWallet(
+    string MemberId,
+    long RealCreditToman,
+    long GiftCreditToman,
+    long BasisRealToman = 0,
+    long BasisGiftToman = 0,
+    long PositiveDrawnToman = 0,
+    long GiftDrawnFromBasisToman = 0)
 {
     public long BalanceToman => RealCreditToman + GiftCreditToman;
 
     public long DebtToman => BalanceToman < 0 ? -BalanceToman : 0;
+
+    public WalletPocket ToPocket()
+    {
+        var untouched = PositiveDrawnToman == 0
+            && GiftDrawnFromBasisToman == 0
+            && BasisRealToman == 0
+            && BasisGiftToman == 0;
+        if (untouched)
+        {
+            return new WalletPocket(RealCreditToman, GiftCreditToman);
+        }
+
+        return new WalletPocket(
+            RealCreditToman,
+            GiftCreditToman,
+            BasisRealToman,
+            BasisGiftToman,
+            PositiveDrawnToman,
+            GiftDrawnFromBasisToman);
+    }
+
+    public static MemberWallet FromPocket(string memberId, WalletPocket pocket)
+    {
+        return new MemberWallet(
+            memberId,
+            pocket.RealToman,
+            pocket.GiftToman,
+            pocket.BasisRealToman,
+            pocket.BasisGiftToman,
+            pocket.PositiveDrawnToman,
+            pocket.GiftDrawnFromBasisToman);
+    }
 }
 
 public sealed record Tender(PaymentMethod Method, long AmountToman, string? MemberId = null);
@@ -57,6 +95,12 @@ public sealed record SplitPayment(
 
 public static class PaymentSplitter
 {
+    /// <summary>
+    /// Splits a payable total. Wallet debt defaults to <see cref="DebtPolicy.None"/>:
+    /// a tender that would push the pocket below zero is refused. Pass
+    /// <see cref="DebtPolicy.Unlimited"/> or <see cref="DebtPolicy.Limited"/> when a
+    /// branch has allowed console or table debt.
+    /// </summary>
     public static SplitPayment Split(
         long payableToman,
         IReadOnlyList<Tender> tenders,
@@ -65,28 +109,32 @@ public static class PaymentSplitter
     {
         if (payableToman < 0)
         {
-            throw new BillingException("invalid_money", "Payable total cannot be negative.");
+            throw new BillingException(BillingErrors.InvalidMoney, "Payable total cannot be negative.");
         }
 
-        ArgumentNullException.ThrowIfNull(tenders);
-        walletDebt ??= DebtPolicy.Unlimited;
+        if (tenders is null)
+        {
+            throw new BillingException(BillingErrors.InvalidPayment, "Tenders are required.");
+        }
+
+        walletDebt ??= DebtPolicy.None;
         var errors = new List<PaymentError>();
-        var balances = new Dictionary<string, (long Real, long Gift)>(StringComparer.Ordinal);
+        var balances = new Dictionary<string, WalletPocket>(StringComparer.Ordinal);
         foreach (var wallet in wallets ?? [])
         {
             if (string.IsNullOrWhiteSpace(wallet.MemberId))
             {
-                throw new BillingException("invalid_payment", "Wallet member id is required.");
+                throw new BillingException(BillingErrors.InvalidPayment, "Wallet member id is required.");
             }
 
             if (wallet.GiftCreditToman < 0)
             {
-                throw new BillingException("invalid_money", $"Wallet '{wallet.MemberId}' has negative gift credit. Debt is carried on real credit.");
+                throw new BillingException(BillingErrors.InvalidMoney, $"Wallet '{wallet.MemberId}' has negative gift credit. Debt is carried on real credit.");
             }
 
-            if (!balances.TryAdd(wallet.MemberId, (wallet.RealCreditToman, wallet.GiftCreditToman)))
+            if (!Bcl.TryAdd(balances, wallet.MemberId, wallet.ToPocket()))
             {
-                throw new BillingException("invalid_payment", $"Duplicate wallet '{wallet.MemberId}'.");
+                throw new BillingException(BillingErrors.InvalidPayment, $"Duplicate wallet '{wallet.MemberId}'.");
             }
         }
 
@@ -102,29 +150,28 @@ public static class PaymentSplitter
                 continue;
             }
 
-            tendered += tender.AmountToman;
+            tendered = MoneyMath.CheckedAdd(tendered, tender.AmountToman);
             if (tender.Method != PaymentMethod.Wallet)
             {
                 results.Add(new TenderResult(i, tender.Method, tender.AmountToman, tender.MemberId, 0, 0, true));
                 continue;
             }
 
-            if (string.IsNullOrWhiteSpace(tender.MemberId))
+            if (tender.MemberId is not string memberId || string.IsNullOrWhiteSpace(memberId))
             {
                 errors.Add(new PaymentError(PaymentErrors.WalletMissingMember, $"Tender {i} is a wallet payment without a member."));
                 results.Add(new TenderResult(i, tender.Method, tender.AmountToman, tender.MemberId, 0, 0, false));
                 continue;
             }
 
-            if (!balances.TryGetValue(tender.MemberId, out var balance))
+            if (!balances.TryGetValue(memberId, out var balance))
             {
-                errors.Add(new PaymentError(PaymentErrors.UnknownWallet, $"No wallet for member '{tender.MemberId}'."));
-                results.Add(new TenderResult(i, tender.Method, tender.AmountToman, tender.MemberId, 0, 0, false));
+                errors.Add(new PaymentError(PaymentErrors.UnknownWallet, $"No wallet for member '{memberId}'."));
+                results.Add(new TenderResult(i, tender.Method, tender.AmountToman, memberId, 0, 0, false));
                 continue;
             }
 
-            var pocket = new WalletPocket(balance.Real, balance.Gift);
-            if (!pocket.TrySpend(tender.AmountToman, walletDebt, out var updated, out var giftDrawn, out var realDrawn))
+            if (!balance.TrySpend(tender.AmountToman, walletDebt, out var updated, out var giftDrawn, out var realDrawn))
             {
                 errors.Add(new PaymentError(
                     PaymentErrors.InsufficientWallet,
@@ -133,9 +180,8 @@ public static class PaymentSplitter
                 continue;
             }
 
-            balance = (updated.RealToman, updated.GiftToman);
-            balances[tender.MemberId] = balance;
-            results.Add(new TenderResult(i, tender.Method, tender.AmountToman, tender.MemberId, giftDrawn, realDrawn, true));
+            balances[memberId] = updated;
+            results.Add(new TenderResult(i, tender.Method, tender.AmountToman, memberId, giftDrawn, realDrawn, true));
         }
 
         var difference = tendered - payableToman;
@@ -148,14 +194,17 @@ public static class PaymentSplitter
 
         var totals = results
             .GroupBy(result => result.Method)
-            .Select(group => new MethodTotal(group.Key, group.Sum(result => result.AmountToman)))
+            .Select(group => new MethodTotal(group.Key, MoneyMath.CheckedSum(group.Select(result => result.AmountToman))))
             .OrderBy(total => total.Method)
             .ToArray();
 
-        var remaining = balances
-            .Select(pair => new MemberWallet(pair.Key, pair.Value.Real, pair.Value.Gift))
-            .OrderBy(wallet => wallet.MemberId, StringComparer.Ordinal)
-            .ToArray();
+        var remaining = new List<MemberWallet>(balances.Count);
+        foreach (var pair in balances)
+        {
+            remaining.Add(MemberWallet.FromPocket(pair.Key, pair.Value));
+        }
+
+        remaining.Sort((left, right) => string.CompareOrdinal(left.MemberId, right.MemberId));
 
         return new SplitPayment(errors.Count == 0, payableToman, tendered, difference, errors, totals, results, remaining);
     }
@@ -163,17 +212,59 @@ public static class PaymentSplitter
 
 /// <summary>
 /// Real and gift credit of one pocket. Debt sits on real credit. Gift credit does not go negative.
+/// Draws use a cumulative floor of <c>totalDrawn × initialGift / initialTotal</c> so a series of
+/// small draws takes the same gift as one draw of the sum. Anything beyond the positive balance
+/// is debt on real credit.
 /// </summary>
-public readonly record struct WalletPocket(long RealToman, long GiftToman)
+public readonly record struct WalletPocket
 {
+    public WalletPocket(long realToman, long giftToman)
+        : this(
+            realToman,
+            giftToman,
+            realToman > 0 ? realToman : 0,
+            giftToman > 0 ? giftToman : 0,
+            0,
+            0)
+    {
+    }
+
+    public WalletPocket(
+        long realToman,
+        long giftToman,
+        long basisRealToman,
+        long basisGiftToman,
+        long positiveDrawnToman,
+        long giftDrawnFromBasisToman)
+    {
+        RealToman = realToman;
+        GiftToman = giftToman;
+        BasisRealToman = basisRealToman;
+        BasisGiftToman = basisGiftToman;
+        PositiveDrawnToman = positiveDrawnToman;
+        GiftDrawnFromBasisToman = giftDrawnFromBasisToman;
+    }
+
+    public long RealToman { get; }
+
+    public long GiftToman { get; }
+
+    public long BasisRealToman { get; }
+
+    public long BasisGiftToman { get; }
+
+    public long PositiveDrawnToman { get; }
+
+    public long GiftDrawnFromBasisToman { get; }
+
     public long TotalToman => RealToman + GiftToman;
 
     public long DebtToman => TotalToman < 0 ? -TotalToman : 0;
 
     /// <summary>
-    /// Spends <paramref name="amount"/>. The positive part is split in proportion
-    /// (gift share floored, leftover toman on real). Anything beyond that is debt on real credit,
-    /// down to <paramref name="debt"/>. A spend that would pass the floor is rejected whole.
+    /// Spends <paramref name="amount"/>. The positive part keeps the original gift ratio.
+    /// Anything beyond that is debt on real credit, down to <paramref name="debt"/>.
+    /// A spend that would pass the floor is rejected whole.
     /// </summary>
     public bool TrySpend(long amount, DebtPolicy debt, out WalletPocket updated, out long giftDrawn, out long realDrawn)
     {
@@ -190,19 +281,56 @@ public readonly record struct WalletPocket(long RealToman, long GiftToman)
         var positiveReal = RealToman > 0 ? RealToman : 0;
         var positive = positiveGift + positiveReal;
         var fromPositive = amount < positive ? amount : positive;
-        if (positive == 0 || positiveGift == 0 || positiveReal == 0)
+        var debtPart = amount - fromPositive;
+        var basis = BasisGiftToman + BasisRealToman;
+        long giftTake;
+        if (fromPositive == 0 || basis <= 0 || BasisGiftToman <= 0)
         {
-            giftDrawn = positiveReal == 0 ? fromPositive : 0;
-            realDrawn = fromPositive - giftDrawn;
+            giftTake = positiveReal == 0 && positiveGift > 0 ? fromPositive : 0;
+        }
+        else if (BasisRealToman <= 0)
+        {
+            giftTake = fromPositive;
         }
         else
         {
-            giftDrawn = fromPositive * positiveGift / positive;
-            realDrawn = fromPositive - giftDrawn;
+            var totalAfter = PositiveDrawnToman + fromPositive;
+            var giftShould = (totalAfter * BasisGiftToman) / basis;
+            giftTake = giftShould - GiftDrawnFromBasisToman;
+            if (giftTake < 0)
+            {
+                giftTake = 0;
+            }
+
+            if (giftTake > fromPositive)
+            {
+                giftTake = fromPositive;
+            }
+
+            if (giftTake > positiveGift)
+            {
+                giftTake = positiveGift;
+            }
         }
 
-        realDrawn += amount - fromPositive;
-        updated = new WalletPocket(RealToman - realDrawn, GiftToman - giftDrawn);
+        var realTake = fromPositive - giftTake + debtPart;
+        if (GiftToman - giftTake < 0)
+        {
+            updated = this;
+            giftDrawn = 0;
+            realDrawn = 0;
+            return false;
+        }
+
+        updated = new WalletPocket(
+            RealToman - realTake,
+            GiftToman - giftTake,
+            BasisRealToman,
+            BasisGiftToman,
+            PositiveDrawnToman + fromPositive,
+            GiftDrawnFromBasisToman + giftTake);
+        giftDrawn = giftTake;
+        realDrawn = realTake;
         return true;
     }
 
@@ -221,7 +349,7 @@ public readonly record struct WalletPocket(long RealToman, long GiftToman)
         var maxDebt = debt.MaxDebtToman.Value;
         if (balance >= 0)
         {
-            return checked(balance + maxDebt);
+            return MoneyMath.CheckedAdd(balance, maxDebt);
         }
 
         var owed = -balance;

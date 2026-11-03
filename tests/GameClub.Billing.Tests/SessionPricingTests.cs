@@ -160,11 +160,11 @@ public class SessionPricingTests
     }
 
     [Fact]
-    public void Special_day_beats_weekday_and_weekday_beats_the_hour_band()
+    public void Special_day_beats_the_hour_band_and_the_band_beats_weekday()
     {
-        Assert.Equal(DayOfWeek.Tuesday, new DateOnly(2026, 6, 2).DayOfWeek);
-        Assert.Equal(DayOfWeek.Friday, new DateOnly(2026, 6, 5).DayOfWeek);
-        Assert.Equal(DayOfWeek.Saturday, new DateOnly(2026, 6, 6).DayOfWeek);
+        Assert.Equal(DayOfWeek.Tuesday, new LocalDate(2026, 6, 2).DayOfWeek);
+        Assert.Equal(DayOfWeek.Friday, new LocalDate(2026, 6, 5).DayOfWeek);
+        Assert.Equal(DayOfWeek.Saturday, new LocalDate(2026, 6, 6).DayOfWeek);
 
         var card = new RateCardBuilder()
             .AddBand(GameTimerReference.SpecialHours)
@@ -174,6 +174,7 @@ public class SessionPricingTests
             .AddBandRate(GameTimerReference.SpecialBandId, CafeFixture.Ps5, PlayMode.Offline, 1, 160_000)
             .AddBandRate(GameTimerReference.SpecialBandId, CafeFixture.Ps5, PlayMode.Offline, 2, 175_000)
             .AddBandRate(GameTimerReference.SpecialBandId, CafeFixture.Ps5, PlayMode.Online, null, 220_000)
+            .AddWeekday(DayOfWeek.Thursday, CafeFixture.Ps5, PlayMode.Offline, 1, 100_000)
             .AddWeekday(DayOfWeek.Friday, CafeFixture.Ps5, PlayMode.Offline, 1, 100_000)
             .AddWeekday(DayOfWeek.Saturday, CafeFixture.Ps5, PlayMode.Offline, 1, 90_000)
             .AddBase(CafeFixture.ExampleVip, PlayMode.Offline, 1, CafeFixture.ExampleVipOnePlayerHourly)
@@ -183,13 +184,18 @@ public class SessionPricingTests
             .Build();
         var specialDays = new SpecialDayCalendar(
         [
-            SpecialDay.Once(JalaliDate.FromGregorian(new DateOnly(2026, 6, 6)), "Festival", "festival"),
-            SpecialDay.Once(JalaliDate.FromGregorian(new DateOnly(2026, 6, 7)), "Local event", "local-event"),
+            SpecialDay.Once(JalaliDate.FromGregorian(new LocalDate(2026, 6, 6)), "Festival", "festival"),
+            SpecialDay.Once(JalaliDate.FromGregorian(new LocalDate(2026, 6, 7)), "Local event", "local-event"),
         ]);
 
-        var fridaySpecial = Price(card, specialDays, T.At(2026, 6, 5, 1, 0), T.At(2026, 6, 5, 2, 0), 1);
-        Assert.Equal(RateSource.Weekday, Assert.Single(fridaySpecial.Lines).Source);
-        Assert.Equal(100_000, fridaySpecial.TotalAmountToman);
+        Assert.Equal(DayOfWeek.Thursday, new LocalDate(2026, 6, 4).DayOfWeek);
+        var thursdayNight = Price(card, specialDays, T.At(2026, 6, 4, 2, 0), T.At(2026, 6, 4, 3, 0), 1);
+        Assert.Equal(RateSource.TimeBand, Assert.Single(thursdayNight.Lines).Source);
+        Assert.Equal(160_000, thursdayNight.TotalAmountToman);
+
+        var fridayNight = Price(card, specialDays, T.At(2026, 6, 5, 1, 0), T.At(2026, 6, 5, 2, 0), 1);
+        Assert.Equal(RateSource.TimeBand, Assert.Single(fridayNight.Lines).Source);
+        Assert.Equal(160_000, fridayNight.TotalAmountToman);
 
         var fridayTwoPlayer = Price(card, specialDays, T.At(2026, 6, 5, 1, 0), T.At(2026, 6, 5, 2, 0), 2);
         Assert.Equal(RateSource.TimeBand, Assert.Single(fridayTwoPlayer.Lines).Source);
@@ -256,8 +262,8 @@ public class SessionPricingTests
             SpecialDay.Once(new JalaliDate(1405, JalaliMonth.Farvardin, 1), "Opening", "opening"),
         ]);
 
-        Assert.Equal(new DateOnly(2025, 3, 21), new JalaliDate(1404, JalaliMonth.Farvardin, 1).ToGregorian());
-        Assert.Equal(new DateOnly(2026, 3, 21), new JalaliDate(1405, JalaliMonth.Farvardin, 1).ToGregorian());
+        Assert.Equal(new LocalDate(2025, 3, 21), new JalaliDate(1404, JalaliMonth.Farvardin, 1).ToGregorian());
+        Assert.Equal(new LocalDate(2026, 3, 21), new JalaliDate(1405, JalaliMonth.Farvardin, 1).ToGregorian());
 
         Assert.Equal(50_000, HourOn(card, yearly, new JalaliDate(1404, 1, 1)).TotalAmountToman);
         Assert.Equal(50_000, HourOn(card, yearly, new JalaliDate(1405, 1, 1)).TotalAmountToman);
@@ -278,7 +284,7 @@ public class SessionPricingTests
             .AddBase(CafeFixture.Ps5, PlayMode.Offline, 1, GameTimerReference.Ps5OnePlayerHourly)
             .AddBandRate(GameTimerReference.SpecialBandId, CafeFixture.Ps5, PlayMode.Offline, 1, GameTimerReference.Ps5OnePlayerSpecialHourly)
             .AddBase(lounge, PlayMode.Offline, 1, 80_000)
-            .AddBand(new TimeBand("example-evening", lounge, "Example evening", new TimeOnly(18, 0), new TimeOnly(22, 0)))
+            .AddBand(new TimeBand("example-evening", lounge, "Example evening", new TimeOfDay(18, 0), new TimeOfDay(22, 0)))
             .AddBandRate("example-evening", lounge, PlayMode.Offline, 1, 50_000)
             .Build();
 
@@ -344,7 +350,7 @@ public class SessionPricingTests
     }
 
     [Fact]
-    public void Overlapping_segments_and_a_bad_offset_are_rejected()
+    public void Overlapping_segments_are_rejected_and_a_utc_offset_is_normalized()
     {
         var overlap = Assert.Throws<BillingException>(() => CafeFixture.Price(CafeFixture.Session(
             "bad",
@@ -352,7 +358,8 @@ public class SessionPricingTests
             CafeFixture.Play("b", T.At(2026, 6, 2, 10, 30), T.At(2026, 6, 2, 11, 30), "ps5-1", CafeFixture.Ps5, 1))));
         Assert.Equal("invalid_session", overlap.Code);
 
-        var offset = Assert.Throws<BillingException>(() => CafeFixture.Price(CafeFixture.Session(
+        // 10:00 UTC is 13:30 in Tehran. The hour is the day rate, not a rejected offset.
+        var utc = CafeFixture.Price(CafeFixture.Session(
             "utc",
             new PlaySegment(
                 "a",
@@ -361,8 +368,10 @@ public class SessionPricingTests
                 "ps5-1",
                 CafeFixture.Ps5,
                 PlayMode.Offline,
-                1))));
-        Assert.Equal("invalid_time", offset.Code);
+                1)));
+        Assert.Equal(110_000, utc.TotalAmountToman);
+        Assert.Equal(new TimeSpan(3, 30, 0), utc.Lines[0].Start.Offset);
+        Assert.Equal(13, utc.Lines[0].Start.Hour);
     }
 
     private static SessionCharge Price(RateCard card, SpecialDayCalendar specialDays, DateTimeOffset start, DateTimeOffset end, int players, PlayMode mode = PlayMode.Offline)

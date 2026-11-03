@@ -101,7 +101,7 @@ public sealed record BirthdayWindow(BirthdayWindowKind Kind, int Days = 1, Birth
         }
     }
 
-    public bool Includes(JalaliDate birthDate, DateOnly tehranDate)
+    public bool Includes(JalaliDate birthDate, LocalDate tehranDate)
     {
         EnsureValid();
         var on = JalaliDate.FromGregorian(tehranDate);
@@ -148,15 +148,15 @@ public sealed record DiscountPolicy(int MaxCombinedPercent, BirthdayWindow Birth
 
 public static class DiscountRejection
 {
-    public const string OutsideWindow = "outside_window";
-    public const string NotEligible = "not_eligible";
+    public const string OutsideWindow = BillingErrors.OutsideWindow;
+    public const string NotEligible = BillingErrors.NotEligible;
 }
 
 public sealed record TimeChargeLine(
     string Description,
     long AmountToman,
     string? GroupId,
-    DateOnly? ServiceDate,
+    LocalDate? ServiceDate,
     DayOfWeek? Weekday)
 {
     public static IReadOnlyList<TimeChargeLine> FromSession(SessionCharge charge)
@@ -180,7 +180,7 @@ public sealed record TimeChargeLine(
 
 public sealed record BuffetLine(string ItemId, string Name, int Quantity, long UnitPriceToman)
 {
-    public long TotalToman => checked((long)Quantity * UnitPriceToman);
+    public long TotalToman => MoneyMath.CheckedMultiply(Quantity, UnitPriceToman);
 }
 
 public sealed record ServiceLine(string ServiceId, string Name, long AmountToman);
@@ -205,8 +205,8 @@ public sealed record DiscountCode(
     long FixedToman,
     DateTimeOffset? ValidFrom,
     DateTimeOffset? ValidUntil,
-    IReadOnlySet<string>? AllowedGroupIds,
-    IReadOnlySet<DayOfWeek>? AllowedWeekdays,
+    IReadOnlyCollection<string>? AllowedGroupIds,
+    IReadOnlyCollection<DayOfWeek>? AllowedWeekdays,
     ChargeScope Scope = ChargeScope.Time)
 {
     public static DiscountCode PercentOff(
@@ -214,10 +214,15 @@ public sealed record DiscountCode(
         int percent,
         DateTimeOffset? validFrom = null,
         DateTimeOffset? validUntil = null,
-        IReadOnlySet<string>? allowedGroupIds = null,
-        IReadOnlySet<DayOfWeek>? allowedWeekdays = null,
+        IReadOnlyCollection<string>? allowedGroupIds = null,
+        IReadOnlyCollection<DayOfWeek>? allowedWeekdays = null,
         ChargeScope scope = ChargeScope.Time)
     {
+        if (percent == 0)
+        {
+            throw new BillingException(BillingErrors.InvalidPolicy, "A discount code must take a percent or a fixed toman amount.");
+        }
+
         return new DiscountCode(code, percent, 0, validFrom, validUntil, allowedGroupIds, allowedWeekdays, scope);
     }
 
@@ -226,10 +231,15 @@ public sealed record DiscountCode(
         long fixedToman,
         DateTimeOffset? validFrom = null,
         DateTimeOffset? validUntil = null,
-        IReadOnlySet<string>? allowedGroupIds = null,
-        IReadOnlySet<DayOfWeek>? allowedWeekdays = null,
+        IReadOnlyCollection<string>? allowedGroupIds = null,
+        IReadOnlyCollection<DayOfWeek>? allowedWeekdays = null,
         ChargeScope scope = ChargeScope.Time)
     {
+        if (fixedToman == 0)
+        {
+            throw new BillingException(BillingErrors.InvalidPolicy, "A discount code must take a percent or a fixed toman amount.");
+        }
+
         return new DiscountCode(code, 0, fixedToman, validFrom, validUntil, allowedGroupIds, allowedWeekdays, scope);
     }
 }
@@ -255,7 +265,19 @@ public enum InvoiceLineKind
     Grace = 5,
 }
 
-public sealed record InvoiceLine(InvoiceLineKind Kind, string Description, long AmountToman);
+public sealed record InvoiceLine(InvoiceLineKind Kind, string Description, long AmountToman, LocalDate? ServiceDate = null)
+{
+    public string PersianLabel => Kind switch
+    {
+        InvoiceLineKind.Time => "زمان",
+        InvoiceLineKind.Buffet => "بوفه",
+        InvoiceLineKind.Service => "خدمات",
+        InvoiceLineKind.Discount => "تخفیف",
+        InvoiceLineKind.Rounding => "رند",
+        InvoiceLineKind.Grace => "دقیقه ارفاقی",
+        _ => throw new BillingException(BillingErrors.InvalidInvoice, $"Unknown invoice line kind '{Kind}'."),
+    };
+}
 
 public sealed record Invoice(
     IReadOnlyList<InvoiceLine> Lines,
@@ -285,12 +307,19 @@ public static class InvoiceCalculator
             throw new BillingException("invalid_policy", "The combined level and birthday cap must be between 0 and 100 percent.");
         }
 
-        var timeGross = request.TimeCharges.Sum(line => line.AmountToman);
-        var buffetGross = request.Buffet.Sum(line => line.TotalToman);
-        var servicesGross = request.Services.Sum(line => line.AmountToman);
-        var gross = timeGross + buffetGross + servicesGross;
+        var timeGross = MoneyMath.CheckedSum(request.TimeCharges.Select(line => line.AmountToman));
+        var buffetGross = MoneyMath.CheckedSum(request.Buffet.Select(line => line.TotalToman));
+        var servicesGross = MoneyMath.CheckedSum(request.Services.Select(line => line.AmountToman));
+        var gross = MoneyMath.CheckedAdd(MoneyMath.CheckedAdd(timeGross, buffetGross), servicesGross);
 
-        var (levelAmount, birthdayAmount) = CustomerDiscounts(request, timeGross);
+        // Grace comes off the time gross before any percent, so a 28% level discounts what was paid.
+        var graceWaived = request.Grace is { WaivedToman: > 0 } graceLine
+            ? Math.Min(graceLine.WaivedToman, timeGross)
+            : 0;
+        var discountRequest = request with { TimeCharges = SubtractFromEnd(request.TimeCharges, graceWaived) };
+        var timeAfterGrace = timeGross - graceWaived;
+
+        var (levelAmount, birthdayAmount) = CustomerDiscounts(discountRequest, timeAfterGrace);
         long codeOnTime = 0;
         long codeOnBuffet = 0;
         long codeOnServices = 0;
@@ -298,10 +327,10 @@ public static class InvoiceCalculator
         string? codeLabel = null;
         if (request.Code is DiscountCode code)
         {
-            (rejected, codeLabel, codeOnTime, codeOnBuffet, codeOnServices) = EvaluateCode(request, code, timeGross, buffetGross, servicesGross);
+            (rejected, codeLabel, codeOnTime, codeOnBuffet, codeOnServices) = EvaluateCode(discountRequest, code, timeAfterGrace, buffetGross, servicesGross);
         }
 
-        TrimExcess(ref codeOnTime, ref birthdayAmount, ref levelAmount, timeGross);
+        TrimExcess(ref codeOnTime, ref birthdayAmount, ref levelAmount, timeAfterGrace);
         CapAt(ref codeOnBuffet, buffetGross);
         CapAt(ref codeOnServices, servicesGross);
 
@@ -309,10 +338,7 @@ public static class InvoiceCalculator
         var discountTotal = levelAmount + birthdayAmount + codeAmount;
         var discountOnTime = levelAmount + birthdayAmount + codeOnTime;
         var discountOnOther = codeOnBuffet + codeOnServices;
-        var graceWaived = request.Grace is { WaivedToman: > 0 } graceLine
-            ? Math.Min(graceLine.WaivedToman, Math.Max(0, timeGross - discountOnTime))
-            : 0;
-        var net = gross - discountTotal - graceWaived;
+        var net = gross - graceWaived - discountTotal;
 
         long payable;
         long roundingDelta;
@@ -322,32 +348,33 @@ public static class InvoiceCalculator
         }
         else
         {
-            var timeNet = timeGross - discountOnTime - graceWaived;
+            var timeNet = timeAfterGrace - discountOnTime;
             var otherNet = buffetGross + servicesGross - discountOnOther;
             var (roundedTime, delta) = MoneyMath.Round(timeNet, request.Rounding);
             roundingDelta = delta;
             payable = roundedTime + otherNet;
         }
 
+        var issuedDate = TehranTime.Date(request.IssuedAt);
         var lines = new List<InvoiceLine>();
-        lines.AddRange(request.TimeCharges.Select(line => new InvoiceLine(InvoiceLineKind.Time, line.Description, line.AmountToman)));
-        lines.AddRange(request.Buffet.Select(line => new InvoiceLine(InvoiceLineKind.Buffet, line.Name, line.TotalToman)));
-        lines.AddRange(request.Services.Select(line => new InvoiceLine(InvoiceLineKind.Service, line.Name, line.AmountToman)));
-        AddDiscountLine(lines, LevelDescription(request.Customer, request.Customer?.LevelPercent ?? 0), levelAmount);
-        AddDiscountLine(lines, $"Birthday discount ({request.Customer?.BirthdayPercent ?? 0}%)", birthdayAmount);
-        if (codeAmount > 0 && codeLabel is not null)
-        {
-            lines.Add(new InvoiceLine(InvoiceLineKind.Discount, codeLabel, -codeAmount));
-        }
-
+        lines.AddRange(request.TimeCharges.Select(line => new InvoiceLine(InvoiceLineKind.Time, line.Description, line.AmountToman, line.ServiceDate ?? issuedDate)));
+        lines.AddRange(request.Buffet.Select(line => new InvoiceLine(InvoiceLineKind.Buffet, line.Name, line.TotalToman, issuedDate)));
+        lines.AddRange(request.Services.Select(line => new InvoiceLine(InvoiceLineKind.Service, line.Name, line.AmountToman, issuedDate)));
         if (graceWaived > 0)
         {
-            lines.Add(new InvoiceLine(InvoiceLineKind.Grace, "Grace minute", -graceWaived));
+            lines.Add(new InvoiceLine(InvoiceLineKind.Grace, "Grace minute", -graceWaived, issuedDate));
+        }
+
+        AddDiscountLine(lines, LevelDescription(request.Customer, request.Customer?.LevelPercent ?? 0), levelAmount, issuedDate);
+        AddDiscountLine(lines, $"Birthday discount ({request.Customer?.BirthdayPercent ?? 0}%)", birthdayAmount, issuedDate);
+        if (codeAmount > 0 && codeLabel is not null)
+        {
+            lines.Add(new InvoiceLine(InvoiceLineKind.Discount, codeLabel, -codeAmount, issuedDate));
         }
 
         if (roundingDelta != 0)
         {
-            lines.Add(new InvoiceLine(InvoiceLineKind.Rounding, "Rounding", roundingDelta));
+            lines.Add(new InvoiceLine(InvoiceLineKind.Rounding, "Rounding", roundingDelta, issuedDate));
         }
 
         return new Invoice(lines, timeGross, buffetGross, servicesGross, discountTotal, net, roundingDelta, payable, rejected, graceWaived);
@@ -426,7 +453,12 @@ public static class InvoiceCalculator
 
         if (code.Percent < 0 || code.FixedToman < 0 || code.Percent > 100)
         {
-            throw new BillingException("invalid_policy", "Discount code percent must be 0–100 and the fixed amount cannot be negative.");
+            throw new BillingException(BillingErrors.InvalidPolicy, "Discount code percent must be 0–100 and the fixed amount cannot be negative.");
+        }
+
+        if (code.Percent == 0 && code.FixedToman == 0)
+        {
+            throw new BillingException(BillingErrors.InvalidPolicy, "A discount code must take a percent or a fixed toman amount.");
         }
 
         if (code.Percent > 0 && code.FixedToman > 0)
@@ -570,12 +602,36 @@ public static class InvoiceCalculator
         return sum;
     }
 
-    private static void AddDiscountLine(List<InvoiceLine> lines, string description, long amount)
+    private static void AddDiscountLine(List<InvoiceLine> lines, string description, long amount, LocalDate date)
     {
         if (amount > 0)
         {
-            lines.Add(new InvoiceLine(InvoiceLineKind.Discount, description, -amount));
+            lines.Add(new InvoiceLine(InvoiceLineKind.Discount, description, -amount, date));
         }
+    }
+
+    private static IReadOnlyList<TimeChargeLine> SubtractFromEnd(IReadOnlyList<TimeChargeLine> lines, long grace)
+    {
+        if (grace <= 0)
+        {
+            return lines;
+        }
+
+        var copy = new TimeChargeLine[lines.Count];
+        for (var i = 0; i < lines.Count; i++)
+        {
+            copy[i] = lines[i];
+        }
+
+        var left = grace;
+        for (var i = copy.Length - 1; i >= 0 && left > 0; i--)
+        {
+            var take = left < copy[i].AmountToman ? left : copy[i].AmountToman;
+            copy[i] = copy[i] with { AmountToman = copy[i].AmountToman - take };
+            left -= take;
+        }
+
+        return copy;
     }
 
     private static string LevelDescription(CustomerPricing? customer, int percent)

@@ -16,9 +16,9 @@ public static class GameTimerReference
 
     public const string SpecialBandId = "special-hours";
 
-    public static readonly TimeOnly SpecialStart = new(0, 0);
+    public static readonly TimeOfDay SpecialStart = new(0, 0);
 
-    public static readonly TimeOnly SpecialEnd = new(8, 30);
+    public static readonly TimeOfDay SpecialEnd = new(8, 30);
 
     public const long Ps5OnePlayerHourly = 110_000;
     public const long Ps5TwoPlayerHourly = 125_000;

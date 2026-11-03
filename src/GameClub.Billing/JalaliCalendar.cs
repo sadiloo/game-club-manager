@@ -42,13 +42,24 @@ public readonly record struct JalaliDate
         Day = day;
     }
 
-    public static JalaliDate FromGregorian(DateOnly tehranDate)
+    /// <summary>True for <c>default(JalaliDate)</c>, which bypasses the constructor.</summary>
+    public bool IsEmpty => Year == 0 && Month == 0 && Day == 0;
+
+    public static JalaliDate FromGregorian(LocalDate tehranDate)
     {
         var parts = JalaliCalendar.FromGregorian(tehranDate);
         return new JalaliDate(parts.Year, parts.Month, parts.Day);
     }
 
-    public DateOnly ToGregorian() => JalaliCalendar.ToGregorian(Year, Month, Day);
+    public LocalDate ToGregorian()
+    {
+        if (IsEmpty)
+        {
+            throw new BillingException(BillingErrors.InvalidDate, "Jalali date is empty.");
+        }
+
+        return JalaliCalendar.ToGregorian(Year, Month, Day);
+    }
 
     /// <summary>
     /// This month and day in <paramref name="jalaliYear"/>. Esfand 30, which exists
@@ -56,6 +67,11 @@ public readonly record struct JalaliDate
     /// </summary>
     public JalaliDate ObservedIn(int jalaliYear)
     {
+        if (IsEmpty)
+        {
+            throw new BillingException(BillingErrors.InvalidDate, "Jalali date is empty.");
+        }
+
         if (Month == JalaliMonth.Esfand && Day == 30 && !JalaliCalendar.IsLeapYear(jalaliYear))
         {
             return new JalaliDate(jalaliYear, JalaliMonth.Esfand, 29);
@@ -81,25 +97,26 @@ public static class JalaliCalendar
         }
         catch (ArgumentOutOfRangeException)
         {
-            throw new BillingException("invalid_date", $"Jalali date {year:0000}/{month:00}/{day:00} does not exist.");
+            throw new BillingException(BillingErrors.InvalidDate, $"Jalali date {year:0000}/{month:00}/{day:00} does not exist.");
         }
     }
 
-    public static (int Year, int Month, int Day) FromGregorian(DateOnly tehranDate)
+    public static (int Year, int Month, int Day) FromGregorian(LocalDate tehranDate)
     {
-        var gregorian = tehranDate.ToDateTime(TimeOnly.MinValue);
+        var gregorian = new DateTime(tehranDate.Year, tehranDate.Month, tehranDate.Day);
         return (Calendar.GetYear(gregorian), Calendar.GetMonth(gregorian), Calendar.GetDayOfMonth(gregorian));
     }
 
-    public static DateOnly ToGregorian(int year, int month, int day)
+    public static LocalDate ToGregorian(int year, int month, int day)
     {
         try
         {
-            return DateOnly.FromDateTime(Calendar.ToDateTime(year, month, day, 0, 0, 0, 0));
+            var date = Calendar.ToDateTime(year, month, day, 0, 0, 0, 0);
+            return new LocalDate(date.Year, date.Month, date.Day);
         }
         catch (ArgumentOutOfRangeException)
         {
-            throw new BillingException("invalid_date", $"Jalali date {year:0000}/{month:00}/{day:00} does not exist.");
+            throw new BillingException(BillingErrors.InvalidDate, $"Jalali date {year:0000}/{month:00}/{day:00} does not exist.");
         }
     }
 

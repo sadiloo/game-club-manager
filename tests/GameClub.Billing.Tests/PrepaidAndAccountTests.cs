@@ -38,7 +38,7 @@ public class PrepaidAndAccountTests
         Assert.Equal(RateSource.TimeBand, crossing.Lines[0].Source);
         Assert.Equal(43, crossing.Lines[1].BilledMinutes);
         Assert.Equal(78_833, crossing.Lines[1].AmountToman);
-        Assert.Equal(1_167, crossing.Lines[2].AmountToman);
+        Assert.Equal(MoneyMath.ChargeForMinutes(GameTimerReference.Ps5OnePlayerHourly, 1, RateRemainderMode.Nearest), crossing.Lines[2].AmountToman);
         Assert.Equal(160_000, crossing.ConsumedToman);
         Assert.Equal(0, crossing.UnusedToman);
         Assert.Equal(1, crossing.Grace!.Minutes);
@@ -164,8 +164,8 @@ public class PrepaidAndAccountTests
             1_000,
             null,
             null,
-            new TimeOnly(0, 0),
-            new TimeOnly(8, 30));
+            new TimeOfDay(0, 0),
+            new TimeOfDay(8, 30));
         var account = new PcAccount("member-1", 1_000_000, [windowed]);
         var charge = CafeFixture.Price(CafeFixture.Session(
             "pc",
@@ -194,7 +194,7 @@ public class PrepaidAndAccountTests
         var expired = new PcAccount(
             "member-3",
             110_000,
-            [new TimePackage("old", 60, null, null, null, null, new DateOnly(2026, 6, 2))]);
+            [new TimePackage("old", 60, null, null, null, null, new LocalDate(2026, 6, 2))]);
         var nextDay = AccountSettlement.Settle(
             CafeFixture.Price(CafeFixture.Session(
                 "pc",
@@ -235,7 +235,7 @@ public class PrepaidAndAccountTests
 
         var console = PaymentSplitter.Split(80_000, [
             new Tender(PaymentMethod.Wallet, 80_000, "member-2"),
-        ], [new MemberWallet("member-2", 30_000, 0)]);
+        ], [new MemberWallet("member-2", 30_000, 0)], DebtPolicy.Unlimited);
         Assert.True(console.IsValid);
         Assert.Equal(-50_000, console.RemainingWallets.Single().BalanceToman);
         Assert.Equal(50_000, console.RemainingWallets.Single().DebtToman);

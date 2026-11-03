@@ -67,30 +67,32 @@ public static class MoneyMath
             PartialUnitMode.Ceiling => leftover > 0,
             PartialUnitMode.Floor => false,
             PartialUnitMode.Nearest => leftover * 2 >= blockSeconds,
-            _ => throw new BillingException("invalid_policy", $"Unknown partial-unit mode '{policy.PartialUnits}'."),
+            _ => throw new BillingException(BillingErrors.InvalidPolicy, $"Unknown partial-unit mode '{policy.PartialUnits}'."),
         };
         if (extra)
         {
             blocks++;
         }
 
-        return checked(blocks * policy.GranularityMinutes);
+        return CheckedMultiply(blocks, policy.GranularityMinutes);
     }
 
     /// <summary>
-    /// Charge for a whole number of billed minutes at an hourly rate, in toman.
-    /// Equivalent to dividing <c>hourly × minutes</c> by 60 with the given remainder mode.
+    /// Charge for a whole line of billed minutes at an hourly rate, in toman.
+    /// One division: <c>hourly × minutes / 60</c>, then half-up (or floor or ceiling) once
+    /// for that line. Minutes are not rounded one by one. Sixty PS5 minutes at 110,000
+    /// are exactly 110,000, not 60 × 1,833.
     /// </summary>
     public static long ChargeForMinutes(long hourlyRateToman, long billedMinutes, RateRemainderMode remainder)
     {
         if (hourlyRateToman < 0)
         {
-            throw new BillingException("invalid_money", "Hourly rate cannot be negative.");
+            throw new BillingException(BillingErrors.InvalidMoney, "Hourly rate cannot be negative.");
         }
 
         if (billedMinutes < 0)
         {
-            throw new BillingException("invalid_time", "Billed minutes cannot be negative.");
+            throw new BillingException(BillingErrors.InvalidTime, "Billed minutes cannot be negative.");
         }
 
         if (hourlyRateToman == 0 || billedMinutes == 0)
@@ -98,7 +100,7 @@ public static class MoneyMath
             return 0;
         }
 
-        var numerator = checked(hourlyRateToman * billedMinutes);
+        var numerator = CheckedMultiply(hourlyRateToman, billedMinutes);
         var quotient = numerator / 60;
         var rem = numerator % 60;
         return remainder switch
@@ -128,7 +130,7 @@ public static class MoneyMath
             return amount;
         }
 
-        return checked(amount * percent) / 100;
+        return CheckedMultiply(amount, percent) / 100;
     }
 
     /// <summary>
@@ -155,7 +157,7 @@ public static class MoneyMath
         }
         catch (OverflowException)
         {
-            upperBlocks = 2_000_000;
+            throw new BillingException(BillingErrors.InvalidMoney, "Budget is too large to price in minutes.");
         }
 
         long lo = 0;
@@ -164,7 +166,7 @@ public static class MoneyMath
         while (lo <= hi)
         {
             var mid = lo + ((hi - lo) / 2);
-            var minutes = checked(mid * policy.GranularityMinutes);
+            var minutes = CheckedMultiply(mid, policy.GranularityMinutes);
             var charge = ChargeForMinutes(hourlyRateToman, minutes, policy.Remainder);
             if (charge <= budgetToman)
             {
@@ -208,14 +210,49 @@ public static class MoneyMath
         var halfRoundsUp = rem >= (step / 2) + (step % 2 == 0 ? 0 : 1);
         long rounded = policy.Direction switch
         {
-            RoundingDirection.Up => checked(amount + (step - rem)),
+            RoundingDirection.Up => CheckedAdd(amount, step - rem),
             RoundingDirection.Down => amount - rem,
             RoundingDirection.Nearest => halfRoundsUp
-                ? checked(amount + (step - rem))
+                ? CheckedAdd(amount, step - rem)
                 : amount - rem,
-            _ => throw new BillingException("invalid_policy", $"Unknown rounding direction '{policy.Direction}'."),
+            _ => throw new BillingException(BillingErrors.InvalidPolicy, $"Unknown rounding direction '{policy.Direction}'."),
         };
 
         return (rounded, rounded - amount);
+    }
+
+    public static long CheckedAdd(long left, long right)
+    {
+        try
+        {
+            return checked(left + right);
+        }
+        catch (OverflowException)
+        {
+            throw new BillingException(BillingErrors.InvalidMoney, "Amount overflowed.");
+        }
+    }
+
+    public static long CheckedMultiply(long left, long right)
+    {
+        try
+        {
+            return checked(left * right);
+        }
+        catch (OverflowException)
+        {
+            throw new BillingException(BillingErrors.InvalidMoney, "Amount overflowed.");
+        }
+    }
+
+    public static long CheckedSum(IEnumerable<long> values)
+    {
+        long total = 0;
+        foreach (var value in values)
+        {
+            total = CheckedAdd(total, value);
+        }
+
+        return total;
     }
 }

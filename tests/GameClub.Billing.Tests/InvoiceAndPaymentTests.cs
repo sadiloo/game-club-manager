@@ -11,19 +11,19 @@ public class InvoiceAndPaymentTests
     {
         var time = Time(200_000);
         var valid = DiscountCode.PercentOff("SAVE15", 15, T.At(2026, 6, 2, 0, 0), T.At(2026, 6, 3, 0, 0));
-        var onBirthday = new CustomerPricing("Bronze", 5, BornOn(new DateOnly(2026, 6, 2)), 10);
+        var onBirthday = new CustomerPricing("Bronze", 5, BornOn(new LocalDate(2026, 6, 2)), 10);
 
         var birthday = InvoiceFor(time, onBirthday, valid);
         Assert.Equal(60_000, birthday.DiscountToman);
         Assert.Equal(140_000, birthday.PayableToman);
-        Assert.Contains(birthday.Lines, line => line.Kind == InvoiceLineKind.Discount && line.Description.Contains("Birthday", StringComparison.Ordinal) && line.AmountToman == -20_000);
-        Assert.Contains(birthday.Lines, line => line.Kind == InvoiceLineKind.Discount && line.Description.Contains("Bronze", StringComparison.Ordinal) && line.AmountToman == -10_000);
+        Assert.Contains(birthday.Lines, line => line.Kind == InvoiceLineKind.Discount && line.Description.IndexOf("Birthday", StringComparison.Ordinal) >= 0 && line.AmountToman == -20_000);
+        Assert.Contains(birthday.Lines, line => line.Kind == InvoiceLineKind.Discount && line.Description.IndexOf("Bronze", StringComparison.Ordinal) >= 0 && line.AmountToman == -10_000);
         Assert.Null(birthday.RejectedCode);
 
         var notBirthday = InvoiceFor(time, new CustomerPricing("Bronze", 5, new JalaliDate(1360, JalaliMonth.Farvardin, 1), 10), valid);
         Assert.Equal(40_000, notBirthday.DiscountToman);
         Assert.Equal(160_000, notBirthday.PayableToman);
-        Assert.DoesNotContain(notBirthday.Lines, line => line.Description.Contains("Birthday", StringComparison.Ordinal));
+        Assert.DoesNotContain(notBirthday.Lines, line => line.Description.IndexOf("Birthday", StringComparison.Ordinal) >= 0);
 
         var tooEarly = InvoiceFor(time, onBirthday, valid, T.At(2026, 6, 1, 23, 0));
         Assert.Equal(DiscountRejection.OutsideWindow, tooEarly.RejectedCode);
@@ -39,14 +39,14 @@ public class InvoiceAndPaymentTests
     public void Combined_customer_percent_is_capped_at_100_by_default()
     {
         var time = Time(200_000);
-        var customer = new CustomerPricing("Titan", 80, BornOn(new DateOnly(2026, 6, 2)), 40);
-        var capped = InvoiceFor(time, customer, DiscountCode.PercentOff("NONE", 0));
+        var customer = new CustomerPricing("Titan", 80, BornOn(new LocalDate(2026, 6, 2)), 40);
+        var capped = InvoiceFor(time, customer, null);
         Assert.Equal(200_000, capped.DiscountToman);
         Assert.Equal(0, capped.PayableToman);
-        Assert.Equal(-133_333, capped.Lines.Single(line => line.Description.Contains("Titan", StringComparison.Ordinal)).AmountToman);
-        Assert.Equal(-66_667, capped.Lines.Single(line => line.Description.Contains("Birthday", StringComparison.Ordinal)).AmountToman);
+        Assert.Equal(-133_333, capped.Lines.Single(line => line.Description.IndexOf("Titan", StringComparison.Ordinal) >= 0).AmountToman);
+        Assert.Equal(-66_667, capped.Lines.Single(line => line.Description.IndexOf("Birthday", StringComparison.Ordinal) >= 0).AmountToman);
 
-        var tighter = InvoiceFor(time, customer, DiscountCode.PercentOff("NONE", 0), policy: new DiscountPolicy(50, BirthdayWindow.ExactDay));
+        var tighter = InvoiceFor(time, customer, null, policy: new DiscountPolicy(50, BirthdayWindow.ExactDay));
         Assert.Equal(100_000, tighter.DiscountToman);
         Assert.Equal(100_000, tighter.PayableToman);
     }
@@ -55,8 +55,8 @@ public class InvoiceAndPaymentTests
     public void Birthday_windows_follow_the_Jalali_calendar()
     {
         var mehrBirth = new JalaliDate(1368, JalaliMonth.Mehr, 28);
-        Assert.Equal(new DateOnly(2026, 9, 23), new JalaliDate(1405, JalaliMonth.Mehr, 1).ToGregorian());
-        Assert.Equal(new DateOnly(2026, 10, 20), new JalaliDate(1405, JalaliMonth.Mehr, 28).ToGregorian());
+        Assert.Equal(new LocalDate(2026, 9, 23), new JalaliDate(1405, JalaliMonth.Mehr, 1).ToGregorian());
+        Assert.Equal(new LocalDate(2026, 10, 20), new JalaliDate(1405, JalaliMonth.Mehr, 28).ToGregorian());
 
         Assert.True(BirthdayWindow.WholeMonth.Includes(mehrBirth, new JalaliDate(1405, JalaliMonth.Mehr, 1).ToGregorian()));
         Assert.True(BirthdayWindow.WholeMonth.Includes(mehrBirth, new JalaliDate(1405, JalaliMonth.Mehr, 30).ToGregorian()));
@@ -76,7 +76,7 @@ public class InvoiceAndPaymentTests
         var esfand30 = new JalaliDate(1375, JalaliMonth.Esfand, 30);
         var esfand29In1404 = new JalaliDate(1404, JalaliMonth.Esfand, 29).ToGregorian();
         var nowruz1405 = new JalaliDate(1405, JalaliMonth.Farvardin, 1).ToGregorian();
-        Assert.Equal(new DateOnly(2026, 3, 20), esfand29In1404);
+        Assert.Equal(new LocalDate(2026, 3, 20), esfand29In1404);
         Assert.True(BirthdayWindow.ExactDay.Includes(esfand30, esfand29In1404));
         Assert.False(BirthdayWindow.ExactDay.Includes(esfand30, nowruz1405));
         Assert.True(BirthdayWindow.ExactDay.Includes(esfand30, new JalaliDate(1403, JalaliMonth.Esfand, 30).ToGregorian()));
@@ -104,11 +104,11 @@ public class InvoiceAndPaymentTests
             TehranTime.At(esfand29In1404.Year, esfand29In1404.Month, esfand29In1404.Day, 12, 0)));
         Assert.Equal(10_000, observed.DiscountToman);
 
-        var serviceBirthday = BornOn(new DateOnly(2026, 6, 2));
+        var serviceBirthday = BornOn(new LocalDate(2026, 6, 2));
         var splitDays = InvoiceCalculator.Calculate(new InvoiceRequest(
             [
-                new TimeChargeLine("before", 100_000, CafeFixture.Ps5, new DateOnly(2026, 6, 1), DayOfWeek.Monday),
-                new TimeChargeLine("on", 100_000, CafeFixture.Ps5, new DateOnly(2026, 6, 2), DayOfWeek.Tuesday),
+                new TimeChargeLine("before", 100_000, CafeFixture.Ps5, new LocalDate(2026, 6, 1), DayOfWeek.Monday),
+                new TimeChargeLine("on", 100_000, CafeFixture.Ps5, new LocalDate(2026, 6, 2), DayOfWeek.Tuesday),
             ],
             [],
             [],
@@ -118,14 +118,14 @@ public class InvoiceAndPaymentTests
             RoundingPolicy.Off,
             Issued));
         Assert.Equal(30_000, splitDays.DiscountToman);
-        Assert.Equal(-20_000, splitDays.Lines.Single(line => line.Description.Contains("Bronze", StringComparison.Ordinal)).AmountToman);
-        Assert.Equal(-10_000, splitDays.Lines.Single(line => line.Description.Contains("Birthday", StringComparison.Ordinal)).AmountToman);
+        Assert.Equal(-20_000, splitDays.Lines.Single(line => line.Description.IndexOf("Bronze", StringComparison.Ordinal) >= 0).AmountToman);
+        Assert.Equal(-10_000, splitDays.Lines.Single(line => line.Description.IndexOf("Birthday", StringComparison.Ordinal) >= 0).AmountToman);
     }
 
     [Fact]
     public void Discount_code_scope_can_combine_time_buffet_and_services()
     {
-        var time = new TimeChargeLine("time", 100_000, CafeFixture.Ps5, new DateOnly(2026, 6, 2), DayOfWeek.Tuesday);
+        var time = new TimeChargeLine("time", 100_000, CafeFixture.Ps5, new LocalDate(2026, 6, 2), DayOfWeek.Tuesday);
         var buffet = new BuffetLine("A_111", "شکلات", 1, 50_000);
         var service = new ServiceLine("extra", "نفر اضافه", 10_000);
 
@@ -155,8 +155,8 @@ public class InvoiceAndPaymentTests
             10,
             allowedGroupIds: new HashSet<string> { CafeFixture.Ps5 },
             scope: ChargeScope.Time | ChargeScope.Buffet | ChargeScope.Services);
-        var ps5 = new TimeChargeLine("ps5", 100_000, CafeFixture.Ps5, new DateOnly(2026, 6, 2), DayOfWeek.Tuesday);
-        var other = new TimeChargeLine("other", 100_000, CafeFixture.ExampleVip, new DateOnly(2026, 6, 2), DayOfWeek.Tuesday);
+        var ps5 = new TimeChargeLine("ps5", 100_000, CafeFixture.Ps5, new LocalDate(2026, 6, 2), DayOfWeek.Tuesday);
+        var other = new TimeChargeLine("other", 100_000, CafeFixture.ExampleVip, new LocalDate(2026, 6, 2), DayOfWeek.Tuesday);
 
         var matched = InvoiceCalculator.Calculate(new InvoiceRequest(
             [ps5], [buffet], [service], null, code, DiscountPolicy.Default, RoundingPolicy.Off, Issued));
@@ -182,8 +182,8 @@ public class InvoiceAndPaymentTests
     {
         var lines = new[]
         {
-            new TimeChargeLine("ps5", 100_000, CafeFixture.Ps5, new DateOnly(2026, 6, 2), DayOfWeek.Tuesday),
-            new TimeChargeLine("vip", 100_000, CafeFixture.ExampleVip, new DateOnly(2026, 6, 2), DayOfWeek.Tuesday),
+            new TimeChargeLine("ps5", 100_000, CafeFixture.Ps5, new LocalDate(2026, 6, 2), DayOfWeek.Tuesday),
+            new TimeChargeLine("vip", 100_000, CafeFixture.ExampleVip, new LocalDate(2026, 6, 2), DayOfWeek.Tuesday),
         };
         var code = DiscountCode.PercentOff("PS5", 10, allowedGroupIds: new HashSet<string> { CafeFixture.Ps5 });
         var invoice = InvoiceCalculator.Calculate(new InvoiceRequest(
@@ -198,10 +198,10 @@ public class InvoiceAndPaymentTests
         Assert.Equal(0, rejected.DiscountToman);
 
         var withFine = InvoiceCalculator.Calculate(new InvoiceRequest(
-            [new TimeChargeLine("ps5", 200_000, CafeFixture.Ps5, new DateOnly(2026, 6, 2), DayOfWeek.Tuesday)],
+            [new TimeChargeLine("ps5", 200_000, CafeFixture.Ps5, new LocalDate(2026, 6, 2), DayOfWeek.Tuesday)],
             [],
             [new ServiceLine("ABC_1", "خسارت انداختن دسته", GameTimerReference.ControllerDamageFineToman)],
-            new CustomerPricing(null, 0, BornOn(new DateOnly(2026, 6, 2)), 10),
+            new CustomerPricing(null, 0, BornOn(new LocalDate(2026, 6, 2)), 10),
             null,
             DiscountPolicy.Default,
             RoundingPolicy.Off,
@@ -214,7 +214,7 @@ public class InvoiceAndPaymentTests
     public void Discounts_cannot_push_the_payable_total_below_zero()
     {
         var invoice = InvoiceCalculator.Calculate(new InvoiceRequest(
-            [new TimeChargeLine("time", 80_000, CafeFixture.Ps5, new DateOnly(2026, 6, 2), DayOfWeek.Tuesday)],
+            [new TimeChargeLine("time", 80_000, CafeFixture.Ps5, new LocalDate(2026, 6, 2), DayOfWeek.Tuesday)],
             [new BuffetLine("A_111", "شکلات", 1, 20_000)],
             [],
             new CustomerPricing("Titan", 100, null, 0),
@@ -279,7 +279,7 @@ public class InvoiceAndPaymentTests
     public void Rounding_runs_after_discounts_and_scope_changes_what_is_rounded()
     {
         var afterDiscount = InvoiceCalculator.Calculate(new InvoiceRequest(
-            [new TimeChargeLine("time", 200_000, CafeFixture.Ps5, new DateOnly(2026, 6, 2), DayOfWeek.Tuesday)],
+            [new TimeChargeLine("time", 200_000, CafeFixture.Ps5, new LocalDate(2026, 6, 2), DayOfWeek.Tuesday)],
             [],
             [],
             null,
@@ -291,7 +291,7 @@ public class InvoiceAndPaymentTests
         Assert.Equal(140_000, afterDiscount.PayableToman);
         Assert.Equal(1_300, afterDiscount.RoundingToman);
 
-        var time = new TimeChargeLine("time", 98_700, CafeFixture.Ps5, new DateOnly(2026, 6, 2), DayOfWeek.Tuesday);
+        var time = new TimeChargeLine("time", 98_700, CafeFixture.Ps5, new LocalDate(2026, 6, 2), DayOfWeek.Tuesday);
         var service = new ServiceLine("extra", "نفر اضافه", 3_000);
         var whole = InvoiceCalculator.Calculate(new InvoiceRequest(
             [time], [], [service], null, null, DiscountPolicy.Default,
@@ -340,7 +340,7 @@ public class InvoiceAndPaymentTests
         Assert.Equal(1, settled.Grace.Minutes);
 
         var invoice = InvoiceCalculator.Calculate(new InvoiceRequest(
-            [new TimeChargeLine("minute", minute, CafeFixture.ExampleNormal, new DateOnly(2026, 6, 2), DayOfWeek.Tuesday)],
+            [new TimeChargeLine("minute", minute, CafeFixture.ExampleNormal, new LocalDate(2026, 6, 2), DayOfWeek.Tuesday)],
             [],
             [],
             null,
@@ -422,9 +422,9 @@ public class InvoiceAndPaymentTests
     }
 
     private static TimeChargeLine Time(long amount)
-        => new("time", amount, CafeFixture.Ps5, new DateOnly(2026, 6, 2), DayOfWeek.Tuesday);
+        => new("time", amount, CafeFixture.Ps5, new LocalDate(2026, 6, 2), DayOfWeek.Tuesday);
 
-    private static JalaliDate BornOn(DateOnly tehranDay)
+    private static JalaliDate BornOn(LocalDate tehranDay)
     {
         var jalali = JalaliDate.FromGregorian(tehranDay);
         return new JalaliDate(jalali.Year - 20, jalali.Month, jalali.Day);
@@ -433,7 +433,7 @@ public class InvoiceAndPaymentTests
     private static Invoice InvoiceFor(
         TimeChargeLine time,
         CustomerPricing customer,
-        DiscountCode code,
+        DiscountCode? code,
         DateTimeOffset? issuedAt = null,
         DiscountPolicy? policy = null)
     {

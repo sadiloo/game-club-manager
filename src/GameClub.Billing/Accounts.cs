@@ -11,10 +11,10 @@ public sealed record TimePackage(
     string Id,
     long RemainingMinutes,
     long? FaceValueToman = null,
-    IReadOnlySet<string>? AllowedGroupIds = null,
-    TimeOnly? AllowedFrom = null,
-    TimeOnly? AllowedUntil = null,
-    DateOnly? ValidThrough = null);
+    IReadOnlyCollection<string>? AllowedGroupIds = null,
+    TimeOfDay? AllowedFrom = null,
+    TimeOfDay? AllowedUntil = null,
+    LocalDate? ValidThrough = null);
 
 public sealed record PcAccount(string Id, long MoneyBalanceToman, IReadOnlyList<TimePackage> Packages);
 
@@ -77,7 +77,8 @@ public sealed record Settlement(
     PcAccount UpdatedAccount,
     IReadOnlyList<PackageDraw> PackageDraws,
     IReadOnlyList<MoneyDraw> MoneyDraws,
-    GraceLine? Grace = null)
+    GraceLine? Grace = null,
+    long DiscountToman = 0)
 {
     /// <summary>Time lines the customer still owes, for an invoice that must not charge package minutes again.</summary>
     public IReadOnlyList<TimeChargeLine> MoneyTimeLines()
@@ -133,7 +134,7 @@ public static class AccountSettlement
         var remaining = account.Packages.ToDictionary(package => package.Id, package => package.RemainingMinutes, StringComparer.Ordinal);
         var order = account.Packages
             .Select((package, index) => (package, index))
-            .OrderBy(item => item.package.ValidThrough ?? DateOnly.MaxValue)
+            .OrderBy(item => item.package.ValidThrough ?? LocalDate.MaxValue)
             .ThenBy(item => item.index)
             .Select(item => item.package)
             .ToArray();
@@ -162,7 +163,7 @@ public static class AccountSettlement
 
         foreach (var slice in charge.Lines)
         {
-            foreach (var part in Divide(slice, order))
+                foreach (var part in Divide(slice, order, remaining))
             {
                 ApplyPart(part, order, remaining, policy, billing, grace, ref money, ref packageMinutes, ref packageCovered, ref moneyConsumed, ref uncovered, packageDraws, moneyDraws);
             }
@@ -345,12 +346,12 @@ public static class AccountSettlement
         }
 
         var date = TehranTime.Date(part.Start);
-        if (package.ValidThrough is DateOnly until && date > until)
+        if (package.ValidThrough is LocalDate until && date > until)
         {
             return false;
         }
 
-        if (package.AllowedFrom is TimeOnly from && package.AllowedUntil is TimeOnly to)
+        if (package.AllowedFrom is TimeOfDay from && package.AllowedUntil is TimeOfDay to)
         {
             var start = TehranTime.TimeOfDay(part.Start);
             var justBeforeEnd = part.End.AddTicks(-1);
@@ -366,7 +367,7 @@ public static class AccountSettlement
         return true;
     }
 
-    private static bool InWindow(TimeOnly time, TimeOnly from, TimeOnly until)
+    private static bool InWindow(TimeOfDay time, TimeOfDay from, TimeOfDay until)
     {
         if (from < until)
         {
@@ -427,18 +428,26 @@ public static class AccountSettlement
         return minutes;
     }
 
-    private static IReadOnlyList<SlicePart> Divide(PricedSlice slice, IReadOnlyList<TimePackage> packages)
+    private static IReadOnlyList<SlicePart> Divide(
+        PricedSlice slice,
+        IReadOnlyList<TimePackage> packages,
+        Dictionary<string, long> remainingMinutes)
     {
         var marks = new SortedSet<DateTimeOffset> { slice.Start, slice.End };
         var date = TehranTime.Date(slice.Start);
         foreach (var package in packages)
         {
-            if (package.AllowedFrom is TimeOnly from)
+            if (!remainingMinutes.TryGetValue(package.Id, out var left) || left <= 0)
+            {
+                continue;
+            }
+
+            if (package.AllowedFrom is TimeOfDay from)
             {
                 AddMark(marks, slice, TehranTime.At(date, from));
             }
 
-            if (package.AllowedUntil is TimeOnly until)
+            if (package.AllowedUntil is TimeOfDay until)
             {
                 AddMark(marks, slice, TehranTime.At(date, until));
             }
@@ -531,7 +540,7 @@ public static class AccountSettlement
                 throw new BillingException("invalid_account", $"Package '{package.Id}' must set both window ends or neither.");
             }
 
-            if (package.AllowedFrom is TimeOnly from && package.AllowedUntil is TimeOnly until && from == until)
+            if (package.AllowedFrom is TimeOfDay from && package.AllowedUntil is TimeOfDay until && from == until)
             {
                 throw new BillingException("invalid_account", $"Package '{package.Id}' has an empty hour window.");
             }
@@ -558,8 +567,11 @@ public static class AccountSettlement
     }
 
     /// <summary>
-    /// Pays whole minutes the balance can afford. If a remainder is still greater than zero
-    /// and less than the next minute, that minute is granted and the shortfall is grace, not debt.
+    /// Pays whole billing blocks the balance can afford. If money is still left and it is
+    /// below the price of one clock minute, that minute is granted. The shortfall is grace,
+    /// not debt, and it is one minute even when the billing block is 5 or 15 minutes.
+    /// A window split that makes <paramref name="moneyDue"/> differ from a clean minute charge
+    /// still uses that one-minute price.
     /// </summary>
     private static void ApplyMoney(
         ref long balance,
@@ -578,51 +590,48 @@ public static class AccountSettlement
             return;
         }
 
-        var priced = hourlyRate > 0
-            ? MoneyMath.ChargeForMinutes(hourlyRate, unpaidMinutes, billing.Remainder)
-            : 0;
-        if (!grace.Enabled || hourlyRate <= 0 || priced != moneyDue)
+        if (!grace.Enabled || grace.Used || hourlyRate <= 0)
         {
-            var before = consumed;
             ChargeUpToZero(ref balance, moneyDue, ref consumed, ref uncovered);
-            if (grace.Enabled && !grace.Used && balance == 0 && consumed > before)
-            {
-                // Partial toman was taken without a clean per-minute price. Grace only applies
-                // when the balance left is below one minute before that partial take.
-            }
-
             return;
         }
 
-        var affordable = MoneyMath.MaxAffordableMinutes(hourlyRate, balance, billing);
+        var minuteCost = MoneyMath.ChargeForMinutes(hourlyRate, 1, billing.Remainder);
+        var affordable = MoneyMath.MaxAffordableMinutes(hourlyRate, balance > 0 ? balance : 0, billing);
         if (affordable > unpaidMinutes)
         {
             affordable = unpaidMinutes;
         }
 
         var paidFull = MoneyMath.ChargeForMinutes(hourlyRate, affordable, billing.Remainder);
-        balance -= paidFull;
-        consumed += paidFull;
-        if (grace.Enabled && !grace.Used && balance > 0 && affordable < unpaidMinutes)
+        if (paidFull > moneyDue)
         {
-            var through = MoneyMath.ChargeForMinutes(hourlyRate, affordable + 1, billing.Remainder);
-            var marginal = through - paidFull;
-            if (marginal > balance)
-            {
-                var waived = marginal - balance;
-                consumed += balance;
-                grace.Waived += waived;
-                grace.Used = true;
-                grace.At = at;
-                grace.SegmentId = segmentId;
-                balance = 0;
-                uncovered += moneyDue - through;
-                return;
-            }
+            paidFull = moneyDue;
         }
 
-        var rest = moneyDue - paidFull;
-        ChargeUpToZero(ref balance, rest, ref consumed, ref uncovered);
+        if (paidFull > balance)
+        {
+            paidFull = balance > 0 ? balance : 0;
+        }
+
+        balance -= paidFull;
+        consumed += paidFull;
+        var stillOwed = moneyDue - paidFull;
+        if (stillOwed >= minuteCost && balance > 0 && balance < minuteCost)
+        {
+            var cover = minuteCost < stillOwed ? minuteCost : stillOwed;
+            var pay = balance < cover ? balance : cover;
+            grace.Waived += cover - pay;
+            grace.Used = true;
+            grace.At = at;
+            grace.SegmentId = segmentId;
+            consumed += pay;
+            balance -= pay;
+            uncovered += stillOwed - cover;
+            return;
+        }
+
+        ChargeUpToZero(ref balance, stillOwed, ref consumed, ref uncovered);
     }
 }
 
@@ -645,7 +654,8 @@ public static class RemainingTimeEstimator
         RateCard rates,
         SpecialDayCalendar? specialDays = null,
         BillingPolicy? policy = null,
-        bool graceMinuteEnabled = true)
+        bool graceMinuteEnabled = true,
+        PcTimeDiscount? timeDiscount = null)
     {
         specialDays ??= SpecialDayCalendar.Empty;
         policy ??= BillingPolicy.Default;
@@ -680,12 +690,12 @@ public static class RemainingTimeEstimator
                 continue;
             }
 
-            if (package.ValidThrough is DateOnly until && TehranTime.Date(at) > until)
+            if (package.ValidThrough is LocalDate until && TehranTime.Date(at) > until)
             {
                 continue;
             }
 
-            if (package.AllowedFrom is TimeOnly from && package.AllowedUntil is TimeOnly to)
+            if (package.AllowedFrom is TimeOfDay from && package.AllowedUntil is TimeOfDay to)
             {
                 if (!InWindow(TehranTime.TimeOfDay(at), from, to))
                 {
@@ -696,13 +706,34 @@ public static class RemainingTimeEstimator
             packageMinutes += package.RemainingMinutes;
         }
 
+        var discount = timeDiscount ?? default;
         var free = quote.HourlyRateToman == 0;
-        long? moneyMinutes = free
-            ? null
-            : account.MoneyBalanceToman <= 0
+        long? moneyMinutes;
+        if (free)
+        {
+            moneyMinutes = null;
+        }
+        else if (!discount.IsNone && account.MoneyBalanceToman > 0)
+        {
+            var discounted = DiscountedMinutes(quote.HourlyRateToman, account.MoneyBalanceToman, policy, discount);
+            if (discounted < 0)
+            {
+                free = true;
+                moneyMinutes = null;
+            }
+            else
+            {
+                moneyMinutes = discounted;
+            }
+        }
+        else
+        {
+            moneyMinutes = account.MoneyBalanceToman <= 0
                 ? 0
                 : MoneyMath.MaxAffordableMinutes(quote.HourlyRateToman, account.MoneyBalanceToman, policy);
-        if (graceMinuteEnabled && moneyMinutes == 0 && account.MoneyBalanceToman > 0 && quote.HourlyRateToman > 0)
+        }
+
+        if (graceMinuteEnabled && moneyMinutes == 0 && account.MoneyBalanceToman > 0 && quote.HourlyRateToman > 0 && !free)
         {
             moneyMinutes = 1;
         }
@@ -721,7 +752,44 @@ public static class RemainingTimeEstimator
             packageMinutes + (moneyMinutes ?? 0));
     }
 
-    private static bool InWindow(TimeOnly time, TimeOnly from, TimeOnly until)
+    private static long DiscountedMinutes(long hourly, long balance, BillingPolicy policy, PcTimeDiscount discount)
+    {
+        var step = policy.GranularityMinutes;
+        var blockNet = discount.Net(MoneyMath.ChargeForMinutes(hourly, step, policy.Remainder));
+        if (blockNet <= 0)
+        {
+            return -1;
+        }
+
+        var maxBlocks = (balance / blockNet) + 2;
+        var rateCap = long.MaxValue / hourly / step;
+        if (maxBlocks > rateCap)
+        {
+            maxBlocks = rateCap;
+        }
+
+        long lo = 0;
+        long hi = maxBlocks;
+        long best = 0;
+        while (lo <= hi)
+        {
+            var mid = lo + ((hi - lo) / 2);
+            var gross = MoneyMath.ChargeForMinutes(hourly, mid * step, policy.Remainder);
+            if (discount.Net(gross) <= balance)
+            {
+                best = mid * step;
+                lo = mid + 1;
+            }
+            else
+            {
+                hi = mid - 1;
+            }
+        }
+
+        return best;
+    }
+
+    private static bool InWindow(TimeOfDay time, TimeOfDay from, TimeOfDay until)
     {
         if (from < until)
         {
@@ -729,5 +797,36 @@ public static class RemainingTimeEstimator
         }
 
         return time >= from || time < until;
+    }
+}
+
+/// <summary>
+/// Level, birthday, and time-scoped code discounts used when a branch applies them to PC time.
+/// Percents are taken off the same gross, then a fixed code is removed. The result is never negative.
+/// </summary>
+public readonly record struct PcTimeDiscount(int LevelBirthdayPercent, int CodePercent, long FixedToman)
+{
+    public bool IsNone => LevelBirthdayPercent <= 0 && CodePercent <= 0 && FixedToman <= 0;
+
+    public long Net(long gross)
+    {
+        if (gross <= 0)
+        {
+            return 0;
+        }
+
+        var off = MoneyMath.PercentOf(gross, LevelBirthdayPercent) + MoneyMath.PercentOf(gross, CodePercent);
+        if (off > gross)
+        {
+            off = gross;
+        }
+
+        var after = gross - off;
+        if (FixedToman > 0)
+        {
+            after -= FixedToman < after ? FixedToman : after;
+        }
+
+        return after;
     }
 }
