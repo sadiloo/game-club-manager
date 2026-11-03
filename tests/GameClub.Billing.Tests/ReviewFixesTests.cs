@@ -145,10 +145,12 @@ public class ReviewFixesTests
         var discountedAccount = PcWallet(500, true);
         var titan = new CustomerPricing("Titan", 28, null, 0);
         var discounted = CustomerPlay.Settle(charge, discountedAccount, pricing: titan);
-        Assert.Equal(360, discounted.ChargeInvoice!.PayableToman);
-        Assert.Equal(140, discounted.ChargeInvoice.DiscountToman);
-        Assert.Equal(360, discounted.Settlement.MoneyConsumedToman);
-        Assert.Equal(140, discounted.Account.PcMoneyToman);
+        var netMinute = new PcTimeDiscount(28, 0, 0).Net(minute);
+        Assert.Equal(500, discounted.ChargeInvoice!.PayableToman);
+        Assert.Equal(minute - netMinute, discounted.ChargeInvoice.DiscountToman);
+        Assert.Equal(500, discounted.Settlement.MoneyConsumedToman);
+        Assert.Equal(netMinute - 500, discounted.Settlement.Grace!.WaivedToman);
+        Assert.Equal(0, discounted.Account.PcMoneyToman);
         Assert.Equal(discounted.ChargeInvoice.PayableToman, 500 - discounted.Account.PcMoneyToman);
 
         var ignored = CustomerPlay.Settle(charge, PcWallet(500, false), pricing: titan);
@@ -163,7 +165,7 @@ public class ReviewFixesTests
         var at = T.At(2026, 6, 2, 10, 0);
         var pricing = new CustomerPricing("Titan", 28, null, 0);
         var off = CustomerPlay.Estimate(
-            PcWallet(2_641, false),
+            PcWallet(3_667, false),
             CafeFixture.ExampleNormal,
             PlayMode.Offline,
             1,
@@ -171,15 +173,15 @@ public class ReviewFixesTests
             CafeFixture.Card(),
             pricing: pricing);
         var on = CustomerPlay.Estimate(
-            PcWallet(2_641, true),
+            PcWallet(3_667, true),
             CafeFixture.ExampleNormal,
             PlayMode.Offline,
             1,
             at,
             CafeFixture.Card(),
             pricing: pricing);
-        Assert.Equal(1, off.MoneyMinutes);
-        Assert.Equal(2, on.MoneyMinutes);
+        Assert.Equal(2, off.MoneyMinutes);
+        Assert.Equal(3, on.MoneyMinutes);
 
         var grace = CustomerPlay.Estimate(
             PcWallet(500, true),
@@ -207,8 +209,9 @@ public class ReviewFixesTests
             Assert.Equal(1, settled.Grace!.Minutes);
             Assert.Equal(minute - 500, settled.Grace.WaivedToman);
             Assert.Equal(500, settled.MoneyConsumedToman);
-            Assert.Equal(charge.TotalAmountToman - minute, settled.UncoveredToman);
-            Assert.Equal(charge.TotalAmountToman, settled.PackageCoveredToman + settled.MoneyConsumedToman + settled.Grace.WaivedToman + settled.UncoveredToman);
+            Assert.Equal(0, settled.UncoveredToman);
+            Assert.Equal(charge.TotalAmountToman - minute, settled.WriteOffToman);
+            Assert.Equal(charge.TotalAmountToman, settled.PackageCoveredToman + settled.MoneyConsumedToman + settled.Grace.WaivedToman + settled.WriteOffToman + settled.UncoveredToman);
         }
 
         var emptyWindow = new TimePackage(

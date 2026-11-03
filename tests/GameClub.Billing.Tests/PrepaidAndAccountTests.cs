@@ -21,8 +21,9 @@ public class PrepaidAndAccountTests
         Assert.Equal(0, exact.UnusedToman);
         Assert.Equal(exact.Lines.Sum(line => line.AmountToman), exact.ConsumedToman);
 
-        // 08:00–08:30 at 160,000 costs 80,000. The remaining 80,000 buys 43 minutes at 110,000.
-        // The leftover 1,167 is below one more minute, so the default grace minute extends the end to 09:14.
+        // 08:00–08:30 at 160,000 costs 80,000. The remaining 80,000 buys 43 minutes at 110,000
+        // (78,833). The leftover 1,167 is below the marginal 44th minute (1,834), so grace
+        // folds that minute into the same line and the end is still 09:14. Waived is 667.
         var crossing = PrepaidPlanner.ForAmount(
             T.At(2026, 6, 2, 8, 0),
             160_000,
@@ -33,16 +34,15 @@ public class PrepaidAndAccountTests
             1,
             CafeFixture.Card());
         Assert.Equal(T.At(2026, 6, 2, 9, 14), crossing.End);
-        Assert.Equal(3, crossing.Lines.Count);
+        Assert.Equal(2, crossing.Lines.Count);
         Assert.Equal(80_000, crossing.Lines[0].AmountToman);
         Assert.Equal(RateSource.TimeBand, crossing.Lines[0].Source);
-        Assert.Equal(43, crossing.Lines[1].BilledMinutes);
-        Assert.Equal(78_833, crossing.Lines[1].AmountToman);
-        Assert.Equal(MoneyMath.ChargeForMinutes(GameTimerReference.Ps5OnePlayerHourly, 1, RateRemainderMode.Nearest), crossing.Lines[2].AmountToman);
+        Assert.Equal(44, crossing.Lines[1].BilledMinutes);
+        Assert.Equal(MoneyMath.ChargeForMinutes(110_000, 44, RateRemainderMode.Nearest), crossing.Lines[1].AmountToman);
         Assert.Equal(160_000, crossing.ConsumedToman);
         Assert.Equal(0, crossing.UnusedToman);
         Assert.Equal(1, crossing.Grace!.Minutes);
-        Assert.Equal(MoneyMath.ChargeForMinutes(GameTimerReference.Ps5OnePlayerHourly, 1, RateRemainderMode.Nearest) - 1_167, crossing.Grace.WaivedToman);
+        Assert.Equal(667, crossing.Grace.WaivedToman);
 
         var tooSmall = PrepaidPlanner.ForAmount(
             T.At(2026, 6, 2, 10, 0),
@@ -228,10 +228,13 @@ public class PrepaidAndAccountTests
         Assert.Equal(50_000, stopped.MoneyConsumedToman);
         Assert.Equal(through - 50_000, stopped.Grace!.WaivedToman);
         Assert.Equal(1, stopped.Grace.Minutes);
-        Assert.Equal(110_000 - through, stopped.UncoveredToman);
+        Assert.Equal(0, stopped.UncoveredToman);
+        Assert.Equal(110_000 - through, stopped.WriteOffToman);
+        Assert.Equal("pc_overshoot", stopped.Alert!.Code);
+        Assert.Equal("write_off", stopped.ReportEntry!.Kind);
         Assert.Equal(0, stopped.UpdatedAccount.MoneyBalanceToman);
         Assert.Equal(0, stopped.DebtToman);
-        Assert.Equal(stopped.GrossToman, stopped.PackageCoveredToman + stopped.MoneyConsumedToman + stopped.Grace.WaivedToman + stopped.UncoveredToman);
+        Assert.Equal(stopped.GrossToman, stopped.PackageCoveredToman + stopped.MoneyConsumedToman + stopped.Grace.WaivedToman + stopped.WriteOffToman + stopped.UncoveredToman);
 
         var console = PaymentSplitter.Split(80_000, [
             new Tender(PaymentMethod.Wallet, 80_000, "member-2"),

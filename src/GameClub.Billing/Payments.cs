@@ -71,6 +71,7 @@ public static class PaymentErrors
     public const string WalletMissingMember = "wallet_missing_member";
     public const string UnknownWallet = "unknown_wallet";
     public const string InsufficientWallet = "insufficient_wallet";
+    public const string PcBalanceNoPcLine = "pc_balance_no_pc_line";
 }
 
 public sealed record PaymentError(string Code, string Message);
@@ -264,6 +265,9 @@ public readonly record struct WalletPocket
 
     public long DebtToman => TotalToman < 0 ? -TotalToman : 0;
 
+    /// <summary>How much this pocket can spend under <paramref name="debt"/>, including the positive balance.</summary>
+    public long SpendRoom(DebtPolicy debt) => Capacity(TotalToman, debt);
+
     /// <summary>
     /// Spends <paramref name="amount"/>. The positive part keeps the original gift ratio.
     /// Anything beyond that is debt on real credit, down to <paramref name="debt"/>.
@@ -396,7 +400,8 @@ public static class PaymentAllocator
         IReadOnlyList<Tender> tenders,
         RoundingPolicy rounding,
         IReadOnlyList<MemberWallet>? wallets = null,
-        DebtPolicy? walletDebt = null)
+        DebtPolicy? walletDebt = null,
+        WalletPocket? pcBalance = null)
     {
         if (lines is null)
         {
@@ -463,8 +468,36 @@ public static class PaymentAllocator
 
             if (tender.Method == PaymentMethod.PcBalance)
             {
-                var drawn = AllocateProRata(lines, remaining, index, tender.Method, tender.AmountToman, PcTimeOnly, shares);
-                results[index] = new TenderResult(index, tender.Method, drawn, tender.MemberId, 0, drawn, drawn > 0 || tender.AmountToman == 0);
+                var coverable = Coverable(lines, remaining, PcTimeOnly);
+                if (coverable == 0 && tender.AmountToman > 0)
+                {
+                    errors.Add(new PaymentError(PaymentErrors.PcBalanceNoPcLine, "PC balance cannot pay an invoice with no PC time line."));
+                    results[index] = new TenderResult(index, tender.Method, 0, tender.MemberId, 0, 0, false);
+                    continue;
+                }
+
+                var pcPocket = pcBalance ?? new WalletPocket(tender.AmountToman, 0);
+                var pcOffer = tender.AmountToman < coverable ? tender.AmountToman : coverable;
+                var pcPositive = pcPocket.TotalToman > 0 ? pcPocket.TotalToman : 0;
+                var pcDraw = pcOffer < pcPositive ? pcOffer : pcPositive;
+                long pcGift = 0;
+                long pcReal = 0;
+                if (pcDraw > 0)
+                {
+                    if (!pcPocket.TrySpend(pcDraw, DebtPolicy.None, out var pcUpdated, out pcGift, out pcReal))
+                    {
+                        pcDraw = 0;
+                        pcGift = 0;
+                        pcReal = 0;
+                    }
+                    else
+                    {
+                        pcBalance = pcUpdated;
+                        AllocateProRata(lines, remaining, index, tender.Method, pcDraw, PcTimeOnly, shares);
+                    }
+                }
+
+                results[index] = new TenderResult(index, tender.Method, pcDraw, tender.MemberId, pcGift, pcReal, pcDraw > 0 || tender.AmountToman == 0);
                 continue;
             }
 
@@ -490,8 +523,44 @@ public static class PaymentAllocator
             }
 
             var offer = tender.AmountToman;
-            var coverable = Coverable(lines, remaining, _ => true);
-            var draw = offer < coverable ? offer : coverable;
+            var positive = pocket.TotalToman > 0 ? pocket.TotalToman : 0;
+            var allCoverable = Coverable(lines, remaining, _ => true);
+            var positiveDraw = offer < positive ? offer : positive;
+            if (positiveDraw > allCoverable)
+            {
+                positiveDraw = allCoverable;
+            }
+
+            var simulated = (long[])remaining.Clone();
+            if (positiveDraw > 0)
+            {
+                AllocateProRata(lines, simulated, index, tender.Method, positiveDraw, _ => true, []);
+            }
+
+            long nonPcLeft = 0;
+            for (var line = 0; line < lines.Count; line++)
+            {
+                if (!lines[line].IsPcTime)
+                {
+                    nonPcLeft = MoneyMath.CheckedAdd(nonPcLeft, simulated[line]);
+                }
+            }
+
+            var room = pocket.SpendRoom(walletDebt);
+            var debtRoom = room == long.MaxValue ? offer : room - positiveDraw;
+            if (debtRoom < 0)
+            {
+                debtRoom = 0;
+            }
+
+            var debtWant = offer - positiveDraw;
+            var debtDraw = debtWant < nonPcLeft ? debtWant : nonPcLeft;
+            if (debtDraw > debtRoom)
+            {
+                debtDraw = debtRoom;
+            }
+
+            var draw = positiveDraw + debtDraw;
             if (!pocket.TrySpend(draw, walletDebt, out var updated, out var gift, out var real))
             {
                 errors.Add(new PaymentError(PaymentErrors.InsufficientWallet, $"Wallet '{memberId}' cannot cover {draw} toman."));
@@ -500,7 +569,16 @@ public static class PaymentAllocator
             }
 
             pockets[memberId] = updated;
-            AllocateProRata(lines, remaining, index, tender.Method, draw, _ => true, shares);
+            if (positiveDraw > 0)
+            {
+                AllocateProRata(lines, remaining, index, tender.Method, positiveDraw, _ => true, shares);
+            }
+
+            if (debtDraw > 0)
+            {
+                AllocateProRata(lines, remaining, index, tender.Method, debtDraw, line => !line.IsPcTime, shares);
+            }
+
             results[index] = new TenderResult(index, tender.Method, draw, memberId, gift, real, true);
         }
 
@@ -668,9 +746,9 @@ public static class PaymentAllocator
         foreach (var index in eligible)
         {
             var weight = remaining[index];
-            floors[index] = pay * weight / total;
-            frac[index] = pay * weight % total;
-            assigned += floors[index];
+            floors[index] = MoneyMath.MulDiv(pay, weight, total);
+            frac[index] = MoneyMath.MulMod(pay, weight, total);
+            assigned = MoneyMath.CheckedAdd(assigned, floors[index]);
         }
 
         var left = pay - assigned;

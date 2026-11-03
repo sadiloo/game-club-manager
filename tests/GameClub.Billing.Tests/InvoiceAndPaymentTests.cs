@@ -363,7 +363,8 @@ public class InvoiceAndPaymentTests
         var without = CustomerPlay.Settle(charge, off);
         Assert.Null(without.Settlement.Grace);
         Assert.Equal(500, without.Settlement.MoneyConsumedToman);
-        Assert.Equal(minute - 500, without.Settlement.UncoveredToman);
+        Assert.Equal(0, without.Settlement.UncoveredToman);
+        Assert.Equal(minute - 500, without.Settlement.WriteOffToman);
         Assert.Equal(0, without.Account.PcMoneyToman);
     }
 

@@ -26,7 +26,25 @@ public readonly record struct LocalDate : IComparable<LocalDate>
 
     public static LocalDate MaxValue { get; } = new(9999, 12, 31);
 
-    public DayOfWeek DayOfWeek => new DateTime(Year, Month, Day).DayOfWeek;
+    public DayOfWeek DayOfWeek
+    {
+        get
+        {
+            if (Year is < 1 or > 9999 || Month is < 1 or > 12 || Day < 1)
+            {
+                throw new BillingException(BillingErrors.InvalidDate, "The date is empty.");
+            }
+
+            try
+            {
+                return new DateTime(Year, Month, Day).DayOfWeek;
+            }
+            catch (ArgumentOutOfRangeException)
+            {
+                throw new BillingException(BillingErrors.InvalidDate, $"Gregorian date {Year:0000}-{Month:00}-{Day:00} does not exist.");
+            }
+        }
+    }
 
     public LocalDate AddDays(int days)
     {

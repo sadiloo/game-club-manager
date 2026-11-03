@@ -28,10 +28,9 @@ public enum TopUpTarget
 /// true lets PC use package minutes, and PC still cannot push the balance further negative.
 /// <see cref="Debt"/> is how far a console or table charge may go. The default is no debt.
 /// PC play never uses it to go further into debt.
-/// <see cref="ApplyDiscountsToPc"/> defaults to false. When it is false, a PC debit is the
-/// post-grace amount before level, birthday, and code discounts. When it is true, those
-/// time discounts reduce the PC debit and the remaining-time estimate, and the invoice
-/// payable equals that debit. Grace is waived before the percents either way.
+/// <see cref="ApplyDiscountsToPc"/> defaults to false. When it is true, level, birthday, and
+/// code discounts reduce the PC debit and the remaining-time estimate. The grace threshold
+/// is the discounted price of the next minute. A PC balance is never rounded.
 /// </summary>
 public sealed record WalletSettings(
     WalletMode Mode,
@@ -143,7 +142,6 @@ public static class CustomerPlay
         CustomerPricing? pricing = null,
         DiscountCode? code = null,
         DiscountPolicy? discounts = null,
-        RoundingPolicy? rounding = null,
         DateTimeOffset? issuedAt = null)
     {
         account.Settings.EnsureValid();
@@ -160,19 +158,27 @@ public static class CustomerPlay
             return new PcPlayResult(blocked, account);
         }
 
+        var timeDiscount = default(PcTimeDiscount);
+        if (account.Settings.ApplyDiscountsToPc && charge.Lines.Count > 0)
+        {
+            timeDiscount = DiscountFor(pricing, code, discounts, charge.Lines[0].GroupId, charge.Lines[0].Start);
+        }
+
+        var inDebt = money < 0;
         var spendable = money > 0 ? money : 0;
         var settled = AccountSettlement.Settle(
             charge,
             new PcAccount(account.Id, spendable, account.Packages),
             policy,
             billing,
-            account.Settings.GraceMinuteEnabled);
+            account.Settings.GraceMinuteEnabled && !inDebt,
+            timeDiscount,
+            shortfallIsUncovered: inDebt);
 
         var debit = settled.MoneyConsumedToman;
-        long discount = 0;
         Invoice? invoice = null;
         var graceWaived = settled.Grace?.WaivedToman ?? 0;
-        if (debit > 0 || graceWaived > 0)
+        if (debit > 0 || graceWaived > 0 || settled.WriteOffToman > 0 || settled.DiscountToman > 0)
         {
             var when = issuedAt ?? (charge.Lines.Count > 0 ? charge.Lines[charge.Lines.Count - 1].End : default);
             if (when == default)
@@ -181,41 +187,11 @@ public static class CustomerPlay
             }
 
             when = TehranTime.Ensure(when);
-            var accounted = debit + graceWaived;
-            string? group = null;
-            LocalDate? date = null;
-            if (charge.Lines.Count > 0)
+            invoice = PcInvoice(charge, settled, when);
+            if (invoice.PayableToman != debit)
             {
-                group = charge.Lines[0].GroupId;
-                date = TehranTime.Date(charge.Lines[0].Start);
-                for (var i = 1; i < charge.Lines.Count; i++)
-                {
-                    if (!string.Equals(charge.Lines[i].GroupId, group, StringComparison.Ordinal))
-                    {
-                        group = null;
-                        break;
-                    }
-                }
+                throw new BillingException(BillingErrors.InvalidMoney, "PC invoice payable does not match the balance debit.");
             }
-
-            var apply = account.Settings.ApplyDiscountsToPc;
-            invoice = InvoiceCalculator.Calculate(new InvoiceRequest(
-                [new TimeChargeLine("PC time", accounted, group, date, date?.DayOfWeek)],
-                [],
-                [],
-                apply ? pricing : null,
-                apply ? code : null,
-                discounts ?? DiscountPolicy.Default,
-                rounding ?? RoundingPolicy.Off,
-                when,
-                settled.Grace));
-            if (invoice.PayableToman > debit)
-            {
-                throw new BillingException(BillingErrors.InvalidMoney, "PC invoice payable is above the post-grace balance.");
-            }
-
-            discount = debit - invoice.PayableToman;
-            debit = invoice.PayableToman;
         }
 
         var pocket = account.Pc;
@@ -234,10 +210,48 @@ public static class CustomerPlay
         var visible = settled with
         {
             MoneyConsumedToman = debit,
-            DiscountToman = discount,
             UpdatedAccount = new PcAccount(account.Id, pocket.TotalToman, settled.UpdatedAccount.Packages),
         };
         return new PcPlayResult(visible, updated, giftDrawn, realDrawn, invoice);
+    }
+
+    private static Invoice PcInvoice(SessionCharge charge, Settlement settled, DateTimeOffset when)
+    {
+        var grace = settled.Grace?.WaivedToman ?? 0;
+        var moneyGross = charge.TotalAmountToman - settled.PackageCoveredToman;
+        if (moneyGross < 0)
+        {
+            moneyGross = 0;
+        }
+
+        var date = TehranTime.Date(when);
+        var lines = new List<InvoiceLine>
+        {
+            new(InvoiceLineKind.Time, "PC time", moneyGross, date),
+        };
+        if (settled.DiscountToman > 0)
+        {
+            lines.Add(new InvoiceLine(InvoiceLineKind.Discount, "PC discount", -settled.DiscountToman, date));
+        }
+
+        if (grace > 0)
+        {
+            lines.Add(new InvoiceLine(InvoiceLineKind.Grace, "Grace minute", -grace, date));
+        }
+
+        if (settled.WriteOffToman > 0)
+        {
+            lines.Add(new InvoiceLine(InvoiceLineKind.WriteOff, "Written off", -settled.WriteOffToman, date));
+        }
+
+        var payable = moneyGross - settled.DiscountToman - grace - settled.WriteOffToman - settled.UncoveredToman;
+        if (payable < 0)
+        {
+            payable = 0;
+        }
+
+        var net = moneyGross - grace - settled.DiscountToman - settled.WriteOffToman;
+        return new Invoice(lines, moneyGross, 0, 0, settled.DiscountToman, net, 0, payable, null, grace);
     }
 
     public static RemainingTimeEstimate Estimate(

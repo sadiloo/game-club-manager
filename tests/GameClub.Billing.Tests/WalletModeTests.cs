@@ -72,14 +72,15 @@ public class WalletModeTests
 
         var estimate = CustomerPlay.Estimate(console.Account, CafeFixture.ExampleNormal, PlayMode.Offline, 1, At, CafeFixture.Card());
         Assert.False(estimate.BlockedByDebt);
-        Assert.Equal(27, estimate.MoneyMinutes);
-        Assert.Equal(27, estimate.TotalMinutes);
+        Assert.Equal(28, estimate.MoneyMinutes);
+        Assert.Equal(28, estimate.TotalMinutes);
 
         var pc = CustomerPlay.Settle(PcHour(), console.Account);
         var through = MoneyMath.ChargeForMinutes(CafeFixture.ExampleNormalOnePlayerHourly, 28, RateRemainderMode.Nearest);
         Assert.Equal(50_000, pc.Settlement.MoneyConsumedToman);
         Assert.Equal(through - 50_000, pc.Settlement.Grace!.WaivedToman);
-        Assert.Equal(110_000 - through, pc.Settlement.UncoveredToman);
+        Assert.Equal(0, pc.Settlement.UncoveredToman);
+        Assert.Equal(110_000 - through, pc.Settlement.WriteOffToman);
         Assert.Equal(0, pc.Account.PcMoneyToman);
         Assert.Equal(-50_000, pc.Account.NonPcMoneyToman);
 

@@ -245,6 +245,44 @@ public static class MoneyMath
         }
     }
 
+    /// <summary>Floor of <c>left × right / divisor</c>. The product may exceed <see cref="long.MaxValue"/>.</summary>
+    public static long MulDiv(long left, long right, long divisor)
+    {
+        if (divisor <= 0)
+        {
+            throw new BillingException(BillingErrors.InvalidMoney, "Cannot divide by a non-positive number.");
+        }
+
+        if (left < 0 || right < 0)
+        {
+            throw new BillingException(BillingErrors.InvalidMoney, "Cannot scale a negative amount.");
+        }
+
+        var quotient = ((System.Numerics.BigInteger)left * right) / divisor;
+        if (quotient > long.MaxValue)
+        {
+            throw new BillingException(BillingErrors.InvalidMoney, "Amount overflowed.");
+        }
+
+        return (long)quotient;
+    }
+
+    /// <summary>Remainder of <c>left × right / divisor</c>, for a largest-remainder split.</summary>
+    public static long MulMod(long left, long right, long divisor)
+    {
+        if (divisor <= 0)
+        {
+            throw new BillingException(BillingErrors.InvalidMoney, "Cannot divide by a non-positive number.");
+        }
+
+        if (left < 0 || right < 0)
+        {
+            throw new BillingException(BillingErrors.InvalidMoney, "Cannot scale a negative amount.");
+        }
+
+        return (long)(((System.Numerics.BigInteger)left * right) % divisor);
+    }
+
     public static long CheckedSum(IEnumerable<long> values)
     {
         long total = 0;

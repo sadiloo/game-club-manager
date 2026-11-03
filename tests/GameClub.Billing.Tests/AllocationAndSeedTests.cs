@@ -279,7 +279,8 @@ public class AllocationAndSeedTests
             [Line(CafeFixture.Ps5, false, 62_500), Snack(7_650)],
             [new Tender(PaymentMethod.PcBalance, 20_000), Cash(71_000)],
             StepThousandUp);
-        Assert.True(rejected.IsValid, rejected.Errors.FirstOrDefault()?.Message);
+        Assert.False(rejected.IsValid);
+        Assert.Contains(rejected.Errors, error => error.Code == PaymentErrors.PcBalanceNoPcLine);
         Assert.Equal(0, rejected.Tenders[0].AmountToman);
         Assert.Empty(rejected.Shares);
     }

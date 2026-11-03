@@ -12,11 +12,11 @@ public enum RoundingDirection
 
 public enum RoundingScope
 {
-    /// <summary>Round the net time charge after discounts. Buffet and services are added afterwards.</summary>
-    TimeChargesOnly = 0,
+    /// <summary>Round the whole invoice after discounts. This is the default (the zero value).</summary>
+    WholeInvoice = 0,
 
-    /// <summary>Round the whole invoice after discounts.</summary>
-    WholeInvoice = 1,
+    /// <summary>Round the net time charge after discounts. Buffet and services are added afterwards.</summary>
+    TimeChargesOnly = 1,
 }
 
 /// <summary>
@@ -157,24 +157,82 @@ public sealed record TimeChargeLine(
     long AmountToman,
     string? GroupId,
     LocalDate? ServiceDate,
-    DayOfWeek? Weekday)
+    DayOfWeek? Weekday,
+    bool IsPcTime = false)
 {
     public static IReadOnlyList<TimeChargeLine> FromSession(SessionCharge charge)
     {
-        return charge.Lines
-            .Select(line =>
+        var lines = new List<TimeChargeLine>();
+        foreach (var line in charge.Lines)
+        {
+            var start = TehranTime.TimeOfDay(line.Start);
+            var end = TehranTime.TimeOfDay(line.End);
+            var description = $"{line.GroupId} {line.Mode} x{line.PlayerCount} {start.Hour:00}:{start.Minute:00}-{end.Hour:00}:{end.Minute:00}";
+            var byDate = line.ByDate;
+            if (byDate is null || byDate.Count <= 1)
+            {
+                var date = byDate is { Count: 1 } ? byDate[0].Date : TehranTime.Date(line.Start);
+                lines.Add(new TimeChargeLine(description, line.AmountToman, line.GroupId, date, date.DayOfWeek));
+                continue;
+            }
+
+            var totalMinutes = 0L;
+            foreach (var part in byDate)
+            {
+                totalMinutes += part.Minutes;
+            }
+
+            if (totalMinutes <= 0)
             {
                 var date = TehranTime.Date(line.Start);
-                var start = TehranTime.TimeOfDay(line.Start);
-                var end = TehranTime.TimeOfDay(line.End);
-                return new TimeChargeLine(
-                    $"{line.GroupId} {line.Mode} x{line.PlayerCount} {start.Hour:00}:{start.Minute:00}-{end.Hour:00}:{end.Minute:00}",
-                    line.AmountToman,
-                    line.GroupId,
-                    date,
-                    date.DayOfWeek);
-            })
-            .ToArray();
+                lines.Add(new TimeChargeLine(description, line.AmountToman, line.GroupId, date, date.DayOfWeek));
+                continue;
+            }
+
+            var shares = LargestRemainder(line.AmountToman, byDate, totalMinutes);
+            for (var i = 0; i < byDate.Count; i++)
+            {
+                var date = byDate[i].Date;
+                lines.Add(new TimeChargeLine(description, shares[i], line.GroupId, date, date.DayOfWeek));
+            }
+        }
+
+        return lines;
+    }
+
+    private static long[] LargestRemainder(long amount, IReadOnlyList<DateMinuteAllocation> parts, long totalMinutes)
+    {
+        var shares = new long[parts.Count];
+        var frac = new long[parts.Count];
+        long assigned = 0;
+        for (var i = 0; i < parts.Count; i++)
+        {
+            shares[i] = MoneyMath.MulDiv(amount, parts[i].Minutes, totalMinutes);
+            frac[i] = MoneyMath.MulMod(amount, parts[i].Minutes, totalMinutes);
+            assigned += shares[i];
+        }
+
+        var left = amount - assigned;
+        var order = new int[parts.Count];
+        for (var i = 0; i < order.Length; i++)
+        {
+            order[i] = i;
+        }
+
+        Array.Sort(order, (leftIndex, rightIndex) =>
+        {
+            var byFraction = frac[rightIndex].CompareTo(frac[leftIndex]);
+            return byFraction != 0 ? byFraction : leftIndex.CompareTo(rightIndex);
+        });
+        var cursor = 0;
+        while (left > 0)
+        {
+            shares[order[cursor % order.Length]]++;
+            left--;
+            cursor++;
+        }
+
+        return shares;
     }
 }
 
@@ -263,6 +321,7 @@ public enum InvoiceLineKind
     Discount = 3,
     Rounding = 4,
     Grace = 5,
+    WriteOff = 6,
 }
 
 public sealed record InvoiceLine(InvoiceLineKind Kind, string Description, long AmountToman, LocalDate? ServiceDate = null)
@@ -275,6 +334,7 @@ public sealed record InvoiceLine(InvoiceLineKind Kind, string Description, long 
         InvoiceLineKind.Discount => "تخفیف",
         InvoiceLineKind.Rounding => "رند",
         InvoiceLineKind.Grace => "دقیقه ارفاقی",
+        InvoiceLineKind.WriteOff => "سوخت",
         _ => throw new BillingException(BillingErrors.InvalidInvoice, $"Unknown invoice line kind '{Kind}'."),
     };
 }
@@ -425,7 +485,7 @@ public static class InvoiceCalculator
             else
             {
                 var combined = MoneyMath.PercentOf(eligible, cap);
-                var levelShare = sum == 0 ? 0 : combined * level / sum;
+                var levelShare = sum == 0 ? 0 : MoneyMath.MulDiv(combined, level, sum);
                 levelAmount += levelShare;
                 birthdayAmount = combined - levelShare;
             }
@@ -551,7 +611,7 @@ public static class InvoiceCalculator
         long allocated = 0;
         for (var i = 0; i < parts.Count; i++)
         {
-            var share = i == parts.Count - 1 ? amount - allocated : amount * parts[i].Base / codeBase;
+            var share = i == parts.Count - 1 ? amount - allocated : MoneyMath.MulDiv(amount, parts[i].Base, codeBase);
             allocated += share;
             switch (parts[i].Kind)
             {
@@ -664,6 +724,133 @@ public static class InvoiceCalculator
         cutSecond -= fromSecond;
         over -= fromSecond;
         cutThird -= Math.Min(over, Math.Max(0, cutThird));
+    }
+
+    /// <summary>
+    /// One rounding path. Per-line nets are taken after grace and discounts, balance tenders
+    /// pay those nets exactly, and only the counter remainder is rounded. The invoice payable
+    /// is the allocator payable, so a wallet plus cash cannot disagree with <see cref="Calculate"/>.
+    /// </summary>
+    public static (Invoice Invoice, AllocationResult Allocation) Collect(
+        InvoiceRequest request,
+        IReadOnlyList<Tender> tenders,
+        IReadOnlyList<MemberWallet>? wallets = null,
+        DebtPolicy? walletDebt = null,
+        WalletPocket? pcBalance = null)
+    {
+        var priced = Calculate(request with { Rounding = RoundingPolicy.Off });
+        var nets = PayableNets(request, priced.NetBeforeRoundingToman);
+        var allocation = PaymentAllocator.Allocate(nets, tenders, request.Rounding, wallets, walletDebt, pcBalance);
+        var date = TehranTime.Date(request.IssuedAt);
+        var lines = new List<InvoiceLine>();
+        foreach (var line in priced.Lines)
+        {
+            if (line.Kind != InvoiceLineKind.Rounding)
+            {
+                lines.Add(line);
+            }
+        }
+
+        if (allocation.RoundingToman != 0)
+        {
+            lines.Add(new InvoiceLine(InvoiceLineKind.Rounding, "Rounding", allocation.RoundingToman, date));
+        }
+
+        var invoice = priced with
+        {
+            Lines = lines,
+            RoundingToman = allocation.RoundingToman,
+            PayableToman = allocation.IsValid ? allocation.PayableToman : priced.NetBeforeRoundingToman + allocation.RoundingToman,
+        };
+        return (invoice, allocation);
+    }
+
+    private static PayableLine[] PayableNets(InvoiceRequest request, long net)
+    {
+        var rows = new List<(string? Group, bool Pc, bool Time, long Gross)>();
+        foreach (var line in request.TimeCharges)
+        {
+            rows.Add((line.GroupId, line.IsPcTime, true, line.AmountToman));
+        }
+
+        foreach (var line in request.Buffet)
+        {
+            rows.Add((null, false, false, line.TotalToman));
+        }
+
+        foreach (var line in request.Services)
+        {
+            rows.Add((null, false, false, line.AmountToman));
+        }
+
+        if (rows.Count == 0)
+        {
+            return [];
+        }
+
+        long gross = 0;
+        foreach (var row in rows)
+        {
+            gross += row.Gross;
+        }
+
+        var reduction = gross - net;
+        if (reduction < 0)
+        {
+            reduction = 0;
+        }
+
+        if (reduction > gross)
+        {
+            reduction = gross;
+        }
+
+        var shares = new long[rows.Count];
+        var frac = new long[rows.Count];
+        long assigned = 0;
+        for (var i = 0; i < rows.Count; i++)
+        {
+            shares[i] = gross == 0 ? 0 : MoneyMath.MulDiv(reduction, rows[i].Gross, gross);
+            frac[i] = gross == 0 ? 0 : MoneyMath.MulMod(reduction, rows[i].Gross, gross);
+            assigned += shares[i];
+        }
+
+        var left = reduction - assigned;
+        var order = new int[rows.Count];
+        for (var i = 0; i < order.Length; i++)
+        {
+            order[i] = i;
+        }
+
+        Array.Sort(order, (leftIndex, rightIndex) =>
+        {
+            var byFraction = frac[rightIndex].CompareTo(frac[leftIndex]);
+            return byFraction != 0 ? byFraction : leftIndex.CompareTo(rightIndex);
+        });
+        var cursor = 0;
+        while (left > 0 && rows.Count > 0)
+        {
+            var index = order[cursor % order.Length];
+            if (shares[index] < rows[index].Gross)
+            {
+                shares[index]++;
+                left--;
+            }
+
+            cursor++;
+            if (cursor > order.Length * (left + 2))
+            {
+                break;
+            }
+        }
+
+        var lines = new PayableLine[rows.Count];
+        for (var i = 0; i < rows.Count; i++)
+        {
+            lines[i] = new PayableLine(rows[i].Group, rows[i].Pc, rows[i].Time, rows[i].Gross - shares[i]);
+        }
+
+        return lines;
     }
 
     private static void Validate(InvoiceRequest request)

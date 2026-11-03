@@ -13,6 +13,9 @@ public sealed record PauseInterval(DateTimeOffset Start, DateTimeOffset End);
 
 public sealed record Session(string Id, IReadOnlyList<PlaySegment> Segments, IReadOnlyList<PauseInterval>? Pauses = null);
 
+/// <summary>Billed minutes of one priced line that start on a Tehran civil date. Daily reports use this; the line itself is not split.</summary>
+public sealed record DateMinuteAllocation(LocalDate Date, long Minutes);
+
 public sealed record PricedSlice(
     string SegmentId,
     string StationId,
@@ -26,7 +29,8 @@ public sealed record PricedSlice(
     long HourlyRateToman,
     RateSource Source,
     string? BandId,
-    long AmountToman);
+    long AmountToman,
+    IReadOnlyList<DateMinuteAllocation>? ByDate = null);
 
 public sealed record SessionCharge(
     string SessionId,
@@ -85,32 +89,11 @@ public static class SessionPricer
 
         var totalMinutes = MoneyMath.BilledMinutes(clock, policy);
         var blockMinutes = policy.GranularityMinutes;
-        var blockSeconds = (long)blockMinutes * 60L;
-        var blockCountLong = blockMinutes == 0 ? 0 : totalMinutes / blockMinutes;
-        if (blockCountLong > int.MaxValue)
-        {
-            throw new BillingException(BillingErrors.InvalidTime, "The session is too long to price.");
-        }
-
-        var blockCount = (int)blockCountLong;
-        var owners = new int[blockCount];
-        var quotes = new RateQuote[blockCount];
-        var walls = new DateTimeOffset[blockCount];
-        for (var i = 0; i < blockCount; i++)
-        {
-            var at = (long)i * blockSeconds;
-            var index = FragmentIndex(fragments, at);
-            var fragment = fragments[index];
-            var wall = TehranTime.AddSeconds(fragment.Start, at - fragment.Offset);
-            owners[i] = index;
-            walls[i] = wall;
-            quotes[i] = RateResolver.Resolve(rates, specialDays, wall, fragment.GroupId, fragment.Mode, fragment.PlayerCount);
-        }
-
+        var blockCount = totalMinutes / blockMinutes;
         var drafts = new List<SliceDraft>();
-        for (var f = 0; f < fragments.Count; f++)
+        foreach (var fragment in fragments)
         {
-            AppendFragment(drafts, fragments[f], f, owners, quotes, walls, blockMinutes, rates, specialDays);
+            AppendFragment(drafts, fragment, blockMinutes, blockCount, rates, specialDays);
         }
 
         var merged = Merge(drafts);
@@ -244,84 +227,117 @@ public static class SessionPricer
     private static void AppendFragment(
         List<SliceDraft> drafts,
         Fragment fragment,
-        int fragmentIndex,
-        int[] owners,
-        RateQuote[] quotes,
-        DateTimeOffset[] walls,
         int blockMinutes,
+        long blockCount,
         RateCard rates,
         SpecialDayCalendar specialDays)
     {
-        var first = -1;
-        var last = -1;
-        for (var i = 0; i < owners.Length; i++)
+        var blockSeconds = (long)blockMinutes * 60L;
+        var offset = fragment.Offset;
+        var endOffset = offset + fragment.Seconds;
+        var first = CeilDiv(offset, blockSeconds);
+        var last = endOffset <= 0 ? 0 : ((endOffset - 1) / blockSeconds) + 1;
+        if (last > blockCount)
         {
-            if (owners[i] != fragmentIndex)
-            {
-                continue;
-            }
-
-            if (first < 0)
-            {
-                first = i;
-            }
-
-            last = i;
+            last = blockCount;
         }
-
-        if (first < 0)
+        if (first >= last)
         {
-            var quote = RateResolver.Resolve(rates, specialDays, fragment.Start, fragment.GroupId, fragment.Mode, fragment.PlayerCount);
-            drafts.Add(SliceDraft.From(fragment, fragment.Start, fragment.End, fragment.Seconds, 0, quote));
+            FoldSeconds(drafts, fragment.End, fragment.Seconds);
             return;
         }
 
-        var cursor = first;
-        var lineStart = fragment.Start;
-        while (cursor <= last)
+        var lead = (first * blockSeconds) - offset;
+        if (lead > 0)
         {
-            var quote = quotes[cursor];
-            var date = TehranTime.Date(walls[cursor]);
-            var next = cursor + 1;
-            while (next <= last
-                && SameQuote(quotes[next], quote)
-                && TehranTime.Date(walls[next]) == date)
+            FoldSeconds(drafts, TehranTime.AddSeconds(fragment.Start, lead), lead);
+        }
+
+        var cursor = first;
+        while (cursor < last)
+        {
+            var startDelta = (cursor * blockSeconds) - offset;
+            var wall = TehranTime.AddSeconds(fragment.Start, startDelta);
+            var quote = RateResolver.Resolve(rates, specialDays, wall, fragment.GroupId, fragment.Mode, fragment.PlayerCount);
+            var boundary = RateBoundaries.Next(wall, rates, fragment.GroupId);
+            var secsToBoundary = TehranTime.WholeSeconds(wall, boundary);
+            long next;
+            if (secsToBoundary <= 0)
             {
-                next++;
+                next = cursor + 1;
+            }
+            else
+            {
+                next = CeilDiv(offset + startDelta + secsToBoundary, blockSeconds);
+                if (next <= cursor)
+                {
+                    next = cursor + 1;
+                }
             }
 
-            var lineEnd = next <= last ? walls[next] : fragment.End;
-            var seconds = TehranTime.WholeSeconds(lineStart, lineEnd);
-            var minutes = (long)(next - cursor) * blockMinutes;
-            if (seconds > 0 || minutes > 0)
+            if (next > last)
             {
-                drafts.Add(SliceDraft.From(fragment, lineStart, lineEnd, seconds, minutes, quote));
+                next = last;
             }
 
-            lineStart = lineEnd;
+            var minutes = (next - cursor) * blockMinutes;
+            DateTimeOffset lineEnd;
+            long seconds;
+            if (next >= last)
+            {
+                lineEnd = fragment.End;
+                seconds = endOffset - (cursor * blockSeconds);
+            }
+            else
+            {
+                var endDelta = (next * blockSeconds) - offset;
+                lineEnd = TehranTime.AddSeconds(fragment.Start, endDelta);
+                seconds = endDelta - startDelta;
+            }
+
+            if (minutes > 0 && seconds > 0)
+            {
+                drafts.Add(SliceDraft.From(
+                    fragment,
+                    wall,
+                    lineEnd,
+                    seconds,
+                    minutes,
+                    quote,
+                    [new DateMinuteAllocation(TehranTime.Date(wall), minutes)]));
+            }
+            else if (seconds > 0)
+            {
+                FoldSeconds(drafts, lineEnd, seconds);
+            }
+
             cursor = next;
         }
     }
 
-    private static int FragmentIndex(List<Fragment> fragments, long activeAt)
+    private static long CeilDiv(long numerator, long denominator)
     {
-        for (var i = 0; i < fragments.Count; i++)
+        if (numerator <= 0)
         {
-            var fragment = fragments[i];
-            if (activeAt >= fragment.Offset && activeAt < fragment.Offset + fragment.Seconds)
-            {
-                return i;
-            }
+            return 0;
         }
 
-        throw new BillingException(BillingErrors.InvalidTime, "A billed block fell outside the session.");
+        return ((numerator - 1) / denominator) + 1;
     }
 
-    private static bool SameQuote(RateQuote left, RateQuote right)
+    private static void FoldSeconds(List<SliceDraft> drafts, DateTimeOffset end, long seconds)
     {
-        return left.HourlyRateToman == right.HourlyRateToman
-            && left.Source == right.Source
-            && left.BandId == right.BandId;
+        if (seconds <= 0 || drafts.Count == 0)
+        {
+            return;
+        }
+
+        var last = drafts[drafts.Count - 1];
+        drafts[drafts.Count - 1] = last with
+        {
+            End = end > last.End ? end : last.End,
+            ActiveSeconds = last.ActiveSeconds + seconds,
+        };
     }
 
     private static List<SliceDraft> Merge(List<SliceDraft> drafts)
@@ -398,9 +414,17 @@ public static class SessionPricer
         long BilledMinutes,
         long HourlyRateToman,
         RateSource Source,
-        string? BandId)
+        string? BandId,
+        IReadOnlyList<DateMinuteAllocation> ByDate)
     {
-        public static SliceDraft From(Fragment fragment, DateTimeOffset start, DateTimeOffset end, long seconds, long minutes, RateQuote quote)
+        public static SliceDraft From(
+            Fragment fragment,
+            DateTimeOffset start,
+            DateTimeOffset end,
+            long seconds,
+            long minutes,
+            RateQuote quote,
+            IReadOnlyList<DateMinuteAllocation> byDate)
         {
             return new SliceDraft(
                 fragment.SegmentId,
@@ -414,7 +438,8 @@ public static class SessionPricer
                 minutes,
                 quote.HourlyRateToman,
                 quote.Source,
-                quote.BandId);
+                quote.BandId,
+                byDate);
         }
 
         public bool CanMerge(SliceDraft next)
@@ -436,6 +461,7 @@ public static class SessionPricer
                 End = next.End,
                 ActiveSeconds = ActiveSeconds + next.ActiveSeconds,
                 BilledMinutes = BilledMinutes + next.BilledMinutes,
+                ByDate = CombineDates(ByDate, next.ByDate),
             };
         }
 
@@ -455,7 +481,35 @@ public static class SessionPricer
                 HourlyRateToman,
                 Source,
                 BandId,
-                amount);
+                amount,
+                ByDate);
+        }
+
+        private static IReadOnlyList<DateMinuteAllocation> CombineDates(
+            IReadOnlyList<DateMinuteAllocation> left,
+            IReadOnlyList<DateMinuteAllocation> right)
+        {
+            if (right.Count == 0)
+            {
+                return left;
+            }
+
+            var merged = new List<DateMinuteAllocation>(left.Count + right.Count);
+            merged.AddRange(left);
+            foreach (var item in right)
+            {
+                var index = merged.FindIndex(existing => existing.Date == item.Date);
+                if (index >= 0)
+                {
+                    merged[index] = new DateMinuteAllocation(item.Date, merged[index].Minutes + item.Minutes);
+                }
+                else
+                {
+                    merged.Add(item);
+                }
+            }
+
+            return merged;
         }
     }
 }
@@ -476,14 +530,17 @@ public sealed record PrepaidPlan(
     long? UnusedToman,
     IReadOnlyList<PricedSlice> Lines,
     GraceLine? Grace = null,
-    bool IsUnlimited = false);
+    bool IsUnlimited = false,
+    DateTimeOffset? FreeUntil = null,
+    long? PaidMinutesAfterFree = null);
 
 /// <summary>
 /// Turns a duration cap or a money cap into an end time. Play is assumed continuous.
 /// Amount conversion uses the same running-clock charge as <see cref="SessionPricer"/>.
-/// A zero hourly rate is unlimited: the walk does not run out to a year.
-/// The grace minute, when the leftover is below one minute, is exactly 60 seconds
-/// priced with <see cref="MoneyMath.ChargeForMinutes"/> of one minute.
+/// A zero hourly rate is unlimited only while that rate lasts. A free band returns
+/// <see cref="PrepaidPlan.FreeUntil"/> and then the paid minutes the budget buys.
+/// The grace minute is folded into the last line at its marginal price,
+/// <c>Price(prefix + 1) − Price(prefix)</c>, not priced as its own minute.
 /// </summary>
 public static class PrepaidPlanner
 {
@@ -550,7 +607,7 @@ public static class PrepaidPlanner
         _ = TariffKey.ForSegment(groupId, mode, playerCount);
 
         var opening = RateResolver.Resolve(rates, specialDays, start, groupId, mode, playerCount);
-        if (opening.HourlyRateToman == 0)
+        if (opening.HourlyRateToman == 0 && FreeThroughHorizon(start, groupId, mode, playerCount, rates, specialDays))
         {
             return Unlimited(start, amountToman);
         }
@@ -564,24 +621,15 @@ public static class PrepaidPlanner
         var maxBlocks = MaxDays * 24L * 60L / step;
         long affordableBlocks = 0;
         long hi = 1;
-        long previousCharge = -1;
-        var becameFree = false;
         while (hi <= maxBlocks)
         {
             var charge = PriceMinutes(start, hi * step, segmentId, stationId, groupId, mode, playerCount, rates, specialDays, policy).TotalAmountToman;
-            if (charge == previousCharge)
-            {
-                becameFree = true;
-                break;
-            }
-
             if (charge > amountToman)
             {
                 break;
             }
 
             affordableBlocks = hi;
-            previousCharge = charge;
             if (hi > maxBlocks / 2)
             {
                 hi = maxBlocks;
@@ -614,72 +662,112 @@ public static class PrepaidPlanner
         }
 
         var bestMinutes = lo * step;
+        var maxMinutes = maxBlocks * step;
+        if (step == 1)
+        {
+            while (bestMinutes + 1 <= maxMinutes)
+            {
+                var extended = PriceMinutes(start, bestMinutes + 1, segmentId, stationId, groupId, mode, playerCount, rates, specialDays, policy).TotalAmountToman;
+                var soFar = bestMinutes == 0
+                    ? 0
+                    : PriceMinutes(start, bestMinutes, segmentId, stationId, groupId, mode, playerCount, rates, specialDays, policy).TotalAmountToman;
+                if (extended != soFar || extended > amountToman)
+                {
+                    break;
+                }
+
+                bestMinutes++;
+            }
+        }
+
         var prefixEnd = TehranTime.AddSeconds(start, bestMinutes * 60L);
         var prefix = bestMinutes == 0
             ? new SessionCharge("prepaid", [], 0, 0, 0)
             : PriceSynthetic(start, prefixEnd, segmentId, stationId, groupId, mode, playerCount, rates, specialDays, policy);
         var consumed = prefix.TotalAmountToman;
         var unused = amountToman - consumed;
-        if (becameFree)
-        {
-            return new PrepaidPlan(
-                PrepaidKind.Amount,
-                start,
-                prefixEnd,
-                prefix.TotalActiveSeconds,
-                amountToman,
-                consumed,
-                unused,
-                prefix.Lines,
-                null,
-                true);
-        }
-
-        GraceLine? grace = null;
-        var lines = prefix.Lines.ToList();
+        IReadOnlyList<PricedSlice> lines = prefix.Lines;
         var end = prefixEnd;
-        if (graceMinuteEnabled && unused > 0)
+        GraceLine? grace = null;
+        if (graceMinuteEnabled && unused > 0 && bestMinutes < maxMinutes)
         {
-            var quote = RateResolver.Resolve(rates, specialDays, end, groupId, mode, playerCount);
-            if (quote.HourlyRateToman == 0)
+            var minuteStart = prefixEnd;
+            var quote = RateResolver.Resolve(rates, specialDays, minuteStart, groupId, mode, playerCount);
+            var minuteLines = lines.ToList();
+            long marginal;
+            if (minuteLines.Count > 0 && SameRate(minuteLines[minuteLines.Count - 1], quote))
             {
-                return new PrepaidPlan(
-                    PrepaidKind.Amount,
-                    start,
-                    end,
-                    prefix.TotalActiveSeconds,
-                    amountToman,
-                    consumed,
-                    unused,
-                    lines,
-                    null,
-                    true);
+                var last = minuteLines[minuteLines.Count - 1];
+                var mergedMinutes = last.BilledMinutes + 1;
+                var mergedAmount = MoneyMath.ChargeForMinutes(last.HourlyRateToman, mergedMinutes, policy.Remainder);
+                marginal = mergedAmount - last.AmountToman;
+                minuteLines[minuteLines.Count - 1] = last with
+                {
+                    End = TehranTime.AddSeconds(minuteStart, 60),
+                    ActiveSeconds = last.ActiveSeconds + 60,
+                    BilledMinutes = mergedMinutes,
+                    AmountToman = mergedAmount,
+                    ByDate = AppendMinute(last.ByDate, TehranTime.Date(minuteStart)),
+                };
             }
-
-            var minuteCost = MoneyMath.ChargeForMinutes(quote.HourlyRateToman, 1, policy.Remainder);
-            if (minuteCost > unused)
+            else
             {
-                var waived = minuteCost - unused;
-                var sliceEnd = TehranTime.AddSeconds(end, 60);
-                lines.Add(new PricedSlice(
+                marginal = MoneyMath.ChargeForMinutes(quote.HourlyRateToman, 1, policy.Remainder);
+                var minuteEnd = TehranTime.AddSeconds(minuteStart, 60);
+                minuteLines.Add(new PricedSlice(
                     segmentId,
                     stationId,
                     groupId,
                     mode,
                     playerCount,
-                    end,
-                    sliceEnd,
+                    minuteStart,
+                    minuteEnd,
                     60,
                     1,
                     quote.HourlyRateToman,
                     quote.Source,
                     quote.BandId,
-                    minuteCost));
-                grace = new GraceLine(1, waived, end, segmentId);
-                end = sliceEnd;
+                    marginal,
+                    [new DateMinuteAllocation(TehranTime.Date(minuteStart), 1)]));
+            }
+
+            if (marginal > unused)
+            {
+                grace = new GraceLine(1, marginal - unused, minuteStart, segmentId);
+                lines = minuteLines;
+                end = TehranTime.AddSeconds(minuteStart, 60);
                 consumed = amountToman;
                 unused = 0;
             }
+            else if (marginal > 0 && step > 1)
+            {
+                lines = minuteLines;
+                end = TehranTime.AddSeconds(minuteStart, 60);
+                consumed += marginal;
+                unused = amountToman - consumed;
+            }
+        }
+
+        DateTimeOffset? freeUntil = null;
+        long? paidAfterFree = null;
+        if (lines.Count > 0 && lines[0].HourlyRateToman == 0)
+        {
+            var freeEnd = lines[0].End;
+            long paid = 0;
+            foreach (var line in lines)
+            {
+                if (line.HourlyRateToman == 0 && line.End >= freeEnd)
+                {
+                    freeEnd = line.End;
+                }
+                else
+                {
+                    paid += line.BilledMinutes;
+                }
+            }
+
+            freeUntil = freeEnd;
+            paidAfterFree = paid;
         }
 
         return new PrepaidPlan(
@@ -691,7 +779,40 @@ public static class PrepaidPlanner
             consumed,
             unused,
             lines,
-            grace);
+            grace,
+            false,
+            freeUntil,
+            paidAfterFree);
+    }
+
+    private static bool FreeThroughHorizon(
+        DateTimeOffset start,
+        string groupId,
+        PlayMode mode,
+        int playerCount,
+        RateCard rates,
+        SpecialDayCalendar specialDays)
+    {
+        var cursor = start;
+        var horizon = TehranTime.AddSeconds(start, MaxDays * 24L * 60L * 60L);
+        while (cursor < horizon)
+        {
+            var quote = RateResolver.Resolve(rates, specialDays, cursor, groupId, mode, playerCount);
+            if (quote.HourlyRateToman > 0)
+            {
+                return false;
+            }
+
+            var next = RateBoundaries.Next(cursor, rates, groupId);
+            if (next <= cursor || next > horizon)
+            {
+                return true;
+            }
+
+            cursor = next;
+        }
+
+        return true;
     }
 
     private static PrepaidPlan Unlimited(DateTimeOffset start, long amountToman)
@@ -707,6 +828,29 @@ public static class PrepaidPlanner
             [],
             null,
             true);
+    }
+
+    private static bool SameRate(PricedSlice line, RateQuote quote)
+    {
+        return line.HourlyRateToman == quote.HourlyRateToman
+            && line.Source == quote.Source
+            && line.BandId == quote.BandId;
+    }
+
+    private static IReadOnlyList<DateMinuteAllocation> AppendMinute(IReadOnlyList<DateMinuteAllocation>? dates, LocalDate date)
+    {
+        var copy = dates is null ? new List<DateMinuteAllocation>() : new List<DateMinuteAllocation>(dates);
+        if (copy.Count > 0 && copy[copy.Count - 1].Date == date)
+        {
+            var last = copy[copy.Count - 1];
+            copy[copy.Count - 1] = new DateMinuteAllocation(date, last.Minutes + 1);
+        }
+        else
+        {
+            copy.Add(new DateMinuteAllocation(date, 1));
+        }
+
+        return copy;
     }
 
     private static SessionCharge PriceMinutes(
