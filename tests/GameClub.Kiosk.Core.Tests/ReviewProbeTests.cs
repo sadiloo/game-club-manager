@@ -396,9 +396,12 @@ public sealed class ReviewProbeTests
         Assert.False(demoRelease.Run);
         var demoDebug = KioskStartup.Decide("{\"Demo\":true}", debugBuild: true, demoSwitch: false);
         Assert.True(demoDebug.Demo);
-        var ok = KioskStartup.Decide("{\"HubUrl\":\"https://cafe/hub\",\"CaThumbprint\":\"ab:cd\"}", false, false);
+        var noToken = KioskStartup.Decide("{\"HubUrl\":\"https://cafe/hub\",\"CaThumbprint\":\"ab:cd\"}", false, false);
+        Assert.False(noToken.Run);
+        var ok = KioskStartup.Decide("{\"HubUrl\":\"https://cafe/hub\",\"CaThumbprint\":\"ab:cd\",\"StationToken\":\"station-1\"}", false, false);
         Assert.True(ok.Run);
         Assert.Equal("ABCD", ok.CaThumbprint);
+        Assert.Equal("station-1", ok.StationToken);
     }
 
     [Fact]

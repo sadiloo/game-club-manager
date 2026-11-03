@@ -61,6 +61,11 @@ public sealed class LocalStore : IDisposable
             );
             """);
         Execute("""
+            CREATE TABLE IF NOT EXISTS stop_list (
+              name TEXT PRIMARY KEY
+            );
+            """);
+        Execute("""
             CREATE TABLE IF NOT EXISTS pending_reports (
               session_id TEXT PRIMARY KEY,
               json TEXT NOT NULL,
@@ -272,6 +277,50 @@ public sealed class LocalStore : IDisposable
     {
         Execute("DELETE FROM open_session;");
     }
+
+    public void SaveStopList(IEnumerable<string> names)
+    {
+        using var transaction = _connection.BeginTransaction();
+        using (var clear = _connection.CreateCommand())
+        {
+            clear.Transaction = transaction;
+            clear.CommandText = "DELETE FROM stop_list;";
+            clear.ExecuteNonQuery();
+        }
+
+        foreach (var name in names)
+        {
+            var normalized = ProcessPolicy.Normalize(name);
+            if (normalized.Length == 0)
+            {
+                continue;
+            }
+
+            using var insert = _connection.CreateCommand();
+            insert.Transaction = transaction;
+            insert.CommandText = "INSERT OR IGNORE INTO stop_list (name) VALUES ($name);";
+            insert.Parameters.AddWithValue("$name", normalized);
+            insert.ExecuteNonQuery();
+        }
+
+        transaction.Commit();
+    }
+
+    public IReadOnlyList<string> ReadStopList()
+    {
+        using var command = _connection.CreateCommand();
+        command.CommandText = "SELECT name FROM stop_list ORDER BY name;";
+        var names = new List<string>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            names.Add(reader.GetString(0));
+        }
+
+        return names;
+    }
+
+    public void ClearStopList() => Execute("DELETE FROM stop_list;");
 
     public void Dispose() => _connection.Dispose();
 

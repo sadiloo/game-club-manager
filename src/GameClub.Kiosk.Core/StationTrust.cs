@@ -32,6 +32,29 @@ public static class StationTrust
         return null;
     }
 
+    public static bool MatchesPresented(string? expected, string? leafThumbprint, IEnumerable<string>? chainThumbprints)
+    {
+        if (ThumbprintEquals(expected, leafThumbprint))
+        {
+            return true;
+        }
+
+        if (chainThumbprints is null)
+        {
+            return false;
+        }
+
+        foreach (var thumb in chainThumbprints)
+        {
+            if (ThumbprintEquals(expected, thumb))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     public static bool ThumbprintEquals(string? expected, string? presented)
     {
         var left = Normalize(expected);

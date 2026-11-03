@@ -147,6 +147,7 @@ public sealed class KioskController
                 _lastWall = now;
                 _clock = now;
                 _processesToStop.Clear();
+            _store.ClearStopList();
                 PersistOpen(now);
                 _store.Append(result.SessionId, OfflineEventKind.Login, now, AccountCodec.Write(AccountCodec.From(result.Account)));
                 Publish();
@@ -544,6 +545,8 @@ public sealed class KioskController
                 _processesToStop.Add(name);
             }
         }
+
+        _store.SaveStopList(_processesToStop);
     }
 
     private void PersistCheckpoint(DateTimeOffset now)

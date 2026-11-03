@@ -46,6 +46,11 @@ public sealed class LogoutResult
     public long Revision { get; init; }
 
     public string? Message { get; init; }
+
+    /// <summary>
+    /// Seconds the PC stayed past the planner lock. The wallet is not charged for them.
+    /// </summary>
+    public long OvershootSeconds { get; init; }
 }
 
 public sealed class SessionReport
@@ -193,6 +198,8 @@ public sealed class InMemoryCafeServer : ICafeServer
         }
     }
 
+    public long LastOvershootSeconds { get; private set; }
+
     public CustomerAccount? FindAccount(string accountId)
     {
         lock (_gate)
@@ -318,8 +325,18 @@ public sealed class InMemoryCafeServer : ICafeServer
                 ended = started;
             }
 
+            var coverage = KioskSessionMath.Coverage(owner.Account, report.Station, started, _rates, _policy, _specialDays);
+            var billEnd = ended;
+            long overshoot = 0;
+            if (coverage.LockAt is DateTimeOffset lockAt && ended > lockAt)
+            {
+                billEnd = lockAt;
+                overshoot = TehranTime.WholeSeconds(lockAt, ended);
+            }
+
+            LastOvershootSeconds = overshoot;
             var changed = owner.Revision != report.LoginRevision;
-            var settled = Price(owner.Account, report.SessionId, started, ended).Account;
+            var settled = Price(owner.Account, report.SessionId, started, billEnd).Account;
             owner.Account = settled;
             owner.Revision++;
             owner.OpenSessionId = null;
@@ -332,6 +349,7 @@ public sealed class InMemoryCafeServer : ICafeServer
                 Account = settled,
                 Revision = owner.Revision,
                 Message = changed ? "resettled" : "server_unchanged",
+                OvershootSeconds = overshoot,
             });
         }
     }

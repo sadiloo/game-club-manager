@@ -18,4 +18,6 @@
     <PackageReference Include="System.Text.Json" Version="8.0.5" />
   </ItemGroup>
 
+  <Import Project="..\SqliteWindowsNative.targets" />
+
 </Project>

@@ -100,13 +100,17 @@ install-kiosk.cmd /shell "C:\Program Files\GameClub\GameClub.Kiosk.exe" /guard "
 The script:
 
 1. Refuses original Windows 8. Requires the .NET Framework 4.8 release key (`Release >= 528040`).
-2. On Windows 7, reminds you about KB4474419 (SHA-2 code signing) and KB3140245 (TLS 1.2). A signed installer will not validate on Windows 7 without the SHA-2 update. .NET Framework 4.8's own installer has the same requirement. The script then sets `SchUseStrongCrypto`, `SystemDefaultTlsVersions`, WinHTTP `DefaultSecureProtocols` (`0xA00`), and the SChannel TLS 1.2 client key. Uninstall does **not** remove those. They are OS/runtime settings, not kiosk-only, and turning TLS 1.2 back off would break other programs.
-3. Creates a standard user (not an administrator) and loads that user's `NTUSER.DAT`.
-4. Sets **that user's** `Winlogon\Shell` to the kiosk exe. It does not write the machine Winlogon shell, so an admin logon still gets Explorer.
-5. Writes the policy values below and installs the guard service.
-6. Writes `%ProgramData%\GameClub\shell.path`.
+2. On Windows 7, reminds you about KB4490628 (servicing stack), KB4474419 (SHA-2 code signing), and KB3140245 (TLS 1.2). A signed installer will not validate on Windows 7 without the SHA-2 update. .NET Framework 4.8's own installer has the same requirement. The script then sets `SchUseStrongCrypto`, `SystemDefaultTlsVersions`, WinHTTP `DefaultSecureProtocols` (`0xA00`), and the SChannel TLS 1.2 client key.
+3. Exports every HKLM key and the kiosk user's hive to `%ProgramData%\GameClub\backup\` **before** writing. A failed `reg add` imports those files and exits. A failed install does not leave the per-user shell pointing at a half-written policy set.
+4. Creates a standard user (not an administrator), sets the password with ADSI (the password never appears on a `net user` command line), and sets `UserFlags` `0x10000` so the password does not expire. `net user /expires:never` is only the account expiry.
+5. Loads that user's `NTUSER.DAT` and sets **that user's** `Winlogon\Shell` to the quoted kiosk exe. It does not write the machine Winlogon shell, so an admin logon still gets Explorer.
+6. Writes the Home registry policies below (`DisableCMD`, `DisableRegistryTools`, `DisableTaskMgr`, Explorer policies, sticky-key flags, Game Bar, USB execute deny). It does not write Software Restriction Policies or AppLocker. Those need Group Policy machinery this product does not rely on for Windows Home.
+7. When `/userpassfile` is passed, stores the password as the LSA secret `DefaultPassword` and turns on `AutoAdminLogon`. There is no plaintext `DefaultPassword` registry value. `/adminuser` hides that admin tile. `DontDisplayLastUserName` and `ConsentPromptBehaviorUser=0` (standard users are denied elevation) are written for every install.
+8. Installs the guard with service recovery (`sc failure` restart, `sc failureflag`), writes `%ProgramData%\GameClub\shell.path` and `kiosk.sid`, and restricts `admin-gate.json` to SYSTEM and Administrators. If `CafeRoot.cer` sits next to the script, it is added to the machine root store.
 
-`uninstall-kiosk.cmd /user GameClubKiosk` stops the service, sets the user's shell back to `explorer.exe`, and deletes the policy values. `/removeuser` also deletes the account. The kiosk user must be logged off so the hive can be loaded.
+`uninstall-kiosk.cmd /user GameClubKiosk` checks that the user hive can be loaded **before** it deletes the service. If the user is still signed in, it exits and changes nothing. Otherwise it imports the backups (or deletes only the values this installer added when a backup file is missing), removes the per-user `Shell` value so the machine default applies, clears the LSA secret, and stops the guard. `/removeuser` also deletes the account.
+
+If a PC is stranded, boot Safe Mode as an administrator, log the kiosk user off, and run `scripts/restore-kiosk-safemode.cmd`. That script calls the uninstaller. It does not register the guard under `SafeBoot` and it does not hide the boot menu. Persian steps are in `docs/kiosk-manual-fa.md`.
 
 ### Policies, and where Windows versions differ
 
@@ -118,17 +122,19 @@ Applied with `reg.exe`, not `gpedit`. Home editions do not ship `gpedit.msc`; th
 | Ctrl+Alt+Del | `DisableLockWorkstation`, `DisableChangePassword`, machine `HideFastUserSwitching` | The secure attention sequence itself cannot be turned off on any of these versions. The options on that screen are removed. | Same. The Windows 11 security screen looks different; the options are still policy-controlled. |
 | Windows key | per-user `NoWinKeys` | Win+R, Win+E, Win+X hotkeys off. Ctrl+Esc can still open a menu on some builds if Explorer is alive. Explorer is not the shell. | Same policy. Win11 still honors `NoWinKeys`. |
 | Run dialog | per-user `NoRun` | Win+R and the Run dialog | Same |
-| Control Panel | per-user `NoControlPanel` | Enough. There is no Settings app. | Classic Control Panel is blocked. The Settings app is a separate hole. `SettingsPageVisibility=hide:allpages` is written everywhere and only means something on Windows 10 1703+. The guard also kills `SystemSettings.exe`, which does not exist on 7/8.1. |
-| USB autorun | machine `NoDriveTypeAutoRun=255`, `NoAutorun=1` | No AutoPlay launch | Same. A file dialog can still open the drive. That is a known gap, not something autorun policy can close. |
+| Control Panel | per-user `NoControlPanel` | Enough. There is no Settings app. | Classic Control Panel is blocked. The Settings app is not hidden machine-wide, because that would hide Windows Update for the administrator. The guard kills `SystemSettings.exe` in the kiosk session. |
+| Command prompt and registry | per-user `DisableCMD=1`, `DisableRegistryTools=1` | `cmd.exe` refuses to open, including a renamed copy. `regedit` refuses. | Same. The guard is the backstop. |
+| USB | machine `NoDriveTypeAutoRun=255`, `NoAutorun=1`, `Deny_Execute=1` on the removable-disk class | No AutoPlay launch, and Windows refuses to execute from that device class. | Same. Drive-letter hiding is not applied: a mask would hide the cafe's game disks. |
+| Sticky keys and Game Bar | per-user accessibility `Flags`, `GameDVR_Enabled=0`, machine `AllowGameDVR=0` | The hotkey dialogs stay off. There is no Game Bar on Windows 7. | Game Bar policy is there for Windows 10 and 11 Home. |
 
-`SettingsPageVisibility` is ignored on Windows 7 and 8.1. Writing it there is harmless.
+`HideFastUserSwitching` is machine-wide. An administrator on that PC does not get Fast User Switching. The machine shell is unchanged.
 
 ## What the Linux tests cover
 
 `dotnet test` on this machine:
 
-- Billing engine: **50** tests (unchanged behavior; the library now also builds `netstandard2.0`).
-- Kiosk core: **35** tests.
+- Billing engine and kiosk core, `net10.0`, on Linux. The Windows CI job runs every target framework, including `net48`.
+- The WPF shell and the guard service build here with the Windows targeting pack. They are not executed on Linux. `docs/kiosk-manual-fa.md` is the manual list for those behaviours.
 
 Covered without Windows:
 
@@ -160,22 +166,32 @@ Standalone demo is enough for the shell tests. For Steam, Epic, Battle.net, Valo
 | 5 | Windows key, Win+R, Win+E, Win+X | Nothing useful. `NoWinKeys` and `NoRun`. If a stray Explorer window appears, the guard closes it within about a second. |
 | 6 | Ctrl+Shift+Esc | Task Manager does not stay open. Policy hides it, and the guard kills `taskmgr.exe` if it starts. |
 | 7 | Ctrl+Alt+Del | The security screen still appears. This cannot be removed on 7, 8.1, 10, or 11. Lock, change password, and switch user are removed. Task Manager on that screen does not stay open. |
-| 8 | Control Panel, and on Windows 10/11 the Settings app | Control Panel does not open (`NoControlPanel`). On 10/11, Settings does not stay open (`SystemSettings.exe` killed, `SettingsPageVisibility` hides pages). On 7 and 8.1 there is no Settings app; `NoControlPanel` is the whole story. |
+| 8 | Control Panel, and on Windows 10/11 the Settings app | Control Panel does not open (`NoControlPanel`). On 10/11, Settings does not stay open in the kiosk session (`SystemSettings.exe` killed). The administrator's Settings app still opens, including Windows Update. |
 | 9 | Insert a USB stick with an `autorun.inf` | Nothing launches. Opening the drive from a game's save dialog still works. That browse is a known gap. |
 | 10 | From a game's save/open dialog, type `cmd` or `powershell` in the address bar, or start `regedit` | The window may flash. The guard kills `cmd`, `powershell`, `pwsh`, and `regedit`. |
-| 11 | Steam overlay (Shift+Tab), Steam's built-in browser, Epic overlay, Battle.net friends list | On Windows 10/11 they keep running. They are not on the deny list. They can browse the web and download files. That is a known gap until a later allow-list of window classes. On Windows 7/8.1 these clients are not installed; expect the shell's "needs Windows 10" message instead. |
+| 11 | Steam overlay (Shift+Tab) → a standalone browser, or start `chrome` / `msedge` / `firefox` from a dialog | The guard kills the browser in the kiosk session within about a second and appends a line to `%ProgramData%\GameClub\guard.log` (`browser`). `steamwebhelper` is killed when no Steam game is the active launch. The overlay itself can still show Steam's own pages. That remaining surface is the cafe-program / Family View guidance, not a second deny list. |
 | 12 | Valorant (Vanguard), a FACEIT client, an EAC game | On Windows 10/11 the game starts. The guard does not inject, does not hook the keyboard globally, and does not kill `vgc`, `vgtray`, or `EasyAntiCheat`. If Vanguard refuses to start, capture the exact error before changing the guard. On Windows 7/8.1 these titles are out of scope. |
 | 13 | Kill `GameClub.Kiosk` from an admin logon (or `taskkill` from an admin) | The guard starts it again within a few seconds, unless it has already restarted five times in five minutes. The balance continues from the SQLite snapshot, it does not reset to the login amount. |
 | 14 | Pull the network cable mid-session, play two minutes, reconnect | The timer keeps moving. After reconnect, logout posts one interval. The server balance matches the shell. Doing it twice does not charge twice. |
-| 15 | Ctrl+Shift+F12 on the shell, wrong password five times, then the right one | Wrong passwords fail. The sixth try inside a minute fails even if it is correct. After a minute the right password pauses the guard for 10 minutes and opens Explorer. Relock by restarting the service or waiting. |
+| 15 | Ctrl+Shift+F12 on the shell, wrong password five times, then the right one | The shell sends the password to the guard. Wrong passwords fail. A different program on the pipe is rejected even with the right password. The sixth try inside the lockout fails even if it is correct. After the lockout, the right password pauses enforcement for 10 minutes and opens Explorer. Ten minutes later the shell sends `admin-relock` and the guard enforces again. |
 | 16 | Shift five times (sticky keys), and the ease-of-access button if it appears | A sticky-keys prompt may show. `sethc.exe` and `utilman.exe` are killed if they are started as a way out. This does not replace those binaries. |
-| 17 | Boot Safe Mode, or hold Shift while clicking Restart | Expected weakness. Safe Mode does not use this shell the same way, and the guard service may not start. Do not "fix" this by disabling Safe Mode from the script. Use a firmware password and BitLocker on the drive, as a later hardening step. Write down what you actually see on each Windows version. |
+| 17 | Boot Safe Mode as the administrator and run `scripts\restore-kiosk-safemode.cmd` | The kiosk user is logged off first. The script imports `%ProgramData%\GameClub\backup\*.reg`, removes the per-user shell, and deletes the guard. The administrator's Explorer comes back. The boot menu is still available. The guard is not registered under SafeBoot. |
 | 18 | A game crash dialog (`WerFault`) | It may appear. The guard does not kill it, so a crash cannot hang the game by leaving a hidden fault window. It must not offer a path into `cmd`. If it does, that is a fail to record. |
 | 19 | Installer on Windows 8.0 (not 8.1) | Script stops and says to upgrade to 8.1. |
 | 20 | Installer on Windows 7 SP1 without KB4474419 | .NET Framework 4.8 or a signed setup will fail trust. After KB4474419 and KB3140245, the script's TLS keys let .NET 4.8 speak TLS 1.2 to the future server. |
 | 21 | Same installer on Windows 7 Home or Windows 10 Home, with no `gpedit.msc` | Task Manager and Win+R are blocked. `cmd.exe` refuses to open (`DisableCMD`). `regedit` refuses (`DisableRegistryTools`). There is no AppLocker and no Software Restriction Policy key under `Safer`. |
 | 23 | Look for a pause button during a PC session | There is none. Time keeps moving until logout, zero credit, or lock. |
 | 24 | Play from 07:30 to 09:00 on a Normal PC with the pilot seed | The screen and the server both charge 08:30 at the special-hour rate and the rest at the day rate. A VIP PC uses the VIP pair, not the Normal pair. |
-| 22 | Uninstall, then log in as the kiosk user | Explorer is back. An administrator logon was never switched to the kiosk shell. |
+| 22 | Uninstall, then log in as the kiosk user | Explorer is back. An administrator logon was never switched to the kiosk shell. If you start uninstall while the kiosk user is still signed in, the script exits and the service is still installed. |
+| 25 | From another Windows user, try to open the pipe `\\.\pipe\GameClub.Kiosk` | Access is denied. The kiosk user can send a heartbeat. SYSTEM (the guard) owns the pipe. |
+| 26 | Log in with a small balance, start the local game, wait until the lock screen | The game process is gone within about a second of the lock. `guard.log` records `session_end`. Logging out with the game running does the same. An administrator's copy of that process is left alone. |
+| 27 | Break the install on purpose (sign the kiosk user in, then run the installer) | The script stops before it writes policy, or it rolls the exported keys back. The PC still boots to the previous shell. |
+| 28 | Confirm `runtimes\win-x64\native\e_sqlite3.dll` and the `win-x86` copy sit next to `GameClub.Kiosk.exe` and the guard | The shell opens its database. A Linux-built folder without those two files is not a shippable build. |
+| 29 | On Windows 7, with `kiosk.json` pointing at `https://` and a station token | The client uses server-sent events and long polling, pins the cafe certificate thumbprint, and sends the station token. WebSockets are not requested. |
+| 30 | Log in with a balance that cannot buy one more minute | The screen shows one grace minute (`مهلت`), then locks. The game process is gone. The balance is 0, not negative. |
+| 31 | Leave the PC on the lock screen for two extra minutes, then look at the server balance | Those extra minutes are not charged and do not become debt. The stand-in records them as overshoot seconds. |
+| 32 | During a free band (hourly rate 0) | The countdown reads `رایگان تا …، سپس …` with the band end and the paid minutes the balance buys after it. When the band ends, the paid countdown continues. A base rate of 0 stays `نامحدود`. |
+
+Persian steps for the same checks are in `docs/kiosk-manual-fa.md`.
 
 Record the Windows edition, build number, and whether the game's anti-cheat printed a specific error. Do not install a kernel driver or a global hook to "fix" a failed anti-cheat test without reading that error first.

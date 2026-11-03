@@ -49,6 +49,16 @@ public sealed record KioskSession
     public static KioskSession Locked(string? message = null) => new() { Phase = KioskPhase.Locked, Message = message };
 }
 
+/// <summary>
+/// Lock time from <see cref="PrepaidPlanner"/>. A free band is unlimited only until it ends;
+/// the paid minutes after it come from a second planner call. Grace is the planner's one minute.
+/// </summary>
+public sealed record PlayCoverage(
+    DateTimeOffset? LockAt,
+    DateTimeOffset? FreeUntil,
+    long? SecondsAfterFree,
+    DateTimeOffset? GraceAt);
+
 public sealed record KioskProjection
 {
     public KioskPhase Phase { get; init; }
@@ -176,37 +186,28 @@ public static class KioskSessionMath
             now = started;
         }
 
-        var coveredEnd = CoveredEnd(session.AccountAtLogin, station, started, rates, policy, specialDays);
-        if (coveredEnd is not DateTimeOffset end)
+        var coverage = Coverage(session.AccountAtLogin, station, started, rates, policy, specialDays);
+        if (coverage.LockAt is not DateTimeOffset end)
         {
             var freeCharge = Price(session.SessionId, station, started, now, rates, policy, specialDays);
             var freePlay = CustomerPlay.Settle(freeCharge, session.AccountAtLogin);
             EnsurePcDidNotGoNegative(session.AccountAtLogin, freePlay.Account);
-            return View(KioskPhase.Active, freePlay, freeCharge, now, null, true, false, false, SessionEndReason.None);
+            return View(KioskPhase.Active, freePlay, freeCharge, now, null, true, false, false, SessionEndReason.None, null);
         }
 
+        var inFree = coverage.FreeUntil is DateTimeOffset freeUntil && now < freeUntil;
         var billUntil = now < end ? now : end;
         var charge = Price(session.SessionId, station, started, billUntil, rates, policy, specialDays);
         var play = CustomerPlay.Settle(charge, session.AccountAtLogin);
         EnsurePcDidNotGoNegative(session.AccountAtLogin, play.Account);
 
         var remaining = now >= end ? 0 : SecondsBetween(now, end);
-        var spendable = Spendable(play.Account);
-        var packageMinutesLeft = CustomerPlay.Estimate(
-            play.Account,
-            station.GroupId,
-            station.Mode,
-            station.PlayerCount,
-            billUntil,
-            rates,
-            specialDays,
-            policy).EligiblePackageMinutes;
-        var inGrace = remaining > 0
-            && play.Settlement.Grace is not null
-            && spendable == 0
-            && packageMinutesLeft == 0;
+        var inGrace = !inFree
+            && coverage.GraceAt is DateTimeOffset graceAt
+            && now >= graceAt
+            && remaining > 0;
 
-        if (remaining <= 0 || play.Settlement.UncoveredToman > 0)
+        if (remaining <= 0)
         {
             return View(
                 KioskPhase.Locked,
@@ -217,19 +218,23 @@ public static class KioskSessionMath
                 false,
                 false,
                 true,
-                SessionEndReason.CreditExhausted);
+                SessionEndReason.CreditExhausted,
+                null);
         }
 
+        var shown = inFree ? (long?)null : remaining;
         return View(
             inGrace ? KioskPhase.Grace : KioskPhase.Active,
             play,
             charge,
             billUntil,
-            remaining,
+            shown,
             false,
             inGrace,
             false,
-            SessionEndReason.None);
+            SessionEndReason.None,
+            inFree ? coverage.FreeUntil : null,
+            inFree ? coverage.SecondsAfterFree : null);
     }
 
     public static KioskSession Apply(KioskSession session, KioskProjection projection, DateTimeOffset now)
@@ -273,7 +278,7 @@ public static class KioskSessionMath
         };
     }
 
-    public static DateTimeOffset? CoveredEnd(
+    public static PlayCoverage Coverage(
         CustomerAccount account,
         StationContext station,
         DateTimeOffset startedAt,
@@ -281,6 +286,7 @@ public static class KioskSessionMath
         BillingPolicy policy,
         SpecialDayCalendar specialDays)
     {
+        startedAt = TehranTime.Ensure(startedAt);
         var estimate = CustomerPlay.Estimate(
             account,
             station.GroupId,
@@ -290,22 +296,14 @@ public static class KioskSessionMath
             rates,
             specialDays,
             policy);
-        if (estimate.RateIsFree)
+        if (estimate.BlockedByDebt && estimate.EligiblePackageMinutes == 0 && !estimate.RateIsFree)
         {
-            return null;
+            return new PlayCoverage(startedAt, null, null, null);
         }
 
-        if (estimate.BlockedByDebt && estimate.EligiblePackageMinutes == 0)
-        {
-            return startedAt;
-        }
-
-        var packageSeconds = estimate.EligiblePackageMinutes * 60L;
         var spendable = account.PcMoneyToman > 0 ? account.PcMoneyToman : 0;
-        long moneySeconds = 0;
-        if (spendable > 0 && estimate.HourlyRateToman > 0)
-        {
-            moneySeconds = PrepaidPlanner.ForAmount(
+        PrepaidPlan? money = spendable > 0 || estimate.RateIsFree
+            ? PrepaidPlanner.ForAmount(
                 startedAt,
                 spendable,
                 "cover",
@@ -316,10 +314,145 @@ public static class KioskSessionMath
                 rates,
                 specialDays,
                 policy,
-                account.Settings.GraceMinuteEnabled).GrantedActiveSeconds;
+                account.Settings.GraceMinuteEnabled)
+            : null;
+
+        if (money is { IsUnlimited: true } || estimate.RateIsFree)
+        {
+            var freeStart = money is { GrantedActiveSeconds: > 0 }
+                ? TehranTime.AddSeconds(startedAt, money.GrantedActiveSeconds)
+                : startedAt;
+            var freeAt = FirstFreeInstant(freeStart, station, rates, specialDays);
+            if (freeAt is not DateTimeOffset opens)
+            {
+                return new PlayCoverage(null, null, null, null);
+            }
+
+            var boundary = FreeBoundary(opens, station, rates, specialDays);
+            if (boundary is not DateTimeOffset until)
+            {
+                return new PlayCoverage(null, null, null, null);
+            }
+
+            var consumed = money?.ConsumedToman ?? 0;
+            var left = spendable - consumed;
+            if (left < 0)
+            {
+                left = 0;
+            }
+
+            var tail = PrepaidPlanner.ForAmount(
+                until,
+                left,
+                "after-free",
+                station.StationId,
+                station.GroupId,
+                station.Mode,
+                station.PlayerCount,
+                rates,
+                specialDays,
+                policy,
+                account.Settings.GraceMinuteEnabled);
+            var after = tail.IsUnlimited ? 0 : tail.GrantedActiveSeconds;
+            var lockAt = tail.IsUnlimited ? (DateTimeOffset?)null : TehranTime.AddSeconds(until, after);
+            return new PlayCoverage(lockAt, until, after, tail.Grace?.At);
         }
 
-        return TehranTime.AddSeconds(startedAt, packageSeconds + moneySeconds);
+        var packageSeconds = estimate.EligiblePackageMinutes * 60L;
+        var moneySeconds = money?.GrantedActiveSeconds ?? 0;
+        return new PlayCoverage(
+            TehranTime.AddSeconds(startedAt, packageSeconds + moneySeconds),
+            null,
+            null,
+            money?.Grace?.At);
+    }
+
+    private static DateTimeOffset? FirstFreeInstant(
+        DateTimeOffset from,
+        StationContext station,
+        RateCard rates,
+        SpecialDayCalendar specialDays)
+    {
+        if (RateResolver.Resolve(rates, specialDays, from, station.GroupId, station.Mode, station.PlayerCount).HourlyRateToman == 0)
+        {
+            return from;
+        }
+
+        var cursor = from;
+        for (var step = 0; step < 8; step++)
+        {
+            var next = NextBoundary(cursor, rates, station.GroupId);
+            if (next <= cursor)
+            {
+                return null;
+            }
+
+            if (RateResolver.Resolve(rates, specialDays, next, station.GroupId, station.Mode, station.PlayerCount).HourlyRateToman == 0)
+            {
+                return next;
+            }
+
+            cursor = next;
+        }
+
+        return null;
+    }
+
+    private static DateTimeOffset? FreeBoundary(
+        DateTimeOffset at,
+        StationContext station,
+        RateCard rates,
+        SpecialDayCalendar specialDays)
+    {
+        var quote = RateResolver.Resolve(rates, specialDays, at, station.GroupId, station.Mode, station.PlayerCount);
+        if (quote.HourlyRateToman != 0)
+        {
+            return null;
+        }
+
+        if (quote.Source == RateSource.TimeBand && quote.BandId is string bandId)
+        {
+            foreach (var band in rates.Bands)
+            {
+                if (string.Equals(band.Id, bandId, StringComparison.Ordinal))
+                {
+                    return TehranTime.NextWallTime(at, band.End);
+                }
+            }
+        }
+
+        if (quote.Source == RateSource.SpecialDay)
+        {
+            return TehranTime.NextMidnight(at);
+        }
+
+        return null;
+    }
+
+    private static DateTimeOffset NextBoundary(DateTimeOffset cursor, RateCard card, string groupId)
+    {
+        var next = TehranTime.NextMidnight(cursor);
+        foreach (var band in card.Bands)
+        {
+            if (!string.Equals(band.GroupId, groupId, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var start = TehranTime.NextWallTime(cursor, band.Start);
+            var end = TehranTime.NextWallTime(cursor, band.End);
+            if (start < next)
+            {
+                next = start;
+            }
+
+            if (end < next)
+            {
+                next = end;
+            }
+        }
+
+        return next;
     }
 
     private static SessionCharge Price(
@@ -363,19 +496,24 @@ public static class KioskSessionMath
         bool unlimited,
         bool inGrace,
         bool shouldLock,
-        SessionEndReason reason)
+        SessionEndReason reason,
+        DateTimeOffset? freeUntil,
+        long? secondsAfterFree = null)
     {
         var spendable = Spendable(play.Account);
+        var time = freeUntil is DateTimeOffset until && secondsAfterFree is long after
+            ? PersianFormat.FreeUntil(until, after)
+            : PersianFormat.Time(unlimited ? null : remainingSeconds, inGrace);
         return new KioskProjection
         {
             Phase = phase,
             SpendableToman = spendable,
-            RemainingSeconds = unlimited ? null : remainingSeconds,
+            RemainingSeconds = unlimited || freeUntil is not null ? null : remainingSeconds,
             Unlimited = unlimited,
             InGrace = inGrace,
             ShouldLock = shouldLock,
             MoneyText = PersianFormat.Money(spendable),
-            TimeText = PersianFormat.Time(unlimited ? null : remainingSeconds, inGrace),
+            TimeText = time,
             Account = play.Account,
             Settlement = play.Settlement,
             Charge = charge,

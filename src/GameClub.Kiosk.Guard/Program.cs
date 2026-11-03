@@ -1,5 +1,7 @@
 using System.Diagnostics;
 using System.IO.Pipes;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Text;
 using System.Runtime.InteropServices;
 using System.ServiceProcess;
@@ -40,6 +42,7 @@ internal sealed class GuardService : ServiceBase
 {
     private GuardLoop? _loop;
     private CancellationTokenSource? _cancel;
+    private Thread? _thread;
 
     public GuardService()
     {
@@ -53,13 +56,14 @@ internal sealed class GuardService : ServiceBase
         _loop = new GuardLoop();
         var token = _cancel.Token;
         var loop = _loop;
-        var thread = new Thread(() => loop.Run(token)) { IsBackground = true, Name = "GameClub.Kiosk.Guard" };
-        thread.Start();
+        _thread = new Thread(() => loop.Run(token)) { IsBackground = true, Name = "GameClub.Kiosk.Guard" };
+        _thread.Start();
     }
 
     protected override void OnStop()
     {
         _cancel?.Cancel();
+        _thread?.Join(TimeSpan.FromSeconds(5));
         _loop?.Dispose();
     }
 }
@@ -72,44 +76,95 @@ internal sealed class GuardLoop : IDisposable
     private DateTimeOffset? _heartbeat;
     private DateTimeOffset? _escapeUntil;
     private LocalStore? _store;
+    private AdminGate? _admin;
+    private string? _shellPath;
 
     public void Run(CancellationToken cancellationToken)
     {
         var root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "GameClub");
-        Directory.CreateDirectory(root);
-        _store = new LocalStore(Path.Combine(root, "kiosk.db"));
+        try
+        {
+            Directory.CreateDirectory(root);
+        }
+        catch (Exception)
+        {
+            // The loop retries the database. A missing directory must not kill the service.
+        }
+
+        _shellPath = ReadText(Path.Combine(root, "shell.path"));
+        try
+        {
+            var hashPath = Path.Combine(root, "admin-gate.json");
+            if (File.Exists(hashPath))
+            {
+                _admin = new AdminGate(Pbkdf2Hash.FromJson(File.ReadAllText(hashPath)));
+                ProtectSecret(hashPath);
+                var lockPath = Path.Combine(root, "admin-lockout.json");
+                if (File.Exists(lockPath))
+                {
+                    _admin.RestoreJson(File.ReadAllText(lockPath));
+                    ProtectSecret(lockPath);
+                }
+            }
+        }
+        catch (Exception)
+        {
+            _admin = null;
+        }
+
         var listener = new Thread(() => Listen(cancellationToken)) { IsBackground = true, Name = "GameClub.Kiosk.Pipe" };
         listener.Start();
         while (!cancellationToken.IsCancellationRequested)
         {
-            var now = WindowsSupport.TehranNow(DateTimeOffset.UtcNow);
-            DateTimeOffset? heartbeat;
-            DateTimeOffset? escape;
-            lock (_gate)
+            try
             {
-                heartbeat = _heartbeat;
-                escape = _escapeUntil;
-            }
-
-            var decision = GuardAdvisor.Decide(
-                new GuardSnapshot(ShellIsRunning(), heartbeat, escape, _restarts.ToArray()),
-                now,
-                _options);
-            if (decision.RestartShell && StartShell())
-            {
-                _restarts.Add(now);
+                _store ??= new LocalStore(Path.Combine(root, "kiosk.db"));
+                var now = WindowsSupport.TehranNow(DateTimeOffset.UtcNow);
+                DateTimeOffset? heartbeat;
+                DateTimeOffset? escape;
                 lock (_gate)
                 {
-                    _heartbeat = null;
+                    heartbeat = _heartbeat;
+                    escape = _escapeUntil;
                 }
-            }
 
-            if (decision.EnforceBlocklist)
+                var decision = GuardAdvisor.Decide(
+                    new GuardSnapshot(ShellIsRunning(), heartbeat, escape, _restarts.ToArray()),
+                    now,
+                    _options);
+                if (decision.RestartShell && StartShell())
+                {
+                    _restarts.Add(now);
+                    lock (_gate)
+                    {
+                        _heartbeat = null;
+                    }
+                }
+
+                var pruned = GuardAdvisor.Prune(_restarts, now, _options.RestartWindow);
+                _restarts.Clear();
+                _restarts.AddRange(pruned);
+
+                if (decision.EnforceBlocklist)
+                {
+                    Enforce(now);
+                }
+
+                Thread.Sleep(1000);
+            }
+            catch (Exception ex)
             {
-                Enforce(now);
-            }
+                try
+                {
+                    AppendLog(GuardLog.Kill(WindowsSupport.TehranNow(DateTimeOffset.UtcNow), "guard", ex.GetType().Name));
+                }
+                catch (Exception)
+                {
+                    // Logging must not take the service down.
+                }
 
-            Thread.Sleep(1000);
+                Thread.Sleep(1000);
+            }
         }
     }
 
@@ -120,15 +175,23 @@ internal sealed class GuardLoop : IDisposable
             NamedPipeServerStream? pipe = null;
             try
             {
-                pipe = new NamedPipeServerStream("GameClub.Kiosk", PipeDirection.In, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
+                pipe = CreatePipe();
                 pipe.WaitForConnection();
+                var clientImage = ClientImage(pipe);
                 var pending = new MemoryStream();
                 var chunk = new byte[4096];
                 int read;
                 while (!cancellationToken.IsCancellationRequested && (read = pipe.Read(chunk, 0, chunk.Length)) > 0)
                 {
                     pending.Write(chunk, 0, read);
-                    Consume(pending);
+                    var reply = Consume(pending, clientImage);
+                    if (reply is not null)
+                    {
+                        var bytes = PipeFraming.Encode(new PipeMessage { Kind = "admin-result", Note = reply });
+                        pipe.Write(bytes, 0, bytes.Length);
+                        pipe.Flush();
+                        break;
+                    }
                 }
             }
             catch (Exception)
@@ -142,15 +205,16 @@ internal sealed class GuardLoop : IDisposable
         }
     }
 
-    private void Consume(MemoryStream pending)
+    private string? Consume(MemoryStream pending, string? clientImage)
     {
+        string? reply = null;
         var bytes = pending.ToArray();
         var offset = 0;
         while (offset < bytes.Length && PipeFraming.TryDecode(Slice(bytes, offset), bytes.Length - offset, out var message, out var consumed))
         {
             if (message is not null)
             {
-                Accept(message);
+                reply = Accept(message, clientImage) ?? reply;
             }
 
             if (consumed <= 0)
@@ -166,6 +230,8 @@ internal sealed class GuardLoop : IDisposable
         {
             pending.Write(bytes, offset, bytes.Length - offset);
         }
+
+        return reply;
     }
 
     private static byte[] Slice(byte[] bytes, int offset)
@@ -176,25 +242,135 @@ internal sealed class GuardLoop : IDisposable
         return copy;
     }
 
-    private void Accept(PipeMessage message)
+    private NamedPipeServerStream CreatePipe()
+    {
+        var security = new PipeSecurity();
+        foreach (var trustee in PipeAccess.ForKioskUser(ReadText(SidPath())))
+        {
+            var rights = trustee.Rights == "full" ? PipeAccessRights.FullControl : PipeAccessRights.ReadWrite;
+            security.AddAccessRule(new PipeAccessRule(new SecurityIdentifier(trustee.Sid), rights, AccessControlType.Allow));
+        }
+
+        var options = PipeOptions.Asynchronous | (PipeOptions)0x00080000;
+        return new NamedPipeServerStream("GameClub.Kiosk", PipeDirection.InOut, 1, PipeTransmissionMode.Byte, options, 0, 0, security);
+    }
+
+    private string? Accept(PipeMessage message, string? clientImage)
     {
         var now = WindowsSupport.TehranNow(DateTimeOffset.UtcNow);
+        var kind = message.Kind ?? "";
         lock (_gate)
         {
-            if (string.Equals(message.Kind, "heartbeat", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(message.Kind, "hello", StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(kind, "heartbeat", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(kind, "hello", StringComparison.OrdinalIgnoreCase))
             {
                 _heartbeat = now;
+                return null;
             }
-            else if (string.Equals(message.Kind, "admin-escape", StringComparison.OrdinalIgnoreCase))
-            {
-                _escapeUntil = now.Add(_options.AdminEscapeDuration);
-            }
-            else if (string.Equals(message.Kind, "admin-relock", StringComparison.OrdinalIgnoreCase))
+
+            if (string.Equals(kind, "admin-relock", StringComparison.OrdinalIgnoreCase))
             {
                 _escapeUntil = null;
+                return "relocked";
             }
         }
+
+        if (!string.Equals(kind, "admin-escape", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(kind, "exit", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        if (!GuardCommands.TryAuthorizePrivileged(message, clientImage, _shellPath, _admin, now, _options.AdminEscapeDuration, out var until, out var reason))
+        {
+            PersistLockout();
+            AppendLog(GuardLog.Kill(now, clientImage ?? "unknown", "escape_" + reason));
+            return reason;
+        }
+
+        PersistLockout();
+        lock (_gate)
+        {
+            if (until is DateTimeOffset open)
+            {
+                _escapeUntil = open;
+            }
+        }
+
+        return reason;
+    }
+
+    private void PersistLockout()
+    {
+        if (_admin is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var path = Path.Combine(DataRoot(), "admin-lockout.json");
+            File.WriteAllText(path, _admin.SnapshotJson());
+            ProtectSecret(path);
+        }
+        catch (Exception)
+        {
+            // A lockout file that cannot be saved must not accept the password anyway.
+        }
+    }
+
+    private static void ProtectSecret(string path)
+    {
+        var security = new FileSecurity();
+        security.SetAccessRuleProtection(true, false);
+        var system = new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null);
+        var admins = new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null);
+        security.AddAccessRule(new FileSystemAccessRule(system, FileSystemRights.FullControl, AccessControlType.Allow));
+        security.AddAccessRule(new FileSystemAccessRule(admins, FileSystemRights.FullControl, AccessControlType.Allow));
+        File.SetAccessControl(path, security);
+    }
+
+    private static string? ClientImage(NamedPipeServerStream pipe)
+    {
+        try
+        {
+            if (!GetNamedPipeClientProcessId(pipe.SafePipeHandle.DangerousGetHandle(), out var pid))
+            {
+                return null;
+            }
+
+            using var process = Process.GetProcessById((int)pid);
+            return ImagePath(process);
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    private static void AppendLog(string line)
+    {
+        var path = LogPath();
+        try
+        {
+            var info = new FileInfo(path);
+            if (info.Exists && info.Length > 1024 * 1024)
+            {
+                var previous = path + ".1";
+                if (File.Exists(previous))
+                {
+                    File.Delete(previous);
+                }
+
+                File.Move(path, previous);
+            }
+        }
+        catch (Exception)
+        {
+            // A log that cannot rotate must not stop enforcement.
+        }
+
+        File.AppendAllText(path, line + Environment.NewLine);
     }
 
     private void Enforce(DateTimeOffset now)
@@ -215,14 +391,14 @@ internal sealed class GuardLoop : IDisposable
                     OriginalFileName = OriginalFileName(process),
                     ImagePath = ImagePath(process),
                 };
-                var decision = ProcessPolicy.Evaluate(process.ProcessName, elevated: false, allow, context);
+                var decision = GuardEnforcement.Combine(process.ProcessName, elevated: false, allow, context, _store?.ReadStopList());
                 if (!decision.Kill)
                 {
                     continue;
                 }
 
                 process.Kill();
-                File.AppendAllText(LogPath(), GuardLog.Kill(now, process.ProcessName, decision.Reason) + Environment.NewLine);
+                AppendLog(GuardLog.Kill(now, process.ProcessName, decision.Reason));
             }
             catch (Exception)
             {
@@ -427,6 +603,9 @@ internal sealed class GuardLoop : IDisposable
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool CloseHandle(IntPtr handle);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool GetNamedPipeClientProcessId(IntPtr pipe, out uint clientProcessId);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern IntPtr LocalFree(IntPtr handle);

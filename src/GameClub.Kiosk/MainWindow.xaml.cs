@@ -18,7 +18,7 @@ public partial class MainWindow : Window
     private readonly WindowsGeneration _generation;
     private readonly string _databasePath;
     private NamedPipeClientStream? _pipe;
-    private AdminGate? _admin;
+    private DispatcherTimer? _relock;
     private InMemoryCafeServer? _demo;
     private readonly Stopwatch _mono = Stopwatch.StartNew();
     private TimeSpan _marked;
@@ -79,13 +79,11 @@ public partial class MainWindow : Window
         }
         else
         {
-            server = new SignalRCafeServerClient(startup.HubUrl!, WindowsSupport.ClientWebSocketSupported(Environment.OSVersion.Version));
-        }
-
-        var hashPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "GameClub", "admin-gate.json");
-        if (File.Exists(hashPath))
-        {
-            _admin = new AdminGate(Pbkdf2Hash.FromJson(File.ReadAllText(hashPath)));
+            server = new SignalRCafeServerClient(
+                startup.HubUrl!,
+                WindowsSupport.ClientWebSocketSupported(Environment.OSVersion.Version),
+                startup.CaThumbprint,
+                startup.StationToken);
         }
 
         return new KioskController(server, store, DemoStand.Station, DemoStand.Rates(), 0);
@@ -191,23 +189,29 @@ public partial class MainWindow : Window
 
     private void AdminUnlock_Click(object sender, RoutedEventArgs e)
     {
-        if (_admin is null)
+        var password = AdminPassword.Password;
+        var verdict = SendPrivileged("admin-escape", password);
+        if (!string.Equals(verdict, "ok", StringComparison.OrdinalIgnoreCase))
         {
-            AdminMessage.Text = "گذرواژهٔ مدیر هنوز تنظیم نشده است.";
-            return;
-        }
-
-        var now = WindowsSupport.TehranNow(DateTimeOffset.UtcNow);
-        if (!_admin.TryOpen(AdminPassword.Password, now, TimeSpan.FromMinutes(10)))
-        {
-            AdminMessage.Text = "گذرواژه نادرست است.";
+            AdminMessage.Text = verdict == "no_admin"
+                ? "گذرواژهٔ مدیر هنوز تنظیم نشده است."
+                : verdict == "rejected"
+                    ? "گذرواژه نادرست است."
+                    : "محافظ ورود مدیر را نپذیرفت.";
             return;
         }
 
         AdminPassword.Clear();
         AdminView.Visibility = Visibility.Collapsed;
         Topmost = false;
-        SendAdmin("admin-escape");
+        _relock?.Stop();
+        _relock = new DispatcherTimer { Interval = TimeSpan.FromMinutes(10) };
+        _relock.Tick += (_, _) =>
+        {
+            _relock?.Stop();
+            SendPrivileged("admin-relock", "");
+        };
+        _relock.Start();
         try
         {
             System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
@@ -327,7 +331,34 @@ public partial class MainWindow : Window
         });
     }
 
-    private void SendAdmin(string kind) => Send(new PipeMessage { Kind = kind, UnixMilliseconds = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() });
+    private string? SendPrivileged(string kind, string password)
+    {
+        try
+        {
+            using var pipe = new NamedPipeClientStream(".", "GameClub.Kiosk", PipeDirection.InOut, PipeOptions.Asynchronous);
+            pipe.Connect(1000);
+            var bytes = PipeFraming.Encode(new PipeMessage
+            {
+                Kind = kind,
+                Password = password,
+                UnixMilliseconds = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            });
+            pipe.Write(bytes, 0, bytes.Length);
+            pipe.Flush();
+            var buffer = new byte[4096];
+            var read = pipe.Read(buffer, 0, buffer.Length);
+            if (!PipeFraming.TryDecode(buffer, read, out var message, out _))
+            {
+                return null;
+            }
+
+            return message?.Note;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
 
     private void Send(PipeMessage message)
     {

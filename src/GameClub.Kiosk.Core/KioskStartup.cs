@@ -85,12 +85,17 @@ public sealed class KioskStartup
             return Locked(hubError);
         }
 
+        if (string.IsNullOrWhiteSpace(config.StationToken))
+        {
+            return Locked("شناسهٔ ایستگاه تنظیم نشده است.");
+        }
+
         return new KioskStartup
         {
             Run = true,
             HubUrl = config.HubUrl!.Trim(),
             CaThumbprint = StationTrust.Normalize(config.CaThumbprint),
-            StationToken = string.IsNullOrWhiteSpace(config.StationToken) ? null : config.StationToken!.Trim(),
+            StationToken = config.StationToken!.Trim(),
             GameRoots = roots,
         };
     }

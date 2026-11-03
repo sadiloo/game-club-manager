@@ -181,6 +181,10 @@ public sealed class AdminGate
         LockedUntil = _lockedUntil == default ? null : _lockedUntil.ToString("o"),
     };
 
+    public string SnapshotJson() => JsonSerializer.Serialize(Snapshot());
+
+    public void RestoreJson(string json) => Restore(JsonSerializer.Deserialize<AdminGateSnapshot>(json));
+
     public void Restore(AdminGateSnapshot? snapshot)
     {
         if (snapshot is null)

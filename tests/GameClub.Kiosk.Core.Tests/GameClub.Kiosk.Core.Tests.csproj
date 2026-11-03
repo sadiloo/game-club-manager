@@ -27,6 +27,8 @@
     <None Include="..\..\scripts\uninstall-kiosk.cmd" Link="scripts\uninstall-kiosk.cmd" CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\..\scripts\install-kiosk.ps1" Link="scripts\install-kiosk.ps1" CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\..\scripts\uninstall-kiosk.ps1" Link="scripts\uninstall-kiosk.ps1" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\scripts\lsa-secret.ps1" Link="scripts\lsa-secret.ps1" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\scripts\restore-kiosk-safemode.cmd" Link="scripts\restore-kiosk-safemode.cmd" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

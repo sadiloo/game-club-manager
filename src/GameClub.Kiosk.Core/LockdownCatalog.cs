@@ -25,6 +25,11 @@ public static class LockdownCatalog
         new("HKU", @"Software\Microsoft\Windows\CurrentVersion\Policies\Explorer", "NoWinKeys", "REG_DWORD", "1", "Win7+"),
         new("HKU", @"Software\Microsoft\Windows\CurrentVersion\Policies\Explorer", "NoRun", "REG_DWORD", "1", "Win7+"),
         new("HKU", @"Software\Microsoft\Windows\CurrentVersion\Policies\Explorer", "NoControlPanel", "REG_DWORD", "1", "Win7+"),
+        new("HKU", @"Control Panel\Accessibility\StickyKeys", "Flags", "REG_SZ", "506", "Win7+"),
+        new("HKU", @"Control Panel\Accessibility\Keyboard Response", "Flags", "REG_SZ", "122", "Win7+"),
+        new("HKU", @"Control Panel\Accessibility\ToggleKeys", "Flags", "REG_SZ", "58", "Win7+"),
+        new("HKU", @"System\GameConfigStore", "GameDVR_Enabled", "REG_DWORD", "0", "Win10+"),
+        new("HKU", @"Software\Microsoft\Windows\Windows Error Reporting", "DontShowUI", "REG_DWORD", "1", "Win7+"),
     ];
 
     public static IReadOnlyList<RegSetting> Machine { get; } =
@@ -32,7 +37,12 @@ public static class LockdownCatalog
         new("HKLM", @"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System", "HideFastUserSwitching", "REG_DWORD", "1", "Win7+"),
         new("HKLM", @"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer", "NoDriveTypeAutoRun", "REG_DWORD", "255", "Win7+"),
         new("HKLM", @"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer", "NoAutorun", "REG_DWORD", "1", "Win7+"),
-        new("HKLM", @"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer", "SettingsPageVisibility", "REG_SZ", "hide:allpages", "Win10+"),
+        new("HKLM", @"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System", "ConsentPromptBehaviorUser", "REG_DWORD", "0", "Win7+"),
+        new("HKLM", @"SOFTWARE\Policies\Microsoft\Windows\GameDVR", "AllowGameDVR", "REG_DWORD", "0", "Win10+"),
+        new("HKLM", @"SOFTWARE\Policies\Microsoft\Windows\RemovableStorageDevices\{53f5630d-b6bf-11d0-94f2-00a0c91efb8b}", "Deny_Execute", "REG_DWORD", "1", "Win7+"),
+        new("HKLM", MachineWinlogonKey, "AutoAdminLogon", "REG_DWORD", "1", "Win7+"),
+        new("HKLM", MachineWinlogonKey, "DontDisplayLastUserName", "REG_DWORD", "1", "Win7+"),
+        new("HKLM", MachineWinlogonKey, "ForceAutoLogon", "REG_DWORD", "1", "Win7+"),
         new("HKLM", @"SOFTWARE\Microsoft\.NETFramework\v4.0.30319", "SchUseStrongCrypto", "REG_DWORD", "1", "Win7+"),
         new("HKLM", @"SOFTWARE\Wow6432Node\Microsoft\.NETFramework\v4.0.30319", "SchUseStrongCrypto", "REG_DWORD", "1", "Win7+"),
         new("HKLM", @"SOFTWARE\Microsoft\.NETFramework\v4.0.30319", "SystemDefaultTlsVersions", "REG_DWORD", "1", "Win7+"),

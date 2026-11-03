@@ -1,3 +1,5 @@
+using System.Net.Http;
+using System.Security.Cryptography.X509Certificates;
 using GameClub.Kiosk.Core;
 using Microsoft.AspNetCore.Http.Connections;
 using Microsoft.AspNetCore.SignalR.Client;
@@ -14,12 +16,46 @@ public sealed class SignalRCafeServerClient : ICafeServer, IAsyncDisposable
 {
     private readonly HubConnection _connection;
 
-    public SignalRCafeServerClient(string hubUrl, bool clientWebSocketSupported)
+    public SignalRCafeServerClient(string hubUrl, bool clientWebSocketSupported, string? caThumbprint, string? stationToken)
     {
         var mask = SignalRTransports.Select(clientWebSocketSupported);
+        var expected = StationTrust.Normalize(caThumbprint);
         _connection = new HubConnectionBuilder()
-            .WithUrl(hubUrl, options => options.Transports = Map(mask))
+            .WithUrl(hubUrl, options =>
+            {
+                options.Transports = Map(mask);
+                if (!string.IsNullOrEmpty(stationToken))
+                {
+                    options.AccessTokenProvider = () => Task.FromResult<string?>(stationToken);
+                }
+
+                options.HttpMessageHandlerFactory = handler =>
+                {
+                    if (handler is HttpClientHandler http)
+                    {
+                        http.ServerCertificateCustomValidationCallback = (_, cert, chain, _) =>
+                            CertificateAccepted(expected, cert, chain);
+                    }
+
+                    return handler;
+                };
+            })
+            .WithAutomaticReconnect()
             .Build();
+    }
+
+    internal static bool CertificateAccepted(string expected, X509Certificate? certificate, X509Chain? chain)
+    {
+        var chainThumbs = new List<string>();
+        if (chain is not null)
+        {
+            foreach (var element in chain.ChainElements)
+            {
+                chainThumbs.Add(element.Certificate.GetCertHashString());
+            }
+        }
+
+        return StationTrust.MatchesPresented(expected, certificate?.GetCertHashString(), chainThumbs);
     }
 
     public async Task<LoginResult> LoginAsync(string username, string password, string stationId, DateTimeOffset at, CancellationToken cancellationToken)

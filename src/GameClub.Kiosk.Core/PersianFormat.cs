@@ -1,3 +1,5 @@
+using GameClub.Billing;
+
 namespace GameClub.Kiosk.Core;
 
 public static class PersianFormat
@@ -48,6 +50,15 @@ public static class PersianFormat
         }
 
         return inGrace ? "مهلت: " + text : text;
+    }
+
+    public static string FreeUntil(DateTimeOffset until, long secondsAfter)
+    {
+        var local = TehranTime.Ensure(until);
+        var clock = ToPersianDigits(local.Hour.ToString("00", System.Globalization.CultureInfo.InvariantCulture))
+            + ":"
+            + ToPersianDigits(local.Minute.ToString("00", System.Globalization.CultureInfo.InvariantCulture));
+        return "رایگان تا " + clock + "، سپس " + Time(secondsAfter, false);
     }
 
     public static string ToPersianDigits(string value)

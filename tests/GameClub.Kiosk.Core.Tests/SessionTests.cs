@@ -151,6 +151,55 @@ public class SessionTests
     }
 
     [Fact]
+    public void Grace_is_exactly_one_minute_then_the_station_locks_at_zero()
+    {
+        var start = CafeKit.At(10, 0);
+        var session = KioskSessionMath.Begin(CafeKit.Money(3_500), "s", "رضا", 20, 1, start);
+        var rates = CafeKit.Rates();
+
+        var before = KioskSessionMath.Project(session, CafeKit.Station, start.AddSeconds(179), rates);
+        Assert.Equal(KioskPhase.Active, before.Phase);
+        Assert.False(before.InGrace);
+
+        var grace = KioskSessionMath.Project(session, CafeKit.Station, start.AddSeconds(180), rates);
+        Assert.Equal(KioskPhase.Grace, grace.Phase);
+        Assert.Equal(60, grace.RemainingSeconds);
+
+        var still = KioskSessionMath.Project(session, CafeKit.Station, start.AddSeconds(239), rates);
+        Assert.Equal(KioskPhase.Grace, still.Phase);
+        Assert.Equal(1, still.RemainingSeconds);
+        Assert.Equal(0, still.Account!.PcMoneyToman);
+
+        var locked = KioskSessionMath.Project(session, CafeKit.Station, start.AddSeconds(240), rates);
+        Assert.True(locked.ShouldLock);
+        Assert.Equal(0, locked.Account!.PcMoneyToman);
+        Assert.Equal(start.AddMinutes(4), locked.BillUntil);
+    }
+
+    [Fact]
+    public void A_free_band_counts_down_as_free_until_then_paid_minutes()
+    {
+        var band = new TimeBand("morning-free", CafeKit.Station.GroupId, "رایگان", new TimeOfDay(8, 0), new TimeOfDay(9, 0));
+        var rates = new RateCardBuilder()
+            .AddBase(CafeKit.Station.GroupId, PlayMode.Offline, 1, CafeKit.Hourly)
+            .AddBand(band)
+            .AddBandRate(band.Id, CafeKit.Station.GroupId, PlayMode.Offline, 1, 0)
+            .Build();
+        var start = CafeKit.At(8, 15);
+        var session = KioskSessionMath.Begin(CafeKit.Money(60_000), "s", "رضا", 20, 1, start);
+        var view = KioskSessionMath.Project(session, CafeKit.Station, start, rates);
+
+        Assert.Equal(KioskPhase.Active, view.Phase);
+        Assert.False(view.ShouldLock);
+        Assert.Equal("رایگان تا ۰۹:۰۰، سپس ۱ ساعت", view.TimeText);
+
+        var after = KioskSessionMath.Project(session, CafeKit.Station, CafeKit.At(9, 30), rates);
+        Assert.Equal(KioskPhase.Active, after.Phase);
+        Assert.Equal(30 * 60, after.RemainingSeconds);
+        Assert.Equal("۳۰ دقیقه", after.TimeText);
+    }
+
+    [Fact]
     public void A_free_rate_does_not_lock()
     {
         var rates = CafeKit.Rates(0);

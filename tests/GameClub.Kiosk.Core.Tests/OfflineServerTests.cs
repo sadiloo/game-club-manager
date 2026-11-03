@@ -36,6 +36,22 @@ public class OfflineServerTests
     }
 
     [Fact]
+    public async Task Overshoot_after_the_grace_minute_is_not_debt()
+    {
+        await using var scope = await Harness.Start(balance: 2_500);
+        var start = CafeKit.At(18, 0);
+        scope.Server.SetServerClock(start);
+        Assert.True(await scope.Controller.LoginAsync("reza", "reza-demo", start));
+        Assert.True(scope.Controller.PrepareLaunch("local", WindowsGeneration.Windows10).Allowed);
+        scope.Server.SetServerClock(start.AddMinutes(10));
+        await scope.Controller.LogoutAsync(start.AddMinutes(10));
+
+        Assert.Equal(0, scope.Server.FindAccount("member-1")!.PcMoneyToman);
+        Assert.Equal(7 * 60, scope.Server.LastOvershootSeconds);
+        Assert.Contains("local", scope.Store.ReadStopList());
+    }
+
+    [Fact]
     public async Task Credit_hits_zero_after_grace_and_locks_without_going_negative()
     {
         await using var scope = await Harness.Start(balance: 2_500);

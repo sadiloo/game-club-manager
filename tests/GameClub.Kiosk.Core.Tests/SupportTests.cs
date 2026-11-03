@@ -124,14 +124,48 @@ public class SupportTests
         Assert.Contains("TLS 1.2", install);
         Assert.Contains("Windows 8.1", install);
         Assert.Contains("HKU", install);
-        Assert.DoesNotContain(@"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon", install);
+        Assert.DoesNotContain(@"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"" /v Shell", install);
+        Assert.Contains("reg export", install);
+        Assert.Contains("65536", install);
+        Assert.Contains("sc failure", install);
+        Assert.Contains("StickyKeys", install);
+        Assert.Contains("Deny_Execute", install);
+        Assert.Contains("KB4490628", install);
+        Assert.Contains("AutoAdminLogon", install);
+        Assert.Contains("lsa-secret.ps1", install);
+        Assert.DoesNotContain("wmic", install);
+        Assert.DoesNotContain("/v DefaultPassword", install);
+
+        var uninstall = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "scripts", "uninstall-kiosk.cmd"));
+        Assert.Contains("reg import", uninstall);
+        Assert.Contains("Nothing was changed", uninstall);
+        Assert.DoesNotContain("/v Shell /t", uninstall);
+        var sc = uninstall.IndexOf("sc delete", StringComparison.Ordinal);
+        var preflight = uninstall.IndexOf("Nothing was changed", StringComparison.Ordinal);
+        Assert.True(preflight >= 0 && sc >= 0 && preflight < sc);
+
+        var restore = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "scripts", "restore-kiosk-safemode.cmd"));
+        Assert.Contains("uninstall-kiosk.cmd", restore);
+        Assert.Contains("Safe Mode", restore);
+        var lsa = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "scripts", "lsa-secret.ps1"));
+        Assert.Contains("LsaStorePrivateData", lsa);
+        Assert.DoesNotContain("/v DefaultPassword", lsa);
 
         var ps1 = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "scripts", "install-kiosk.ps1"));
         Assert.Contains("#requires -Version 2", ps1);
         Assert.Contains("SchUseStrongCrypto", ps1);
+        Assert.Contains("reg.exe export", ps1);
+        Assert.Contains("65536", ps1);
+        Assert.Contains("sc.exe failure", ps1);
+        Assert.Contains("StickyKeys", ps1);
+        Assert.Contains("Deny_Execute", ps1);
+        Assert.Contains("lsa-secret.ps1", ps1);
         Assert.DoesNotContain("$PSScriptRoot", ps1);
         Assert.DoesNotContain("ConvertTo-Json", ps1);
         Assert.DoesNotContain("Get-CimInstance", ps1);
+        Assert.DoesNotContain("wmic", ps1);
+        Assert.DoesNotContain("/v DefaultPassword", ps1);
+        Assert.DoesNotContain(@"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"" ""Shell""", ps1);
     }
 
     [Fact]
