@@ -121,7 +121,8 @@ public static class GameCatalog
         IEnumerable<GameEntry> catalog,
         string gameId,
         GameFilter filter,
-        WindowsGeneration operatingSystem)
+        WindowsGeneration operatingSystem,
+        IReadOnlyList<string>? approvedRoots = null)
     {
         GameEntry? game = null;
         foreach (var entry in catalog)
@@ -147,6 +148,12 @@ public static class GameCatalog
         if (osBlock is not null)
         {
             return Deny(osBlock);
+        }
+
+        var launchBlock = LaunchPolicy.Reject(game.Launch, approvedRoots);
+        if (launchBlock is not null)
+        {
+            return Deny(launchBlock);
         }
 
         foreach (var process in GameProcesses.Names(game))
@@ -206,7 +213,7 @@ public static class GameProcesses
 
     public static bool IsBattleNet(string launch) => HasPrefix(launch, "battlenet:");
 
-    public static bool IsLauncherUri(string launch) => IsSteam(launch) || IsEpic(launch) || IsBattleNet(launch) || HasPrefix(launch, "http:") || HasPrefix(launch, "https:");
+    public static bool IsLauncherUri(string launch) => IsSteam(launch) || IsEpic(launch) || IsBattleNet(launch);
 
     public static IReadOnlyList<string> Names(GameEntry game)
     {

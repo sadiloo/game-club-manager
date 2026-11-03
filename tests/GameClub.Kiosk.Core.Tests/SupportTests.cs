@@ -1,3 +1,5 @@
+using GameClub.Billing;
+
 namespace GameClub.Kiosk.Core.Tests;
 
 public class SupportTests
@@ -135,13 +137,13 @@ public class SupportTests
                 15,
                 20_000,
                 new HashSet<string> { "pc-normal" },
-                new TimeOnly(0, 0),
-                new TimeOnly(8, 0),
-                new DateOnly(2026, 12, 31)));
+                new TimeOfDay(0, 0),
+                new TimeOfDay(8, 0),
+                new LocalDate(2026, 12, 31)));
         var restored = AccountCodec.ToAccount(AccountCodec.Read(AccountCodec.Write(AccountCodec.From(account))));
         Assert.Equal(4_000, restored.PcMoneyToman);
         Assert.Equal(15, restored.Packages[0].RemainingMinutes);
-        Assert.Equal(new DateOnly(2026, 12, 31), restored.Packages[0].ValidThrough);
+        Assert.Equal(new LocalDate(2026, 12, 31), restored.Packages[0].ValidThrough);
         Assert.Contains("pc-normal", restored.Packages[0].AllowedGroupIds!);
     }
 }

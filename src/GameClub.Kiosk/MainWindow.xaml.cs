@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.IO;
 using System.IO.Pipes;
 using System.Windows;
@@ -18,6 +19,12 @@ public partial class MainWindow : Window
     private readonly string _databasePath;
     private NamedPipeClientStream? _pipe;
     private AdminGate? _admin;
+    private InMemoryCafeServer? _demo;
+    private readonly Stopwatch _mono = Stopwatch.StartNew();
+    private TimeSpan _marked;
+    private bool _allowClose;
+
+    private void AllowServiceClose() => _allowClose = true;
 
     public MainWindow()
     {
@@ -37,20 +44,42 @@ public partial class MainWindow : Window
         }
 
         Loaded += (_, _) => Render();
+        Closing += (_, args) => args.Cancel = ShellClosePolicy.CancelClose(_allowClose);
+        _ = _allowClose;
+        PreviewKeyDown += (_, args) =>
+        {
+            if (ShellClosePolicy.SwallowAltF4(args.Key == Key.System && args.SystemKey == Key.F4, Keyboard.Modifiers.HasFlag(ModifierKeys.Alt)))
+            {
+                args.Handled = true;
+            }
+        };
     }
 
     private KioskController BuildController()
     {
         var store = new LocalStore(_databasePath);
-        var hub = ReadHubUrl();
+        var configPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "kiosk.json");
+        var json = File.Exists(configPath) ? File.ReadAllText(configPath) : null;
+#if DEBUG
+        var debugBuild = true;
+#else
+        var debugBuild = false;
+#endif
+        var startup = KioskStartup.Decide(json, debugBuild, Environment.GetCommandLineArgs().Any(arg => string.Equals(arg, "--demo", StringComparison.OrdinalIgnoreCase)));
         ICafeServer server;
-        if (hub is string url && url.Length > 0)
+        if (!startup.Run)
         {
-            server = new SignalRCafeServerClient(url, WindowsSupport.ClientWebSocketSupported(Environment.OSVersion.Version));
+            server = new RefusalServer(startup.LockMessage);
+        }
+        else if (startup.Demo)
+        {
+            _demo = DemoStand.CreateServer();
+            _demo.SetServerClock(WindowsSupport.TehranNow(DateTimeOffset.UtcNow));
+            server = new ConnectionGate(_demo);
         }
         else
         {
-            server = new ConnectionGate(DemoStand.CreateServer());
+            server = new SignalRCafeServerClient(startup.HubUrl!, WindowsSupport.ClientWebSocketSupported(Environment.OSVersion.Version));
         }
 
         var hashPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "GameClub", "admin-gate.json");
@@ -62,38 +91,14 @@ public partial class MainWindow : Window
         return new KioskController(server, store, DemoStand.Station, DemoStand.Rates(), DemoStand.HourlyToman);
     }
 
-    private static string? ReadHubUrl()
-    {
-        var path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "kiosk.json");
-        if (!File.Exists(path))
-        {
-            return null;
-        }
-
-        var text = File.ReadAllText(path);
-        const string marker = "\"HubUrl\"";
-        var at = text.IndexOf(marker, StringComparison.Ordinal);
-        if (at < 0)
-        {
-            return null;
-        }
-
-        var quote = text.IndexOf('"', text.IndexOf(':', at) + 1);
-        var end = text.IndexOf('"', quote + 1);
-        if (quote < 0 || end < 0)
-        {
-            return null;
-        }
-
-        var value = text.Substring(quote + 1, end - quote - 1).Trim();
-        return value.Length == 0 ? null : value;
-    }
-
     private void OnTick()
     {
+        var elapsed = _mono.Elapsed - _marked;
+        _marked = _mono.Elapsed;
         var now = WindowsSupport.TehranNow(DateTimeOffset.UtcNow);
+        _demo?.SetServerClock(now);
         var wasLocked = _controller.Screen.Phase == KioskPhase.Locked;
-        _controller.Tick(now);
+        _controller.AdvanceMonotonic(elapsed, now);
         if (_controller.PendingServerLogout)
         {
             _ = _controller.FlushAsync();
@@ -115,7 +120,9 @@ public partial class MainWindow : Window
         LoginButton.IsEnabled = false;
         try
         {
-            var ok = await _controller.LoginAsync(UserBox.Text.Trim(), PasswordBox.Password, WindowsSupport.TehranNow(DateTimeOffset.UtcNow));
+            var now = WindowsSupport.TehranNow(DateTimeOffset.UtcNow);
+            _demo?.SetServerClock(now);
+            var ok = await _controller.LoginAsync(UserBox.Text.Trim(), PasswordBox.Password, now);
             PasswordBox.Clear();
             if (!ok)
             {
@@ -341,5 +348,21 @@ public partial class MainWindow : Window
             _pipe?.Dispose();
             _pipe = null;
         }
+    }
+
+    private sealed class RefusalServer : ICafeServer
+    {
+        private readonly string _message;
+
+        public RefusalServer(string message) => _message = string.IsNullOrWhiteSpace(message) ? "پیکربندی کیوسک پیدا نشد." : message;
+
+        public Task<LoginResult> LoginAsync(string username, string password, string stationId, DateTimeOffset at, CancellationToken cancellationToken) =>
+            Task.FromResult(LoginResult.Fail(_message));
+
+        public Task<LogoutResult> LogoutAsync(SessionReport report, CancellationToken cancellationToken) =>
+            Task.FromResult(new LogoutResult { Offline = true, Message = _message });
+
+        public Task<IReadOnlyList<GameEntry>> GetCatalogAsync(CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<GameEntry>>([]);
     }
 }

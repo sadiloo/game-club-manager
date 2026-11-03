@@ -50,7 +50,7 @@ The launcher shows only games an admin defined: name, cover path, executable or 
 
 The list lives on the server. The shell caches it in the local SQLite file at login and uses the cache offline. Disabled games, games for another station group, and age-restricted games (hidden when the member's age is unknown or too low) are not shown and cannot be launched. A catalog entry whose executable is `cmd.exe` or another blocked tool is rejected.
 
-The guard's job is still a **deny list**, not "kill every process except games". Windows, the GPU driver, and anti-cheat services must keep running. Listed, enabled games and their launcher processes are marked `catalog` so they are explicitly allowed. `taskmgr`, `cmd`, `powershell`, `regedit`, and the other escape tools are still killed even if someone puts them in the catalog. `explorer.exe` is killed unless the token is elevated (the admin escape).
+The guard kills escape tools only in the kiosk user's session. An admin session, session 0, and SYSTEM are not touched. Browsers (Chrome, Edge, Firefox, Opera, Internet Explorer, Brave, and a renamed copy recognized by its original file name) are killed and written to `guard.log`. Listed games stay allowed. `explorer.exe` in the kiosk session is closed.
 
 Steam, Epic, and Battle.net no longer support Windows 7 or 8.x. On those versions the shell refuses `steam:`, `com.epicgames.launcher:`, and `battlenet:` URIs and tells the member the game needs Windows 10 or 11. A normal `.exe` is still launched. Valorant, Vanguard, FACEIT, and Easy Anti-Cheat are not expected to install on Windows 7 or 8.1.
 
@@ -63,7 +63,9 @@ Steam, Epic, and Battle.net no longer support Windows 7 or 8.x. On those version
 - It kills the deny-list processes above. It reads the cached catalog so enabled games and their helpers are recognized.
 - Named pipe `GameClub.Kiosk`, length-prefixed UTF-8 JSON. The shell sends `heartbeat` and `admin-escape`.
 - Ctrl+Shift+F12 inside the shell asks for the admin password (PBKDF2-SHA256, 100,000 iterations, hash file `%ProgramData%\GameClub\admin-gate.json`). Five failures lock the prompt for one minute. Success pauses enforcement for 10 minutes and starts `explorer.exe`. There is **no global keyboard hook**: anti-cheat products often flag those. From inside a game, Alt+Tab back to the shell, then the hotkey.
-- SQLite file `%ProgramData%\GameClub\kiosk.db` stores the open session, the catalog cache, and the event log. Counting does not stop when the network or the shell process dies. On startup the shell re-prices from the stored login snapshot to "now". Logout reports the interval to the server, which prices it again and ignores any client-claimed balance. If the account revision changed (a top-up), the server resettles the same interval against the new balance. The same session id is applied once.
+- SQLite file `%ProgramData%\GameClub\kiosk.db` stores the open session, the catalog cache, and the event log. Play time is accumulated from a monotonic counter and a checkpoint, not from the PC wall clock. Event timestamps are Tehran `+03:30`, rebuilt from the UTC instant, so a Windows 7 box that still applies the old Iran daylight-saving offset does not change the log.
+- On startup the shell resumes from the last checkpoint and does not bill the time the PC was off. If the gap is longer than the absence timeout (default 10 minutes, configurable), the session closes at that checkpoint and the member must log in again.
+- Logout reports a session id. The server prices with its own clock, its own rate card, and its own heartbeats. It ignores the client's hourly rate, start, and end. The same session id is applied once.
 
 The kiosk clock is UTC converted with the fixed Tehran offset `+03:30`. It does not trust the PC's local time zone setting. Instants passed into the billing engine still have to carry that offset.
 

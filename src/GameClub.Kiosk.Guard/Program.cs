@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.IO.Pipes;
+using System.Text;
 using System.Runtime.InteropServices;
 using System.ServiceProcess;
 using GameClub.Kiosk.Core;
@@ -199,18 +200,29 @@ internal sealed class GuardLoop : IDisposable
     private void Enforce(DateTimeOffset now)
     {
         var allow = _store is null ? new HashSet<string>(StringComparer.OrdinalIgnoreCase) : GameProcesses.AllowSet(_store.ReadCatalog());
+        var console = ConsoleSession();
+        var kioskSid = ReadText(SidPath());
         foreach (var process in Process.GetProcesses())
         {
             try
             {
-                var decision = ProcessPolicy.Evaluate(process.ProcessName, IsElevated(process), allow);
+                var context = new ProcessContext
+                {
+                    SessionId = process.SessionId,
+                    KioskSessionId = console,
+                    UserSid = ProcessSid(process),
+                    KioskUserSid = kioskSid,
+                    OriginalFileName = OriginalFileName(process),
+                    ImagePath = ImagePath(process),
+                };
+                var decision = ProcessPolicy.Evaluate(process.ProcessName, elevated: false, allow, context);
                 if (!decision.Kill)
                 {
                     continue;
                 }
 
                 process.Kill();
-                File.AppendAllText(LogPath(), now.ToString("o") + " killed " + process.ProcessName + " " + decision.Reason + Environment.NewLine);
+                File.AppendAllText(LogPath(), GuardLog.Kill(now, process.ProcessName, decision.Reason) + Environment.NewLine);
             }
             catch (Exception)
             {
@@ -225,10 +237,20 @@ internal sealed class GuardLoop : IDisposable
 
     private static bool ShellIsRunning()
     {
+        var console = ConsoleSession();
+        var kioskSid = ReadText(SidPath());
         var processes = Process.GetProcessesByName("GameClub.Kiosk");
         try
         {
-            return processes.Length > 0;
+            foreach (var process in processes)
+            {
+                if (InteractiveSession.IsKioskShell(process.SessionId, console, ProcessSid(process), kioskSid))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
         finally
         {
@@ -241,43 +263,35 @@ internal sealed class GuardLoop : IDisposable
 
     private static bool StartShell()
     {
-        var path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "GameClub", "shell.path");
-        if (!File.Exists(path))
+        var shell = ReadText(Path.Combine(DataRoot(), "shell.path"));
+        if (string.IsNullOrWhiteSpace(shell) || !File.Exists(shell))
         {
             return false;
         }
 
-        var shell = File.ReadAllText(path).Trim();
-        if (shell.Length == 0 || !File.Exists(shell))
+        var session = ConsoleSession();
+        if (session <= 0)
         {
             return false;
         }
 
-        Process.Start(new ProcessStartInfo { FileName = shell, UseShellExecute = true });
-        return true;
-    }
-
-    private static string LogPath() =>
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "GameClub", "guard.log");
-
-    private static bool IsElevated(Process process)
-    {
-        if (!OpenProcessToken(process.Handle, 0x0008, out var token))
+        if (!WTSQueryUserToken(session, out var token))
         {
             return false;
         }
 
         try
         {
-            var elevation = 0;
-            var size = Marshal.SizeOf(elevation);
-            var written = 0;
-            if (!GetTokenInformation(token, 20, ref elevation, size, ref written))
+            var startup = new StartupInfo { cb = Marshal.SizeOf(typeof(StartupInfo)), lpDesktop = InteractiveSession.Desktop };
+            var command = "\"" + shell + "\"";
+            if (!CreateProcessAsUser(token, null, command, IntPtr.Zero, IntPtr.Zero, false, 0, IntPtr.Zero, null, ref startup, out var process))
             {
                 return false;
             }
 
-            return elevation != 0;
+            CloseHandle(process.hProcess);
+            CloseHandle(process.hThread);
+            return true;
         }
         finally
         {
@@ -285,14 +299,190 @@ internal sealed class GuardLoop : IDisposable
         }
     }
 
+    private static int ConsoleSession()
+    {
+        var session = WTSGetActiveConsoleSessionId();
+        return session == unchecked((int)0xFFFFFFFF) ? 0 : session;
+    }
+
+    private static string? ProcessSid(Process process)
+    {
+        try
+        {
+            if (!OpenProcessToken(process.Handle, 0x0008, out var token))
+            {
+                return null;
+            }
+
+            try
+            {
+                var needed = 0;
+                GetTokenInformation(token, 1, IntPtr.Zero, 0, ref needed);
+                if (needed <= 0)
+                {
+                    return null;
+                }
+
+                var buffer = Marshal.AllocHGlobal(needed);
+                try
+                {
+                    if (!GetTokenInformation(token, 1, buffer, needed, ref needed))
+                    {
+                        return null;
+                    }
+
+                    var sid = Marshal.ReadIntPtr(buffer);
+                    if (!ConvertSidToStringSid(sid, out var text))
+                    {
+                        return null;
+                    }
+
+                    try
+                    {
+                        return Marshal.PtrToStringUni(text);
+                    }
+                    finally
+                    {
+                        LocalFree(text);
+                    }
+                }
+                finally
+                {
+                    Marshal.FreeHGlobal(buffer);
+                }
+            }
+            finally
+            {
+                CloseHandle(token);
+            }
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    private static string? ImagePath(Process process)
+    {
+        try
+        {
+            var size = 1024;
+            var buffer = new StringBuilder(size);
+            return QueryFullProcessImageName(process.Handle, 0, buffer, ref size) ? buffer.ToString() : null;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    private static string? OriginalFileName(Process process)
+    {
+        var path = ImagePath(process);
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return null;
+        }
+
+        try
+        {
+            return FileVersionInfo.GetVersionInfo(path).OriginalFilename;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    private static string DataRoot() =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "GameClub");
+
+    private static string SidPath() => Path.Combine(DataRoot(), "kiosk.sid");
+
+    private static string? ReadText(string path)
+    {
+        try
+        {
+            return File.Exists(path) ? File.ReadAllText(path).Trim() : null;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    private static string LogPath() =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "GameClub", "guard.log");
+
     public void Dispose() => _store?.Dispose();
 
     [DllImport("advapi32.dll", SetLastError = true)]
     private static extern bool OpenProcessToken(IntPtr processHandle, uint desiredAccess, out IntPtr tokenHandle);
 
     [DllImport("advapi32.dll", SetLastError = true)]
-    private static extern bool GetTokenInformation(IntPtr tokenHandle, int tokenInformationClass, ref int tokenInformation, int tokenInformationLength, ref int returnLength);
+    private static extern bool GetTokenInformation(IntPtr tokenHandle, int tokenInformationClass, IntPtr tokenInformation, int tokenInformationLength, ref int returnLength);
+
+    [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool ConvertSidToStringSid(IntPtr sid, out IntPtr stringSid);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool CloseHandle(IntPtr handle);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr LocalFree(IntPtr handle);
+
+    [DllImport("kernel32.dll")]
+    private static extern int WTSGetActiveConsoleSessionId();
+
+    [DllImport("wtsapi32.dll", SetLastError = true)]
+    private static extern bool WTSQueryUserToken(int sessionId, out IntPtr token);
+
+    [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool CreateProcessAsUser(
+        IntPtr token,
+        string? application,
+        string command,
+        IntPtr processAttributes,
+        IntPtr threadAttributes,
+        bool inheritHandles,
+        uint flags,
+        IntPtr environment,
+        string? directory,
+        ref StartupInfo startup,
+        out ProcessInformation process);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool QueryFullProcessImageName(IntPtr process, int flags, StringBuilder name, ref int size);
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct StartupInfo
+    {
+        public int cb;
+        public string? lpReserved;
+        public string? lpDesktop;
+        public string? lpTitle;
+        public int dwX;
+        public int dwY;
+        public int dwXSize;
+        public int dwYSize;
+        public int dwXCountChars;
+        public int dwYCountChars;
+        public int dwFillAttribute;
+        public int dwFlags;
+        public short wShowWindow;
+        public short cbReserved2;
+        public IntPtr lpReserved2;
+        public IntPtr hStdInput;
+        public IntPtr hStdOutput;
+        public IntPtr hStdError;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ProcessInformation
+    {
+        public IntPtr hProcess;
+        public IntPtr hThread;
+        public int dwProcessId;
+        public int dwThreadId;
+    }
 }

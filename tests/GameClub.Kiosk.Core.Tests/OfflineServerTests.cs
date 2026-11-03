@@ -7,6 +7,7 @@ public class OfflineServerTests
     {
         await using var scope = await Harness.Start();
         var start = CafeKit.At(18, 0);
+        scope.Server.SetServerClock(start);
         Assert.True(await scope.Controller.LoginAsync("reza", "reza-demo", start));
         Assert.Equal(["local", "valorant", "cs2"], scope.Controller.Screen.Games.Select(game => game.Id).ToArray());
         Assert.Equal(200_000, scope.Controller.Screen.SpendableToman);
@@ -17,6 +18,7 @@ public class OfflineServerTests
         Assert.False(scope.Controller.PrepareLaunch("hidden", WindowsGeneration.Windows10).Allowed);
 
         var at = start.AddMinutes(10);
+        scope.Server.SetServerClock(at);
         await scope.Controller.LogoutAsync(at);
         Assert.Equal(KioskPhase.Locked, scope.Controller.Screen.Phase);
         Assert.Equal(190_000, scope.Server.FindAccount("member-1")!.PcMoneyToman);
@@ -27,6 +29,7 @@ public class OfflineServerTests
     public async Task Wrong_password_stays_on_the_lock_screen()
     {
         await using var scope = await Harness.Start();
+        scope.Server.SetServerClock(CafeKit.At(18, 0));
         Assert.False(await scope.Controller.LoginAsync("reza", "nope", CafeKit.At(18, 0)));
         Assert.Equal(KioskPhase.Locked, scope.Controller.Screen.Phase);
         Assert.Equal(200_000, scope.Server.FindAccount("member-1")!.PcMoneyToman);
@@ -37,6 +40,7 @@ public class OfflineServerTests
     {
         await using var scope = await Harness.Start(balance: 2_500);
         var start = CafeKit.At(18, 0);
+        scope.Server.SetServerClock(start);
         Assert.True(await scope.Controller.LoginAsync("reza", "reza-demo", start));
         scope.Controller.Tick(start.AddSeconds(130));
         Assert.Equal(KioskPhase.Grace, scope.Controller.Screen.Phase);
@@ -47,6 +51,7 @@ public class OfflineServerTests
         Assert.Equal(0, scope.Controller.Session.Account!.PcMoneyToman);
         Assert.True(scope.Controller.PendingServerLogout);
 
+        scope.Server.SetServerClock(start.AddMinutes(5));
         await scope.Controller.FlushAsync();
         Assert.False(scope.Controller.PendingServerLogout);
         Assert.Equal(0, scope.Server.FindAccount("member-1")!.PcMoneyToman);
@@ -57,6 +62,7 @@ public class OfflineServerTests
     {
         await using var scope = await Harness.Start();
         var start = CafeKit.At(18, 0);
+        scope.Server.SetServerClock(start);
         Assert.True(await scope.Controller.LoginAsync("reza", "reza-demo", start));
         scope.Gate.Online = false;
         scope.Controller.Tick(start.AddMinutes(4));
@@ -77,6 +83,7 @@ public class OfflineServerTests
     {
         var server = CafeKit.Server(balance: 10_000);
         var start = CafeKit.At(18, 0);
+        server.SetServerClock(start);
         var login = await server.LoginAsync("reza", "reza-demo", "pc-01", start, CancellationToken.None);
         var report = new SessionReport
         {
@@ -90,21 +97,22 @@ public class OfflineServerTests
             Reason = SessionEndReason.UserLogout,
         };
 
-        var honest = SessionReconciler.Recompute(report, login.Account, login.Account, login.Revision);
+        var honest = SessionReconciler.Recompute(report, login.Account, login.Account, login.Revision, CafeKit.Rates(), start, start.AddMinutes(3));
         Assert.Equal("server_unchanged", honest.Message);
         Assert.Equal(7_000, honest.Account!.PcMoneyToman);
 
-        var pending = SessionReconciler.Recompute(report, login.Account, null, login.Revision);
+        var pending = SessionReconciler.Recompute(report, login.Account, null, login.Revision, CafeKit.Rates(), start, start.AddMinutes(3));
         Assert.True(pending.Offline);
         Assert.Equal(7_000, pending.Account!.PcMoneyToman);
 
         server.TopUp("member-1", 20_000);
         var current = server.FindAccount("member-1")!;
-        var resettled = SessionReconciler.Recompute(report, login.Account, current, login.Revision + 1);
+        var resettled = SessionReconciler.Recompute(report, login.Account, current, login.Revision + 1, CafeKit.Rates(), start, start.AddMinutes(3));
         Assert.Equal("resettled", resettled.Message);
         Assert.Equal(27_000, resettled.Account!.PcMoneyToman);
         Assert.True(resettled.Account.PcMoneyToman >= 0);
 
+        server.SetServerClock(start.AddMinutes(3));
         var first = await server.LogoutAsync(report, CancellationToken.None);
         var second = await server.LogoutAsync(report, CancellationToken.None);
         Assert.Equal("resettled", first.Message);

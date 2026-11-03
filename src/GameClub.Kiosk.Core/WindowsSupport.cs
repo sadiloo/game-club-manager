@@ -1,3 +1,5 @@
+using GameClub.Billing;
+
 namespace GameClub.Kiosk.Core;
 
 public enum WindowsGeneration
@@ -88,12 +90,5 @@ public static class WindowsSupport
         return version >= new Version(6, 2);
     }
 
-    public static DateTimeOffset TehranNow(DateTimeOffset clock)
-    {
-        var utc = clock.ToUniversalTime();
-        var wall = utc.DateTime.Add(TehranOffset);
-        return new DateTimeOffset(wall, TehranOffset);
-    }
-
-    private static readonly TimeSpan TehranOffset = TimeSpan.FromHours(3.5);
+    public static DateTimeOffset TehranNow(DateTimeOffset clock) => TehranTime.FromUtc(clock.UtcDateTime);
 }

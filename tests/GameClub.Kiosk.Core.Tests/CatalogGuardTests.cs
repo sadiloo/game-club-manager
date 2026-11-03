@@ -119,7 +119,8 @@ public class CatalogGuardTests
         Assert.True(GuardAdvisor.Decide(new GuardSnapshot(false, null, null, []), now, options).RestartShell);
 
         var waiting = GuardAdvisor.Decide(new GuardSnapshot(true, null, null, []), now, options);
-        Assert.Equal("healthy", waiting.Reason);
+        Assert.Equal("startup_grace", waiting.Reason);
+        Assert.False(waiting.RestartShell);
 
         var hung = GuardAdvisor.Decide(new GuardSnapshot(true, now.AddSeconds(-30), null, []), now, options);
         Assert.Equal("heartbeat_timeout", hung.Reason);
@@ -134,6 +135,8 @@ public class CatalogGuardTests
         var backedOff = GuardAdvisor.Decide(new GuardSnapshot(false, null, null, restarts), now, options);
         Assert.Equal("restart_backoff", backedOff.Reason);
         Assert.False(backedOff.RestartShell);
-        Assert.True(backedOff.EnforceBlocklist);
+        Assert.False(backedOff.EnforceBlocklist);
+        Assert.True(backedOff.EnterMaintenance);
+        Assert.True(backedOff.LogOffKiosk);
     }
 }

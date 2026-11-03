@@ -70,6 +70,10 @@ public sealed class OpenSessionSnapshot
     public int PlayerCount { get; set; } = 1;
 
     public long HourlyToman { get; set; }
+
+    public long PlayedSeconds { get; set; }
+
+    public string? LastCheckpointAt { get; set; }
 }
 
 public static class AccountCodec
@@ -85,9 +89,9 @@ public static class AccountCodec
                 RemainingMinutes = package.RemainingMinutes,
                 FaceValueToman = package.FaceValueToman,
                 AllowedGroupIds = package.AllowedGroupIds is null ? [] : package.AllowedGroupIds.ToList(),
-                AllowedFrom = package.AllowedFrom is TimeOnly from ? Clock(from) : null,
-                AllowedUntil = package.AllowedUntil is TimeOnly until ? Clock(until) : null,
-                ValidThrough = package.ValidThrough is DateOnly date ? $"{date.Year:0000}-{date.Month:00}-{date.Day:00}" : null,
+                AllowedFrom = package.AllowedFrom is TimeOfDay from ? from.ToString() : null,
+                AllowedUntil = package.AllowedUntil is TimeOfDay until ? until.ToString() : null,
+                ValidThrough = package.ValidThrough is LocalDate date ? date.ToString() : null,
             });
         }
 
@@ -118,12 +122,12 @@ public static class AccountCodec
         var packages = new List<TimePackage>();
         foreach (var package in snapshot.Packages ?? [])
         {
-            ISet<string>? groups = package.AllowedGroupIds is { Count: > 0 }
-                ? new HashSet<string>(package.AllowedGroupIds, StringComparer.Ordinal)
+            IReadOnlyCollection<string>? groups = package.AllowedGroupIds is { Count: > 0 }
+                ? package.AllowedGroupIds
                 : null;
-            TimeOnly? from = package.AllowedFrom is null ? null : ParseClock(package.AllowedFrom);
-            TimeOnly? until = package.AllowedUntil is null ? null : ParseClock(package.AllowedUntil);
-            DateOnly? through = package.ValidThrough is null ? null : ParseDate(package.ValidThrough);
+            TimeOfDay? from = package.AllowedFrom is null ? null : ParseClock(package.AllowedFrom);
+            TimeOfDay? until = package.AllowedUntil is null ? null : ParseClock(package.AllowedUntil);
+            LocalDate? through = package.ValidThrough is null ? null : ParseDate(package.ValidThrough);
             packages.Add(new TimePackage(package.Id, package.RemainingMinutes, package.FaceValueToman, groups, from, until, through));
         }
 
@@ -145,21 +149,19 @@ public static class AccountCodec
     public static OpenSessionSnapshot ReadSession(string json) =>
         JsonSerializer.Deserialize<OpenSessionSnapshot>(json) ?? throw new InvalidOperationException("Session snapshot is empty.");
 
-    private static string Clock(TimeOnly time) => $"{time.Hour:00}:{time.Minute:00}:{time.Second:00}";
-
-    private static TimeOnly ParseClock(string text)
+    private static TimeOfDay ParseClock(string text)
     {
         var parts = text.Split(':');
         var hour = int.Parse(parts[0], System.Globalization.CultureInfo.InvariantCulture);
         var minute = int.Parse(parts[1], System.Globalization.CultureInfo.InvariantCulture);
         var second = parts.Length > 2 ? int.Parse(parts[2], System.Globalization.CultureInfo.InvariantCulture) : 0;
-        return new TimeOnly(hour, minute, second);
+        return new TimeOfDay(hour, minute, second);
     }
 
-    private static DateOnly ParseDate(string text)
+    private static LocalDate ParseDate(string text)
     {
         var parts = text.Split('-');
-        return new DateOnly(
+        return new LocalDate(
             int.Parse(parts[0], System.Globalization.CultureInfo.InvariantCulture),
             int.Parse(parts[1], System.Globalization.CultureInfo.InvariantCulture),
             int.Parse(parts[2], System.Globalization.CultureInfo.InvariantCulture));

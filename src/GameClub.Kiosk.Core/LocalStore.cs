@@ -60,6 +60,14 @@ public sealed class LocalStore : IDisposable
               json TEXT NOT NULL
             );
             """);
+        Execute("""
+            CREATE TABLE IF NOT EXISTS pending_reports (
+              session_id TEXT PRIMARY KEY,
+              json TEXT NOT NULL,
+              attempts INTEGER NOT NULL DEFAULT 0,
+              next_attempt_utc TEXT NOT NULL
+            );
+            """);
     }
 
     public void Append(string sessionId, OfflineEventKind kind, DateTimeOffset at, string payload)
@@ -71,7 +79,7 @@ public sealed class LocalStore : IDisposable
             """;
         command.Parameters.AddWithValue("$session", sessionId);
         command.Parameters.AddWithValue("$kind", kind.ToString());
-        command.Parameters.AddWithValue("$at", at.ToUniversalTime().ToString("o"));
+        command.Parameters.AddWithValue("$at", TehranStamp.Format(at));
         command.Parameters.AddWithValue("$payload", payload ?? "");
         command.ExecuteNonQuery();
     }
@@ -116,6 +124,104 @@ public sealed class LocalStore : IDisposable
         transaction.Commit();
     }
 
+    public void MarkSessionSynced(string sessionId)
+    {
+        using var transaction = _connection.BeginTransaction();
+        using (var update = _connection.CreateCommand())
+        {
+            update.Transaction = transaction;
+            update.CommandText = "UPDATE events SET synced = 1 WHERE session_id = $session AND synced = 0;";
+            update.Parameters.AddWithValue("$session", sessionId);
+            update.ExecuteNonQuery();
+        }
+
+        using (var prune = _connection.CreateCommand())
+        {
+            prune.Transaction = transaction;
+            prune.CommandText = "DELETE FROM events WHERE session_id = $session AND kind = $kind AND synced = 1;";
+            prune.Parameters.AddWithValue("$session", sessionId);
+            prune.Parameters.AddWithValue("$kind", OfflineEventKind.Heartbeat.ToString());
+            prune.ExecuteNonQuery();
+        }
+
+        transaction.Commit();
+    }
+
+    public void WriteCheckpoint(string sessionId, DateTimeOffset at, long playedSeconds)
+    {
+        using var transaction = _connection.BeginTransaction();
+        using (var delete = _connection.CreateCommand())
+        {
+            delete.Transaction = transaction;
+            delete.CommandText = "DELETE FROM events WHERE session_id = $session AND kind = $kind;";
+            delete.Parameters.AddWithValue("$session", sessionId);
+            delete.Parameters.AddWithValue("$kind", OfflineEventKind.Heartbeat.ToString());
+            delete.ExecuteNonQuery();
+        }
+
+        using (var insert = _connection.CreateCommand())
+        {
+            insert.Transaction = transaction;
+            insert.CommandText = """
+                INSERT INTO events (session_id, kind, at_utc, payload, synced)
+                VALUES ($session, $kind, $at, $payload, 0);
+                """;
+            insert.Parameters.AddWithValue("$session", sessionId);
+            insert.Parameters.AddWithValue("$kind", OfflineEventKind.Heartbeat.ToString());
+            insert.Parameters.AddWithValue("$at", TehranStamp.Format(at));
+            insert.Parameters.AddWithValue("$payload", playedSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            insert.ExecuteNonQuery();
+        }
+
+        transaction.Commit();
+    }
+
+    public void SavePending(PendingReport report)
+    {
+        using var command = _connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO pending_reports (session_id, json, attempts, next_attempt_utc)
+            VALUES ($session, $json, $attempts, $next)
+            ON CONFLICT(session_id) DO UPDATE SET
+              json = excluded.json,
+              attempts = excluded.attempts,
+              next_attempt_utc = excluded.next_attempt_utc;
+            """;
+        command.Parameters.AddWithValue("$session", report.SessionId);
+        command.Parameters.AddWithValue("$json", System.Text.Json.JsonSerializer.Serialize(report));
+        command.Parameters.AddWithValue("$attempts", report.Attempts);
+        command.Parameters.AddWithValue("$next", report.NextAttemptAt ?? "");
+        command.ExecuteNonQuery();
+    }
+
+    public PendingReport? PeekPending()
+    {
+        using var command = _connection.CreateCommand();
+        command.CommandText = "SELECT json FROM pending_reports ORDER BY rowid LIMIT 1;";
+        if (command.ExecuteScalar() is not string json || json.Length == 0)
+        {
+            return null;
+        }
+
+        return System.Text.Json.JsonSerializer.Deserialize<PendingReport>(json);
+    }
+
+    public bool HasPending()
+    {
+        using var command = _connection.CreateCommand();
+        command.CommandText = "SELECT COUNT(*) FROM pending_reports;";
+        var count = (long)(command.ExecuteScalar() ?? 0L);
+        return count > 0;
+    }
+
+    public void DeletePending(string sessionId)
+    {
+        using var command = _connection.CreateCommand();
+        command.CommandText = "DELETE FROM pending_reports WHERE session_id = $session;";
+        command.Parameters.AddWithValue("$session", sessionId);
+        command.ExecuteNonQuery();
+    }
+
     public void SaveCatalog(IReadOnlyList<GameEntry> games, DateTimeOffset at)
     {
         using var command = _connection.CreateCommand();
@@ -125,7 +231,7 @@ public sealed class LocalStore : IDisposable
             ON CONFLICT(id) DO UPDATE SET json = excluded.json, cached_at_utc = excluded.cached_at_utc;
             """;
         command.Parameters.AddWithValue("$json", System.Text.Json.JsonSerializer.Serialize(games));
-        command.Parameters.AddWithValue("$at", at.ToUniversalTime().ToString("o"));
+        command.Parameters.AddWithValue("$at", TehranStamp.Format(at));
         command.ExecuteNonQuery();
     }
 

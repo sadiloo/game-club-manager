@@ -7,6 +7,7 @@ public enum KioskPhase
     Locked = 0,
     Active = 1,
     Grace = 2,
+    Paused = 3,
 }
 
 public enum SessionEndReason
@@ -44,7 +45,7 @@ public sealed record KioskSession
 
     public long LoginRevision { get; init; }
 
-    public bool IsOpen => Phase is KioskPhase.Active or KioskPhase.Grace;
+    public bool IsOpen => Phase is KioskPhase.Active or KioskPhase.Grace or KioskPhase.Paused;
 
     public static KioskSession Locked(string? message = null) => new() { Phase = KioskPhase.Locked, Message = message };
 }
@@ -173,7 +174,7 @@ public static class KioskSessionMath
         TehranTime.Ensure(now);
         if (now < started)
         {
-            throw new BillingException("invalid_time", "The kiosk clock moved before the session start.");
+            now = started;
         }
 
         var coveredEnd = CoveredEnd(session.AccountAtLogin, station, started, rates, policy, specialDays);
