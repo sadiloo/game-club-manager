@@ -37,7 +37,7 @@ public sealed record SessionCharge(
 
 /// <summary>
 /// Prices a session. The caller splits play when the controller count, station, or mode changes.
-/// The engine further splits each of those segments at midnight and at time-band edges, then
+/// The engine further splits each of those segments at midnight and at that group's own time-band edges, then
 /// prices every piece at the rate in force at its start. Paused time is removed before that split.
 /// Contiguous pieces of the same segment that resolve to the same rate on the same Tehran date
 /// are merged before minute rounding, so a band edge that does not change the rate is not an
@@ -48,10 +48,10 @@ public static class SessionPricer
     public static SessionCharge Price(
         Session session,
         RateCard rates,
-        HolidayCalendar? holidays = null,
+        SpecialDayCalendar? specialDays = null,
         BillingPolicy? policy = null)
     {
-        holidays ??= HolidayCalendar.Empty;
+        specialDays ??= SpecialDayCalendar.Empty;
         policy ??= BillingPolicy.Default;
         policy.EnsureValid();
         Validate(session);
@@ -64,12 +64,12 @@ public static class SessionPricer
                 var cursor = activeStart;
                 while (cursor < activeEnd)
                 {
-                    var boundary = RateBoundaries.Next(cursor, rates);
+                    var boundary = RateBoundaries.Next(cursor, rates, segment.GroupId);
                     var sliceEnd = boundary < activeEnd ? boundary : activeEnd;
                     var seconds = TehranTime.WholeSeconds(cursor, sliceEnd);
                     if (seconds > 0)
                     {
-                        var quote = RateResolver.Resolve(rates, holidays, cursor, segment.GroupId, segment.Mode, segment.PlayerCount);
+                        var quote = RateResolver.Resolve(rates, specialDays, cursor, segment.GroupId, segment.Mode, segment.PlayerCount);
                         drafts.Add(new SliceDraft(
                             segment.Id,
                             segment.StationId,
@@ -306,7 +306,7 @@ public static class PrepaidPlanner
         PlayMode mode,
         int playerCount,
         RateCard rates,
-        HolidayCalendar? holidays = null,
+        SpecialDayCalendar? specialDays = null,
         BillingPolicy? policy = null)
     {
         TehranTime.Ensure(start);
@@ -321,7 +321,7 @@ public static class PrepaidPlanner
         }
 
         var end = TehranTime.AddSeconds(start, playTime.Ticks / TimeSpan.TicksPerSecond);
-        var charge = PriceSynthetic(start, end, segmentId, stationId, groupId, mode, playerCount, rates, holidays, policy);
+        var charge = PriceSynthetic(start, end, segmentId, stationId, groupId, mode, playerCount, rates, specialDays, policy);
         return new PrepaidPlan(
             PrepaidKind.Duration,
             start,
@@ -342,7 +342,7 @@ public static class PrepaidPlanner
         PlayMode mode,
         int playerCount,
         RateCard rates,
-        HolidayCalendar? holidays = null,
+        SpecialDayCalendar? specialDays = null,
         BillingPolicy? policy = null)
     {
         TehranTime.Ensure(start);
@@ -351,7 +351,7 @@ public static class PrepaidPlanner
             throw new BillingException("invalid_money", "Prepaid amount cannot be negative.");
         }
 
-        holidays ??= HolidayCalendar.Empty;
+        specialDays ??= SpecialDayCalendar.Empty;
         policy ??= BillingPolicy.Default;
         policy.EnsureValid();
         _ = TariffKey.ForSegment(groupId, mode, playerCount);
@@ -363,7 +363,7 @@ public static class PrepaidPlanner
 
         while (remaining > 0 && cursor < horizon)
         {
-            var boundary = RateBoundaries.Next(cursor, rates);
+            var boundary = RateBoundaries.Next(cursor, rates, groupId);
             if (boundary > horizon)
             {
                 boundary = horizon;
@@ -376,7 +376,7 @@ public static class PrepaidPlanner
                 continue;
             }
 
-            var quote = RateResolver.Resolve(rates, holidays, cursor, groupId, mode, playerCount);
+            var quote = RateResolver.Resolve(rates, specialDays, cursor, groupId, mode, playerCount);
             var take = AffordableSeconds(quote.HourlyRateToman, remaining, policy, spanSeconds);
             if (take <= 0)
             {
@@ -471,12 +471,12 @@ public static class PrepaidPlanner
         PlayMode mode,
         int playerCount,
         RateCard rates,
-        HolidayCalendar? holidays,
+        SpecialDayCalendar? specialDays,
         BillingPolicy? policy)
     {
         var session = new Session(
             "prepaid",
             [new PlaySegment(segmentId, start, end, stationId, groupId, mode, playerCount)]);
-        return SessionPricer.Price(session, rates, holidays, policy);
+        return SessionPricer.Price(session, rates, specialDays, policy);
     }
 }

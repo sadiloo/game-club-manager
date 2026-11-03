@@ -111,7 +111,11 @@ public class InvariantAndReferenceTests
                 TimeChargeLine.FromSession(charge),
                 rng.Next(2) == 0 ? [] : [new BuffetLine("A_111", "شکلات", 1, 98_000)],
                 rng.Next(2) == 0 ? [] : [new ServiceLine("fine", "fine", 10_000)],
-                new CustomerPricing("Bronze", rng.Next(0, 30), rng.Next(2) == 0, rng.Next(0, 20)),
+                new CustomerPricing(
+                    "Bronze",
+                    rng.Next(0, 30),
+                    rng.Next(2) == 0 ? new DateOnly(1990, 6, 2) : new DateOnly(1990, 1, 1),
+                    rng.Next(0, 20)),
                 null,
                 DiscountPolicy.Default,
                 rng.Next(2) == 0
@@ -127,10 +131,12 @@ public class InvariantAndReferenceTests
 
             if (charge.TotalAmountToman > 0 && invoice.TimeGrossToman > 0)
             {
-                var settled = AccountSettlement.Settle(charge, new PcAccount("m", rng.Next(0, 500_000), [new TimePackage("p", rng.Next(0, 90), 200_000)]));
+                var opening = rng.Next(0, 500_000);
+                var settled = AccountSettlement.Settle(charge, new PcAccount("m", opening, [new TimePackage("p", rng.Next(0, 90), 200_000)]));
                 Assert.Equal(charge.TotalAmountToman, settled.PackageCoveredToman + settled.MoneyConsumedToman + settled.UncoveredToman);
-                Assert.True(settled.UpdatedAccount.MoneyBalanceToman >= 0);
-                Assert.True(settled.UncoveredToman >= 0);
+                Assert.Equal(0, settled.UncoveredToman);
+                Assert.Equal(opening - settled.MoneyConsumedToman, settled.UpdatedAccount.MoneyBalanceToman);
+                Assert.Equal(settled.UpdatedAccount.MoneyBalanceToman < 0 ? -settled.UpdatedAccount.MoneyBalanceToman : 0, settled.DebtToman);
                 Assert.True(settled.PackageMinutesConsumed >= 0);
             }
         }
@@ -147,8 +153,8 @@ public class InvariantAndReferenceTests
             var length = rng.Next(0, 150) * 60L + rng.Next(0, 30);
             var end = TehranTime.AddSeconds(cursor, length);
             var players = rng.Next(1, 5);
-            var group = rng.Next(2) == 0 ? CafeFixture.Ps5 : CafeFixture.Vip;
-            var station = group == CafeFixture.Ps5 ? "ps5-1" : "vip-1";
+            var group = rng.Next(2) == 0 ? CafeFixture.Ps5 : CafeFixture.ExampleVip;
+            var station = group == CafeFixture.Ps5 ? "ps5-1" : "example-vip-1";
             segments.Add(CafeFixture.Play($"s{i}", cursor, end, station, group, players));
             cursor = end;
         }

@@ -50,7 +50,7 @@ public static class GameTimerReference
         ("Titan", 28),
     ];
 
-    public static TimeBand SpecialHours { get; } = new(SpecialBandId, "Special hours 00:00–08:30", SpecialStart, SpecialEnd);
+    public static TimeBand SpecialHours { get; } = new(SpecialBandId, Ps5GroupId, "Special hours 00:00–08:30", SpecialStart, SpecialEnd);
 
     public static RateCard CreatePs5Card()
     {

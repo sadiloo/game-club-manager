@@ -82,8 +82,8 @@ public class PrepaidAndAccountTests
         var account = new PcAccount("member-1", 220_000, [package]);
         var at = T.At(2026, 6, 2, 18, 0);
 
-        var beforeNormal = RemainingTimeEstimator.Estimate(account, CafeFixture.Normal, PlayMode.Offline, 1, at, CafeFixture.Card());
-        var beforeVip = RemainingTimeEstimator.Estimate(account, CafeFixture.Vip, PlayMode.Offline, 1, at, CafeFixture.Card());
+        var beforeNormal = RemainingTimeEstimator.Estimate(account, CafeFixture.ExampleNormal, PlayMode.Offline, 1, at, CafeFixture.Card());
+        var beforeVip = RemainingTimeEstimator.Estimate(account, CafeFixture.ExampleVip, PlayMode.Offline, 1, at, CafeFixture.Card());
         Assert.Equal(120, beforeNormal.EligiblePackageMinutes);
         Assert.Equal(120, beforeNormal.MoneyMinutes);
         Assert.Equal(240, beforeNormal.TotalMinutes);
@@ -112,8 +112,8 @@ public class PrepaidAndAccountTests
         Assert.Equal(110_000, fallback.UpdatedAccount.MoneyBalanceToman);
 
         var after = T.At(2026, 6, 3, 20, 30);
-        var normalLeft = RemainingTimeEstimator.Estimate(fallback.UpdatedAccount, CafeFixture.Normal, PlayMode.Offline, 1, after, CafeFixture.Card());
-        var vipLeft = RemainingTimeEstimator.Estimate(fallback.UpdatedAccount, CafeFixture.Vip, PlayMode.Offline, 1, after, CafeFixture.Card());
+        var normalLeft = RemainingTimeEstimator.Estimate(fallback.UpdatedAccount, CafeFixture.ExampleNormal, PlayMode.Offline, 1, after, CafeFixture.Card());
+        var vipLeft = RemainingTimeEstimator.Estimate(fallback.UpdatedAccount, CafeFixture.ExampleVip, PlayMode.Offline, 1, after, CafeFixture.Card());
         Assert.Equal(0, normalLeft.EligiblePackageMinutes);
         Assert.Equal(60, normalLeft.MoneyMinutes);
         Assert.Equal(30, vipLeft.MoneyMinutes);
@@ -127,7 +127,7 @@ public class PrepaidAndAccountTests
         var account = new PcAccount("member-1", 220_000, [new TimePackage("two-hours", 120, 200_000)]);
         var charge = CafeFixture.Price(CafeFixture.Session(
             "vip",
-            CafeFixture.Play("a", T.At(2026, 6, 2, 18, 0), T.At(2026, 6, 2, 19, 0), "vip-1", CafeFixture.Vip, 1)));
+            CafeFixture.Play("a", T.At(2026, 6, 2, 18, 0), T.At(2026, 6, 2, 19, 0), "example-vip-1", CafeFixture.ExampleVip, 1)));
         var settled = AccountSettlement.Settle(charge, account, new AccountPolicy(ConsumptionOrder.MoneyThenPackages));
 
         Assert.Equal(220_000, settled.MoneyConsumedToman);
@@ -149,7 +149,7 @@ public class PrepaidAndAccountTests
         var account = new PcAccount("member-1", 1_000_000, [windowed]);
         var charge = CafeFixture.Price(CafeFixture.Session(
             "pc",
-            CafeFixture.Play("a", T.At(2026, 6, 2, 7, 0), T.At(2026, 6, 2, 9, 0), "pc-1", CafeFixture.Normal, 1)));
+            CafeFixture.Play("a", T.At(2026, 6, 2, 7, 0), T.At(2026, 6, 2, 9, 0), "example-pc-1", CafeFixture.ExampleNormal, 1)));
         Assert.Equal(220_000, charge.TotalAmountToman);
 
         var settled = AccountSettlement.Settle(charge, account);
@@ -161,11 +161,11 @@ public class PrepaidAndAccountTests
         var vipOnly = new PcAccount(
             "member-2",
             110_000,
-            [new TimePackage("vip-pack", 60, null, new HashSet<string> { CafeFixture.Vip })]);
+            [new TimePackage("vip-pack", 60, null, new HashSet<string> { CafeFixture.ExampleVip })]);
         var onNormal = AccountSettlement.Settle(
             CafeFixture.Price(CafeFixture.Session(
                 "pc",
-                CafeFixture.Play("a", T.At(2026, 6, 2, 10, 0), T.At(2026, 6, 2, 11, 0), "pc-1", CafeFixture.Normal, 1))),
+                CafeFixture.Play("a", T.At(2026, 6, 2, 10, 0), T.At(2026, 6, 2, 11, 0), "example-pc-1", CafeFixture.ExampleNormal, 1))),
             vipOnly);
         Assert.Equal(0, onNormal.PackageMinutesConsumed);
         Assert.Equal(110_000, onNormal.MoneyConsumedToman);
@@ -178,7 +178,7 @@ public class PrepaidAndAccountTests
         var nextDay = AccountSettlement.Settle(
             CafeFixture.Price(CafeFixture.Session(
                 "pc",
-                CafeFixture.Play("a", T.At(2026, 6, 3, 10, 0), T.At(2026, 6, 3, 11, 0), "pc-1", CafeFixture.Normal, 1))),
+                CafeFixture.Play("a", T.At(2026, 6, 3, 10, 0), T.At(2026, 6, 3, 11, 0), "example-pc-1", CafeFixture.ExampleNormal, 1))),
             expired);
         Assert.Equal(0, nextDay.PackageMinutesConsumed);
         Assert.Equal(110_000, nextDay.MoneyConsumedToman);
@@ -186,28 +186,46 @@ public class PrepaidAndAccountTests
         var stillValid = AccountSettlement.Settle(
             CafeFixture.Price(CafeFixture.Session(
                 "pc",
-                CafeFixture.Play("a", T.At(2026, 6, 2, 10, 0), T.At(2026, 6, 2, 11, 0), "pc-1", CafeFixture.Normal, 1))),
+                CafeFixture.Play("a", T.At(2026, 6, 2, 10, 0), T.At(2026, 6, 2, 11, 0), "example-pc-1", CafeFixture.ExampleNormal, 1))),
             expired);
         Assert.Equal(60, stillValid.PackageMinutesConsumed);
         Assert.Equal(0, stillValid.MoneyConsumedToman);
     }
 
     [Fact]
-    public void Shortfall_does_not_drive_the_balance_negative()
+    public void Insufficient_balance_becomes_visible_debt_up_to_an_optional_cap()
     {
         var account = new PcAccount("member-1", 50_000, []);
         var settled = Settle(account, T.At(2026, 6, 2, 18, 0), T.At(2026, 6, 2, 19, 0));
-        Assert.Equal(50_000, settled.MoneyConsumedToman);
-        Assert.Equal(170_000, settled.UncoveredToman);
-        Assert.Equal(0, settled.UpdatedAccount.MoneyBalanceToman);
+        Assert.Equal(220_000, settled.MoneyConsumedToman);
+        Assert.Equal(0, settled.UncoveredToman);
+        Assert.Equal(-170_000, settled.UpdatedAccount.MoneyBalanceToman);
+        Assert.Equal(170_000, settled.DebtToman);
         Assert.Equal(settled.GrossToman, settled.PackageCoveredToman + settled.MoneyConsumedToman + settled.UncoveredToman);
+
+        var charge = CafeFixture.Price(CafeFixture.Session(
+            "vip",
+            CafeFixture.Play("a", T.At(2026, 6, 2, 18, 0), T.At(2026, 6, 2, 19, 0), "example-vip-1", CafeFixture.ExampleVip, 1)));
+        var capped = AccountSettlement.Settle(charge, account, new AccountPolicy(ConsumptionOrder.PackagesThenMoney, DebtPolicy.Limited(100_000)));
+        Assert.Equal(150_000, capped.MoneyConsumedToman);
+        Assert.Equal(-100_000, capped.UpdatedAccount.MoneyBalanceToman);
+        Assert.Equal(70_000, capped.UncoveredToman);
+
+        var stopped = AccountSettlement.Settle(charge, account, new AccountPolicy(ConsumptionOrder.PackagesThenMoney, DebtPolicy.None));
+        Assert.Equal(50_000, stopped.MoneyConsumedToman);
+        Assert.Equal(0, stopped.UpdatedAccount.MoneyBalanceToman);
+        Assert.Equal(170_000, stopped.UncoveredToman);
+
+        var deeper = AccountSettlement.Settle(charge, settled.UpdatedAccount);
+        Assert.Equal(-390_000, deeper.UpdatedAccount.MoneyBalanceToman);
+        Assert.Equal(390_000, deeper.DebtToman);
     }
 
     private static Settlement Settle(PcAccount account, DateTimeOffset start, DateTimeOffset end)
     {
         var charge = CafeFixture.Price(CafeFixture.Session(
             "vip",
-            CafeFixture.Play("a", start, end, "vip-1", CafeFixture.Vip, 1)));
+            CafeFixture.Play("a", start, end, "example-vip-1", CafeFixture.ExampleVip, 1)));
         return AccountSettlement.Settle(charge, account);
     }
 }

@@ -118,14 +118,14 @@ public class SessionPricingTests
         var charge = CafeFixture.Price(CafeFixture.Session(
             "move",
             directory.Segment("on-ps5", T.At(2026, 6, 2, 18, 0), T.At(2026, 6, 2, 19, 0), "ps5-1", PlayMode.Offline, 1),
-            directory.Segment("on-vip", T.At(2026, 6, 2, 19, 0), T.At(2026, 6, 2, 20, 0), "vip-1", PlayMode.Offline, 1)));
+            directory.Segment("on-vip", T.At(2026, 6, 2, 19, 0), T.At(2026, 6, 2, 20, 0), "example-vip-1", PlayMode.Offline, 1)));
 
         Assert.Equal(CafeFixture.Ps5, charge.Lines[0].GroupId);
         Assert.Equal("ps5-1", charge.Lines[0].StationId);
         Assert.Equal(110_000, charge.Lines[0].AmountToman);
-        Assert.Equal(CafeFixture.Vip, charge.Lines[1].GroupId);
-        Assert.Equal("vip-1", charge.Lines[1].StationId);
-        Assert.Equal(CafeFixture.VipOnePlayerHourly, charge.Lines[1].AmountToman);
+        Assert.Equal(CafeFixture.ExampleVip, charge.Lines[1].GroupId);
+        Assert.Equal("example-vip-1", charge.Lines[1].StationId);
+        Assert.Equal(CafeFixture.ExampleVipOnePlayerHourly, charge.Lines[1].AmountToman);
         Assert.Equal(330_000, charge.TotalAmountToman);
     }
 
@@ -160,7 +160,7 @@ public class SessionPricingTests
     }
 
     [Fact]
-    public void Holiday_beats_weekday_and_weekday_beats_the_hour_band()
+    public void Special_day_beats_weekday_and_weekday_beats_the_hour_band()
     {
         Assert.Equal(DayOfWeek.Tuesday, new DateOnly(2026, 6, 2).DayOfWeek);
         Assert.Equal(DayOfWeek.Friday, new DateOnly(2026, 6, 5).DayOfWeek);
@@ -176,35 +176,53 @@ public class SessionPricingTests
             .AddBandRate(GameTimerReference.SpecialBandId, CafeFixture.Ps5, PlayMode.Online, null, 220_000)
             .AddWeekday(DayOfWeek.Friday, CafeFixture.Ps5, PlayMode.Offline, 1, 100_000)
             .AddWeekday(DayOfWeek.Saturday, CafeFixture.Ps5, PlayMode.Offline, 1, 90_000)
-            .AddHoliday(CafeFixture.Ps5, PlayMode.Offline, 1, 50_000)
+            .AddBase(CafeFixture.ExampleVip, PlayMode.Offline, 1, CafeFixture.ExampleVipOnePlayerHourly)
+            .AddSpecialRate("festival", CafeFixture.Ps5, PlayMode.Offline, 1, 50_000)
+            .AddSpecialRate("festival", CafeFixture.ExampleVip, PlayMode.Offline, 1, 70_000)
+            .AddSpecialRate("local-event", CafeFixture.Ps5, PlayMode.Offline, 1, 40_000)
             .Build();
-        var holidays = new HolidayCalendar([new DateOnly(2026, 6, 6)]);
+        var specialDays = new SpecialDayCalendar(
+        [
+            new SpecialDay(new DateOnly(2026, 6, 6), "Festival", "festival"),
+            new SpecialDay(new DateOnly(2026, 6, 7), "Local event", "local-event"),
+        ]);
 
-        var fridaySpecial = Price(card, holidays, T.At(2026, 6, 5, 1, 0), T.At(2026, 6, 5, 2, 0), 1);
+        var fridaySpecial = Price(card, specialDays, T.At(2026, 6, 5, 1, 0), T.At(2026, 6, 5, 2, 0), 1);
         Assert.Equal(RateSource.Weekday, Assert.Single(fridaySpecial.Lines).Source);
         Assert.Equal(100_000, fridaySpecial.TotalAmountToman);
 
-        var fridayTwoPlayer = Price(card, holidays, T.At(2026, 6, 5, 1, 0), T.At(2026, 6, 5, 2, 0), 2);
+        var fridayTwoPlayer = Price(card, specialDays, T.At(2026, 6, 5, 1, 0), T.At(2026, 6, 5, 2, 0), 2);
         Assert.Equal(RateSource.TimeBand, Assert.Single(fridayTwoPlayer.Lines).Source);
         Assert.Equal(175_000, fridayTwoPlayer.TotalAmountToman);
 
-        var saturdayHoliday = Price(card, holidays, T.At(2026, 6, 6, 1, 0), T.At(2026, 6, 6, 2, 0), 1);
-        Assert.Equal(RateSource.Holiday, Assert.Single(saturdayHoliday.Lines).Source);
-        Assert.Equal(50_000, saturdayHoliday.TotalAmountToman);
+        var saturdaySpecial = Price(card, specialDays, T.At(2026, 6, 6, 1, 0), T.At(2026, 6, 6, 2, 0), 1);
+        Assert.Equal(RateSource.SpecialDay, Assert.Single(saturdaySpecial.Lines).Source);
+        Assert.Equal(50_000, saturdaySpecial.TotalAmountToman);
 
-        var tuesdaySpecial = Price(card, holidays, T.At(2026, 6, 2, 1, 0), T.At(2026, 6, 2, 2, 0), 1);
+        var exampleOnFestival = SessionPricer.Price(
+            CafeFixture.Session("ex", CafeFixture.Play("a", T.At(2026, 6, 6, 10, 0), T.At(2026, 6, 6, 11, 0), "example-vip-1", CafeFixture.ExampleVip, 1)),
+            card,
+            specialDays);
+        Assert.Equal(RateSource.SpecialDay, Assert.Single(exampleOnFestival.Lines).Source);
+        Assert.Equal(70_000, exampleOnFestival.TotalAmountToman);
+
+        var localEvent = Price(card, specialDays, T.At(2026, 6, 7, 10, 0), T.At(2026, 6, 7, 11, 0), 1);
+        Assert.Equal(RateSource.SpecialDay, Assert.Single(localEvent.Lines).Source);
+        Assert.Equal(40_000, localEvent.TotalAmountToman);
+
+        var tuesdaySpecial = Price(card, specialDays, T.At(2026, 6, 2, 1, 0), T.At(2026, 6, 2, 2, 0), 1);
         Assert.Equal(RateSource.TimeBand, Assert.Single(tuesdaySpecial.Lines).Source);
         Assert.Equal(160_000, tuesdaySpecial.TotalAmountToman);
 
-        var tuesdayDay = Price(card, holidays, T.At(2026, 6, 2, 10, 0), T.At(2026, 6, 2, 11, 0), 1);
+        var tuesdayDay = Price(card, specialDays, T.At(2026, 6, 2, 10, 0), T.At(2026, 6, 2, 11, 0), 1);
         Assert.Equal(RateSource.BaseTariff, Assert.Single(tuesdayDay.Lines).Source);
         Assert.Equal(110_000, tuesdayDay.TotalAmountToman);
 
-        var fridayDay = Price(card, holidays, T.At(2026, 6, 5, 10, 0), T.At(2026, 6, 5, 11, 0), 1);
+        var fridayDay = Price(card, specialDays, T.At(2026, 6, 5, 10, 0), T.At(2026, 6, 5, 11, 0), 1);
         Assert.Equal(RateSource.Weekday, Assert.Single(fridayDay.Lines).Source);
         Assert.Equal(100_000, fridayDay.TotalAmountToman);
 
-        var onlineOnHoliday = Price(card, holidays, T.At(2026, 6, 6, 1, 0), T.At(2026, 6, 6, 2, 0), 1, PlayMode.Online);
+        var onlineOnHoliday = Price(card, specialDays, T.At(2026, 6, 6, 1, 0), T.At(2026, 6, 6, 2, 0), 1, PlayMode.Online);
         Assert.Equal(RateSource.TimeBand, Assert.Single(onlineOnHoliday.Lines).Source);
         Assert.Equal(220_000, onlineOnHoliday.TotalAmountToman);
 
@@ -213,13 +231,47 @@ public class SessionPricingTests
                 "cross",
                 CafeFixture.Play("a", T.At(2026, 6, 5, 23, 0), T.At(2026, 6, 6, 1, 0), "ps5-1", CafeFixture.Ps5, 1)),
             card,
-            holidays);
+            specialDays);
         Assert.Equal(2, crossing.Lines.Count);
         Assert.Equal(RateSource.Weekday, crossing.Lines[0].Source);
         Assert.Equal(100_000, crossing.Lines[0].AmountToman);
-        Assert.Equal(RateSource.Holiday, crossing.Lines[1].Source);
+        Assert.Equal(RateSource.SpecialDay, crossing.Lines[1].Source);
         Assert.Equal(50_000, crossing.Lines[1].AmountToman);
         Assert.Equal(150_000, crossing.TotalAmountToman);
+    }
+
+    [Fact]
+    public void Each_group_has_its_own_time_bands()
+    {
+        const string lounge = "example-lounge";
+        var card = new RateCardBuilder()
+            .AddBand(GameTimerReference.SpecialHours)
+            .AddBase(CafeFixture.Ps5, PlayMode.Offline, 1, GameTimerReference.Ps5OnePlayerHourly)
+            .AddBandRate(GameTimerReference.SpecialBandId, CafeFixture.Ps5, PlayMode.Offline, 1, GameTimerReference.Ps5OnePlayerSpecialHourly)
+            .AddBase(lounge, PlayMode.Offline, 1, 80_000)
+            .AddBand(new TimeBand("example-evening", lounge, "Example evening", new TimeOnly(18, 0), new TimeOnly(22, 0)))
+            .AddBandRate("example-evening", lounge, PlayMode.Offline, 1, 50_000)
+            .Build();
+
+        var ps5Morning = PlayOn(card, CafeFixture.Ps5, "ps5-1", T.At(2026, 6, 2, 7, 0), T.At(2026, 6, 2, 9, 0));
+        Assert.Equal(2, ps5Morning.Lines.Count);
+        Assert.Equal(240_000, ps5Morning.Lines[0].AmountToman);
+        Assert.Equal(55_000, ps5Morning.Lines[1].AmountToman);
+
+        var loungeMorning = PlayOn(card, lounge, "example-lounge-1", T.At(2026, 6, 2, 7, 0), T.At(2026, 6, 2, 9, 0));
+        Assert.Equal(RateSource.BaseTariff, Assert.Single(loungeMorning.Lines).Source);
+        Assert.Equal(160_000, loungeMorning.TotalAmountToman);
+
+        var ps5Evening = PlayOn(card, CafeFixture.Ps5, "ps5-1", T.At(2026, 6, 2, 21, 0), T.At(2026, 6, 2, 23, 0));
+        Assert.Equal(RateSource.BaseTariff, Assert.Single(ps5Evening.Lines).Source);
+        Assert.Equal(220_000, ps5Evening.TotalAmountToman);
+
+        var loungeEvening = PlayOn(card, lounge, "example-lounge-1", T.At(2026, 6, 2, 21, 0), T.At(2026, 6, 2, 23, 0));
+        Assert.Equal(2, loungeEvening.Lines.Count);
+        Assert.Equal(RateSource.TimeBand, loungeEvening.Lines[0].Source);
+        Assert.Equal(50_000, loungeEvening.Lines[0].AmountToman);
+        Assert.Equal(RateSource.BaseTariff, loungeEvening.Lines[1].Source);
+        Assert.Equal(80_000, loungeEvening.Lines[1].AmountToman);
     }
 
     [Fact]
@@ -284,11 +336,18 @@ public class SessionPricingTests
         Assert.Equal("invalid_time", offset.Code);
     }
 
-    private static SessionCharge Price(RateCard card, HolidayCalendar holidays, DateTimeOffset start, DateTimeOffset end, int players, PlayMode mode = PlayMode.Offline)
+    private static SessionCharge Price(RateCard card, SpecialDayCalendar specialDays, DateTimeOffset start, DateTimeOffset end, int players, PlayMode mode = PlayMode.Offline)
     {
         return SessionPricer.Price(
             CafeFixture.Session("s", CafeFixture.Play("a", start, end, "ps5-1", CafeFixture.Ps5, players, mode)),
             card,
-            holidays);
+            specialDays);
+    }
+
+    private static SessionCharge PlayOn(RateCard card, string groupId, string stationId, DateTimeOffset start, DateTimeOffset end)
+    {
+        return SessionPricer.Price(
+            CafeFixture.Session("s", CafeFixture.Play("a", start, end, stationId, groupId, 1)),
+            card);
     }
 }

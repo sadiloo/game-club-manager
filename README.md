@@ -20,11 +20,11 @@ Money is a `long` in toman. Nothing in the library reads the clock, and nothing 
 
 این کتابخانه فقط محاسبهٔ قیمت و زمان است. مبلغ‌ها تومان و عدد صحیح‌اند. ساعت را خودِ برنامه می‌دهد (از ساعت سیستم خوانده نمی‌شود) و همیشه به وقت تهران با اختلاف `+۰۳:۳۰` تفسیر می‌شود. ایران از ۲۰۲۲ ساعت تابستانی ندارد و این موتور هم تعویض ساعت را اعمال نمی‌کند.
 
-نرخ یک لحظه به این ترتیب انتخاب می‌شود: **تعطیل > روز هفته > بازهٔ ساعتی > نرخ پایه**. اگر برای لایهٔ بالاتر نرخی تعریف نشده باشد، به لایهٔ بعدی برمی‌گردد. سانسِ طولانی، حتی اگر از نیمه‌شب یا از مرز «ساعات خاص» (مثلاً ۰۸:۳۰) رد شود، خودش تکه‌تکه می‌شود و هر تکه با نرخ همان بازه حساب می‌شود. اپراتور لازم نیست نیمه‌شب را دستی ببرد.
+نرخ یک لحظه به این ترتیب انتخاب می‌شود: **روز خاصِ همان گروه > روز هفته > بازهٔ ساعتیِ همان گروه > نرخ پایه**. هر گروه بازهٔ ساعتی خودش را دارد؛ بازهٔ PS5 روی گروه دیگر اثر نمی‌گذارد. اگر برای لایهٔ بالاتر نرخی تعریف نشده باشد، به لایهٔ بعدی برمی‌گردد. سانسِ طولانی، حتی اگر از نیمه‌شب یا از مرز «ساعات خاص» رد شود، خودش تکه‌تکه می‌شود.
 
-پیش‌فرض تخفیف: بهترینِ «درصد سطح مشتری» یا «درصد تولد»، به‌علاوهٔ فقط یک کد تخفیف. هر دو روی مبلغ اصلی زمان بازی حساب می‌شوند، نه روی بوفه و خدمات. مبلغ نهایی منفی نمی‌شود. گرد کردن بعد از تخفیف است، برای هر شعبه روشن/خاموش می‌شود، و اختلافش یک سطر جدا در فاکتور است. در کیف پول، اول اعتبار هدیه و بعد اعتبار واقعی مصرف می‌شود. هر دو ترتیب قابل تنظیم است.
+تخفیف سطح مشتری و تخفیف تولد با هم جمع می‌شوند (سقف پیش‌فرض ۱۰۰٪) و فقط روی زمان بازی اعمال می‌شوند. کد تخفیف جداست و محدودهٔ آن قابل تنظیم است: زمان، بوفه، خدمات ویژه، یا ترکیبی از آن‌ها. مبلغ نهایی منفی نمی‌شود. هر دقیقهٔ شروع‌شده حساب می‌شود. اگر موجودی پول کافی نباشد، حساب منفی (بدهکار) می‌شود؛ سقف بدهی اختیاری است و پیش‌فرض نامحدود است. کیف پول، اعتبار هدیه و واقعی را مثل یک موجودی و به نسبت مصرف می‌کند و سهم هر کدام را جدا نشان می‌دهد. تعطیلات فهرست ثابت ندارند؛ کافه خودش روزهای خاص و جدول نرخ هر گروه را وارد می‌کند.
 
-قیمت‌های PS5 از خروجی Game Timer خوانده شده است. نرخ VIP، PC، VR و میزها در آن فایل صفر بود و اینجا به‌عنوان «نامشخص» عمداً تعریف نشده است.
+فقط نرخ PS5 از Game Timer موجود است. گروه ناشناخته خطا می‌دهد و رایگان حساب نمی‌شود.
 
 ## Domain
 
@@ -33,9 +33,9 @@ Money is a `long` in toman. Nothing in the library reads the clock, and nothing 
 | `StationGroup` | User-defined group (`معمولی`, CIP, VIP, VVIP, `ps5`, billiard, …) with a kind: PC, console, or timed table. Unlimited groups. |
 | `Station` | Belongs to exactly one group. `StationDirectory` is the lookup. |
 | `PlayMode` | `Offline` is priced by player/controller count 1–4. `Online` and `Vr` are a single rate; the count is recorded but does not select the tariff. |
-| `TimeBand` | Half-open local interval `[start, end)`. `end <= start` wraps midnight. Bands on one card must not overlap. Gaps use the base tariff. |
-| `RateCard` | Base rates, per-band rates, per-weekday rates, and one holiday rate table. |
-| `HolidayCalendar` | A set of Tehran dates. Every date shares the holiday rate table. |
+| `TimeBand` | Half-open local interval `[start, end)` **for one station group**. `end <= start` wraps midnight. Bands of the same group must not overlap. Another group's bands are ignored. Gaps use that group's base tariff. |
+| `RateCard` | Base rates, per-group band rates, per-weekday rates, and special-day rate tables keyed by group. |
+| `SpecialDay` / `SpecialDayCalendar` | Cafe-defined dates. No built-in holiday list. Each date points at a rate table; the same table can price groups differently, and several dates can share a table. |
 | `PlaySegment` | One stretch at one station, group, mode, and player count. |
 | `Session` | Ordered segments plus pause intervals. |
 | `TimePackage` / `PcAccount` | Remaining package minutes and a money balance. |
@@ -50,7 +50,7 @@ A segment is what the caller already knows: the controller count changed, the me
 
 1. Reject overlapping segments, a reversed interval, a player count outside 1–4 for offline play, or an instant whose offset is not `+03:30`.
 2. Subtract pauses. A pause cuts every segment it overlaps. Time outside the session is ignored. Overlapping pauses are safe.
-3. Split each active stretch at Tehran midnight and at every band edge.
+3. Split each active stretch at Tehran midnight and at the edges of **that segment's group** bands. A band that belongs to another group is not a boundary.
 4. Resolve the rate at the start of each piece (see precedence).
 5. Merge pieces of the **same caller segment** when they are contiguous, on the same Tehran date, and resolved to the same rate. A band edge that does not change the price is not an extra rounded minute. Pieces the caller already split stay separate, even at the same rate.
 6. Turn each merged piece's active seconds into billed minutes, then into toman.
@@ -78,24 +78,26 @@ Sessions may cross midnight, cross several days, and run longer than 24 hours. A
 | `PartialUnits` (Ceiling) | What happens to an incomplete block. Ceiling bills it as a full block. Floor drops it. Nearest rounds an exact half up, so 30 seconds of a 1-minute block is billed and 29 seconds are not. |
 | `Remainder` (Nearest) | The toman remainder of dividing by 60, as above. |
 
-`AccountPolicy.Order` is `PackagesThenMoney` by default.
+`AccountPolicy` spends package minutes before money. `DebtPolicy` defaults to **unlimited**: a short money balance becomes a negative debt. `DebtPolicy.None` stops at zero. `DebtPolicy.Limited(amount)` refuses to go below minus that amount, and the rest is `UncoveredToman`. The resulting balance, including a negative one, is on the updated account (`DebtToman` is the positive size of that debt).
 
-`DiscountPolicy` is `BestLevelOrBirthdayPlusCode` on `TimeChargesOnly` by default.
+`DiscountPolicy` adds the level percent and the birthday percent, caps that sum at `MaxCombinedPercent` (default **100**), and applies it to time charges only. `Birthday` defaults to the exact day. `BirthdayWindow.DaysOnAndAfter(7)` is the birthday plus the next six days. `BirthdayWindow.DaysAround(7)` is three days before, the day, and three days after. An even span puts the extra day after the birthday. `BirthdayWindow.WholeMonth` is the birth month. February 29 is observed on February 28 in a non-leap year.
+
+A discount code's `ChargeScope` defaults to time. Combine `Time`, `Buffet`, and `Services` when the code should cover more than one part.
 
 `RoundingPolicy` is **off** by default. A branch turns it on with a step, a direction, and a scope.
 
-`WalletDrawOrder` is `GiftThenReal` by default.
+Wallet draws do not order gift before real or the reverse. They take both as one balance.
 
 ## Rate precedence
 
-For one instant and one tariff key `(group, mode, player count)`:
+For one instant, one group, and one tariff key `(group, mode, player count)`:
 
-1. **Holiday**, if the Tehran date is in the holiday calendar and a holiday rate exists for that key.
+1. **Special day**, if the cafe put that Tehran date on the calendar and the date's rate table has a rate for this group and key.
 2. **Weekday**, if that day has a rate for the key.
-3. **Time band**, if local time falls in a band that has a rate for the key.
+3. **This group's time band**, if local time falls in one of its bands and that band has a rate for the key.
 4. **Base tariff**.
 
-A missing rate falls through. A holiday does not need a copy of every mode: Saturday online play still uses the special-hour online rate when only the offline holiday rate was defined. If nothing matches, pricing throws `BillingException` with code `tariff_not_found` rather than charging zero.
+A missing rate falls through. A special day does not need a copy of every mode, and it does not need a rate for every group: a group with no row on that table keeps its weekday, band, or base rate. PS5's 00:00–08:30 band does not split or reprice any other group. If nothing matches, pricing throws `BillingException` with code `tariff_not_found` rather than charging zero. Only PS5 rates are live; other groups in tests use rates marked as examples.
 
 Worked PS5 1-player figures from the owner's sheet:
 
@@ -109,7 +111,7 @@ Worked PS5 1-player figures from the owner's sheet:
 
 The band is half-open: 08:30 is already the day rate.
 
-Weekday and holiday rates replace the band for the keys they define. They are not multiplied by it. On a Friday whose 1-player rate is 100,000, 01:00–02:00 costs 100,000 even though special hours would have been 160,000. A 2-player rate that was not overridden still uses the band.
+Weekday and special-day rates replace the band for the keys they define. They are not multiplied by it. On a Friday whose 1-player rate is 100,000, 01:00–02:00 costs 100,000 even though special hours would have been 160,000. A 2-player rate that was not overridden still uses the band. A started minute is billed (partial blocks round up). That default is what the cafe confirmed; floor and nearest remain available on `BillingPolicy` if a branch ever needs them.
 
 ## Prepaid limits
 
@@ -135,9 +137,11 @@ Default consumption is package minutes, then money. `MoneyThenPackages` is the o
 
 If a priced line straddles a package window, settlement splits that line at the window and allocates the original toman and billed minutes in proportion to the seconds (the tail gets the rounding remainder). The session total does not change. A package with no window, or a line that already ended on the boundary, is all-or-nothing.
 
-`RemainingTimeEstimator.Estimate` answers "if they start **now** on this group". Eligible package minutes are counted 1:1. The money balance is converted with the rate in force at that instant only — the next band is not projected, which is why the same balance is a different number of minutes on معمولی versus VIP. A zero hourly rate is free: money minutes are null, because the balance is not what is buying the time.
+`RemainingTimeEstimator.Estimate` answers "if they start **now** on this group". Eligible package minutes are counted 1:1. The money balance is converted with the rate in force at that instant only — the next band is not projected, which is why the same balance is a different number of minutes on an ordinary example group versus an example VIP group. A zero or negative balance contributes no money minutes. A zero hourly rate is free: money minutes are null, because the balance is not what is buying the time.
 
-The account tests use a hypothetical ordinary rate of 110,000 and a hypothetical VIP rate of 220,000, because those rows were empty in the export. With a 220,000 toman balance the ordinary estimate is 120 minutes and the VIP estimate is 60, before any package minutes.
+Money still due after packages (or after the positive balance, when money is configured first) is posted to the account. By default the balance may go negative and that debt is visible. A later visit on the same account adds to the debt. A limited policy stops at the floor and returns the remainder as uncovered, for the counter.
+
+The account tests use an example ordinary rate of 110,000 and an example VIP rate of 220,000. Those are not live tariffs. With a 220,000 toman balance the ordinary estimate is 120 minutes and the example VIP estimate is 60, before any package minutes.
 
 ## Invoice, discounts, rounding
 
@@ -152,22 +156,26 @@ Line amounts sum to the payable total. Discount lines are negative. A rounding l
 
 ### Discount stacking
 
-Percents are integers. Each discount toman is `amount × percent / 100`, floored. Computing each percent on its own (instead of adding the percents first) keeps every line an exact toman figure; the difference versus summing percents first is at most 1 toman per extra percent.
+Level and birthday are separate discounts and they are **added**. A 5% level and a 10% birthday are 15% of the time charge, shown as two lines. The sum of those two percents is capped. The default cap is **100%**: 80% + 40% becomes 100%, not 120%. `DiscountPolicy.MaxCombinedPercent` can be set lower (0–100). It cannot be set above 100.
 
-| Policy | Rule |
+While the sum is within the cap, each percent is floored on its own base (`amount × percent / 100`), so the lines stay exact toman figures. When the cap binds, the eligible time is charged at the capped percent and that toman is split between the two lines in proportion to the original percents (the birthday line keeps the remainder).
+
+The birthday window is the cafe's, not a flag on the invoice. It is checked against each time line's service date (or `IssuedAt` when a line has no date):
+
+| Window | Meaning |
 | --- | --- |
-| `BestLevelOrBirthdayPlusCode` (**default**) | One customer percent: the better of the level and the birthday. Birthday counts only when `IsBirthday` is set. Ties prefer the birthday label. Plus one code. Both are percents (or the code's fixed toman) of the **original** base. |
-| `SumLevelBirthdayAndCode` | Level and birthday are both taken off the original base, then the code is too. This is the opt-in closest to Game Timer, which subtracted both. |
-| `BestLevelOrBirthdayThenCompoundCode` | The best of level or birthday comes off first. The code is applied to what remains of the code's own base. |
+| Exact day (**default**) | The birthday month and day. |
+| `DaysOnAndAfter(N)` | The birthday and the next N−1 days. N = 7 is one week starting on the birthday. |
+| `DaysAround(N)` | N days with the birthday inside. Odd N is centered. Even N puts the extra day after the birthday. |
+| Whole birth month | Any day in the birth month. |
 
-Scope:
+A line outside the window gets the level percent only. February 29 is observed on February 28 when the year is not a leap year.
 
-- `TimeChargesOnly` (**default**). Buffet and services are not discounted. A 900,000 toman controller-damage fine stays 900,000.
-- `WholeInvoice`. The base includes buffet and services.
+Customer discounts apply to **time charges only**. Buffet and fixed services are not reduced by level or birthday. A 900,000 toman controller-damage fine stays 900,000.
 
-A code is either a percent or a fixed toman amount, not both. `ValidFrom` is inclusive and `ValidUntil` is exclusive, compared with the invoice instant the caller passes (`IssuedAt`). Outside the window the code is ignored (`outside_window`) and the rest of the invoice still stands. A group or weekday restriction applies only to matching **time** lines; a restricted code never discounts buffet. If nothing matches, the code is `not_eligible`.
+A code is either a percent or a fixed toman amount, not both, and it is a third line. Its scope is `ChargeScope`: time (the default), buffet, services, or any combination such as time and buffet together. A fixed code cannot exceed that scope's gross. `ValidFrom` is inclusive and `ValidUntil` is exclusive, compared with `IssuedAt`. Outside the window the code is ignored (`outside_window`). A group or weekday restriction filters **time** lines only; buffet and services included in the scope are still discounted in full. If the scope base is zero, the code is `not_eligible`.
 
-If the discounts would exceed the discount base, the code is reduced first, then the birthday, then the level. The payable total is never negative. A 100% level plus a 50% code on an 80,000 time charge with a 20,000 buffet item, time-only scope, leaves the buffet: payable 20,000.
+If discounts would push a part below zero, the code is reduced first, then the birthday, then the level. The payable total is never negative. A 100% level plus a 50% time code on an 80,000 time charge with a 20,000 buffet item leaves the buffet: payable 20,000. The code does not eat the buffet unless its scope includes buffet.
 
 Suggested level names from the product brief, **not** from the export (the sheet had the columns and no data rows): Bronze 5%, Silver 8%, Gold 12%, Platinum 16%, Diamond 20%, Titan 28%. Pass the percent in; the engine does not look the name up.
 
@@ -205,7 +213,7 @@ A fixed code of 61,300 on a 200,000 time charge produces 138,700 and only then r
 
 A failed wallet draw does not partially consume it. Method totals and per-tender gift/real splits are both returned.
 
-**Gift credit is spent before real credit.** The member keeps the balance they paid in. `RealThenGift` is the other branch policy. Gift and real are not a third discount; they are how a wallet tender is funded.
+Gift and real credit are **one balance**. There is no gift-first or real-first order, and gift credit does not expire. The ledger still reports both parts. The gift toman is `tender × gift / (gift + real)`, floored; the rest of that tender is real, so the two parts add up to the tender. If either side is already zero, the whole tender comes from the other side. A 30,000 tender on a wallet with 10,000 gift and 50,000 real draws 5,000 gift and 25,000 real. A wallet tender cannot go negative. Debt is only the PC account balance.
 
 ## What was taken from Game Timer 4.3
 
@@ -227,35 +235,35 @@ Two exported visits reproduce exactly, because they divide evenly and sit outsid
 
 Also read, and not a tariff: service `ABC_1` «خسارت انداختن دسته» at 900,000 toman. Buffet examples on that day included «دبی چاکلت» (the line total was 196,000) and «شکلات» at 98,000. They are not hard-coded.
 
-**Not in the export, so not invented as real prices:** PC offline/online, Xbox, VIP, ping-pong, foosball, billiard, hockey, TV, and the `No_name` device. A lookup throws `tariff_not_found`. Tests that need a second group use clearly hypothetical rates (ordinary 110,000, VIP 1-player 220,000).
+**Not live prices:** PC, Xbox, VIP, ping-pong, foosball, billiard, hockey, TV, and VR were blank. A lookup throws `tariff_not_found`. Tests that need a second group use ids such as `example-vip` and `example-normal`, with rates that exist only in the test fixture.
 
 **Contrast, not a default.** Game Timer computes `minutes × (hourly / 60)` in floating point and then `ROUND(amount, -2)`, nearest 100 toman. One PS5 minute is about 1,833.33 and rounds to **1,800** there. This engine charges **1,833** and does not apply a 100-toman step. Branch rounding starts at the PA-8 steps (1,000 and up) and is off until enabled. A one-minute visit is the case where the two systems disagree; the two sample visits above do not show it.
 
 ## Decisions
 
 - Tehran is a fixed offset. Historical daylight-saving dates before 2022 are out of scope; passing one still uses `+03:30`.
-- Sub-second ticks are truncated, not rounded up. Billing granularity starts at one second of input and one minute of default charge.
-- Unknown tariffs fail loudly. A blank Game Timer cell is not a free hour.
-- Holiday and weekday rates are flat for that date. They are not a multiplier on the night band.
-- Same-rate caller splits may differ by at most the ceiling cost of **one** granularity block (at the PS5 1-player rate, 1,834 toman). Whole-minute splits of a single rate match exactly. The toman remainder of `/ 60` can move a total by 1 toman inside that bound.
-- Package minutes are minutes, not "toman of face value". VIP does not burn a 2-hour package faster than an ordinary station.
-- The remaining-time estimate does not look ahead to the next band. The prepaid amount planner does.
-- Discount codes are judged at `IssuedAt`. Weekday and group restrictions look at each time line's own date and group, so a Friday-only code still applies to Friday play that is invoiced on Saturday.
-- Customer level names are input. The Bronze…Titan ladder is a suggestion sitting on `GameTimerReference.SuggestedLevels`.
-- Rounding a tiny amount up to a large step is allowed when rounding is on (100 with step 5,000 becomes 5,000). Turn rounding off, or pick a smaller step, for small counter sales. Zero stays zero.
-- Malformed input (bad offset, overlap, negative price, duplicate tariff) throws `BillingException`. An unbalanced payment is a result with error codes, not an exception.
+- Sub-second ticks are truncated. A started minute is billed. That is the confirmed default.
+- Unknown tariffs fail loudly. Only PS5 rates are loaded from Game Timer. Example groups in tests are labeled `example-*` and are not live prices.
+- Time bands belong to one station group. Special days are dates the cafe adds, each pointing at a rate table that can differ by group. They replace the band for the keys they define; they are not a multiplier on it.
+- Same-rate caller splits may differ by at most the ceiling cost of **one** granularity block (at the PS5 1-player rate, 1,834 toman). Whole-minute splits of a single rate match exactly.
+- Package minutes are minutes, not "toman of face value".
+- The remaining-time estimate does not look ahead to the next band. The prepaid amount planner does. A negative balance contributes zero minutes to the estimate.
+- Level and birthday percents are summed and capped at 100% by default, on time only. Codes are separate and choose their own scope. Codes are judged at `IssuedAt`. The birthday window uses each time line's service date.
+- Debt defaults to unlimited. The PC-account balance may go negative, and that figure is returned on the account. A cap is optional. Wallet tenders stay funded; they are not the debt balance.
+- Wallet gift and real credit move in proportion. The floored gift share can be one toman short of an even split; that toman is reported as real. Gift credit does not expire.
+- Customer level names are input. The Bronze…Titan ladder on `GameTimerReference.SuggestedLevels` is still only a suggestion.
+- Rounding a tiny amount up to a large step is allowed when rounding is on (100 with step 5,000 becomes 5,000). Zero stays zero.
+- Malformed input throws `BillingException`. An unbalanced payment is a result with error codes, not an exception.
 
-## Open questions for the owner
+## Owner answers already applied
 
-1. What are the real hourly and special-hour prices for VIP, CIP, معمولی PC, Xbox, VR, and the tables (billiard, ping-pong, foosball, hockey)? The export has those rows at 0.
-2. Is 00:00–08:30 still the only special band, and is it the same for every group? Should a Friday night band differ from the weekday table, or is a flat Friday rate what you want?
-3. Confirm precedence: a holiday rate replaces special hours for the whole holiday, it is not "holiday plus the night band".
-4. Should a started minute always be billed (current default), or only full minutes?
-5. Game Timer rounds the game charge to 100 toman. The new steps start at 1,000. Do you still want a 100-toman option, and should a charge smaller than the step round up to the step?
-6. Game Timer subtracted **both** the level percent and the birthday percent. The default here keeps only the better one, plus one code, and does not touch buffet or damage fines. Which combination do you want, and should a code be checked at session start instead of invoice time?
-7. Is the birthday discount the birthday itself or the whole birth month? The customer sheet has a birth-month column. The level rows (name, minimum hours, percent) were not in the export — please send that ladder.
-8. Wallet: spend gift credit first (current default) or real credit first? Do gift credits expire, and may they be limited to certain groups the way packages are?
-9. Time packages: confirm hour windows and that a minute outside the window falls straight through to the money balance. Should the remaining-time estimate look past the next band change, or is "the current rate only" what the screen should show?
-10. When the balance does not cover the visit, the counter collects the shortfall and the balance stays at zero. Confirm you do not want a negative account.
-11. A prepaid amount that cannot buy a full minute grants no time and leaves the money unspent. Do you want a grace minute instead?
-12. Official Iranian holidays, or a list you edit per year? Should Nowruz use a different rate table from a one-day holiday?
+Live prices are PS5 only. Bands are per group. Every started minute is billed. Level and birthday discounts add, with a 100% cap, on time only; codes choose a scope. The birthday window is the exact day, N days on-and-after or around, or the birth month. Wallets spend gift and real as one proportional balance. A short PC-account balance becomes debt, unlimited unless a cap is set. Holidays are whatever dates the cafe enters.
+
+## Still open
+
+1. May a member's wallet tender go into debt as well, or is debt only the PC account (what this build does)?
+2. Is observing February 29 on February 28, in a non-leap year, the right birthday rule?
+3. When a code includes buffet or services and also has a group restriction, the restriction filters time lines only. Should that code leave buffet and services undiscounted unless the time lines matched?
+4. The level ladder's minimum hours were not in the export. The suggested percents are not a confirmed table.
+5. A prepaid amount that cannot buy a full minute still grants no time. Say if a grace minute is wanted.
+6. Game Timer's nearest-100-toman step is still not offered. Say if a 100 toman rounding step should sit beside 1,000 / 5,000 / 10,000.

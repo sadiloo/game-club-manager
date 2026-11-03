@@ -27,9 +27,37 @@ public enum ConsumptionOrder
     MoneyThenPackages = 1,
 }
 
-public sealed record AccountPolicy(ConsumptionOrder Order)
+/// <summary>
+/// How far a PC account may go into debt. <see cref="MaxDebtToman"/> null means unlimited
+/// (the default). Zero means the balance stops at zero and the rest is uncovered.
+/// A positive value is the largest debt, so the balance cannot go below minus that amount.
+/// Gift credit is not part of this balance.
+/// </summary>
+public sealed record DebtPolicy(long? MaxDebtToman)
 {
-    public static AccountPolicy Default { get; } = new(ConsumptionOrder.PackagesThenMoney);
+    public static DebtPolicy Unlimited { get; } = new((long?)null);
+
+    public static DebtPolicy None { get; } = new(0);
+
+    public static DebtPolicy Limited(long maxDebtToman)
+    {
+        if (maxDebtToman < 0)
+        {
+            throw new BillingException("invalid_policy", "Max debt cannot be negative. Use null for unlimited debt.");
+        }
+
+        return new DebtPolicy(maxDebtToman);
+    }
+}
+
+public sealed record AccountPolicy(ConsumptionOrder Order, DebtPolicy Debt)
+{
+    public static AccountPolicy Default { get; } = new(ConsumptionOrder.PackagesThenMoney, DebtPolicy.Unlimited);
+
+    public AccountPolicy(ConsumptionOrder order)
+        : this(order, DebtPolicy.Unlimited)
+    {
+    }
 }
 
 public sealed record PackageDraw(string PackageId, string SegmentId, DateTimeOffset SliceStart, long Minutes);
@@ -59,6 +87,9 @@ public sealed record Settlement(
                 TehranTime.Date(draw.SliceStart).DayOfWeek))
             .ToArray();
     }
+
+    /// <summary>How much of the balance is debt. Zero when the account is not negative.</summary>
+    public long DebtToman => UpdatedAccount.MoneyBalanceToman < 0 ? -UpdatedAccount.MoneyBalanceToman : 0;
 }
 
 public sealed record RemainingTimeEstimate(
@@ -77,7 +108,8 @@ public sealed record RemainingTimeEstimate(
 /// <summary>
 /// Applies a priced session to a PC account. Logout is just the session end the caller
 /// already used when pricing: nothing after that instant is settled, and whatever
-/// package minutes or money remain stay on the account.
+/// package minutes remain stay on the account. Money still due after the consumption
+/// order is charged to the balance and may make it negative, down to <see cref="DebtPolicy"/>.
 /// </summary>
 public static class AccountSettlement
 {
@@ -105,7 +137,7 @@ public static class AccountSettlement
         {
             foreach (var part in Divide(slice, order))
             {
-                ApplyPart(part, order, remaining, policy.Order, ref money, ref packageMinutes, ref packageCovered, ref moneyConsumed, ref uncovered, packageDraws, moneyDraws);
+                ApplyPart(part, order, remaining, policy, ref money, ref packageMinutes, ref packageCovered, ref moneyConsumed, ref uncovered, packageDraws, moneyDraws);
             }
         }
 
@@ -128,7 +160,7 @@ public static class AccountSettlement
         SlicePart part,
         IReadOnlyList<TimePackage> order,
         Dictionary<string, long> remaining,
-        ConsumptionOrder consumption,
+        AccountPolicy policy,
         ref long money,
         ref long packageMinutes,
         ref long packageCovered,
@@ -145,10 +177,9 @@ public static class AccountSettlement
         // Dust with no billed minute cannot be paid with a package minute.
         if (part.BilledMinutes == 0)
         {
-            var dustPaid = Math.Min(money, part.AmountToman);
-            money -= dustPaid;
-            moneyConsumed += dustPaid;
-            uncovered += part.AmountToman - dustPaid;
+            var before = moneyConsumed;
+            ChargeBalance(ref money, part.AmountToman, policy.Debt, ref moneyConsumed, ref uncovered);
+            var dustPaid = moneyConsumed - before;
             if (dustPaid > 0)
             {
                 moneyDraws.Add(new MoneyDraw(part.SegmentId, part.Start, 0, dustPaid));
@@ -163,19 +194,18 @@ public static class AccountSettlement
             return;
         }
 
-        if (consumption == ConsumptionOrder.PackagesThenMoney)
+        if (policy.Order == ConsumptionOrder.PackagesThenMoney)
         {
             var taken = DrawPackages(part, part.BilledMinutes, order, remaining, packageDraws);
             var coveredValue = taken >= part.BilledMinutes
                 ? part.AmountToman
                 : part.AmountToman * taken / part.BilledMinutes;
             var moneyDue = part.AmountToman - coveredValue;
-            var paid = Math.Min(money, moneyDue);
-            money -= paid;
             packageMinutes += taken;
             packageCovered += coveredValue;
-            moneyConsumed += paid;
-            uncovered += moneyDue - paid;
+            var before = moneyConsumed;
+            ChargeBalance(ref money, moneyDue, policy.Debt, ref moneyConsumed, ref uncovered);
+            var paid = moneyConsumed - before;
             if (paid > 0)
             {
                 moneyDraws.Add(new MoneyDraw(part.SegmentId, part.Start, part.BilledMinutes - taken, paid));
@@ -183,7 +213,8 @@ public static class AccountSettlement
         }
         else
         {
-            var moneyMinutes = MaxMoneyMinutes(part.AmountToman, part.BilledMinutes, money);
+            var spendable = money > 0 ? money : 0;
+            var moneyMinutes = MaxMoneyMinutes(part.AmountToman, part.BilledMinutes, spendable);
             var moneyShare = MoneyShare(part.AmountToman, moneyMinutes, part.BilledMinutes);
             money -= moneyShare;
             moneyConsumed += moneyShare;
@@ -210,8 +241,48 @@ public static class AccountSettlement
 
             packageMinutes += taken;
             packageCovered += coveredValue;
-            uncovered += shortfall;
+            var beforeDebt = moneyConsumed;
+            ChargeBalance(ref money, shortfall, policy.Debt, ref moneyConsumed, ref uncovered);
+            var debtPaid = moneyConsumed - beforeDebt;
+            if (debtPaid > 0)
+            {
+                moneyDraws.Add(new MoneyDraw(part.SegmentId, part.Start, tailMinutes - taken, debtPaid));
+            }
         }
+    }
+
+    /// <summary>
+    /// Charges <paramref name="due"/> to the balance. Positive balance is used first;
+    /// the rest becomes debt down to the policy floor. Anything past that floor is uncovered.
+    /// </summary>
+    private static void ChargeBalance(ref long balance, long due, DebtPolicy debt, ref long consumed, ref long uncovered)
+    {
+        if (due <= 0)
+        {
+            return;
+        }
+
+        long capacity = debt.MaxDebtToman switch
+        {
+            null => due,
+            0 => balance > 0 ? balance : 0,
+            long maxDebt => CapacityAboveFloor(balance, maxDebt),
+        };
+        var paid = Math.Min(due, capacity);
+        balance -= paid;
+        consumed += paid;
+        uncovered += due - paid;
+    }
+
+    private static long CapacityAboveFloor(long balance, long maxDebt)
+    {
+        if (balance >= 0)
+        {
+            return checked(balance + maxDebt);
+        }
+
+        var owed = -balance;
+        return owed >= maxDebt ? 0 : maxDebt - owed;
     }
 
     private static long DrawPackages(
@@ -425,11 +496,6 @@ public static class AccountSettlement
             throw new BillingException("invalid_account", "Account id is required.");
         }
 
-        if (account.MoneyBalanceToman < 0)
-        {
-            throw new BillingException("invalid_money", "Account balance cannot be negative.");
-        }
-
         var ids = new HashSet<string>(StringComparer.Ordinal);
         foreach (var package in account.Packages)
         {
@@ -489,12 +555,12 @@ public static class RemainingTimeEstimator
         int playerCount,
         DateTimeOffset at,
         RateCard rates,
-        HolidayCalendar? holidays = null,
+        SpecialDayCalendar? specialDays = null,
         BillingPolicy? policy = null)
     {
-        holidays ??= HolidayCalendar.Empty;
+        specialDays ??= SpecialDayCalendar.Empty;
         policy ??= BillingPolicy.Default;
-        var quote = RateResolver.Resolve(rates, holidays, at, groupId, mode, playerCount);
+        var quote = RateResolver.Resolve(rates, specialDays, at, groupId, mode, playerCount);
         long packageMinutes = 0;
         foreach (var package in account.Packages)
         {
@@ -527,7 +593,9 @@ public static class RemainingTimeEstimator
         var free = quote.HourlyRateToman == 0;
         long? moneyMinutes = free
             ? null
-            : MoneyMath.MaxAffordableMinutes(quote.HourlyRateToman, account.MoneyBalanceToman, policy);
+            : account.MoneyBalanceToman <= 0
+                ? 0
+                : MoneyMath.MaxAffordableMinutes(quote.HourlyRateToman, account.MoneyBalanceToman, policy);
 
         return new RemainingTimeEstimate(
             groupId,

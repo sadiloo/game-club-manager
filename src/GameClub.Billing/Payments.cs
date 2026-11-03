@@ -9,16 +9,11 @@ public enum PaymentMethod
 }
 
 /// <summary>
-/// Gift credit is spent before real (paid) credit by default, so a member keeps
-/// the balance they can still cash out or move. Switch to <see cref="WalletDrawOrder.RealThenGift"/>
-/// when the branch wants gift credit held back.
+/// A member wallet. Gift and real credit are one spendable balance: a draw takes
+/// them in proportion (gift share floored, leftover toman assigned to real) and
+/// the result still reports each part. Gift credit does not expire. A wallet
+/// tender cannot go negative; PC-account debt is a separate balance.
 /// </summary>
-public enum WalletDrawOrder
-{
-    GiftThenReal = 0,
-    RealThenGift = 1,
-}
-
 public sealed record MemberWallet(string MemberId, long RealCreditToman, long GiftCreditToman);
 
 public sealed record Tender(PaymentMethod Method, long AmountToman, string? MemberId = null);
@@ -60,8 +55,7 @@ public static class PaymentSplitter
     public static SplitPayment Split(
         long payableToman,
         IReadOnlyList<Tender> tenders,
-        IReadOnlyList<MemberWallet>? wallets = null,
-        WalletDrawOrder walletOrder = WalletDrawOrder.GiftThenReal)
+        IReadOnlyList<MemberWallet>? wallets = null)
     {
         if (payableToman < 0)
         {
@@ -122,7 +116,7 @@ public static class PaymentSplitter
                 continue;
             }
 
-            if (!TryDraw(ref balance, tender.AmountToman, walletOrder, out var giftDrawn, out var realDrawn))
+            if (!TryDraw(ref balance, tender.AmountToman, out var giftDrawn, out var realDrawn))
             {
                 errors.Add(new PaymentError(
                     PaymentErrors.InsufficientWallet,
@@ -157,29 +151,34 @@ public static class PaymentSplitter
         return new SplitPayment(errors.Count == 0, payableToman, tendered, difference, errors, totals, results, remaining);
     }
 
+    /// <summary>
+    /// Gift and real are one balance. The gift portion is <c>amount × gift / (gift + real)</c>,
+    /// floored; the rest of the tender is real, so the two parts sum to the tender.
+    /// When one side is already zero, the whole tender comes from the other side.
+    /// </summary>
     private static bool TryDraw(
         ref (long Real, long Gift) balance,
         long amount,
-        WalletDrawOrder order,
         out long giftDrawn,
         out long realDrawn)
     {
-        if (amount > balance.Real + balance.Gift)
+        var total = balance.Real + balance.Gift;
+        if (amount > total)
         {
             giftDrawn = 0;
             realDrawn = 0;
             return false;
         }
 
-        if (order == WalletDrawOrder.GiftThenReal)
+        if (balance.Gift == 0 || balance.Real == 0)
         {
-            giftDrawn = Math.Min(balance.Gift, amount);
+            giftDrawn = balance.Real == 0 ? amount : 0;
             realDrawn = amount - giftDrawn;
         }
         else
         {
-            realDrawn = Math.Min(balance.Real, amount);
-            giftDrawn = amount - realDrawn;
+            giftDrawn = amount * balance.Gift / total;
+            realDrawn = amount - giftDrawn;
         }
 
         balance = (balance.Real - realDrawn, balance.Gift - giftDrawn);

@@ -7,47 +7,130 @@ public class InvoiceAndPaymentTests
     private static readonly DateTimeOffset Issued = T.At(2026, 6, 2, 18, 0);
 
     [Fact]
-    public void Default_stack_is_the_better_of_level_or_birthday_plus_one_code()
+    public void Level_and_birthday_are_added_and_a_code_is_separate()
     {
         var time = Time(200_000);
         var valid = DiscountCode.PercentOff("SAVE15", 15, T.At(2026, 6, 2, 0, 0), T.At(2026, 6, 3, 0, 0));
+        var onBirthday = new CustomerPricing("Bronze", 5, new DateOnly(1990, 6, 2), 10);
 
-        var birthday = InvoiceFor(time, new CustomerPricing("Bronze", 5, true, 10), valid);
-        Assert.Equal(50_000, birthday.DiscountToman);
-        Assert.Equal(150_000, birthday.PayableToman);
-        Assert.Contains(birthday.Lines, line => line.Kind == InvoiceLineKind.Discount && line.Description.Contains("Birthday", StringComparison.Ordinal));
-        Assert.DoesNotContain(birthday.Lines, line => line.Description.Contains("Bronze", StringComparison.Ordinal));
+        var birthday = InvoiceFor(time, onBirthday, valid);
+        Assert.Equal(60_000, birthday.DiscountToman);
+        Assert.Equal(140_000, birthday.PayableToman);
+        Assert.Contains(birthday.Lines, line => line.Kind == InvoiceLineKind.Discount && line.Description.Contains("Birthday", StringComparison.Ordinal) && line.AmountToman == -20_000);
+        Assert.Contains(birthday.Lines, line => line.Kind == InvoiceLineKind.Discount && line.Description.Contains("Bronze", StringComparison.Ordinal) && line.AmountToman == -10_000);
         Assert.Null(birthday.RejectedCode);
 
-        var notBirthday = InvoiceFor(time, new CustomerPricing("Bronze", 5, false, 10), valid);
+        var notBirthday = InvoiceFor(time, new CustomerPricing("Bronze", 5, new DateOnly(1990, 1, 1), 10), valid);
         Assert.Equal(40_000, notBirthday.DiscountToman);
         Assert.Equal(160_000, notBirthday.PayableToman);
+        Assert.DoesNotContain(notBirthday.Lines, line => line.Description.Contains("Birthday", StringComparison.Ordinal));
 
-        var expired = DiscountCode.PercentOff("SAVE15", 15, T.At(2026, 6, 2, 0, 0), T.At(2026, 6, 3, 0, 0));
-        var tooEarly = InvoiceFor(time, new CustomerPricing("Bronze", 5, true, 10), expired, T.At(2026, 6, 1, 23, 0));
+        var tooEarly = InvoiceFor(time, onBirthday, valid, T.At(2026, 6, 1, 23, 0));
         Assert.Equal(DiscountRejection.OutsideWindow, tooEarly.RejectedCode);
-        Assert.Equal(20_000, tooEarly.DiscountToman);
-        Assert.Equal(180_000, tooEarly.PayableToman);
+        Assert.Equal(30_000, tooEarly.DiscountToman);
+        Assert.Equal(170_000, tooEarly.PayableToman);
 
-        var tooLate = InvoiceFor(time, new CustomerPricing("Bronze", 5, true, 10), expired, T.At(2026, 6, 3, 0, 0));
+        var tooLate = InvoiceFor(time, onBirthday, valid, T.At(2026, 6, 3, 0, 0));
         Assert.Equal(DiscountRejection.OutsideWindow, tooLate.RejectedCode);
-        Assert.Equal(180_000, tooLate.PayableToman);
+        Assert.Equal(170_000, tooLate.PayableToman);
+    }
 
-        var summed = InvoiceFor(
-            time,
-            new CustomerPricing("Bronze", 5, true, 10),
-            valid,
-            policy: new DiscountPolicy(DiscountStacking.SumLevelBirthdayAndCode, DiscountScope.TimeChargesOnly));
-        Assert.Equal(60_000, summed.DiscountToman);
-        Assert.Equal(140_000, summed.PayableToman);
+    [Fact]
+    public void Combined_customer_percent_is_capped_at_100_by_default()
+    {
+        var time = Time(200_000);
+        var customer = new CustomerPricing("Titan", 80, new DateOnly(1990, 6, 2), 40);
+        var capped = InvoiceFor(time, customer, DiscountCode.PercentOff("NONE", 0));
+        Assert.Equal(200_000, capped.DiscountToman);
+        Assert.Equal(0, capped.PayableToman);
+        Assert.Equal(-133_333, capped.Lines.Single(line => line.Description.Contains("Titan", StringComparison.Ordinal)).AmountToman);
+        Assert.Equal(-66_667, capped.Lines.Single(line => line.Description.Contains("Birthday", StringComparison.Ordinal)).AmountToman);
 
-        var compound = InvoiceFor(
-            time,
-            new CustomerPricing("Bronze", 5, true, 10),
-            valid,
-            policy: new DiscountPolicy(DiscountStacking.BestLevelOrBirthdayThenCompoundCode, DiscountScope.TimeChargesOnly));
-        Assert.Equal(47_000, compound.DiscountToman);
-        Assert.Equal(153_000, compound.PayableToman);
+        var tighter = InvoiceFor(time, customer, DiscountCode.PercentOff("NONE", 0), policy: new DiscountPolicy(50, BirthdayWindow.ExactDay));
+        Assert.Equal(100_000, tighter.DiscountToman);
+        Assert.Equal(100_000, tighter.PayableToman);
+    }
+
+    [Fact]
+    public void Birthday_window_is_exact_day_a_span_or_the_birth_month()
+    {
+        var birth = new DateOnly(2000, 6, 2);
+        Assert.True(BirthdayWindow.ExactDay.Includes(birth, new DateOnly(2026, 6, 2)));
+        Assert.False(BirthdayWindow.ExactDay.Includes(birth, new DateOnly(2026, 6, 3)));
+
+        var weekAfter = BirthdayWindow.DaysOnAndAfter(7);
+        Assert.True(weekAfter.Includes(birth, new DateOnly(2026, 6, 8)));
+        Assert.False(weekAfter.Includes(birth, new DateOnly(2026, 6, 9)));
+        Assert.False(weekAfter.Includes(birth, new DateOnly(2026, 6, 1)));
+
+        var around = BirthdayWindow.DaysAround(7);
+        Assert.True(around.Includes(birth, new DateOnly(2026, 5, 30)));
+        Assert.True(around.Includes(birth, new DateOnly(2026, 6, 5)));
+        Assert.False(around.Includes(birth, new DateOnly(2026, 5, 29)));
+        Assert.False(around.Includes(birth, new DateOnly(2026, 6, 6)));
+
+        Assert.True(BirthdayWindow.WholeMonth.Includes(birth, new DateOnly(2026, 6, 15)));
+        Assert.False(BirthdayWindow.WholeMonth.Includes(birth, new DateOnly(2026, 7, 1)));
+
+        var yearEnd = new DateOnly(1992, 12, 31);
+        var intoJanuary = BirthdayWindow.DaysOnAndAfter(7);
+        Assert.True(intoJanuary.Includes(yearEnd, new DateOnly(2026, 1, 6)));
+        Assert.False(intoJanuary.Includes(yearEnd, new DateOnly(2026, 1, 7)));
+
+        var leap = new DateOnly(2000, 2, 29);
+        Assert.True(BirthdayWindow.ExactDay.Includes(leap, new DateOnly(2024, 2, 29)));
+        Assert.True(BirthdayWindow.ExactDay.Includes(leap, new DateOnly(2026, 2, 28)));
+        Assert.False(BirthdayWindow.ExactDay.Includes(leap, new DateOnly(2026, 3, 1)));
+
+        var month = InvoiceCalculator.Calculate(new InvoiceRequest(
+            [new TimeChargeLine("time", 100_000, CafeFixture.Ps5, new DateOnly(2026, 6, 15), DayOfWeek.Monday)],
+            [],
+            [],
+            new CustomerPricing(null, 0, birth, 10),
+            null,
+            new DiscountPolicy(100, BirthdayWindow.WholeMonth),
+            RoundingPolicy.Off,
+            T.At(2026, 6, 15, 12, 0)));
+        Assert.Equal(10_000, month.DiscountToman);
+
+        var splitDays = InvoiceCalculator.Calculate(new InvoiceRequest(
+            [
+                new TimeChargeLine("before", 100_000, CafeFixture.Ps5, new DateOnly(2026, 6, 1), DayOfWeek.Monday),
+                new TimeChargeLine("on", 100_000, CafeFixture.Ps5, new DateOnly(2026, 6, 2), DayOfWeek.Tuesday),
+            ],
+            [],
+            [],
+            new CustomerPricing("Bronze", 10, birth, 10),
+            null,
+            DiscountPolicy.Default,
+            RoundingPolicy.Off,
+            Issued));
+        Assert.Equal(30_000, splitDays.DiscountToman);
+        Assert.Equal(-20_000, splitDays.Lines.Single(line => line.Description.Contains("Bronze", StringComparison.Ordinal)).AmountToman);
+        Assert.Equal(-10_000, splitDays.Lines.Single(line => line.Description.Contains("Birthday", StringComparison.Ordinal)).AmountToman);
+    }
+
+    [Fact]
+    public void Discount_code_scope_can_combine_time_buffet_and_services()
+    {
+        var time = new TimeChargeLine("time", 100_000, CafeFixture.Ps5, new DateOnly(2026, 6, 2), DayOfWeek.Tuesday);
+        var buffet = new BuffetLine("A_111", "شکلات", 1, 50_000);
+        var service = new ServiceLine("extra", "نفر اضافه", 10_000);
+
+        Invoice Scoped(ChargeScope scope) => InvoiceCalculator.Calculate(new InvoiceRequest(
+            [time], [buffet], [service], null, DiscountCode.PercentOff("MIX", 10, scope: scope),
+            DiscountPolicy.Default, RoundingPolicy.Off, Issued));
+
+        Assert.Equal(10_000, Scoped(ChargeScope.Time).DiscountToman);
+        Assert.Equal(150_000, Scoped(ChargeScope.Time).PayableToman);
+        Assert.Equal(5_000, Scoped(ChargeScope.Buffet).DiscountToman);
+        Assert.Equal(155_000, Scoped(ChargeScope.Buffet).PayableToman);
+        Assert.Equal(1_000, Scoped(ChargeScope.Services).DiscountToman);
+        Assert.Equal(159_000, Scoped(ChargeScope.Services).PayableToman);
+        var both = Scoped(ChargeScope.Time | ChargeScope.Buffet);
+        Assert.Equal(15_000, both.DiscountToman);
+        Assert.Equal(145_000, both.PayableToman);
+        Assert.Contains(both.Lines, line => line.Kind == InvoiceLineKind.Service && line.AmountToman == 10_000);
     }
 
     [Fact]
@@ -56,7 +139,7 @@ public class InvoiceAndPaymentTests
         var lines = new[]
         {
             new TimeChargeLine("ps5", 100_000, CafeFixture.Ps5, new DateOnly(2026, 6, 2), DayOfWeek.Tuesday),
-            new TimeChargeLine("vip", 100_000, CafeFixture.Vip, new DateOnly(2026, 6, 2), DayOfWeek.Tuesday),
+            new TimeChargeLine("vip", 100_000, CafeFixture.ExampleVip, new DateOnly(2026, 6, 2), DayOfWeek.Tuesday),
         };
         var code = DiscountCode.PercentOff("PS5", 10, allowedGroupIds: new HashSet<string> { CafeFixture.Ps5 });
         var invoice = InvoiceCalculator.Calculate(new InvoiceRequest(
@@ -74,7 +157,7 @@ public class InvoiceAndPaymentTests
             [new TimeChargeLine("ps5", 200_000, CafeFixture.Ps5, new DateOnly(2026, 6, 2), DayOfWeek.Tuesday)],
             [],
             [new ServiceLine("ABC_1", "خسارت انداختن دسته", GameTimerReference.ControllerDamageFineToman)],
-            new CustomerPricing(null, 0, true, 10),
+            new CustomerPricing(null, 0, new DateOnly(1990, 6, 2), 10),
             null,
             DiscountPolicy.Default,
             RoundingPolicy.Off,
@@ -90,7 +173,7 @@ public class InvoiceAndPaymentTests
             [new TimeChargeLine("time", 80_000, CafeFixture.Ps5, new DateOnly(2026, 6, 2), DayOfWeek.Tuesday)],
             [new BuffetLine("A_111", "شکلات", 1, 20_000)],
             [],
-            new CustomerPricing("Titan", 100, false, 0),
+            new CustomerPricing("Titan", 100, null, 0),
             DiscountCode.PercentOff("HALF", 50),
             DiscountPolicy.Default,
             RoundingPolicy.Create(5_000),
@@ -187,7 +270,7 @@ public class InvoiceAndPaymentTests
             [new TimeChargeLine("time", 10_000, null, null, null)],
             [],
             [],
-            new CustomerPricing(null, 100, false, 0),
+            new CustomerPricing(null, 100, null, 0),
             null,
             DiscountPolicy.Default,
             RoundingPolicy.Create(5_000),
@@ -197,7 +280,7 @@ public class InvoiceAndPaymentTests
     }
 
     [Fact]
-    public void Split_payment_checks_the_sum_and_draws_wallets_in_the_configured_order()
+    public void Split_payment_checks_the_sum_and_splits_wallet_credit_in_proportion()
     {
         var methods = PaymentSplitter.Split(140_000, [
             new Tender(PaymentMethod.Cash, 40_000),
@@ -215,27 +298,19 @@ public class InvoiceAndPaymentTests
             new MemberWallet("A", 50_000, 10_000),
             new MemberWallet("B", 80_000, 20_000),
         };
-        var giftFirst = PaymentSplitter.Split(140_000, [
-            new Tender(PaymentMethod.Wallet, 60_000, "A"),
-            new Tender(PaymentMethod.Wallet, 80_000, "B"),
+        var proportional = PaymentSplitter.Split(70_000, [
+            new Tender(PaymentMethod.Wallet, 30_000, "A"),
+            new Tender(PaymentMethod.Wallet, 40_000, "B"),
         ], wallets);
-        Assert.True(giftFirst.IsValid);
-        var drawA = giftFirst.Tenders[0];
-        Assert.Equal(10_000, drawA.GiftDrawnToman);
-        Assert.Equal(50_000, drawA.RealDrawnToman);
-        var drawB = giftFirst.Tenders[1];
-        Assert.Equal(20_000, drawB.GiftDrawnToman);
-        Assert.Equal(60_000, drawB.RealDrawnToman);
-        Assert.Equal(0, giftFirst.RemainingWallets.Single(wallet => wallet.MemberId == "A").RealCreditToman);
-        Assert.Equal(20_000, giftFirst.RemainingWallets.Single(wallet => wallet.MemberId == "B").RealCreditToman);
-        Assert.Equal(0, giftFirst.RemainingWallets.Single(wallet => wallet.MemberId == "B").GiftCreditToman);
-
-        var realFirst = PaymentSplitter.Split(60_000, [
-            new Tender(PaymentMethod.Wallet, 60_000, "A"),
-        ], wallets, WalletDrawOrder.RealThenGift);
-        Assert.True(realFirst.IsValid);
-        Assert.Equal(50_000, realFirst.Tenders[0].RealDrawnToman);
-        Assert.Equal(10_000, realFirst.Tenders[0].GiftDrawnToman);
+        Assert.True(proportional.IsValid);
+        Assert.Equal(5_000, proportional.Tenders[0].GiftDrawnToman);
+        Assert.Equal(25_000, proportional.Tenders[0].RealDrawnToman);
+        Assert.Equal(8_000, proportional.Tenders[1].GiftDrawnToman);
+        Assert.Equal(32_000, proportional.Tenders[1].RealDrawnToman);
+        Assert.Equal(25_000, proportional.RemainingWallets.Single(wallet => wallet.MemberId == "A").RealCreditToman);
+        Assert.Equal(5_000, proportional.RemainingWallets.Single(wallet => wallet.MemberId == "A").GiftCreditToman);
+        Assert.Equal(48_000, proportional.RemainingWallets.Single(wallet => wallet.MemberId == "B").RealCreditToman);
+        Assert.Equal(12_000, proportional.RemainingWallets.Single(wallet => wallet.MemberId == "B").GiftCreditToman);
 
         var shortWallet = PaymentSplitter.Split(60_001, [
             new Tender(PaymentMethod.Wallet, 60_001, "A"),

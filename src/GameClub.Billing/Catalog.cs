@@ -24,7 +24,7 @@ public enum RateSource
     BaseTariff = 0,
     TimeBand = 1,
     Weekday = 2,
-    Holiday = 3,
+    SpecialDay = 3,
 }
 
 /// <summary>A user-defined station group: معمولی, CIP, VIP, VVIP, a console model, a table game, and so on.</summary>
@@ -98,9 +98,11 @@ public sealed class StationDirectory
 }
 
 /// <summary>
-/// Half-open local-time interval <c>[Start, End)</c>. When <c>End &lt;= Start</c> the band wraps midnight.
+/// Half-open local-time interval <c>[Start, End)</c> belonging to one station group.
+/// When <c>End &lt;= Start</c> the band wraps midnight. Another group's bands do not
+/// split or reprice this group's sessions.
 /// </summary>
-public sealed record TimeBand(string Id, string Name, TimeOnly Start, TimeOnly End)
+public sealed record TimeBand(string Id, string GroupId, string Name, TimeOnly Start, TimeOnly End)
 {
     public bool WrapsMidnight => SecondOfDay(End) <= SecondOfDay(Start);
 
@@ -176,21 +178,44 @@ public sealed record WeekdayTariff(DayOfWeek Day, string GroupId, PlayMode Mode,
 
 public readonly record struct RateQuote(long HourlyRateToman, RateSource Source, string? BandId);
 
-/// <summary>Holiday dates in the Tehran calendar. One holiday rate table on the <see cref="RateCard"/> applies to every date.</summary>
-public sealed class HolidayCalendar
-{
-    private readonly HashSet<DateOnly> _dates;
+/// <summary>
+/// A cafe-defined holiday or other special day. There is no built-in official calendar.
+/// Several dates may share one <see cref="RateTableId"/>. Rates on that table are per group.
+/// </summary>
+public sealed record SpecialDay(DateOnly Date, string Name, string RateTableId);
 
-    public HolidayCalendar(IEnumerable<DateOnly>? dates = null)
+/// <summary>User-maintained set of special days. The cafe adds and removes dates; nothing is hard-coded.</summary>
+public sealed class SpecialDayCalendar
+{
+    private readonly Dictionary<DateOnly, SpecialDay> _days;
+
+    public SpecialDayCalendar(IEnumerable<SpecialDay>? days = null)
     {
-        _dates = dates is null ? [] : [..dates];
+        _days = [];
+        if (days is null)
+        {
+            return;
+        }
+
+        foreach (var day in days)
+        {
+            if (string.IsNullOrWhiteSpace(day.Name) || string.IsNullOrWhiteSpace(day.RateTableId))
+            {
+                throw new BillingException("invalid_tariff", "A special day needs a name and a rate table id.");
+            }
+
+            if (!_days.TryAdd(day.Date, day))
+            {
+                throw new BillingException("invalid_tariff", $"Two special days are set on {day.Date:yyyy-MM-dd}.");
+            }
+        }
     }
 
-    public static HolidayCalendar Empty { get; } = new();
+    public static SpecialDayCalendar Empty { get; } = new();
 
-    public bool IsHoliday(DateOnly date) => _dates.Contains(date);
+    public SpecialDay? On(DateOnly date) => _days.TryGetValue(date, out var day) ? day : null;
 
-    public IReadOnlyCollection<DateOnly> Dates => _dates;
+    public IReadOnlyCollection<SpecialDay> Days => _days.Values;
 }
 
 public sealed class RateCard
@@ -198,20 +223,20 @@ public sealed class RateCard
     private readonly Dictionary<TariffKey, long> _base;
     private readonly Dictionary<(string BandId, TariffKey Key), long> _bands;
     private readonly Dictionary<(DayOfWeek Day, TariffKey Key), long> _weekdays;
-    private readonly Dictionary<TariffKey, long> _holidays;
+    private readonly Dictionary<(string TableId, TariffKey Key), long> _special;
 
     internal RateCard(
         IReadOnlyList<TimeBand> bands,
         Dictionary<TariffKey, long> baseRates,
         Dictionary<(string BandId, TariffKey Key), long> bandRates,
         Dictionary<(DayOfWeek Day, TariffKey Key), long> weekdayRates,
-        Dictionary<TariffKey, long> holidayRates)
+        Dictionary<(string TableId, TariffKey Key), long> specialRates)
     {
         Bands = bands;
         _base = baseRates;
         _bands = bandRates;
         _weekdays = weekdayRates;
-        _holidays = holidayRates;
+        _special = specialRates;
     }
 
     public IReadOnlyList<TimeBand> Bands { get; }
@@ -222,21 +247,21 @@ public sealed class RateCard
 
     public bool TryWeekday(DayOfWeek day, TariffKey key, out long hourly) => _weekdays.TryGetValue((day, key), out hourly);
 
-    public bool TryHoliday(TariffKey key, out long hourly) => _holidays.TryGetValue(key, out hourly);
+    public bool TrySpecial(string rateTableId, TariffKey key, out long hourly) => _special.TryGetValue((rateTableId, key), out hourly);
 
-    public TimeBand? BandAt(TimeOnly time)
+    public TimeBand? BandAt(string groupId, TimeOnly time)
     {
         TimeBand? found = null;
         foreach (var band in Bands)
         {
-            if (!band.Contains(time))
+            if (!string.Equals(band.GroupId, groupId, StringComparison.Ordinal) || !band.Contains(time))
             {
                 continue;
             }
 
             if (found is not null)
             {
-                throw new BillingException("invalid_tariff", $"Bands '{found.Id}' and '{band.Id}' both contain {time}.");
+                throw new BillingException("invalid_tariff", $"Bands '{found.Id}' and '{band.Id}' of group '{groupId}' both contain {time}.");
             }
 
             found = band;
@@ -252,13 +277,13 @@ public sealed class RateCardBuilder
     private readonly Dictionary<TariffKey, long> _base = [];
     private readonly Dictionary<(string BandId, TariffKey Key), long> _bandRates = [];
     private readonly Dictionary<(DayOfWeek Day, TariffKey Key), long> _weekdays = [];
-    private readonly Dictionary<TariffKey, long> _holidays = [];
+    private readonly Dictionary<(string TableId, TariffKey Key), long> _special = [];
 
     public RateCardBuilder AddBand(TimeBand band)
     {
-        if (string.IsNullOrWhiteSpace(band.Id))
+        if (string.IsNullOrWhiteSpace(band.Id) || string.IsNullOrWhiteSpace(band.GroupId))
         {
-            throw new BillingException("invalid_tariff", "Time band id is required.");
+            throw new BillingException("invalid_tariff", "Time band id and group id are required.");
         }
 
         if (_bands.Any(existing => string.Equals(existing.Id, band.Id, StringComparison.Ordinal)))
@@ -311,13 +336,18 @@ public sealed class RateCardBuilder
         return this;
     }
 
-    public RateCardBuilder AddHoliday(string groupId, PlayMode mode, int? playerCount, long hourlyRateToman)
+    public RateCardBuilder AddSpecialRate(string rateTableId, string groupId, PlayMode mode, int? playerCount, long hourlyRateToman)
     {
+        if (string.IsNullOrWhiteSpace(rateTableId))
+        {
+            throw new BillingException("invalid_tariff", "Special-day rate table id is required.");
+        }
+
         var key = TariffKey.Create(groupId, mode, playerCount);
         RequireRate(hourlyRateToman);
-        if (!_holidays.TryAdd(key, hourlyRateToman))
+        if (!_special.TryAdd((rateTableId, key), hourlyRateToman))
         {
-            throw new BillingException("invalid_tariff", $"Duplicate holiday rate for {Describe(key)}.");
+            throw new BillingException("invalid_tariff", $"Duplicate special rate '{rateTableId}' for {Describe(key)}.");
         }
 
         return this;
@@ -326,12 +356,17 @@ public sealed class RateCardBuilder
     public RateCard Build()
     {
         EnsureNoOverlap();
-        var known = _bands.Select(band => band.Id).ToHashSet(StringComparer.Ordinal);
-        foreach (var (bandId, _) in _bandRates.Keys)
+        var known = _bands.ToDictionary(band => band.Id, StringComparer.Ordinal);
+        foreach (var (bandId, key) in _bandRates.Keys)
         {
-            if (!known.Contains(bandId))
+            if (!known.TryGetValue(bandId, out var band))
             {
                 throw new BillingException("invalid_tariff", $"Band rate references unknown band '{bandId}'.");
+            }
+
+            if (!string.Equals(band.GroupId, key.GroupId, StringComparison.Ordinal))
+            {
+                throw new BillingException("invalid_tariff", $"Band '{bandId}' belongs to group '{band.GroupId}', not '{key.GroupId}'.");
             }
         }
 
@@ -340,24 +375,24 @@ public sealed class RateCardBuilder
             new Dictionary<TariffKey, long>(_base),
             new Dictionary<(string BandId, TariffKey Key), long>(_bandRates),
             new Dictionary<(DayOfWeek Day, TariffKey Key), long>(_weekdays),
-            new Dictionary<TariffKey, long>(_holidays));
+            new Dictionary<(string TableId, TariffKey Key), long>(_special));
     }
 
     private void EnsureNoOverlap()
     {
-        var ranges = new List<(int Start, int End, string Id)>();
+        var ranges = new List<(int Start, int End, string Id, string GroupId)>();
         foreach (var band in _bands)
         {
             var start = TimeBand.SecondOfDay(band.Start);
             var end = TimeBand.SecondOfDay(band.End);
             if (start < end)
             {
-                ranges.Add((start, end, band.Id));
+                ranges.Add((start, end, band.Id, band.GroupId));
             }
             else
             {
-                ranges.Add((start, 86_400, band.Id));
-                ranges.Add((0, end, band.Id));
+                ranges.Add((start, 86_400, band.Id, band.GroupId));
+                ranges.Add((0, end, band.Id, band.GroupId));
             }
         }
 
@@ -367,14 +402,14 @@ public sealed class RateCardBuilder
             {
                 var a = ranges[i];
                 var b = ranges[j];
-                if (a.Id == b.Id)
+                if (a.Id == b.Id || !string.Equals(a.GroupId, b.GroupId, StringComparison.Ordinal))
                 {
                     continue;
                 }
 
                 if (a.Start < b.End && b.Start < a.End)
                 {
-                    throw new BillingException("invalid_tariff", $"Time bands '{a.Id}' and '{b.Id}' overlap.");
+                    throw new BillingException("invalid_tariff", $"Time bands '{a.Id}' and '{b.Id}' of group '{a.GroupId}' overlap.");
                 }
             }
         }
@@ -399,13 +434,13 @@ public sealed class RateCardBuilder
 public static class RateResolver
 {
     /// <summary>
-    /// Precedence is holiday, then weekday, then the hour band, then the base tariff.
-    /// A missing rate at a higher layer falls through, so a holiday does not need a
-    /// copy of every mode. Online and VR ignore player count.
+    /// Precedence is the cafe's special day for this group, then weekday, then that
+    /// group's own hour band, then the base tariff. A missing rate falls through.
+    /// Bands of other groups are ignored. Online and VR ignore player count.
     /// </summary>
     public static RateQuote Resolve(
         RateCard card,
-        HolidayCalendar holidays,
+        SpecialDayCalendar specialDays,
         DateTimeOffset instant,
         string groupId,
         PlayMode mode,
@@ -416,9 +451,10 @@ public static class RateResolver
         var date = TehranTime.Date(instant);
         var time = TehranTime.TimeOfDay(instant);
 
-        if (holidays.IsHoliday(date) && card.TryHoliday(key, out var holidayRate))
+        var special = specialDays.On(date);
+        if (special is not null && card.TrySpecial(special.RateTableId, key, out var specialRate))
         {
-            return new RateQuote(holidayRate, RateSource.Holiday, null);
+            return new RateQuote(specialRate, RateSource.SpecialDay, special.RateTableId);
         }
 
         if (card.TryWeekday(date.DayOfWeek, key, out var weekdayRate))
@@ -426,7 +462,7 @@ public static class RateResolver
             return new RateQuote(weekdayRate, RateSource.Weekday, null);
         }
 
-        var band = card.BandAt(time);
+        var band = card.BandAt(groupId, time);
         if (band is not null && card.TryBand(band.Id, key, out var bandRate))
         {
             return new RateQuote(bandRate, RateSource.TimeBand, band.Id);
@@ -445,11 +481,16 @@ public static class RateResolver
 
 internal static class RateBoundaries
 {
-    public static DateTimeOffset Next(DateTimeOffset cursor, RateCard card)
+    public static DateTimeOffset Next(DateTimeOffset cursor, RateCard card, string groupId)
     {
         var next = TehranTime.NextMidnight(cursor);
         foreach (var band in card.Bands)
         {
+            if (!string.Equals(band.GroupId, groupId, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
             var start = TehranTime.NextWallTime(cursor, band.Start);
             var end = TehranTime.NextWallTime(cursor, band.End);
             if (start < next)

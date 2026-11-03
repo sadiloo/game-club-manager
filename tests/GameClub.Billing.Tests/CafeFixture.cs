@@ -9,21 +9,21 @@ internal static class T
 }
 
 /// <summary>
-/// PS5 prices are the Game Timer export. VIP and معمولی rates were blank in that
-/// export; the figures below are explicit hypotheticals so account and transfer
-/// tests have a second group.
+/// PS5 prices are the Game Timer export. The owner has no other live rates yet.
+/// <see cref="ExampleVip"/> and <see cref="ExampleNormal"/> exist only so tests can
+/// show a second group. They are not cafe prices.
 /// </summary>
 internal static class CafeFixture
 {
     public const string Ps5 = GameTimerReference.Ps5GroupId;
-    public const string Vip = "vip";
-    public const string Normal = "normal";
+    public const string ExampleVip = "example-vip";
+    public const string ExampleNormal = "example-normal";
 
-    /// <summary>Hypothetical. Not in the Game Timer export.</summary>
-    public const long VipOnePlayerHourly = 220_000;
+    /// <summary>Example rate for tests only. Not a Game Timer price and not a live VIP tariff.</summary>
+    public const long ExampleVipOnePlayerHourly = 220_000;
 
-    /// <summary>Hypothetical ordinary PC rate, equal to the published PS5 1-player rate so estimates divide cleanly.</summary>
-    public const long NormalOnePlayerHourly = GameTimerReference.Ps5OnePlayerHourly;
+    /// <summary>Example ordinary rate for tests only, set equal to the published PS5 1-player rate so estimates divide cleanly.</summary>
+    public const long ExampleNormalOnePlayerHourly = GameTimerReference.Ps5OnePlayerHourly;
 
     public static RateCard Card()
     {
@@ -39,14 +39,14 @@ internal static class CafeFixture
             .AddBandRate(GameTimerReference.SpecialBandId, Ps5, PlayMode.Offline, 3, GameTimerReference.Ps5ThreePlayerSpecialHourly)
             .AddBandRate(GameTimerReference.SpecialBandId, Ps5, PlayMode.Offline, 4, GameTimerReference.Ps5FourPlayerSpecialHourly)
             .AddBandRate(GameTimerReference.SpecialBandId, Ps5, PlayMode.Online, null, GameTimerReference.Ps5OnlineSpecialHourly)
-            .AddBase(Vip, PlayMode.Offline, 1, VipOnePlayerHourly)
-            .AddBase(Vip, PlayMode.Offline, 2, 250_000)
-            .AddBase(Vip, PlayMode.Offline, 3, 300_000)
-            .AddBase(Vip, PlayMode.Offline, 4, 360_000)
-            .AddBase(Normal, PlayMode.Offline, 1, NormalOnePlayerHourly)
-            .AddBase(Normal, PlayMode.Offline, 2, 130_000)
-            .AddBase(Normal, PlayMode.Offline, 3, 150_000)
-            .AddBase(Normal, PlayMode.Offline, 4, 180_000)
+            .AddBase(ExampleVip, PlayMode.Offline, 1, ExampleVipOnePlayerHourly)
+            .AddBase(ExampleVip, PlayMode.Offline, 2, 250_000)
+            .AddBase(ExampleVip, PlayMode.Offline, 3, 300_000)
+            .AddBase(ExampleVip, PlayMode.Offline, 4, 360_000)
+            .AddBase(ExampleNormal, PlayMode.Offline, 1, ExampleNormalOnePlayerHourly)
+            .AddBase(ExampleNormal, PlayMode.Offline, 2, 130_000)
+            .AddBase(ExampleNormal, PlayMode.Offline, 3, 150_000)
+            .AddBase(ExampleNormal, PlayMode.Offline, 4, 180_000)
             .Build();
     }
 
@@ -55,15 +55,15 @@ internal static class CafeFixture
         return new StationDirectory(
             [
                 new StationGroup(Ps5, "PS5", StationKind.Console),
-                new StationGroup(Vip, "VIP", StationKind.Console),
-                new StationGroup(Normal, "معمولی", StationKind.Pc),
+                new StationGroup(ExampleVip, "Example VIP", StationKind.Console),
+                new StationGroup(ExampleNormal, "Example ordinary", StationKind.Pc),
             ],
             [
                 new Station("ps5-1", "ps5 (1)", Ps5),
                 new Station("ps5-3", "ps5 (3)", Ps5),
                 new Station("ps5-6", "ps5 (6)", Ps5),
-                new Station("vip-1", "VIP 1", Vip),
-                new Station("pc-1", "PC 1", Normal),
+                new Station("example-vip-1", "Example VIP 1", ExampleVip),
+                new Station("example-pc-1", "Example PC 1", ExampleNormal),
             ]);
     }
 
@@ -80,6 +80,6 @@ internal static class CafeFixture
         PlayMode mode = PlayMode.Offline)
         => new(id, start, end, stationId, groupId, mode, players);
 
-    public static SessionCharge Price(Session session, BillingPolicy? policy = null, HolidayCalendar? holidays = null)
-        => SessionPricer.Price(session, Card(), holidays, policy);
+    public static SessionCharge Price(Session session, BillingPolicy? policy = null, SpecialDayCalendar? specialDays = null)
+        => SessionPricer.Price(session, Card(), specialDays, policy);
 }
