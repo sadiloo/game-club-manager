@@ -28,8 +28,6 @@ public sealed class LoginResult
 
     public CalendarDocument? Calendar { get; init; }
 
-    public bool AllowPause { get; init; }
-
     public IReadOnlyList<GameEntry> Catalog { get; init; } = [];
 
     public static LoginResult Fail(string message) => new() { Message = message };
@@ -136,7 +134,6 @@ public sealed class InMemoryCafeServer : ICafeServer
     private readonly long _hourlyToman;
     private SpecialDayCalendar _specialDays = SpecialDayCalendar.Empty;
     private BillingPolicy _policy = BillingPolicy.Default;
-    private bool _allowPause;
     private IReadOnlyList<GameEntry> _catalog;
 
     public InMemoryCafeServer(StationContext station, RateCard rates, long hourlyToman, IReadOnlyList<GameEntry> catalog)
@@ -167,8 +164,6 @@ public sealed class InMemoryCafeServer : ICafeServer
     public void UseCalendar(SpecialDayCalendar calendar) => _specialDays = calendar ?? SpecialDayCalendar.Empty;
 
     public void UsePolicy(BillingPolicy policy) => _policy = policy ?? BillingPolicy.Default;
-
-    public void AllowMemberPause(bool allow) => _allowPause = allow;
 
     public void NoteHeartbeat(string sessionId, DateTimeOffset at)
     {
@@ -264,7 +259,6 @@ public sealed class InMemoryCafeServer : ICafeServer
                 ServerNow = now,
                 Tariff = _rates.ToDocument(),
                 Calendar = CalendarDocument.From(_specialDays),
-                AllowPause = _allowPause,
                 Catalog = _catalog.ToArray(),
             });
         }

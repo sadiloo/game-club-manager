@@ -88,7 +88,7 @@ public partial class MainWindow : Window
             _admin = new AdminGate(Pbkdf2Hash.FromJson(File.ReadAllText(hashPath)));
         }
 
-        return new KioskController(server, store, DemoStand.Station, DemoStand.Rates(), DemoStand.HourlyToman);
+        return new KioskController(server, store, DemoStand.Station, DemoStand.Rates(), 0);
     }
 
     private void OnTick()

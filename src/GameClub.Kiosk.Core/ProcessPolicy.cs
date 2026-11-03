@@ -31,8 +31,10 @@ public sealed record ProcessContext
 /// <summary>
 /// Known escape tools, matched on the process name, the image file name, and
 /// FileVersionInfo.OriginalFilename so a renamed cmd.exe is still recognized.
-/// This is a backstop. DisableCMD, DisableRegistryTools, and per-user Software
-/// Restriction Policies are what stop the tool from running in the first place.
+/// This is a backstop for the per-user registry policies the Home editions honor
+/// (DisableCMD, DisableRegistryTools, DisableTaskMgr). Software Restriction Policies
+/// are not installed: they are a Group Policy feature, deprecated, and not something
+/// this product can prove on Windows Home.
 /// </summary>
 public static class ProcessPolicy
 {

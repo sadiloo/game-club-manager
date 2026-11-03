@@ -1,9 +1,9 @@
 #requires -Version 2
 <#
 .SYNOPSIS
-  Installs the Game Club kiosk on Windows 7 SP1, 8.1, 10, or 11. Home and Pro.
-  PowerShell 2.0 compatible. Home editions have no gpedit.msc; policies are registry values.
-  Does not set the machine Winlogon shell. Shell Launcher and Assigned Access are not used.
+  Installs the Game Club kiosk on Windows 7 Home and Windows 10 Home (also 8.1 and 11 Home).
+  PowerShell 2.0 compatible. No Group Policy editor and no edition-limited application control.
+  Lockdown is the per-user Winlogon shell, registry policies those binaries honor, and the guard.
 #>
 param(
   [string]$User = "GameClubKiosk",
@@ -82,6 +82,8 @@ function Set-String($key, $name, $data) {
 
 Set-String ($hive + "\Software\Microsoft\Windows NT\CurrentVersion\Winlogon") "Shell" $ShellPath
 Set-Dword ($hive + "\Software\Microsoft\Windows\CurrentVersion\Policies\System") "DisableTaskMgr" "1"
+Set-Dword ($hive + "\Software\Microsoft\Windows\CurrentVersion\Policies\System") "DisableRegistryTools" "1"
+Set-Dword ($hive + "\Software\Policies\Microsoft\Windows\System") "DisableCMD" "1"
 Set-Dword ($hive + "\Software\Microsoft\Windows\CurrentVersion\Policies\System") "DisableLockWorkstation" "1"
 Set-Dword ($hive + "\Software\Microsoft\Windows\CurrentVersion\Policies\System") "DisableChangePassword" "1"
 Set-Dword ($hive + "\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer") "NoWinKeys" "1"

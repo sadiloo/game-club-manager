@@ -38,7 +38,6 @@ public sealed class KioskController
     private readonly List<string> _processesToStop = [];
     private RateCard _rates;
     private SpecialDayCalendar _specialDays;
-    private bool _allowPause;
     private readonly TimeSpan _absenceLimit;
     private long _hourlyToman;
     private IReadOnlyList<GameEntry> _catalog = [];
@@ -57,7 +56,6 @@ public sealed class KioskController
         long hourlyToman,
         BillingPolicy? policy = null,
         SpecialDayCalendar? specialDays = null,
-        bool allowPause = false,
         TimeSpan? absenceLimit = null)
     {
         _server = server;
@@ -68,14 +66,7 @@ public sealed class KioskController
         _policy = policy ?? BillingPolicy.Default;
         _absenceLimit = absenceLimit ?? KioskTiming.PowerCutGap;
         _specialDays = specialDays ?? SpecialDayCalendar.Empty;
-        _allowPause = allowPause;
         Screen = LockScreen(null);
-    }
-
-    public bool AllowPause
-    {
-        get => _allowPause;
-        set => _allowPause = value;
     }
 
     public KioskScreen Screen { get; private set; }
@@ -195,44 +186,6 @@ public sealed class KioskController
         await FlushAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    public bool TryPause(DateTimeOffset now)
-    {
-        lock (_db)
-        {
-            if (!_allowPause || !_session.IsOpen || _session.Phase == KioskPhase.Paused)
-            {
-                return false;
-            }
-
-            Advance(now);
-            var gameId = _session.ActiveGameId;
-            RememberStop(gameId);
-            _session = _session with { Phase = KioskPhase.Paused, ActiveGameId = null, Message = "مکث — سیستم قفل است." };
-            _lastWall = now;
-            PersistOpen(now);
-            Publish();
-            return true;
-        }
-    }
-
-    public bool TryResume(DateTimeOffset now)
-    {
-        lock (_db)
-        {
-            if (_session.Phase != KioskPhase.Paused)
-            {
-                return false;
-            }
-
-            _lastWall = now;
-            _clock = now;
-            _session = _session with { Phase = KioskPhase.Active, Message = null };
-            Publish();
-            PersistOpen(now);
-            return true;
-        }
-    }
-
     /// <summary>
     /// Add play from a monotonic counter. <paramref name="serverNow"/> is the server's
     /// Tehran instant (UTC plus the fixed +03:30), not the PC's local clock.
@@ -247,7 +200,7 @@ public sealed class KioskController
                 elapsed = TimeSpan.Zero;
             }
 
-            if (!_session.IsOpen || _session.StartedAt is null || _session.Phase == KioskPhase.Paused)
+            if (!_session.IsOpen || _session.StartedAt is null)
             {
                 _clock = serverNow;
                 return;
@@ -276,11 +229,6 @@ public sealed class KioskController
             if (!_session.IsOpen)
             {
                 return new LaunchPlan(false, "ابتدا وارد شوید.", null, null, null, false);
-            }
-
-            if (_session.Phase == KioskPhase.Paused)
-            {
-                return new LaunchPlan(false, "سیستم در مکث است.", null, null, null, false);
             }
 
             var plan = GameCatalog.Prepare(_catalog, gameId, new GameFilter(_station.GroupId, _session.MemberAge), operatingSystem);
@@ -445,7 +393,7 @@ public sealed class KioskController
 
     private void Advance(DateTimeOffset now)
     {
-        if (!_session.IsOpen || _session.StartedAt is null || _session.Phase == KioskPhase.Paused)
+        if (!_session.IsOpen || _session.StartedAt is null)
         {
             return;
         }
@@ -688,12 +636,8 @@ public sealed class KioskController
         Screen = new KioskScreen
         {
             Phase = _session.Phase,
-            Message = _session.Phase == KioskPhase.Paused
-                ? "مکث — سیستم قفل است."
-                : _session.Phase == KioskPhase.Grace ? "مهلت یک دقیقه" : null,
-            Games = _session.Phase == KioskPhase.Paused
-                ? []
-                : GameCatalog.Visible(_catalog, new GameFilter(_station.GroupId, _session.MemberAge)),
+            Message = _session.Phase == KioskPhase.Grace ? "مهلت یک دقیقه" : null,
+            Games = GameCatalog.Visible(_catalog, new GameFilter(_station.GroupId, _session.MemberAge)),
             MemberName = _session.MemberName ?? "",
             MoneyText = projection.MoneyText,
             TimeText = projection.TimeText,
@@ -717,7 +661,6 @@ public sealed class KioskController
             _specialDays = result.Calendar.ToCalendar();
         }
 
-        _allowPause = result.AllowPause;
     }
 
     private KioskScreen LockScreen(string? message) => new()

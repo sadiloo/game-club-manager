@@ -1,7 +1,8 @@
 @echo off
 setlocal EnableExtensions
 REM Game Club kiosk installer for Windows 7 SP1, 8.1, 10, and 11 (Home and Pro).
-REM Home editions have no gpedit.msc. These registry values are the policies themselves.
+REM Pilot PCs are Windows Home. No Group Policy editor and no edition-limited application control.
+REM These registry values are the policies the Home editions honor themselves.
 REM The shell is the per-user Winlogon Shell of the kiosk account. The machine shell is left alone.
 REM Windows 8.0 is refused: .NET Framework 4.8 supports Windows 8.1, not the original Windows 8.
 REM On Windows 7, install the SHA-2 update KB4474419 and the TLS update KB3140245 before a signed
@@ -97,6 +98,8 @@ if errorlevel 1 (
 
 reg add "HKU\GameClubKiosk\Software\Microsoft\Windows NT\CurrentVersion\Winlogon" /v Shell /t REG_SZ /d "%SHELLPATH%" /f >nul
 reg add "HKU\GameClubKiosk\Software\Microsoft\Windows\CurrentVersion\Policies\System" /v DisableTaskMgr /t REG_DWORD /d 1 /f >nul
+reg add "HKU\GameClubKiosk\Software\Microsoft\Windows\CurrentVersion\Policies\System" /v DisableRegistryTools /t REG_DWORD /d 1 /f >nul
+reg add "HKU\GameClubKiosk\Software\Policies\Microsoft\Windows\System" /v DisableCMD /t REG_DWORD /d 1 /f >nul
 reg add "HKU\GameClubKiosk\Software\Microsoft\Windows\CurrentVersion\Policies\System" /v DisableLockWorkstation /t REG_DWORD /d 1 /f >nul
 reg add "HKU\GameClubKiosk\Software\Microsoft\Windows\CurrentVersion\Policies\System" /v DisableChangePassword /t REG_DWORD /d 1 /f >nul
 reg add "HKU\GameClubKiosk\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer" /v NoWinKeys /t REG_DWORD /d 1 /f >nul

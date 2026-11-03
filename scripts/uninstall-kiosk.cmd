@@ -3,7 +3,7 @@ setlocal EnableExtensions
 REM Removes the per-user Winlogon shell and the lockdown values this installer wrote.
 REM TLS 1.2 and .NET strong-crypto values are left in place. They are not kiosk-only.
 REM Does not delete the Windows user unless /removeuser is passed.
-REM Home editions have no gpedit.msc; removal is the same registry delete.
+REM Home editions have no Group Policy editor; removal is the same registry delete.
 
 net session >nul 2>&1
 if errorlevel 1 (
@@ -32,6 +32,8 @@ if not "%PROFILE%"=="" (
   if not errorlevel 1 (
     reg add "HKU\GameClubKiosk\Software\Microsoft\Windows NT\CurrentVersion\Winlogon" /v Shell /t REG_SZ /d "explorer.exe" /f >nul
     reg delete "HKU\GameClubKiosk\Software\Microsoft\Windows\CurrentVersion\Policies\System" /v DisableTaskMgr /f >nul 2>&1
+    reg delete "HKU\GameClubKiosk\Software\Microsoft\Windows\CurrentVersion\Policies\System" /v DisableRegistryTools /f >nul 2>&1
+    reg delete "HKU\GameClubKiosk\Software\Policies\Microsoft\Windows\System" /v DisableCMD /f >nul 2>&1
     reg delete "HKU\GameClubKiosk\Software\Microsoft\Windows\CurrentVersion\Policies\System" /v DisableLockWorkstation /f >nul 2>&1
     reg delete "HKU\GameClubKiosk\Software\Microsoft\Windows\CurrentVersion\Policies\System" /v DisableChangePassword /f >nul 2>&1
     reg delete "HKU\GameClubKiosk\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer" /v NoWinKeys /f >nul 2>&1

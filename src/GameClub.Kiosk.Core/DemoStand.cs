@@ -9,8 +9,8 @@ namespace GameClub.Kiosk.Core;
 public static class DemoStand
 {
     public const string StationId = "pc-01";
-    public const string GroupId = "pc-normal";
-    public const long HourlyToman = 60_000;
+
+    public static string GroupId => PilotSeed.PcNormalGroupId;
     public const string AdultUser = "reza";
     public const string AdultPassword = "reza-demo";
     public const string MinorUser = "neda";
@@ -18,8 +18,7 @@ public static class DemoStand
 
     public static StationContext Station { get; } = new(StationId, GroupId, PlayMode.Offline, 1);
 
-    public static RateCard Rates() =>
-        new RateCardBuilder().AddBase(GroupId, PlayMode.Offline, 1, HourlyToman).Build();
+    public static RateCard Rates() => PilotSeed.CreateCard();
 
     public static IReadOnlyList<GameEntry> Games() =>
     [
@@ -74,7 +73,7 @@ public static class DemoStand
 
     public static InMemoryCafeServer CreateServer()
     {
-        var server = new InMemoryCafeServer(Station, Rates(), HourlyToman, Games());
+        var server = new InMemoryCafeServer(Station, Rates(), 0, Games());
         server.AddMember(AdultUser, AdultPassword, "رضا", 20, Account("member-reza", 200_000));
         server.AddMember(MinorUser, MinorPassword, "ندا", 15, Account("member-neda", 2_000));
         return server;

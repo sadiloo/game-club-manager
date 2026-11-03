@@ -80,6 +80,8 @@ public class SupportTests
     public void Lockdown_is_per_user_registry_and_has_no_shell_launcher()
     {
         Assert.Contains(LockdownCatalog.PerUser, item => item.Name == "DisableTaskMgr");
+        Assert.Contains(LockdownCatalog.PerUser, item => item.Name == "DisableCMD" && item.Data == "1");
+        Assert.Contains(LockdownCatalog.PerUser, item => item.Name == "DisableRegistryTools");
         Assert.Contains(LockdownCatalog.PerUser, item => item.Name == "NoWinKeys");
         Assert.Contains(LockdownCatalog.PerUser, item => item.Name == "NoRun");
         Assert.Contains(LockdownCatalog.PerUser, item => item.Name == "NoControlPanel");
@@ -103,6 +105,8 @@ public class SupportTests
             var path = Path.Combine(AppContext.BaseDirectory, "scripts", name);
             var text = File.ReadAllText(path);
             Assert.Contains("DisableTaskMgr", text);
+            Assert.Contains("DisableRegistryTools", text);
+            Assert.Contains("DisableCMD", text);
             Assert.Contains("NoWinKeys", text);
             Assert.Contains("NoRun", text);
             Assert.Contains("NoControlPanel", text);
@@ -110,6 +114,9 @@ public class SupportTests
             Assert.Contains("Winlogon", text);
             Assert.DoesNotContain("ShellLauncher", text);
             Assert.DoesNotContain("AssignedAccess", text);
+            Assert.DoesNotContain("AppLocker", text);
+            Assert.DoesNotContain("Safer", text);
+            Assert.DoesNotContain("gpedit.msc", text);
         }
 
         var install = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "scripts", "install-kiosk.cmd"));

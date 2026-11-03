@@ -7,7 +7,6 @@ public enum KioskPhase
     Locked = 0,
     Active = 1,
     Grace = 2,
-    Paused = 3,
 }
 
 public enum SessionEndReason
@@ -45,7 +44,7 @@ public sealed record KioskSession
 
     public long LoginRevision { get; init; }
 
-    public bool IsOpen => Phase is KioskPhase.Active or KioskPhase.Grace or KioskPhase.Paused;
+    public bool IsOpen => Phase is KioskPhase.Active or KioskPhase.Grace;
 
     public static KioskSession Locked(string? message = null) => new() { Phase = KioskPhase.Locked, Message = message };
 }

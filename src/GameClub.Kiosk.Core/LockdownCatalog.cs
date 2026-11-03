@@ -18,6 +18,8 @@ public static class LockdownCatalog
     public static IReadOnlyList<RegSetting> PerUser { get; } =
     [
         new("HKU", @"Software\Microsoft\Windows\CurrentVersion\Policies\System", "DisableTaskMgr", "REG_DWORD", "1", "Win7+"),
+        new("HKU", @"Software\Microsoft\Windows\CurrentVersion\Policies\System", "DisableRegistryTools", "REG_DWORD", "1", "Win7+"),
+        new("HKU", @"Software\Policies\Microsoft\Windows\System", "DisableCMD", "REG_DWORD", "1", "Win7+"),
         new("HKU", @"Software\Microsoft\Windows\CurrentVersion\Policies\System", "DisableLockWorkstation", "REG_DWORD", "1", "Win7+"),
         new("HKU", @"Software\Microsoft\Windows\CurrentVersion\Policies\System", "DisableChangePassword", "REG_DWORD", "1", "Win7+"),
         new("HKU", @"Software\Microsoft\Windows\CurrentVersion\Policies\Explorer", "NoWinKeys", "REG_DWORD", "1", "Win7+"),

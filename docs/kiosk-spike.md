@@ -7,13 +7,13 @@ Prototype of the Windows PC client for a گیم‌نت (PC and console). The bil
 | Machine | Minimum OS | Runtime |
 | --- | --- | --- |
 | Cafe server (future ASP.NET Core + SignalR) | Windows 10 64-bit, or Windows Server | .NET 10 |
-| Each gaming PC: shell and guard | Windows 7 SP1, Windows 8.1, Windows 10, Windows 11. Home and Pro | .NET Framework 4.8 |
+| Each gaming PC: shell and guard | Windows 7 Home and Windows 10 Home are the pilot. 8.1 and 11 Home are the same client. Pro is not required. | .NET Framework 4.8 |
 
 .NET 10 does not run on Windows 7 or 8.1, so the shell and the guard are **net48** WPF / Windows Service projects, C# `LangVersion` latest. Shared decisions (session clock, catalog, block list, offline log, pipe frames, transport choice) live in `GameClub.Kiosk.Core`, multi-targeted **net48 and net10.0**, and are tested with xUnit on Linux. `GameClub.Billing` is multi-targeted **netstandard2.0 and net10.0** so the same pricing code runs inside the net48 shell. The server stays on .NET 10 and keeps referencing the net10.0 build.
 
 Windows 8 (the original 6.2 release, not 8.1) cannot install .NET Framework 4.8. Those PCs must be upgraded to 8.1 before this client is installed. The installer exits with that message, and the shell refuses to log anyone in if it still detects Windows 8.
 
-Shell Launcher, Assigned Access, WinRT, and toast notifications are not used. Shell Launcher exists only on Enterprise, Education, and IoT. Home has no `gpedit.msc`. Lockdown is the per-user Winlogon shell plus registry policy values that have existed since Windows 7 and that Home editions honor without Group Policy.
+Shell Launcher, Assigned Access, AppLocker, and Software Restriction Policies are not used. The pilot PCs are Windows Home, which has no `gpedit.msc`. AppLocker needs Enterprise. SRP is a Group Policy feature, deprecated since Windows 10 1803, and this project cannot prove that writing `HKLM\...\Safer\CodeIdentifiers` actually blocks programs on Home 7 and Home 10. Tools such as Hard_Configurator claim the registry keys are enough; Microsoft does not support that configuration, and a default-disallow rule that does not enforce still looks installed. The installer therefore does not write SRP. Lockdown on Home is the per-user Winlogon shell, the registry values `cmd.exe` and `regedit.exe` honor themselves (`DisableCMD`, `DisableRegistryTools`), Task Manager and Explorer policies, and the guard service.
 
 ## Layout
 
@@ -40,7 +40,8 @@ After login the shell prices one continuous segment with `SessionPricer` and set
 - When that covered end is reached, the shell locks, logs the member out, and leaves the PC balance at zero or at any unpaid dust. It does not bill time past the covered end, so a late tick cannot push the balance below zero.
 - Logout before that keeps whatever toman and package minutes were not consumed.
 - A shared-wallet debt blocks PC login unless the branch explicitly allows package minutes. A separate console wallet does not.
-- The demo rate is **60,000 toman/hour** (1,000 toman per minute). It is not a live cafe price. The label in code is `DemoStand`.
+- There is no customer pause on a PC. Time stops on logout, when credit hits zero, or when the station locks. Operator pause for consoles stays on the server.
+- The countdown uses the rate card the server sends, including special hours and special days. It does not keep a flat hourly rate of its own. The pilot numbers live in `GameClub.Billing.PilotSeed` (Normal, VIP, and the 00:00–08:30 band on each PC group). `PilotSeed.CounterRounding` is the invoice step of 5,000 toman, upward, on the counter remainder only. The kiosk does not round again; it shows the balance and time the server already produced.
 
 The countdown uses a flat hourly rate captured at login, plus package minutes at 1:1. It does not preview the next time band. While the process stays up, settlement still goes through the billing engine, so the toman figure matches `CustomerPlay`. A shell restart rebuilds that flat card from the login snapshot stored in SQLite.
 
@@ -172,7 +173,9 @@ Standalone demo is enough for the shell tests. For Steam, Epic, Battle.net, Valo
 | 18 | A game crash dialog (`WerFault`) | It may appear. The guard does not kill it, so a crash cannot hang the game by leaving a hidden fault window. It must not offer a path into `cmd`. If it does, that is a fail to record. |
 | 19 | Installer on Windows 8.0 (not 8.1) | Script stops and says to upgrade to 8.1. |
 | 20 | Installer on Windows 7 SP1 without KB4474419 | .NET Framework 4.8 or a signed setup will fail trust. After KB4474419 and KB3140245, the script's TLS keys let .NET 4.8 speak TLS 1.2 to the future server. |
-| 21 | Same installer on Home, with no `gpedit.msc` | Policies still apply. Check Task Manager and Win+R under the kiosk user. |
+| 21 | Same installer on Windows 7 Home or Windows 10 Home, with no `gpedit.msc` | Task Manager and Win+R are blocked. `cmd.exe` refuses to open (`DisableCMD`). `regedit` refuses (`DisableRegistryTools`). There is no AppLocker and no Software Restriction Policy key under `Safer`. |
+| 23 | Look for a pause button during a PC session | There is none. Time keeps moving until logout, zero credit, or lock. |
+| 24 | Play from 07:30 to 09:00 on a Normal PC with the pilot seed | The screen and the server both charge 08:30 at the special-hour rate and the rest at the day rate. A VIP PC uses the VIP pair, not the Normal pair. |
 | 22 | Uninstall, then log in as the kiosk user | Explorer is back. An administrator logon was never switched to the kiosk shell. |
 
 Record the Windows edition, build number, and whether the game's anti-cheat printed a specific error. Do not install a kernel driver or a global hook to "fix" a failed anti-cheat test without reading that error first.

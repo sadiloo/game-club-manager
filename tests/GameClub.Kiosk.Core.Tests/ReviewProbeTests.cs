@@ -193,40 +193,35 @@ public sealed class ReviewProbeTests
     }
 
     [Fact]
-    public async Task Pause_locks_the_pc_and_does_not_bill_and_is_off_unless_the_server_allows_it()
+    public void Pilot_seed_prices_special_hours_and_the_day_rate_for_both_groups()
     {
-        var k = Make();
-        Assert.True(await k.c.LoginAsync("reza", "reza-demo", CafeKit.At(18, 0)));
-        Assert.False(k.c.TryPause(CafeKit.At(18, 1)));
-        await k.c.LogoutAsync(CafeKit.At(18, 1));
-        k.server.AllowMemberPause(true);
-        Assert.True(await k.c.LoginAsync("reza", "reza-demo", CafeKit.At(18, 2)));
-        Assert.True(k.c.TryPause(CafeKit.At(18, 2)));
+        var card = PilotSeed.CreateCard();
+        var night = CafeKit.At(2, 0);
+        var day = CafeKit.At(12, 0);
+        var empty = SpecialDayCalendar.Empty;
+        Assert.Equal(PilotSeed.PcNormalSpecialHourly, RateResolver.Resolve(card, empty, night, PilotSeed.PcNormalGroupId, PlayMode.Offline, 1).HourlyRateToman);
+        Assert.Equal(RateSource.TimeBand, RateResolver.Resolve(card, empty, night, PilotSeed.PcNormalGroupId, PlayMode.Offline, 1).Source);
+        Assert.Equal(PilotSeed.PcNormalHourly, RateResolver.Resolve(card, empty, day, PilotSeed.PcNormalGroupId, PlayMode.Offline, 1).HourlyRateToman);
+        Assert.Equal(PilotSeed.PcVipSpecialHourly, RateResolver.Resolve(card, empty, night, PilotSeed.PcVipGroupId, PlayMode.Offline, 1).HourlyRateToman);
+        Assert.Equal(PilotSeed.PcVipHourly, RateResolver.Resolve(card, empty, day, PilotSeed.PcVipGroupId, PlayMode.Offline, 1).HourlyRateToman);
     }
 
     [Fact]
-    public async Task Pause_when_allowed_freezes_time_and_blocks_launch()
+    public async Task Countdown_uses_the_server_card_including_the_special_band()
     {
-        var server = CafeKit.Server();
-        server.SetServerClock(CafeKit.At(18, 0));
-        server.AllowMemberPause(true);
-        var gate = new ConnectionGate(server);
-        var path = CafeKit.TempDb();
-        using var store = new LocalStore(path);
-        var controller = new KioskController(gate, store, CafeKit.Station, CafeKit.Rates(), CafeKit.Hourly);
-        var start = CafeKit.At(18, 0);
+        var server = new InMemoryCafeServer(CafeKit.Station, PilotSeed.CreateCard(), 0, CafeKit.DemoGames());
+        var start = CafeKit.At(2, 0);
+        server.SetServerClock(start);
+        server.AddMember("reza", "reza-demo", "رضا", 20, CafeKit.Money(200_000));
+        using var store = new LocalStore(CafeKit.TempDb());
+        var controller = new KioskController(new ConnectionGate(server), store, CafeKit.Station, CafeKit.Rates(), CafeKit.Hourly);
         Assert.True(await controller.LoginAsync("reza", "reza-demo", start));
-        controller.PrepareLaunch("local", WindowsGeneration.Windows10);
-        Assert.True(controller.TryPause(start.AddMinutes(2)));
-        Assert.Equal(KioskPhase.Paused, controller.Screen.Phase);
-        Assert.Empty(controller.Screen.Games);
-        Assert.Contains("local", controller.ProcessesToStop);
-        Assert.False(controller.PrepareLaunch("local", WindowsGeneration.Windows10).Allowed);
-        var frozen = controller.Screen.SpendableToman;
-        controller.Tick(start.AddMinutes(20));
-        Assert.Equal(frozen, controller.Screen.SpendableToman);
-        Assert.True(controller.TryResume(start.AddMinutes(21)));
-        Assert.Equal(KioskPhase.Active, controller.Screen.Phase);
+        controller.Tick(start.AddHours(1));
+        server.SetServerClock(start.AddHours(1));
+        await controller.LogoutAsync(start.AddHours(1));
+        var left = CafeKit.Money(200_000).PcMoneyToman - PilotSeed.PcNormalSpecialHourly;
+        Assert.Equal(left, server.FindAccount("member-1")!.PcMoneyToman);
+        Assert.Equal(left, controller.Session.Account!.PcMoneyToman);
     }
 
     [Fact]
