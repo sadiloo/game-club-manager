@@ -28,10 +28,10 @@ public enum TopUpTarget
 /// true lets PC use package minutes, and PC still cannot push the balance further negative.
 /// <see cref="Debt"/> is how far a console or table charge may go. PC play never uses it to go further into debt.
 /// </summary>
-public sealed record WalletSettings(WalletMode Mode, bool AllowPcWhileInDebt, DebtPolicy Debt)
+public sealed record WalletSettings(WalletMode Mode, bool AllowPcWhileInDebt, DebtPolicy Debt, bool GraceMinuteEnabled = true)
 {
     public WalletSettings(WalletMode mode, bool allowPcWhileInDebt = false)
-        : this(mode, allowPcWhileInDebt, DebtPolicy.Unlimited)
+        : this(mode, allowPcWhileInDebt, DebtPolicy.Unlimited, true)
     {
         EnsureValid();
     }
@@ -136,7 +136,8 @@ public static class CustomerPlay
         var settled = AccountSettlement.Settle(
             charge,
             new PcAccount(account.Id, spendable, account.Packages),
-            policy);
+            policy,
+            graceMinuteEnabled: account.Settings.GraceMinuteEnabled);
         var pocket = account.Pc;
         if (settled.MoneyConsumedToman > 0
             && !pocket.TrySpend(settled.MoneyConsumedToman, DebtPolicy.None, out pocket, out _, out _))
@@ -190,7 +191,8 @@ public static class CustomerPlay
             at,
             rates,
             specialDays,
-            policy);
+            policy,
+            account.Settings.GraceMinuteEnabled);
         return estimate with { MoneyBalanceToman = money };
     }
 

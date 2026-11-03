@@ -284,7 +284,8 @@ public sealed record PrepaidPlan(
     long? AmountBudgetToman,
     long ConsumedToman,
     long? UnusedToman,
-    IReadOnlyList<PricedSlice> Lines);
+    IReadOnlyList<PricedSlice> Lines,
+    GraceLine? Grace = null);
 
 /// <summary>
 /// Turns a duration cap or a money cap into an end time. Play is assumed continuous
@@ -343,7 +344,8 @@ public static class PrepaidPlanner
         int playerCount,
         RateCard rates,
         SpecialDayCalendar? specialDays = null,
-        BillingPolicy? policy = null)
+        BillingPolicy? policy = null,
+        bool graceMinuteEnabled = true)
     {
         TehranTime.Ensure(start);
         if (amountToman < 0)
@@ -413,6 +415,44 @@ public static class PrepaidPlanner
             }
         }
 
+        GraceLine? grace = null;
+        if (graceMinuteEnabled && remaining > 0 && cursor < horizon)
+        {
+            var quote = RateResolver.Resolve(rates, specialDays, cursor, groupId, mode, playerCount);
+            var minuteSeconds = 60L;
+            var span = TehranTime.WholeSeconds(cursor, RateBoundaries.Next(cursor, rates, groupId));
+            var grantedSeconds = span > 0 && span < minuteSeconds ? span : minuteSeconds;
+            var billed = MoneyMath.BilledMinutes(grantedSeconds, policy);
+            if (billed < 1)
+            {
+                billed = 1;
+            }
+
+            var minuteCost = MoneyMath.ChargeForMinutes(quote.HourlyRateToman, billed, policy.Remainder);
+            if (quote.HourlyRateToman > 0 && minuteCost > remaining)
+            {
+                var waived = minuteCost - remaining;
+                var sliceEnd = TehranTime.AddSeconds(cursor, grantedSeconds);
+                lines.Add(new PricedSlice(
+                    segmentId,
+                    stationId,
+                    groupId,
+                    mode,
+                    playerCount,
+                    cursor,
+                    sliceEnd,
+                    grantedSeconds,
+                    billed,
+                    quote.HourlyRateToman,
+                    quote.Source,
+                    quote.BandId,
+                    remaining));
+                grace = new GraceLine(1, waived, cursor, segmentId);
+                cursor = sliceEnd;
+                remaining = 0;
+            }
+        }
+
         return new PrepaidPlan(
             PrepaidKind.Amount,
             start,
@@ -421,7 +461,8 @@ public static class PrepaidPlanner
             amountToman,
             amountToman - remaining,
             remaining,
-            lines);
+            lines,
+            grace);
     }
 
     internal static long AffordableSeconds(long hourlyRate, long budget, BillingPolicy policy, long spanSeconds)

@@ -271,6 +271,7 @@ public class InvoiceAndPaymentTests
         yield return [138_700L, 2_500L, RoundingDirection.Down, true, 137_500L, -1_200L];
         yield return [138_700L, 1_000L, RoundingDirection.Up, true, 139_000L, 300L];
         yield return [138_700L, 10_000L, RoundingDirection.Up, true, 140_000L, 1_300L];
+        yield return [138_750L, 100L, RoundingDirection.Up, true, 138_800L, 50L];
         yield return [138_700L, 10_000L, RoundingDirection.Down, true, 130_000L, -8_700L];
     }
 
@@ -321,6 +322,49 @@ public class InvoiceAndPaymentTests
             Issued));
         Assert.Equal(0, invoice.PayableToman);
         Assert.Equal(0, invoice.RoundingToman);
+    }
+
+    [Fact]
+    public void Grace_minute_is_its_own_invoice_line_and_does_not_create_debt()
+    {
+        var minute = MoneyMath.ChargeForMinutes(110_000, 1, RateRemainderMode.Nearest);
+        var account = new PcAccount("pc", 500, []);
+        var charge = CafeFixture.Price(CafeFixture.Session(
+            "pc",
+            CafeFixture.Play("a", T.At(2026, 6, 2, 10, 0), T.At(2026, 6, 2, 10, 1), "example-pc-1", CafeFixture.ExampleNormal, 1)));
+        var settled = AccountSettlement.Settle(charge, account);
+        Assert.Equal(500, settled.MoneyConsumedToman);
+        Assert.Equal(0, settled.UpdatedAccount.MoneyBalanceToman);
+        Assert.Equal(0, settled.UncoveredToman);
+        Assert.Equal(minute - 500, settled.Grace!.WaivedToman);
+        Assert.Equal(1, settled.Grace.Minutes);
+
+        var invoice = InvoiceCalculator.Calculate(new InvoiceRequest(
+            [new TimeChargeLine("minute", minute, CafeFixture.ExampleNormal, new DateOnly(2026, 6, 2), DayOfWeek.Tuesday)],
+            [],
+            [],
+            null,
+            null,
+            DiscountPolicy.Default,
+            RoundingPolicy.Off,
+            Issued,
+            settled.Grace));
+        var grace = Assert.Single(invoice.Lines, line => line.Kind == InvoiceLineKind.Grace);
+        Assert.Equal(-(minute - 500), grace.AmountToman);
+        Assert.Equal(500, invoice.PayableToman);
+        Assert.Equal(minute - 500, invoice.GraceWaivedToman);
+
+        var off = new CustomerAccount(
+            "m",
+            WalletSettings.Shared with { GraceMinuteEnabled = false },
+            new WalletPocket(500, 0),
+            new WalletPocket(0, 0),
+            []);
+        var without = CustomerPlay.Settle(charge, off);
+        Assert.Null(without.Settlement.Grace);
+        Assert.Equal(500, without.Settlement.MoneyConsumedToman);
+        Assert.Equal(minute - 500, without.Settlement.UncoveredToman);
+        Assert.Equal(0, without.Account.PcMoneyToman);
     }
 
     [Fact]

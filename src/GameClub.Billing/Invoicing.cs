@@ -242,7 +242,8 @@ public sealed record InvoiceRequest(
     DiscountCode? Code,
     DiscountPolicy Discount,
     RoundingPolicy Rounding,
-    DateTimeOffset IssuedAt);
+    DateTimeOffset IssuedAt,
+    GraceLine? Grace = null);
 
 public enum InvoiceLineKind
 {
@@ -251,6 +252,7 @@ public enum InvoiceLineKind
     Service = 2,
     Discount = 3,
     Rounding = 4,
+    Grace = 5,
 }
 
 public sealed record InvoiceLine(InvoiceLineKind Kind, string Description, long AmountToman);
@@ -264,7 +266,8 @@ public sealed record Invoice(
     long NetBeforeRoundingToman,
     long RoundingToman,
     long PayableToman,
-    string? RejectedCode)
+    string? RejectedCode,
+    long GraceWaivedToman = 0)
 {
     public long GrossToman => TimeGrossToman + BuffetGrossToman + ServicesGrossToman;
 }
@@ -306,7 +309,10 @@ public static class InvoiceCalculator
         var discountTotal = levelAmount + birthdayAmount + codeAmount;
         var discountOnTime = levelAmount + birthdayAmount + codeOnTime;
         var discountOnOther = codeOnBuffet + codeOnServices;
-        var net = gross - discountTotal;
+        var graceWaived = request.Grace is { WaivedToman: > 0 } graceLine
+            ? Math.Min(graceLine.WaivedToman, Math.Max(0, timeGross - discountOnTime))
+            : 0;
+        var net = gross - discountTotal - graceWaived;
 
         long payable;
         long roundingDelta;
@@ -316,7 +322,7 @@ public static class InvoiceCalculator
         }
         else
         {
-            var timeNet = timeGross - discountOnTime;
+            var timeNet = timeGross - discountOnTime - graceWaived;
             var otherNet = buffetGross + servicesGross - discountOnOther;
             var (roundedTime, delta) = MoneyMath.Round(timeNet, request.Rounding);
             roundingDelta = delta;
@@ -334,12 +340,17 @@ public static class InvoiceCalculator
             lines.Add(new InvoiceLine(InvoiceLineKind.Discount, codeLabel, -codeAmount));
         }
 
+        if (graceWaived > 0)
+        {
+            lines.Add(new InvoiceLine(InvoiceLineKind.Grace, "Grace minute", -graceWaived));
+        }
+
         if (roundingDelta != 0)
         {
             lines.Add(new InvoiceLine(InvoiceLineKind.Rounding, "Rounding", roundingDelta));
         }
 
-        return new Invoice(lines, timeGross, buffetGross, servicesGross, discountTotal, net, roundingDelta, payable, rejected);
+        return new Invoice(lines, timeGross, buffetGross, servicesGross, discountTotal, net, roundingDelta, payable, rejected, graceWaived);
     }
 
     private static (long Level, long Birthday) CustomerDiscounts(InvoiceRequest request, long timeGross)

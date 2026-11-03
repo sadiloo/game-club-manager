@@ -133,7 +133,7 @@ public class InvariantAndReferenceTests
             {
                 var opening = rng.Next(0, 500_000);
                 var settled = AccountSettlement.Settle(charge, new PcAccount("m", opening, [new TimePackage("p", rng.Next(0, 90), 200_000)]));
-                Assert.Equal(charge.TotalAmountToman, settled.PackageCoveredToman + settled.MoneyConsumedToman + settled.UncoveredToman);
+                Assert.Equal(charge.TotalAmountToman, settled.PackageCoveredToman + settled.MoneyConsumedToman + (settled.Grace?.WaivedToman ?? 0) + settled.UncoveredToman);
                 Assert.True(settled.UpdatedAccount.MoneyBalanceToman >= 0);
                 Assert.True(settled.MoneyConsumedToman <= opening);
                 Assert.Equal(opening - settled.MoneyConsumedToman, settled.UpdatedAccount.MoneyBalanceToman);
