@@ -317,7 +317,7 @@ internal sealed class DiscountLedger
         var share = percentTotal - state.PrevPercentTotal;
         var combinedRate = (birthEligible
             ? Math.Min(_spec.LevelPercent + _spec.BirthdayPercent, _spec.Cap)
-            : _spec.LevelPercent)
+            : Math.Min(_spec.LevelPercent, _spec.Cap))
             + (codeEligible ? _spec.CodePercent : 0);
         long percentDisc;
         if (combinedRate >= 100)
@@ -381,20 +381,20 @@ internal sealed class DiscountLedger
 
             if (sum <= _spec.Cap)
             {
-                levelOff = MoneyMath.PercentOf(rest, _spec.LevelPercent) + MoneyMath.PercentOf(birthG, _spec.LevelPercent);
+                levelOff = MoneyMath.PercentOf(rest, Math.Min(_spec.LevelPercent, _spec.Cap)) + MoneyMath.PercentOf(birthG, _spec.LevelPercent);
                 birthOff = MoneyMath.PercentOf(birthG, _spec.BirthdayPercent);
             }
             else
             {
                 var combined = MoneyMath.PercentOf(birthG, _spec.Cap);
                 var levelShare = sum == 0 ? 0 : MoneyMath.MulDiv(combined, _spec.LevelPercent, sum);
-                levelOff = MoneyMath.PercentOf(rest, _spec.LevelPercent) + levelShare;
+                levelOff = MoneyMath.PercentOf(rest, Math.Min(_spec.LevelPercent, _spec.Cap)) + levelShare;
                 birthOff = combined - levelShare;
             }
         }
         else
         {
-            levelOff = MoneyMath.PercentOf(all, _spec.LevelPercent);
+            levelOff = MoneyMath.PercentOf(all, Math.Min(_spec.LevelPercent, _spec.Cap));
             birthOff = 0;
         }
 
