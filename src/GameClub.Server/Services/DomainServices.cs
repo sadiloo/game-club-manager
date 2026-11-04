@@ -443,60 +443,65 @@ public sealed class SessionService(
             return await closer.CloseAsync(session, endUtc, "stop", innerCt);
         }, ct);
 
-    public async Task RecordCheckpointAsync(Guid sessionId, DateTimeOffset? at, CancellationToken ct)
-    {
-        var session = await LoadOpenSession(sessionId, ct);
-        if (session.Station!.Group!.Kind != StationKind.Pc)
+    public Task RecordCheckpointAsync(Guid sessionId, DateTimeOffset? at, CancellationToken ct)
+        => ExecuteWithSessionWriteLockAsync(sessionId, async (session, innerCt) =>
         {
-            throw new ApiException(StatusCodes.Status400BadRequest, "not_pc", "Checkpoints are for PC sessions only.");
-        }
-
-        if (session.Status == SessionStatus.ManualSettle)
-        {
-            throw new ApiException(StatusCodes.Status409Conflict, "manual_settle", "Session awaits manual settlement.");
-        }
-
-        var serverNow = clock.UtcNow.UtcDateTime;
-        var previous = session.LastCheckpointUtc ?? session.StartedAtUtc;
-        DateTime? reportedUtc = null;
-
-        if (at.HasValue)
-        {
-            reportedUtc = TimeMapping.ToUtc(TehranTime.Ensure(at.Value));
-            if (reportedUtc > serverNow.AddSeconds(60))
+            if (session.Station!.Group!.Kind != StationKind.Pc)
             {
-                throw new ApiException(
-                    StatusCodes.Status400BadRequest,
-                    "checkpoint_in_future",
-                    "Checkpoint time cannot be more than 60 seconds ahead of server time.");
+                throw new ApiException(StatusCodes.Status400BadRequest, "not_pc", "Checkpoints are for PC sessions only.");
             }
 
-            if (reportedUtc < previous)
+            if (session.Status is not SessionStatus.Open and not SessionStatus.Paused)
             {
-                session.Status = SessionStatus.ManualSettle;
-                session.ManualSettleReason = "rejected_checkpoint";
-                await audit.AppendAsync("session.manual_settle", new { sessionId, reason = "rejected_checkpoint" }, ct);
-                await db.SaveChangesAsync(ct);
-                return;
+                if (session.Status == SessionStatus.ManualSettle)
+                {
+                    throw new ApiException(StatusCodes.Status409Conflict, "manual_settle", "Session awaits manual settlement.");
+                }
+
+                throw new ApiException(StatusCodes.Status409Conflict, "closed", "Session is closed.");
             }
-        }
 
-        DateTime acceptedUtc;
-        if (reportedUtc is null)
-        {
-            acceptedUtc = serverNow;
-        }
-        else
-        {
-            var minReportServer = reportedUtc.Value <= serverNow ? reportedUtc.Value : serverNow;
-            acceptedUtc = previous >= minReportServer ? previous : minReportServer;
-        }
+            var serverNow = clock.UtcNow.UtcDateTime;
+            var previous = session.LastCheckpointUtc ?? session.StartedAtUtc;
+            DateTime? reportedUtc = null;
 
-        session.LastCheckpointUtc = acceptedUtc;
-        session.Checkpoints.Add(new CheckpointEntity { AtUtc = acceptedUtc });
-        await audit.AppendAsync("session.checkpoint", new { sessionId, atUtc = acceptedUtc }, ct);
-        await db.SaveChangesAsync(ct);
-    }
+            if (at.HasValue)
+            {
+                reportedUtc = TimeMapping.ToUtc(TehranTime.Ensure(at.Value));
+                if (reportedUtc > serverNow.AddSeconds(60))
+                {
+                    throw new ApiException(
+                        StatusCodes.Status400BadRequest,
+                        "checkpoint_in_future",
+                        "Checkpoint time cannot be more than 60 seconds ahead of server time.");
+                }
+
+                if (reportedUtc < previous)
+                {
+                    session.Status = SessionStatus.ManualSettle;
+                    session.ManualSettleReason = "rejected_checkpoint";
+                    await audit.AppendAsync("session.manual_settle", new { sessionId, reason = "rejected_checkpoint" }, innerCt);
+                    await db.SaveChangesAsync(innerCt);
+                    return;
+                }
+            }
+
+            DateTime acceptedUtc;
+            if (reportedUtc is null)
+            {
+                acceptedUtc = serverNow;
+            }
+            else
+            {
+                var minReportServer = reportedUtc.Value <= serverNow ? reportedUtc.Value : serverNow;
+                acceptedUtc = previous >= minReportServer ? previous : minReportServer;
+            }
+
+            session.LastCheckpointUtc = acceptedUtc;
+            session.Checkpoints.Add(new CheckpointEntity { AtUtc = acceptedUtc });
+            await audit.AppendAsync("session.checkpoint", new { sessionId, atUtc = acceptedUtc }, innerCt);
+            await db.SaveChangesAsync(innerCt);
+        }, ct);
 
     public Task ChangePlayerCountAsync(Guid sessionId, int playerCount, CancellationToken ct)
         => ExecuteWithSessionWriteLockAsync(sessionId, async (session, innerCt) =>
@@ -728,7 +733,13 @@ public sealed class DeadPcMonitor(IServiceScopeFactory scopes, IClock clock, ILo
                         return;
                     }
 
-                    await closer.CloseAsync(session, item.EndUtc, "auto-close", ct);
+                    var lastAccepted = session.LastCheckpointUtc ?? session.StartedAtUtc;
+                    if (lastAccepted > now - Timeout)
+                    {
+                        return;
+                    }
+
+                    await closer.CloseAsync(session, lastAccepted, "auto-close", ct);
                     await tx.CommitAsync(ct);
                     closedThis = true;
                 });
