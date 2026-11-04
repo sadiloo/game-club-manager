@@ -167,7 +167,7 @@ public class Round6Tests
         var charge = Play(Flat(), start, start.AddHours(1));
         var code = new DiscountCode("FX", 0, 5_000, start.AddMinutes(30), null, null, null);
         var result = CustomerPlay.Settle(charge, Wallet(), pricing: new CustomerPricing("Titan", 28, null, 0), code: code, issuedAt: start.AddHours(1));
-        Assert.Equal(75_240, result.Settlement.MoneyConsumedToman);
+        Assert.Equal(74_200, result.Settlement.MoneyConsumedToman);
         Assert.Equal(result.Settlement.MoneyConsumedToman, result.ChargeInvoice!.PayableToman);
     }
 
@@ -183,8 +183,27 @@ public class Round6Tests
             pricing: new CustomerPricing("Titan", 28, null, 0),
             code: code,
             issuedAt: start.AddHours(1));
-        Assert.Equal(70_240, result.Settlement.MoneyConsumedToman);
+        Assert.Equal(68_700, result.Settlement.MoneyConsumedToman);
         Assert.Equal(result.Settlement.MoneyConsumedToman, result.ChargeInvoice!.PayableToman);
+    }
+
+    [Fact]
+    public void Row_93_level_30_and_code_80_from_mid_hour_gives_38500_payable()
+    {
+        var start = T.At(2026, 6, 2, 10, 0);
+        var charge = Play(Flat(), start, start.AddHours(1));
+        var spec = new SessionDiscount(LevelPercent: 30, CodePercent: 80, ValidFrom: start.AddMinutes(30));
+        var settled = AccountSettlement.Settle(charge, new PcAccount("m", 100_000_000, []), discount: spec);
+        Assert.Equal(38_500, settled.MoneyConsumedToman);
+        Assert.Equal(71_500, settled.DiscountToman);
+        var play = CustomerPlay.Settle(
+            charge,
+            Wallet(),
+            pricing: new CustomerPricing("L", 30, null, 0),
+            code: new DiscountCode("P", 80, 0, start.AddMinutes(30), null, null, null),
+            issuedAt: start.AddHours(1));
+        Assert.Equal(38_500, play.Settlement.MoneyConsumedToman);
+        Assert.Equal(play.Settlement.MoneyConsumedToman, play.ChargeInvoice!.PayableToman);
     }
 
     [Fact]
@@ -398,9 +417,9 @@ public class Round6Tests
         long allGross = 0;
         long codeGross = 0;
         long birthGross = 0;
-        long prevAll = 0;
-        long prevCode = 0;
-        long prevBirth = 0;
+        long prevPercentTotal = 0;
+        long carry = 0;
+        long fixedLeft = spec.FixedToman;
         long net = 0;
         long minutes = 0;
         var spendable = balance > 0 ? balance : 0;
@@ -408,21 +427,17 @@ public class Round6Tests
         {
             var gross = MinuteGross(i);
             var at = minuteStarts[(int)i];
-            allGross += gross;
-            if (CodeEligible(spec, at, line.GroupId))
-            {
-                codeGross += gross;
-            }
-
-            if (BirthEligible(spec, at))
-            {
-                birthGross += gross;
-            }
-
-            var marginal = OracleCappedMarginal(prevAll, prevCode, prevBirth, allGross, codeGross, birthGross, gross, spec);
-            prevAll = allGross;
-            prevCode = codeGross;
-            prevBirth = birthGross;
+            var marginal = OracleMarginal(
+                ref prevPercentTotal,
+                ref carry,
+                ref fixedLeft,
+                ref allGross,
+                ref codeGross,
+                ref birthGross,
+                gross,
+                at,
+                line.GroupId,
+                spec);
             if (net + marginal > spendable)
             {
                 break;
@@ -481,9 +496,9 @@ public class Round6Tests
         long allGross = 0;
         long codeGross = 0;
         long birthGross = 0;
-        long prevAll = 0;
-        long prevCode = 0;
-        long prevBirth = 0;
+        long prevPercentTotal = 0;
+        long carry = 0;
+        long fixedLeft = spec.FixedToman;
         long netAccum = 0;
         long offset = 0;
         foreach (var line in charge.Lines)
@@ -491,22 +506,18 @@ public class Round6Tests
             for (long m = 0; m < line.BilledMinutes; m++)
             {
                 var gross = OracleHalfUp(line.HourlyRateToman, m + 1) - OracleHalfUp(line.HourlyRateToman, m);
-                allGross += gross;
                 var at = minuteStarts[(int)(offset + m)];
-                if (CodeEligible(spec, at, line.GroupId))
-                {
-                    codeGross += gross;
-                }
-
-                if (BirthEligible(spec, at))
-                {
-                    birthGross += gross;
-                }
-
-                netAccum += OracleCappedMarginal(prevAll, prevCode, prevBirth, allGross, codeGross, birthGross, gross, spec);
-                prevAll = allGross;
-                prevCode = codeGross;
-                prevBirth = birthGross;
+                netAccum += OracleMarginal(
+                    ref prevPercentTotal,
+                    ref carry,
+                    ref fixedLeft,
+                    ref allGross,
+                    ref codeGross,
+                    ref birthGross,
+                    gross,
+                    at,
+                    line.GroupId,
+                    spec);
             }
 
             offset += line.BilledMinutes;
@@ -634,19 +645,88 @@ public class Round6Tests
         return (spec.Birthday ?? BirthdayWindow.ExactDay).Includes(birth, TehranTime.Date(at));
     }
 
-    private static long OracleCappedMarginal(
-        long prevAll,
-        long prevCode,
-        long prevBirth,
-        long all,
-        long codeGross,
-        long birthGross,
+    private static long OracleMarginal(
+        ref long prevPercentTotal,
+        ref long carry,
+        ref long fixedLeft,
+        ref long allGross,
+        ref long codeGross,
+        ref long birthGross,
         long gross,
+        DateTimeOffset at,
+        string groupId,
         SessionDiscount spec)
     {
-        var before = OracleUncappedNet(prevAll, prevCode, prevBirth, spec);
-        var after = OracleUncappedNet(all, codeGross, birthGross, spec);
-        var marginal = after - before;
+        if (spec.LevelPercent == 0 && spec.BirthdayPercent == 0 && spec.CodePercent == 0 && spec.FixedToman == 0)
+        {
+            allGross += gross;
+            if (CodeEligible(spec, at, groupId))
+            {
+                codeGross += gross;
+            }
+
+            if (BirthEligible(spec, at))
+            {
+                birthGross += gross;
+            }
+
+            return gross;
+        }
+
+        var codeOn = CodeEligible(spec, at, groupId);
+        var birthOn = BirthEligible(spec, at);
+        allGross += gross;
+        if (codeOn)
+        {
+            codeGross += gross;
+        }
+
+        if (birthOn)
+        {
+            birthGross += gross;
+        }
+
+        var percentTotal = OraclePercentTotal(allGross, codeGross, birthGross, spec);
+        var share = percentTotal - prevPercentTotal;
+        prevPercentTotal = percentTotal;
+        carry = 0;
+        var combinedRate = (birthOn
+            ? Math.Min(spec.LevelPercent + spec.BirthdayPercent, spec.Cap)
+            : spec.LevelPercent)
+            + (codeOn ? spec.CodePercent : 0);
+        long percentDisc;
+        if (combinedRate >= 100)
+        {
+            percentDisc = gross;
+        }
+        else
+        {
+            percentDisc = share;
+            if (percentDisc > gross)
+            {
+                percentDisc = gross;
+            }
+
+            if (percentDisc < 0)
+            {
+                percentDisc = 0;
+            }
+        }
+
+        long fixedUse = 0;
+        if (codeOn && spec.FixedToman > 0 && fixedLeft > 0)
+        {
+            var room = gross - percentDisc;
+            if (room < 0)
+            {
+                room = 0;
+            }
+
+            fixedUse = fixedLeft < room ? fixedLeft : room;
+            fixedLeft -= fixedUse;
+        }
+
+        var marginal = gross - percentDisc - fixedUse;
         if (marginal < 0)
         {
             marginal = 0;
@@ -660,13 +740,7 @@ public class Round6Tests
         return marginal;
     }
 
-    private static long OracleNet(long all, long codeGross, long birthGross, SessionDiscount spec)
-    {
-        var net = OracleUncappedNet(all, codeGross, birthGross, spec);
-        return net < 0 ? 0 : net;
-    }
-
-    private static long OracleUncappedNet(long all, long codeGross, long birthGross, SessionDiscount spec)
+    private static long OraclePercentTotal(long all, long codeGross, long birthGross, SessionDiscount spec)
     {
         long levelOff;
         long birthOff;
@@ -699,20 +773,7 @@ public class Round6Tests
         }
 
         var codeOff = OraclePercent(codeGross, spec.CodePercent);
-        long fixedOff = 0;
-        if (spec.FixedToman > 0 && codeGross > 0)
-        {
-            var room = codeGross - codeOff;
-            if (room < 0)
-            {
-                room = 0;
-            }
-
-            fixedOff = spec.FixedToman < room ? spec.FixedToman : room;
-        }
-
-        var net = all - levelOff - birthOff - codeOff - fixedOff;
-        return net;
+        return levelOff + birthOff + codeOff;
     }
 
     private static long OraclePercent(long amount, int percent)

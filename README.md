@@ -1,35 +1,16 @@
-# Game Club Manager — billing engine
+# game-club-manager
 
-Pure pricing and session calculation for a PC and console gaming cafe (گیم‌نت) in Iran. This is the first technical spike: a dependency-free class library and xUnit tests. There is no UI, database, or web API.
+Gaming-cafe management. Agents start at [AGENTS.md](AGENTS.md).
 
-The repository had no application code, only a title, so this is a new solution rather than an extension of an existing layout.
+Until the rules move to [docs/CONTEXT.md](docs/CONTEXT.md), the business rules are the README sections from Domain through Still open. Those sections arrive when PR #1 and PR #2 merge. Nothing else in this file is a requirement.
 
-```text
-GameClub.slnx
-src/GameClub.Billing/          netstandard2.0 and net10.0 class library
-tests/GameClub.Billing.Tests/  xUnit
-```
+Feature specs: `docs/specs/`. Decisions: `docs/adr/`.
 
-```bash
-dotnet test
-```
-
-Money is a `long` in toman. Nothing in the library reads the clock, and nothing uses `double` or `decimal` for a charge.
-
-## خلاصه فارسی
-
-این کتابخانه فقط محاسبهٔ قیمت و زمان است. مبلغ‌ها تومان و عدد صحیح‌اند. ساعت را خودِ برنامه می‌دهد (از ساعت سیستم خوانده نمی‌شود) و همیشه به وقت تهران با اختلاف `+۰۳:۳۰` تفسیر می‌شود. ایران از ۲۰۲۲ ساعت تابستانی ندارد و این موتور هم تعویض ساعت را اعمال نمی‌کند.
-
-نرخ یک لحظه به این ترتیب انتخاب می‌شود: **روز خاصِ همان گروه > بازهٔ ساعتیِ همان گروه > روز هفته > نرخ پایه**. اگر روز خاص برای آن تعداد بازیکن نرخ نداشته باشد، به لایهٔ بعدی برمی‌گردد و فقط وقتی هیچ نرخی نیست خطا می‌دهد. هر گروه بازهٔ ساعتی خودش را دارد؛ بازهٔ PS5 روی گروه دیگر اثر نمی‌گذارد. اگر برای لایهٔ بالاتر نرخی تعریف نشده باشد، به لایهٔ بعدی برمی‌گردد. سانسِ طولانی، حتی اگر از نیمه‌شب یا از مرز «ساعات خاص» رد شود، خودش تکه‌تکه می‌شود.
-
-تولد، «کل ماه تولد»، پنجرهٔ تخفیف تولد، و روزهای خاص با تقویم شمسی (جلالی) و به وقت تهران حساب می‌شوند. مثلاً کل مهر، یا هر سال ۱ فروردین. تولد ۳۰ اسفند در سال غیرکبیسه روی ۲۹ اسفند دیده می‌شود.
-
-تخفیف سطح و تولد جمع می‌شوند (سقف پیش‌فرض ۱۰۰٪) و فقط روی زمان بازی‌اند. سطح‌ها را خود کافه می‌سازد (نام، حداقل ساعت کل، درصد). کد تخفیف محدودهٔ جدا دارد. اگر کد به یک گروه محدود باشد و بوفه یا خدمات را هم شامل شود، آن بخش فقط وقتی تخفیف می‌گیرد که حداقل یک سطر زمان از همان گروه در فاکتور باشد؛ وگرنه کد اعمال نمی‌شود.
-
-حالت کیف پول تنظیم شعبه است. در حالت مشترک یک موجودی برای PC و کنسول است. بدهی به‌طور پیش‌فرض خاموش است؛ کنسول موجودی را منفی نمی‌کند مگر شعبه سقف بدهی بگذارد. اگر موجودی منفی باشد، PC به‌طور پیش‌فرض بسته می‌شود. اگر `AllowPcWhileInDebt` روشن باشد، PC هنوز می‌تواند دقیقه‌های بسته را مصرف کند ولی پول را منفی‌تر نمی‌کند. در حالت جدا، موجودی PC هرگز منفی نمی‌شود و کیف پول کنسول/میز جداست؛ بدهی کنسول روی ورود PC اثر ندارد. شارژ باید بگوید کدام موجودی را پر می‌کند.
-
-فقط نرخ PS5 از Game Timer موجود است. گروه ناشناخته خطا می‌دهد و رایگان حساب نمی‌شود.
-
+- `src/GameClub.Server/` — ASP.NET Core API (.NET 10, not created yet)
+- `src/GameClub.Billing/` — pricing (netstandard2.0 and net10.0)
+- `src/GameClub.Kiosk.Core/` — kiosk logic tested on Linux
+- `src/GameClub.Kiosk/` — WPF shell, .NET Framework 4.8, compile-only on Linux
+- `src/GameClub.Kiosk.Guard/` — Windows service, .NET Framework 4.8, compile-only on Linux
 ## Domain
 
 | Type | Role |

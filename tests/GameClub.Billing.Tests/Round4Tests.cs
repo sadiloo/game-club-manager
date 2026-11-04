@@ -20,12 +20,12 @@ public class Round4Tests
 
         var edge = Play(card, vip, T.At(2026, 6, 2, 7, 50), T.At(2026, 6, 2, 9, 10));
         var edgePay = CustomerPlay.Settle(edge, Account(1_000_000), pricing: Titan, code: fixedCode);
-        Assert.Equal(111_413, edgePay.Settlement.MoneyConsumedToman);
+        Assert.Equal(110_200, edgePay.Settlement.MoneyConsumedToman);
         Assert.Equal(edgePay.Settlement.MoneyConsumedToman, edgePay.ChargeInvoice!.PayableToman);
 
         var midnight = Play(card, vip, T.At(2026, 6, 2, 23, 30), T.At(2026, 6, 3, 0, 40));
         var midnightPay = CustomerPlay.Settle(midnight, Account(1_000_000), pricing: Titan, code: fixedCode, issuedAt: T.At(2026, 6, 3, 0, 40));
-        Assert.Equal(98_041, midnightPay.Settlement.MoneyConsumedToman);
+        Assert.Equal(97_001, midnightPay.Settlement.MoneyConsumedToman);
         Assert.Equal(midnightPay.Settlement.MoneyConsumedToman, midnightPay.ChargeInvoice!.PayableToman);
     }
 
