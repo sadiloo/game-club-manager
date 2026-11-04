@@ -14,7 +14,48 @@ namespace GameClub.Server.Data.Migrations
                 name: "RateCardSnapshotId",
                 table: "sessions",
                 type: "integer",
-                nullable: false);
+                nullable: true);
+
+            migrationBuilder.Sql("""
+                DO $$
+                DECLARE
+                  snap_id int;
+                  snap_json text;
+                BEGIN
+                  IF EXISTS (SELECT 1 FROM sessions WHERE "RateCardSnapshotId" IS NULL) THEN
+                    SELECT json_build_object(
+                      'StepToman', br."StepToman",
+                      'Direction', br."Direction",
+                      'PcSpecialBandSurchargeToman', br."PcSpecialBandSurchargeToman",
+                      'Lines', COALESCE((
+                        SELECT json_agg(json_build_object(
+                          'GroupId', rl."GroupId",
+                          'PlayMode', rl."PlayMode",
+                          'PlayerCount', rl."PlayerCount",
+                          'IsSpecialBand', rl."IsSpecialBand",
+                          'HourlyToman', rl."HourlyToman"
+                        ) ORDER BY rl."Id")
+                        FROM rate_lines rl
+                      ), '[]'::json)
+                    )::text
+                    INTO snap_json
+                    FROM branch_rounding br
+                    LIMIT 1;
+
+                    INSERT INTO rate_card_snapshot ("Json") VALUES (snap_json) RETURNING "Id" INTO snap_id;
+                    UPDATE sessions SET "RateCardSnapshotId" = snap_id WHERE "RateCardSnapshotId" IS NULL;
+                  END IF;
+                END $$;
+                """);
+
+            migrationBuilder.AlterColumn<int>(
+                name: "RateCardSnapshotId",
+                table: "sessions",
+                type: "integer",
+                nullable: false,
+                oldClrType: typeof(int),
+                oldType: "integer",
+                oldNullable: true);
 
             migrationBuilder.CreateIndex(
                 name: "IX_sessions_RateCardSnapshotId",

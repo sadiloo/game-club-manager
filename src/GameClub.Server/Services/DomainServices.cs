@@ -5,6 +5,8 @@ using GameClub.Server.Data.Entities;
 using GameClub.Server.Time;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
+using Npgsql;
 
 namespace GameClub.Server.Services;
 
@@ -76,38 +78,46 @@ public sealed class StationService(AppDbContext db, AuditService audit)
 
     public async Task<StationEntity> UpdateAsync(string stationId, string? name, string? groupId, CancellationToken ct)
     {
-        var id = StationIdNormalizer.Normalize(stationId);
-        var station = await db.Stations.FirstOrDefaultAsync(s => s.Id == id, ct)
-            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Station not found.");
-        if (!station.IsActive)
+        var strategy = db.Database.CreateExecutionStrategy();
+        return await strategy.ExecuteAsync(async () =>
         {
-            throw new ApiException(StatusCodes.Status409Conflict, "inactive", "Station is deactivated.");
-        }
-
-        if (name is not null)
-        {
-            station.Name = name;
-        }
-
-        if (groupId is not null)
-        {
-            _ = await db.StationGroups.AsNoTracking().FirstOrDefaultAsync(g => g.Id == groupId, ct)
-                ?? throw new ApiException(StatusCodes.Status400BadRequest, "unknown_group", $"Unknown group '{groupId}'.");
-        }
-
-        if (groupId is not null && !string.Equals(groupId, station.GroupId, StringComparison.Ordinal))
-        {
-            if (await db.Sessions.AnyAsync(s => s.StationId == id && s.Status != SessionStatus.Closed, ct))
+            await using var tx = await db.Database.BeginTransactionAsync(ct);
+            var id = StationIdNormalizer.Normalize(stationId);
+            await db.Database.ExecuteSqlRawAsync(
+                """SELECT 1 FROM stations WHERE "Id" = {0} FOR UPDATE""",
+                id);
+            var station = await db.Stations.FirstOrDefaultAsync(s => s.Id == id, ct)
+                ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Station not found.");
+            if (!station.IsActive)
             {
-                throw new ApiException(StatusCodes.Status409Conflict, "station_busy", "Station has an active session; group cannot change.");
+                throw new ApiException(StatusCodes.Status409Conflict, "inactive", "Station is deactivated.");
             }
 
-            station.GroupId = groupId;
-        }
+            if (name is not null)
+            {
+                station.Name = name;
+            }
 
-        await audit.AppendAsync("station.update", new { stationId = id, name, groupId }, ct);
-        await db.SaveChangesAsync(ct);
-        return station;
+            if (groupId is not null)
+            {
+                _ = await db.StationGroups.AsNoTracking().FirstOrDefaultAsync(g => g.Id == groupId, ct)
+                    ?? throw new ApiException(StatusCodes.Status400BadRequest, "unknown_group", $"Unknown group '{groupId}'.");
+            }
+
+            if (groupId is not null && !string.Equals(groupId, station.GroupId, StringComparison.Ordinal))
+            {
+                if (await db.Sessions.AnyAsync(s => s.StationId == id && s.Status != SessionStatus.Closed, ct))
+                {
+                    throw new ApiException(StatusCodes.Status409Conflict, "station_busy", "Station has an active session; group cannot change.");
+                }
+
+                station.GroupId = groupId;
+            }
+
+            await audit.AppendAsync("station.update", new { stationId = id, name, groupId }, ct);
+            await tx.CommitAsync(ct);
+            return station;
+        });
     }
 
     public async Task<StationEntity> DeactivateAsync(string stationId, CancellationToken ct)
@@ -199,19 +209,6 @@ public sealed class SessionCloser(AppDbContext db, RateConfigService rates, Sess
             throw new ApiException(StatusCodes.Status409Conflict, "closed", "Session is closed.");
         }
 
-        foreach (var seg in session.Segments.Where(s => s.EndUtc is null))
-        {
-            seg.EndUtc = endUtc;
-        }
-
-        foreach (var pause in session.Pauses.Where(p => p.EndUtc is null))
-        {
-            pause.EndUtc = endUtc;
-        }
-
-        session.EndedAtUtc = endUtc;
-        session.Status = SessionStatus.Closed;
-
         var snapshot = session.RateCardSnapshotId != 0
             ? await rates.LoadSnapshotAsync(session.RateCardSnapshotId, ct)
             : await rates.LoadAsync(ct);
@@ -227,6 +224,19 @@ public sealed class SessionCloser(AppDbContext db, RateConfigService rates, Sess
             DiscountPolicy.Default,
             snapshot.Rounding,
             issuedAt));
+
+        foreach (var seg in session.Segments.Where(s => s.EndUtc is null))
+        {
+            seg.EndUtc = endUtc;
+        }
+
+        foreach (var pause in session.Pauses.Where(p => p.EndUtc is null))
+        {
+            pause.EndUtc = endUtc;
+        }
+
+        session.EndedAtUtc = endUtc;
+        session.Status = SessionStatus.Closed;
 
         var number = await NextInvoiceNumberAsync(ct);
         var invoice = new InvoiceEntity
@@ -294,135 +304,134 @@ public sealed class SessionService(
                 "Session start time is set by the server; do not send startedAt.");
         }
 
-        var normalizedId = StationIdNormalizer.Normalize(stationId);
-        var station = await db.Stations.Include(s => s.Group).FirstOrDefaultAsync(s => s.Id == normalizedId, ct)
-            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Station not found.");
-        if (station.Group is null || string.IsNullOrWhiteSpace(station.GroupId))
-        {
-            throw new ApiException(StatusCodes.Status409Conflict, "no_group", "Station has no group.");
-        }
-
-        if (!station.IsActive)
-        {
-            throw new ApiException(StatusCodes.Status409Conflict, "inactive", "Station is deactivated.");
-        }
-
-        if (await db.Sessions.AnyAsync(
-                s => s.StationId == station.Id
-                    && (s.Status == SessionStatus.Open || s.Status == SessionStatus.Paused),
-                ct))
-        {
-            throw new ApiException(StatusCodes.Status409Conflict, "station_busy", "Station already has an open session.");
-        }
-
-        if (playerCount is < 1 or > 4)
-        {
-            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_players", "Player count must be 1–4.");
-        }
-
-        var startUtc = clock.UtcNow.UtcDateTime;
-        var rateSnapshot = await rates.CreateSnapshotEntityAsync(ct);
-
-        var session = new PlaySessionEntity
-        {
-            Id = Guid.NewGuid(),
-            StationId = station.Id,
-            Status = SessionStatus.Open,
-            StartedAtUtc = startUtc,
-            Mode = mode,
-            PlayerCount = playerCount,
-            LastCheckpointUtc = station.Group.Kind == StationKind.Pc ? startUtc : null,
-            RateCardSnapshot = rateSnapshot,
-        };
-
-        session.Segments.Add(new PlaySegmentEntity
-        {
-            SegmentKey = "a",
-            StartUtc = startUtc,
-            StationId = station.Id,
-            GroupId = station.GroupId,
-            Mode = mode,
-            PlayerCount = playerCount,
-            Kind = station.Group.Kind,
-        });
-
-        db.Sessions.Add(session);
-        try
-        {
-            await audit.AppendAsync("session.start", new { sessionId = session.Id, stationId = station.Id, playerCount, mode = mode.ToString() }, ct);
-        }
-        catch (DbUpdateException ex) when (PostgresErrors.IsActiveSessionUniqueViolation(ex))
-        {
-            throw new ApiException(StatusCodes.Status409Conflict, "station_busy", "Station already has an open session.");
-        }
-
-        return session;
-    }
-
-    public async Task PauseAsync(Guid sessionId, CancellationToken ct)
-    {
-        var session = await LoadOpenSession(sessionId, ct);
-        if (session.Station!.Group!.Kind == StationKind.Pc)
-        {
-            throw new ApiException(StatusCodes.Status409Conflict, "pc_pause", "Pause is not allowed on a PC station.");
-        }
-
-        if (session.Status == SessionStatus.Paused)
-        {
-            throw new ApiException(StatusCodes.Status409Conflict, "already_paused", "Session is already paused.");
-        }
-
-        var now = clock.UtcNow.UtcDateTime;
-        session.Status = SessionStatus.Paused;
-        session.Pauses.Add(new PauseIntervalEntity { StartUtc = now });
-        try
-        {
-            await audit.AppendAsync("session.pause", new { sessionId }, ct);
-            await db.SaveChangesAsync(ct);
-        }
-        catch (DbUpdateException ex) when (PostgresErrors.IsOpenPauseUniqueViolation(ex))
-        {
-            throw new ApiException(StatusCodes.Status409Conflict, "already_paused", "Session is already paused.");
-        }
-    }
-
-    public async Task ResumeAsync(Guid sessionId, CancellationToken ct)
-    {
-        var session = await LoadOpenSession(sessionId, ct);
-        if (session.Status != SessionStatus.Paused)
-        {
-            throw new ApiException(StatusCodes.Status409Conflict, "not_paused", "Session is not paused.");
-        }
-
-        var openPause = session.Pauses.LastOrDefault(p => p.EndUtc is null)
-            ?? throw new ApiException(StatusCodes.Status409Conflict, "not_paused", "No open pause.");
-        openPause.EndUtc = clock.UtcNow.UtcDateTime;
-        session.Status = SessionStatus.Open;
-        await audit.AppendAsync("session.resume", new { sessionId }, ct);
-        await db.SaveChangesAsync(ct);
-    }
-
-    public async Task<InvoiceEntity> StopAsync(Guid sessionId, CancellationToken ct)
-    {
         var strategy = db.Database.CreateExecutionStrategy();
         return await strategy.ExecuteAsync(async () =>
         {
             await using var tx = await db.Database.BeginTransactionAsync(ct);
+            var normalizedId = StationIdNormalizer.Normalize(stationId);
             await db.Database.ExecuteSqlRawAsync(
-                """SELECT "Id" FROM sessions WHERE "Id" = {0} FOR UPDATE""",
-                sessionId);
-
-            var session = await db.Sessions
-                .Include(s => s.Station)!.ThenInclude(st => st!.Group)
-                .Include(s => s.Segments)
-                .Include(s => s.Pauses)
-                .FirstOrDefaultAsync(s => s.Id == sessionId, ct)
-                ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Session not found.");
-            if (session.Status == SessionStatus.Closed)
+                """SELECT 1 FROM stations WHERE "Id" = {0} FOR UPDATE""",
+                normalizedId);
+            var station = await db.Stations.Include(s => s.Group).FirstOrDefaultAsync(s => s.Id == normalizedId, ct)
+                ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Station not found.");
+            if (station.Group is null || string.IsNullOrWhiteSpace(station.GroupId))
             {
-                throw new ApiException(StatusCodes.Status409Conflict, "closed", "Session is closed.");
+                throw new ApiException(StatusCodes.Status409Conflict, "no_group", "Station has no group.");
             }
 
+            if (!station.IsActive)
+            {
+                throw new ApiException(StatusCodes.Status409Conflict, "inactive", "Station is deactivated.");
+            }
+
+            if (await db.Sessions.AnyAsync(
+                    s => s.StationId == station.Id
+                        && (s.Status == SessionStatus.Open || s.Status == SessionStatus.Paused),
+                    ct))
+            {
+                throw new ApiException(StatusCodes.Status409Conflict, "station_busy", "Station already has an open session.");
+            }
+
+            if (playerCount is < 1 or > 4)
+            {
+                throw new ApiException(StatusCodes.Status400BadRequest, "invalid_players", "Player count must be 1–4.");
+            }
+
+            var startUtc = clock.UtcNow.UtcDateTime;
+            var rateSnapshot = await rates.CreateSnapshotEntityAsync(ct);
+
+            var session = new PlaySessionEntity
+            {
+                Id = Guid.NewGuid(),
+                StationId = station.Id,
+                Status = SessionStatus.Open,
+                StartedAtUtc = startUtc,
+                Mode = mode,
+                PlayerCount = playerCount,
+                LastCheckpointUtc = station.Group.Kind == StationKind.Pc ? startUtc : null,
+                RateCardSnapshot = rateSnapshot,
+            };
+
+            session.Segments.Add(new PlaySegmentEntity
+            {
+                SegmentKey = "a",
+                StartUtc = startUtc,
+                StationId = station.Id,
+                GroupId = station.GroupId,
+                Mode = mode,
+                PlayerCount = playerCount,
+                Kind = station.Group.Kind,
+            });
+
+            db.Sessions.Add(session);
+            try
+            {
+                await audit.AppendAsync("session.start", new { sessionId = session.Id, stationId = station.Id, playerCount, mode = mode.ToString() }, ct);
+            }
+            catch (DbUpdateException ex) when (PostgresErrors.IsActiveSessionUniqueViolation(ex))
+            {
+                throw new ApiException(StatusCodes.Status409Conflict, "station_busy", "Station already has an open session.");
+            }
+
+            await tx.CommitAsync(ct);
+            return session;
+        });
+    }
+
+    public Task PauseAsync(Guid sessionId, CancellationToken ct)
+        => ExecuteWithSessionWriteLockAsync(sessionId, async (session, innerCt) =>
+        {
+            if (session.Station!.Group!.Kind == StationKind.Pc)
+            {
+                throw new ApiException(StatusCodes.Status409Conflict, "pc_pause", "Pause is not allowed on a PC station.");
+            }
+
+            if (session.Status == SessionStatus.ManualSettle)
+            {
+                throw new ApiException(StatusCodes.Status409Conflict, "manual_settle", "Session awaits manual settlement.");
+            }
+
+            if (session.Status == SessionStatus.Paused)
+            {
+                throw new ApiException(StatusCodes.Status409Conflict, "already_paused", "Session is already paused.");
+            }
+
+            var now = clock.UtcNow.UtcDateTime;
+            session.Status = SessionStatus.Paused;
+            session.Pauses.Add(new PauseIntervalEntity { StartUtc = now });
+            try
+            {
+                await audit.AppendAsync("session.pause", new { sessionId }, innerCt);
+            }
+            catch (DbUpdateException ex) when (PostgresErrors.IsOpenPauseUniqueViolation(ex))
+            {
+                throw new ApiException(StatusCodes.Status409Conflict, "already_paused", "Session is already paused.");
+            }
+        }, ct);
+
+    public Task ResumeAsync(Guid sessionId, CancellationToken ct)
+        => ExecuteWithSessionWriteLockAsync(sessionId, async (session, innerCt) =>
+        {
+            if (session.Status == SessionStatus.ManualSettle)
+            {
+                throw new ApiException(StatusCodes.Status409Conflict, "manual_settle", "Session awaits manual settlement.");
+            }
+
+            if (session.Status != SessionStatus.Paused)
+            {
+                throw new ApiException(StatusCodes.Status409Conflict, "not_paused", "Session is not paused.");
+            }
+
+            var openPause = session.Pauses.LastOrDefault(p => p.EndUtc is null)
+                ?? throw new ApiException(StatusCodes.Status409Conflict, "not_paused", "No open pause.");
+            openPause.EndUtc = clock.UtcNow.UtcDateTime;
+            session.Status = SessionStatus.Open;
+            await audit.AppendAsync("session.resume", new { sessionId }, innerCt);
+        }, ct);
+
+    public Task<InvoiceEntity> StopAsync(Guid sessionId, CancellationToken ct)
+        => ExecuteWithSessionWriteLockAsync(sessionId, async (session, innerCt) =>
+        {
             if (session.Status == SessionStatus.ManualSettle)
             {
                 throw new ApiException(StatusCodes.Status409Conflict, "manual_settle", "Session awaits manual settlement.");
@@ -431,11 +440,8 @@ public sealed class SessionService(
             var endUtc = session.Station!.Group!.Kind == StationKind.Pc
                 ? session.LastCheckpointUtc ?? session.StartedAtUtc
                 : clock.UtcNow.UtcDateTime;
-            var invoice = await closer.CloseAsync(session, endUtc, "stop", ct);
-            await tx.CommitAsync(ct);
-            return invoice;
-        });
-    }
+            return await closer.CloseAsync(session, endUtc, "stop", innerCt);
+        }, ct);
 
     public async Task RecordCheckpointAsync(Guid sessionId, DateTimeOffset? at, CancellationToken ct)
     {
@@ -452,10 +458,11 @@ public sealed class SessionService(
 
         var serverNow = clock.UtcNow.UtcDateTime;
         var previous = session.LastCheckpointUtc ?? session.StartedAtUtc;
+        DateTime? reportedUtc = null;
 
         if (at.HasValue)
         {
-            var reportedUtc = TimeMapping.ToUtc(TehranTime.Ensure(at.Value));
+            reportedUtc = TimeMapping.ToUtc(TehranTime.Ensure(at.Value));
             if (reportedUtc > serverNow.AddSeconds(60))
             {
                 throw new ApiException(
@@ -474,48 +481,63 @@ public sealed class SessionService(
             }
         }
 
-        session.LastCheckpointUtc = serverNow;
-        session.Checkpoints.Add(new CheckpointEntity { AtUtc = serverNow });
-        await audit.AppendAsync("session.checkpoint", new { sessionId, atUtc = serverNow }, ct);
+        DateTime acceptedUtc;
+        if (reportedUtc is null)
+        {
+            acceptedUtc = serverNow;
+        }
+        else
+        {
+            var minReportServer = reportedUtc.Value <= serverNow ? reportedUtc.Value : serverNow;
+            acceptedUtc = previous >= minReportServer ? previous : minReportServer;
+        }
+
+        session.LastCheckpointUtc = acceptedUtc;
+        session.Checkpoints.Add(new CheckpointEntity { AtUtc = acceptedUtc });
+        await audit.AppendAsync("session.checkpoint", new { sessionId, atUtc = acceptedUtc }, ct);
         await db.SaveChangesAsync(ct);
     }
 
-    public async Task ChangePlayerCountAsync(Guid sessionId, int playerCount, CancellationToken ct)
-    {
-        var session = await LoadOpenSession(sessionId, ct);
-        if (session.Station!.Group!.Kind != StationKind.Console)
+    public Task ChangePlayerCountAsync(Guid sessionId, int playerCount, CancellationToken ct)
+        => ExecuteWithSessionWriteLockAsync(sessionId, async (session, innerCt) =>
         {
-            throw new ApiException(StatusCodes.Status400BadRequest, "not_console", "Controller count changes apply to consoles only.");
-        }
+            if (session.Station!.Group!.Kind != StationKind.Console)
+            {
+                throw new ApiException(StatusCodes.Status400BadRequest, "not_console", "Controller count changes apply to consoles only.");
+            }
 
-        if (playerCount is < 1 or > 4)
-        {
-            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_players", "Player count must be 1–4.");
-        }
+            if (session.Status == SessionStatus.ManualSettle)
+            {
+                throw new ApiException(StatusCodes.Status409Conflict, "manual_settle", "Session awaits manual settlement.");
+            }
 
-        if (session.PlayerCount == playerCount)
-        {
-            return;
-        }
+            if (playerCount is < 1 or > 4)
+            {
+                throw new ApiException(StatusCodes.Status400BadRequest, "invalid_players", "Player count must be 1–4.");
+            }
 
-        var now = clock.UtcNow.UtcDateTime;
-        var openSegment = session.Segments.Single(s => s.EndUtc is null);
-        openSegment.EndUtc = now;
-        var nextKey = ((char)('a' + session.Segments.Count)).ToString();
-        session.Segments.Add(new PlaySegmentEntity
-        {
-            SegmentKey = nextKey,
-            StartUtc = now,
-            StationId = session.StationId,
-            GroupId = session.Station.GroupId,
-            Mode = session.Mode,
-            PlayerCount = playerCount,
-            Kind = StationKind.Console,
-        });
-        session.PlayerCount = playerCount;
-        await audit.AppendAsync("session.player_count", new { sessionId, playerCount }, ct);
-        await db.SaveChangesAsync(ct);
-    }
+            if (session.PlayerCount == playerCount)
+            {
+                return;
+            }
+
+            var now = clock.UtcNow.UtcDateTime;
+            var openSegment = session.Segments.Single(s => s.EndUtc is null);
+            openSegment.EndUtc = now;
+            var nextKey = ((char)('a' + session.Segments.Count)).ToString();
+            session.Segments.Add(new PlaySegmentEntity
+            {
+                SegmentKey = nextKey,
+                StartUtc = now,
+                StationId = session.StationId,
+                GroupId = session.Station.GroupId,
+                Mode = session.Mode,
+                PlayerCount = playerCount,
+                Kind = StationKind.Console,
+            });
+            session.PlayerCount = playerCount;
+            await audit.AppendAsync("session.player_count", new { sessionId, playerCount }, innerCt);
+        }, ct);
 
     public async Task<long> LiveAmountAsync(Guid sessionId, CancellationToken ct)
     {
@@ -589,6 +611,60 @@ public sealed class SessionService(
 
         return session;
     }
+
+    private async Task ExecuteWithSessionWriteLockAsync(
+        Guid sessionId,
+        Func<PlaySessionEntity, CancellationToken, Task> action,
+        CancellationToken ct)
+    {
+        _ = await ExecuteWithSessionWriteLockAsync(sessionId, async (session, innerCt) =>
+        {
+            await action(session, innerCt);
+            return false;
+        }, ct);
+    }
+
+    private async Task LockSessionRowForUpdateAsync(Guid sessionId, CancellationToken ct)
+    {
+        try
+        {
+            await db.Database.ExecuteSqlRawAsync(
+                """SELECT "Id" FROM sessions WHERE "Id" = {0} FOR UPDATE NOWAIT""",
+                sessionId);
+        }
+        catch (Exception ex) when (PostgresErrors.IsLockNotAvailable(ex))
+        {
+            throw new ApiException(StatusCodes.Status409Conflict, "session_busy", "Session is being updated.");
+        }
+    }
+
+    private async Task<T> ExecuteWithSessionWriteLockAsync<T>(
+        Guid sessionId,
+        Func<PlaySessionEntity, CancellationToken, Task<T>> action,
+        CancellationToken ct)
+    {
+        var strategy = db.Database.CreateExecutionStrategy();
+        return await strategy.ExecuteAsync(async () =>
+        {
+            await using var tx = await db.Database.BeginTransactionAsync(ct);
+            await LockSessionRowForUpdateAsync(sessionId, ct);
+
+            var session = await db.Sessions
+                .Include(s => s.Station)!.ThenInclude(st => st!.Group)
+                .Include(s => s.Segments)
+                .Include(s => s.Pauses)
+                .FirstOrDefaultAsync(s => s.Id == sessionId, ct)
+                ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Session not found.");
+            if (session.Status == SessionStatus.Closed)
+            {
+                throw new ApiException(StatusCodes.Status409Conflict, "closed", "Session is closed.");
+            }
+
+            var result = await action(session, ct);
+            await tx.CommitAsync(ct);
+            return result;
+        });
+    }
 }
 
 public interface IDeadPcMonitor
@@ -596,36 +672,77 @@ public interface IDeadPcMonitor
     Task<int> RunDueClosuresAsync(CancellationToken ct);
 }
 
-public sealed class DeadPcMonitor(AppDbContext db, IClock clock, SessionCloser closer, ILogger<DeadPcMonitor> logger) : IDeadPcMonitor
+public sealed class DeadPcMonitor(IServiceScopeFactory scopes, IClock clock, ILogger<DeadPcMonitor> logger) : IDeadPcMonitor
 {
     public static readonly TimeSpan Timeout = TimeSpan.FromMinutes(10);
 
     public async Task<int> RunDueClosuresAsync(CancellationToken ct)
     {
         var now = clock.UtcNow.UtcDateTime;
-        var candidates = await db.Sessions
-            .Include(s => s.Station)!.ThenInclude(st => st!.Group)
-            .Include(s => s.Segments)
-            .Include(s => s.Pauses)
-            .Where(s => s.Status == SessionStatus.Open && s.LastCheckpointUtc != null)
-            .ToListAsync(ct);
-
-        var due = candidates
-            .Where(s => s.Station?.Group?.Kind == StationKind.Pc
-                && s.LastCheckpointUtc!.Value <= now - Timeout)
-            .ToList();
+        List<(Guid Id, DateTime EndUtc, string StationId)> due;
+        using (var listScope = scopes.CreateScope())
+        {
+            var listDb = listScope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var candidates = await listDb.Sessions
+                .AsNoTracking()
+                .Include(s => s.Station)!.ThenInclude(st => st!.Group)
+                .Where(s => s.Status == SessionStatus.Open && s.LastCheckpointUtc != null)
+                .ToListAsync(ct);
+            due = candidates
+                .Where(s => s.Station?.Group?.Kind == StationKind.Pc
+                    && s.LastCheckpointUtc!.Value <= now - Timeout)
+                .Select(s => (s.Id, s.LastCheckpointUtc!.Value, s.StationId))
+                .ToList();
+        }
 
         var closed = 0;
-        foreach (var session in due)
+        foreach (var item in due)
         {
             try
             {
-                await closer.CloseAsync(session, session.LastCheckpointUtc!.Value, "auto-close", ct);
-                closed++;
+                using var scope = scopes.CreateScope();
+                var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+                var closer = scope.ServiceProvider.GetRequiredService<SessionCloser>();
+                var strategy = db.Database.CreateExecutionStrategy();
+                var closedThis = false;
+                await strategy.ExecuteAsync(async () =>
+                {
+                    await using var tx = await db.Database.BeginTransactionAsync(ct);
+                    try
+                    {
+                        await db.Database.ExecuteSqlRawAsync(
+                            """SELECT "Id" FROM sessions WHERE "Id" = {0} FOR UPDATE NOWAIT""",
+                            item.Id);
+                    }
+                    catch (Exception ex) when (PostgresErrors.IsLockNotAvailable(ex))
+                    {
+                        return;
+                    }
+                    var session = await db.Sessions
+                        .Include(s => s.Station)!.ThenInclude(st => st!.Group)
+                        .Include(s => s.Segments)
+                        .Include(s => s.Pauses)
+                        .FirstAsync(s => s.Id == item.Id, ct);
+                    if (session.Status != SessionStatus.Open)
+                    {
+                        return;
+                    }
+
+                    await closer.CloseAsync(session, item.EndUtc, "auto-close", ct);
+                    await tx.CommitAsync(ct);
+                    closedThis = true;
+                });
+                if (closedThis)
+                {
+                    closed++;
+                }
+            }
+            catch (ApiException ex) when (ex.Code is "closed")
+            {
             }
             catch (Exception ex)
             {
-                logger.LogError(ex, "Dead-PC auto-close failed for session {SessionId} on station {StationId}", session.Id, session.StationId);
+                logger.LogError(ex, "Dead-PC auto-close failed for session {SessionId} on station {StationId}", item.Id, item.StationId);
             }
         }
 

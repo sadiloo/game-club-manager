@@ -67,6 +67,11 @@ public sealed class RateConfigService(AppDbContext db, AuditService audit)
             }
         }
 
+        if (request.PcSpecialBandSurchargeToman is { } requestedSurcharge && requestedSurcharge < 0)
+        {
+            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_rate", "PC special-band surcharge cannot be negative.");
+        }
+
         var rounding = await db.BranchRounding.SingleAsync(ct);
         rounding.StepToman = request.RoundingStepToman;
         rounding.Direction = request.RoundingDirection;

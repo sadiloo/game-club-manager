@@ -45,10 +45,15 @@ public sealed class GameClubWebApplicationFactory : WebApplicationFactory<Progra
 
     protected override IHost CreateHost(IHostBuilder builder)
     {
+        var options = new DbContextOptionsBuilder<AppDbContext>().UseNpgsql(ConnectionString).Options;
+        using (var bootstrap = new AppDbContext(options))
+        {
+            bootstrap.Database.EnsureDeleted();
+        }
+
         var host = base.CreateHost(builder);
         using var scope = host.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        db.Database.EnsureDeleted();
         db.Database.Migrate();
         DatabaseSeed.EnsureAsync(db).GetAwaiter().GetResult();
         Program.ApplyAuditImmutabilityAsync(db).GetAwaiter().GetResult();

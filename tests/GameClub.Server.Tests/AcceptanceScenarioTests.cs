@@ -57,7 +57,7 @@ public sealed class AcceptanceScenarioTests(GameClubWebApplicationFactory factor
         factory.Clock.SetTehran(2026, 6, 3, 14, 0);
         var sessionId = await StartSession("PC-A", 1);
         factory.Clock.SetTehran(2026, 6, 3, 15, 0);
-        await CheckpointAsync(sessionId);
+        await CheckpointAsync(sessionId, TestTimes.T(2026, 6, 3, 15, 0));
         var stop = await _client.PostAsync($"/api/sessions/{sessionId}/stop", null);
         var invoice = await stop.Content.ReadFromJsonAsync<JsonElement>();
         AssertInvoice(invoice, 80_000, 80_000);
@@ -72,7 +72,7 @@ public sealed class AcceptanceScenarioTests(GameClubWebApplicationFactory factor
         factory.Clock.SetTehran(2026, 6, 3, 14, 0);
         var sessionId = await StartSession("PC-B", 1);
         factory.Clock.SetTehran(2026, 6, 3, 15, 0);
-        await CheckpointAsync(sessionId);
+        await CheckpointAsync(sessionId, TestTimes.T(2026, 6, 3, 15, 0));
         var stop = await _client.PostAsync($"/api/sessions/{sessionId}/stop", null);
         var invoice = await stop.Content.ReadFromJsonAsync<JsonElement>();
         AssertInvoice(invoice, 110_000, 110_000);
@@ -86,7 +86,7 @@ public sealed class AcceptanceScenarioTests(GameClubWebApplicationFactory factor
         factory.Clock.SetTehran(2026, 6, 3, 14, 0);
         var sessionId = await StartSession("PC-C", 1);
         factory.Clock.SetTehran(2026, 6, 3, 14, 50);
-        await CheckpointAsync(sessionId);
+        await CheckpointAsync(sessionId, TestTimes.T(2026, 6, 3, 14, 50));
         var stop = await _client.PostAsync($"/api/sessions/{sessionId}/stop", null);
         var invoice = await stop.Content.ReadFromJsonAsync<JsonElement>();
         AssertInvoice(invoice, 66_667, 70_000);
@@ -100,7 +100,7 @@ public sealed class AcceptanceScenarioTests(GameClubWebApplicationFactory factor
         factory.Clock.SetTehran(2026, 6, 3, 8, 0);
         var sessionId = await StartSession("PC-D", 1);
         factory.Clock.SetTehran(2026, 6, 3, 9, 0);
-        await CheckpointAsync(sessionId);
+        await CheckpointAsync(sessionId, TestTimes.T(2026, 6, 3, 9, 0));
         var stop = await _client.PostAsync($"/api/sessions/{sessionId}/stop", null);
         var invoice = await stop.Content.ReadFromJsonAsync<JsonElement>();
         AssertInvoice(invoice, 90_000, 90_000);
@@ -114,7 +114,7 @@ public sealed class AcceptanceScenarioTests(GameClubWebApplicationFactory factor
         factory.Clock.SetTehran(2026, 6, 3, 2, 0);
         var sessionId = await StartSession("PC-E", 1);
         factory.Clock.SetTehran(2026, 6, 3, 3, 0);
-        await CheckpointAsync(sessionId);
+        await CheckpointAsync(sessionId, TestTimes.T(2026, 6, 3, 3, 0));
         var stop = await _client.PostAsync($"/api/sessions/{sessionId}/stop", null);
         var invoice = await stop.Content.ReadFromJsonAsync<JsonElement>();
         AssertInvoice(invoice, 130_000, 130_000);
@@ -178,7 +178,7 @@ public sealed class AcceptanceScenarioTests(GameClubWebApplicationFactory factor
         var pause = await _client.PostAsync($"/api/sessions/{sessionId}/pause", null);
         Assert.Equal(HttpStatusCode.Conflict, pause.StatusCode);
         factory.Clock.SetTehran(2026, 6, 3, 15, 0);
-        await CheckpointAsync(sessionId);
+        await CheckpointAsync(sessionId, TestTimes.T(2026, 6, 3, 15, 0));
         var live = await _client.GetFromJsonAsync<JsonElement>($"/api/sessions/{sessionId}/live-amount");
         Assert.Equal(80_000, live.GetProperty("amountToman").GetInt64());
         var stop = await _client.PostAsync($"/api/sessions/{sessionId}/stop", null);
@@ -219,7 +219,7 @@ public sealed class AcceptanceScenarioTests(GameClubWebApplicationFactory factor
         factory.Clock.SetTehran(2026, 6, 3, 14, 0);
         var sessionId = await StartSession("PC-G", 1);
         factory.Clock.SetTehran(2026, 6, 3, 15, 0);
-        await CheckpointAsync(sessionId);
+        await CheckpointAsync(sessionId, TestTimes.T(2026, 6, 3, 15, 0));
         factory.Clock.SetTehran(2026, 6, 3, 15, 10);
         var sweep = await _client.PostAsync("/api/internal/dead-pc-sweep", null);
         Assert.Equal(HttpStatusCode.OK, sweep.StatusCode);
@@ -240,7 +240,7 @@ public sealed class AcceptanceScenarioTests(GameClubWebApplicationFactory factor
         factory.Clock.SetTehran(2026, 6, 3, 14, 0);
         var sessionId = await StartSession("PC-H", 1);
         factory.Clock.SetTehran(2026, 6, 3, 15, 0);
-        await CheckpointAsync(sessionId);
+        await CheckpointAsync(sessionId, TestTimes.T(2026, 6, 3, 15, 0));
         await _client.PostAsJsonAsync($"/api/sessions/{sessionId}/checkpoints", new { at = TestTimes.T(2026, 6, 3, 14, 30) });
         var stop = await _client.PostAsync($"/api/sessions/{sessionId}/stop", null);
         Assert.Equal(HttpStatusCode.Conflict, stop.StatusCode);
@@ -308,8 +308,8 @@ public sealed class AcceptanceScenarioTests(GameClubWebApplicationFactory factor
         Assert.Equal(expectedCollectible, collectible);
     }
 
-    private Task CheckpointAsync(Guid sessionId)
-        => _client.PostAsJsonAsync($"/api/sessions/{sessionId}/checkpoints", new { });
+    private Task CheckpointAsync(Guid sessionId, DateTimeOffset at)
+        => _client.PostAsJsonAsync($"/api/sessions/{sessionId}/checkpoints", new { at });
 
     private async Task RegisterPc(string id, string groupId)
     {
