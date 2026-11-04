@@ -1,0 +1,117 @@
+using GameClub.Server.Data;
+using GameClub.Server.Services;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+
+namespace GameClub.Server.Controllers;
+
+[ApiController]
+[Route("api/stations")]
+public sealed class StationsController(StationService stations) : ControllerBase
+{
+    public sealed record RegisterRequest(string Id, string Name, string GroupId);
+
+    public sealed record UpdateGroupRequest(string GroupId);
+
+    [HttpPost]
+    public async Task<IActionResult> Register(RegisterRequest body, CancellationToken ct)
+    {
+        var station = await stations.RegisterAsync(body.Id, body.Name, body.GroupId, ct);
+        return Created($"/api/stations/{station.Id}", new { station.Id, station.Name, station.GroupId });
+    }
+
+    [HttpPatch("{id}/group")]
+    public async Task<IActionResult> UpdateGroup(string id, UpdateGroupRequest body, CancellationToken ct)
+    {
+        var station = await stations.UpdateGroupAsync(id, body.GroupId, ct);
+        return Ok(new { station.Id, station.GroupId });
+    }
+}
+
+[ApiController]
+[Route("api/sessions")]
+public sealed class SessionsController(SessionService sessions, IDeadPcMonitor deadPc) : ControllerBase
+{
+    public sealed record StartRequest(string StationId, int PlayerCount = 1, string Mode = "Offline", DateTimeOffset? StartedAt = null);
+
+    public sealed record CheckpointRequest(DateTimeOffset? At = null);
+
+    public sealed record PlayerCountRequest(int PlayerCount);
+
+    [HttpPost]
+    public async Task<IActionResult> Start(StartRequest body, CancellationToken ct)
+    {
+        var mode = Enum.TryParse<GameClub.Billing.PlayMode>(body.Mode, true, out var parsed)
+            ? parsed
+            : GameClub.Billing.PlayMode.Offline;
+        var session = await sessions.StartAsync(body.StationId, body.PlayerCount, mode, body.StartedAt, ct);
+        return Created($"/api/sessions/{session.Id}", new { session.Id, session.StationId, session.Status });
+    }
+
+    [HttpPost("{id:guid}/pause")]
+    public async Task<IActionResult> Pause(Guid id, CancellationToken ct)
+    {
+        await sessions.PauseAsync(id, ct);
+        return NoContent();
+    }
+
+    [HttpPost("{id:guid}/resume")]
+    public async Task<IActionResult> Resume(Guid id, CancellationToken ct)
+    {
+        await sessions.ResumeAsync(id, ct);
+        return NoContent();
+    }
+
+    [HttpPost("{id:guid}/stop")]
+    public async Task<IActionResult> Stop(Guid id, CancellationToken ct)
+    {
+        var invoice = await sessions.StopAsync(id, ct);
+        return Ok(new
+        {
+            invoice.Number,
+            invoice.PayableToman,
+            invoice.NetBeforeRoundingToman,
+            invoice.RoundingToman,
+        });
+    }
+
+    [HttpGet("{id:guid}/live-amount")]
+    public async Task<IActionResult> LiveAmount(Guid id, CancellationToken ct)
+    {
+        var amount = await sessions.LiveAmountAsync(id, ct);
+        return Ok(new { amountToman = amount });
+    }
+
+    [HttpPost("{id:guid}/checkpoints")]
+    public async Task<IActionResult> Checkpoint(Guid id, CheckpointRequest body, CancellationToken ct)
+    {
+        await sessions.RecordCheckpointAsync(id, body.At, ct);
+        return NoContent();
+    }
+
+    [HttpPatch("{id:guid}/player-count")]
+    public async Task<IActionResult> PlayerCount(Guid id, PlayerCountRequest body, CancellationToken ct)
+    {
+        await sessions.ChangePlayerCountAsync(id, body.PlayerCount, ct);
+        return NoContent();
+    }
+
+    [HttpPost("~/api/internal/dead-pc-sweep")]
+    public async Task<IActionResult> DeadPcSweep(CancellationToken ct)
+    {
+        var count = await deadPc.RunDueClosuresAsync(ct);
+        return Ok(new { closed = count });
+    }
+}
+
+[ApiController]
+[Route("api/audit")]
+public sealed class AuditController(AppDbContext db) : ControllerBase
+{
+    [HttpGet]
+    public async Task<IActionResult> List(CancellationToken ct)
+    {
+        var rows = await db.AuditLog.OrderBy(a => a.Id).Select(a => new { a.Id, a.Action }).ToListAsync(ct);
+        return Ok(rows);
+    }
+}

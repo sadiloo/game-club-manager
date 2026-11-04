@@ -1,4 +1,6 @@
 <Solution>
   <Project Path="src/GameClub.Billing/GameClub.Billing.csproj" />
+  <Project Path="src/GameClub.Server/GameClub.Server.csproj" />
   <Project Path="tests/GameClub.Billing.Tests/GameClub.Billing.Tests.csproj" />
+  <Project Path="tests/GameClub.Server.Tests/GameClub.Server.Tests.csproj" />
 </Solution>
