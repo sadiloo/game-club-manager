@@ -32,8 +32,10 @@ public sealed class GameClubWebApplicationFactory : WebApplicationFactory<Progra
 
         Environment.SetEnvironmentVariable("GAMECLUB_DATABASE", ConnectionString);
         Environment.SetEnvironmentVariable("GAMECLUB_API_KEY", "dev-key");
+        Environment.SetEnvironmentVariable("DeadPc__SweepIntervalSeconds", "1");
 
         builder.UseSetting("ConnectionStrings:Default", ConnectionString);
+        builder.UseSetting($"{DeadPcSweepOptions.SectionName}:SweepIntervalSeconds", "1");
         builder.ConfigureServices(services =>
         {
             services.RemoveAll<IClock>();

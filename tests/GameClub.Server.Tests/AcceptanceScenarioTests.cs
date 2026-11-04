@@ -25,6 +25,14 @@ public sealed class AcceptanceScenarioTests(GameClubWebApplicationFactory factor
         await db.Database.ExecuteSqlRawAsync("""
             TRUNCATE audit_log, checkpoints, pause_intervals, play_segments, invoices, sessions, stations RESTART IDENTITY CASCADE;
             UPDATE invoice_number_sequence SET "NextNumber" = 1;
+            UPDATE rate_lines SET "HourlyToman" = 80000
+              WHERE "GroupId" = 'pc-normal' AND "IsSpecialBand" = false AND "PlayMode" = 'Offline' AND "PlayerCount" = 1;
+            UPDATE rate_lines SET "HourlyToman" = 100000
+              WHERE "GroupId" = 'pc-normal' AND "IsSpecialBand" = true AND "PlayMode" = 'Offline' AND "PlayerCount" = 1;
+            UPDATE rate_lines SET "HourlyToman" = 110000
+              WHERE "GroupId" = 'pc-vip' AND "IsSpecialBand" = false AND "PlayMode" = 'Offline' AND "PlayerCount" = 1;
+            UPDATE rate_lines SET "HourlyToman" = 130000
+              WHERE "GroupId" = 'pc-vip' AND "IsSpecialBand" = true AND "PlayMode" = 'Offline' AND "PlayerCount" = 1;
             """);
     }
 
