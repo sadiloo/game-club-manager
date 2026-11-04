@@ -16,6 +16,12 @@ public sealed class ApiKeyMiddleware(RequestDelegate next, IConfiguration config
             return;
         }
 
+        if (context.Request.Path.StartsWithSegments("/swagger"))
+        {
+            await next(context);
+            return;
+        }
+
         var expected = config["GAMECLUB_API_KEY"] ?? config["ApiKey"] ?? "dev-key";
         if (!context.Request.Headers.TryGetValue(HeaderName, out var provided) || provided != expected)
         {

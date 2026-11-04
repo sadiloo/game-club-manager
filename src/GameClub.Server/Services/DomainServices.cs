@@ -202,9 +202,9 @@ public sealed class SessionCloser(AppDbContext db, RateConfigService rates, Sess
             Id = Guid.NewGuid(),
             Number = number,
             SessionId = session.Id,
-            NetBeforeRoundingToman = invoiceCalc.NetBeforeRoundingToman,
+            UnroundedPayableToman = invoiceCalc.NetBeforeRoundingToman,
             RoundingToman = invoiceCalc.RoundingToman,
-            PayableToman = invoiceCalc.PayableToman,
+            CollectibleToman = invoiceCalc.PayableToman,
             IssuedAtUtc = endUtc,
         };
         session.Invoice = invoice;
@@ -425,6 +425,45 @@ public sealed class SessionService(
         return charge.TotalAmountToman;
     }
 
+    public async Task<InvoiceEntity> ResolveManualSettleAsync(Guid sessionId, DateTimeOffset? endAt, CancellationToken ct)
+    {
+        var session = await db.Sessions
+            .Include(s => s.Station)!.ThenInclude(st => st!.Group)
+            .Include(s => s.Segments)
+            .Include(s => s.Pauses)
+            .FirstOrDefaultAsync(s => s.Id == sessionId, ct)
+            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Session not found.");
+        if (session.Status != SessionStatus.ManualSettle)
+        {
+            throw new ApiException(StatusCodes.Status409Conflict, "not_manual_settle", "Session is not awaiting manual settlement.");
+        }
+
+        var now = clock.UtcNow.UtcDateTime;
+        var lastAccepted = session.LastCheckpointUtc ?? session.StartedAtUtc;
+        DateTime endUtc;
+        if (!endAt.HasValue)
+        {
+            endUtc = lastAccepted;
+        }
+        else
+        {
+            endUtc = TimeMapping.ToUtc(TehranTime.Ensure(endAt.Value));
+            if (endUtc > now)
+            {
+                throw new ApiException(StatusCodes.Status400BadRequest, "future_end", "End time cannot be in the future.");
+            }
+
+            if (endUtc < lastAccepted)
+            {
+                throw new ApiException(StatusCodes.Status400BadRequest, "before_checkpoint", "End time must be at or after the last accepted checkpoint.");
+            }
+        }
+
+        var invoice = await closer.CloseAsync(session, endUtc, "manual-settle", ct);
+        await audit.AppendAsync("session.manual_settle_resolve", new { sessionId, endUtc }, ct);
+        return invoice;
+    }
+
     private async Task<PlaySessionEntity> LoadOpenSession(Guid id, CancellationToken ct)
     {
         var session = await db.Sessions
@@ -454,7 +493,6 @@ public sealed class DeadPcMonitor(AppDbContext db, IClock clock, SessionCloser c
     public async Task<int> RunDueClosuresAsync(CancellationToken ct)
     {
         var now = clock.UtcNow.UtcDateTime;
-        var threshold = now - Timeout;
         var candidates = await db.Sessions
             .Include(s => s.Station)!.ThenInclude(st => st!.Group)
             .Include(s => s.Segments)
@@ -464,7 +502,7 @@ public sealed class DeadPcMonitor(AppDbContext db, IClock clock, SessionCloser c
 
         var due = candidates
             .Where(s => s.Station?.Group?.Kind == StationKind.Pc
-                && s.LastCheckpointUtc!.Value <= threshold)
+                && s.LastCheckpointUtc!.Value <= now - Timeout)
             .ToList();
 
         foreach (var session in due)
@@ -512,6 +550,7 @@ public sealed class DatabaseSeed
                 Id = 1,
                 StepToman = 5_000,
                 Direction = "Up",
+                PcSpecialBandSurchargeToman = RateConfigService.DefaultPcSpecialBandSurchargeToman,
             });
         }
 

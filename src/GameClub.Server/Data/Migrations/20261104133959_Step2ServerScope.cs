@@ -87,9 +87,7 @@ namespace GameClub.Server.Data.Migrations
             Line(ps5, "Offline", 4, true, 270_000);
             Line(ps5, "Online", null, true, 220_000);
             Line("pc-normal", "Offline", 1, false, 80_000);
-            Line("pc-normal", "Offline", 1, true, 100_000);
             Line("pc-vip", "Offline", 1, false, 110_000);
-            Line("pc-vip", "Offline", 1, true, 130_000);
         }
 
         /// <inheritdoc />

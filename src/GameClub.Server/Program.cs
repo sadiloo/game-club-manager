@@ -11,6 +11,8 @@ public partial class Program
     {
         var builder = WebApplication.CreateBuilder(args);
         builder.Services.AddControllers();
+        builder.Services.AddEndpointsApiExplorer();
+        builder.Services.AddSwaggerGen();
         builder.Services.AddSingleton<IClock, SystemClock>();
         builder.Services.Configure<DeadPcSweepOptions>(builder.Configuration.GetSection(DeadPcSweepOptions.SectionName));
         builder.Services.AddScoped<RateConfigService>();
@@ -31,6 +33,7 @@ public partial class Program
         var app = builder.Build();
         app.UseMiddleware<ApiExceptionMiddleware>();
         app.UseMiddleware<ApiKeyMiddleware>();
+        app.UseSwagger();
         app.MapControllers();
 
         using (var scope = app.Services.CreateScope())

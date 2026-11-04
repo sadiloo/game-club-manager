@@ -58,6 +58,9 @@ namespace GameClub.Server.Data.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<long>("PcSpecialBandSurchargeToman")
+                        .HasColumnType("bigint");
+
                     b.Property<long>("StepToman")
                         .HasColumnType("bigint");
 
@@ -93,16 +96,13 @@ namespace GameClub.Server.Data.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
+                    b.Property<long>("CollectibleToman")
+                        .HasColumnType("bigint");
+
                     b.Property<DateTime>("IssuedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
-                    b.Property<long>("NetBeforeRoundingToman")
-                        .HasColumnType("bigint");
-
                     b.Property<long>("Number")
-                        .HasColumnType("bigint");
-
-                    b.Property<long>("PayableToman")
                         .HasColumnType("bigint");
 
                     b.Property<long>("RoundingToman")
@@ -114,6 +114,9 @@ namespace GameClub.Server.Data.Migrations
                     b.Property<string>("Status")
                         .IsRequired()
                         .HasColumnType("text");
+
+                    b.Property<long>("UnroundedPayableToman")
+                        .HasColumnType("bigint");
 
                     b.HasKey("Id");
 

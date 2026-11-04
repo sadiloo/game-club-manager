@@ -119,9 +119,24 @@ public sealed class SessionsController(SessionService sessions, IDeadPcMonitor d
         return Ok(new
         {
             invoice.Number,
-            invoice.PayableToman,
-            invoice.NetBeforeRoundingToman,
-            invoice.RoundingToman,
+            unroundedPayableToman = invoice.UnroundedPayableToman,
+            roundingToman = invoice.RoundingToman,
+            collectibleToman = invoice.CollectibleToman,
+        });
+    }
+
+    public sealed record ManualSettleRequest(DateTimeOffset? EndAt = null);
+
+    [HttpPost("{id:guid}/manual-settle")]
+    public async Task<IActionResult> ManualSettle(Guid id, ManualSettleRequest body, CancellationToken ct)
+    {
+        var invoice = await sessions.ResolveManualSettleAsync(id, body.EndAt, ct);
+        return Ok(new
+        {
+            invoice.Number,
+            unroundedPayableToman = invoice.UnroundedPayableToman,
+            roundingToman = invoice.RoundingToman,
+            collectibleToman = invoice.CollectibleToman,
         });
     }
 

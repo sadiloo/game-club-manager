@@ -122,11 +122,13 @@ public sealed class InvoiceEntity
 
     public PlaySessionEntity? Session { get; set; }
 
-    public long NetBeforeRoundingToman { get; set; }
+    /// <summary>Exact session payable before PA-8 rounding (unrounded).</summary>
+    public long UnroundedPayableToman { get; set; }
 
     public long RoundingToman { get; set; }
 
-    public long PayableToman { get; set; }
+    /// <summary>Rounded amount to collect (step 5,000 up).</summary>
+    public long CollectibleToman { get; set; }
 
     public DateTime IssuedAtUtc { get; set; }
 
@@ -165,6 +167,9 @@ public sealed class BranchRoundingEntity
     public long StepToman { get; set; }
 
     public string Direction { get; set; } = "Up";
+
+    /// <summary>Added to PC base hourly rate inside 00:00–08:30 (pilot: 20,000).</summary>
+    public long PcSpecialBandSurchargeToman { get; set; } = 20_000;
 }
 
 public sealed class RateLineEntity
