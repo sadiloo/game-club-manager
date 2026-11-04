@@ -289,6 +289,149 @@ public class Round6Tests
         }
     }
 
+    [Fact]
+    public void money_first_with_packages_and_codes_matches_minute_oracle()
+    {
+        var rng = new Random(808);
+        var flat = Flat();
+        var pilot = PilotSeed.CreateCard();
+        var cards = new (RateCard Card, string GroupId)[]
+        {
+            (flat, "g"),
+        };
+
+        for (var i = 0; i < 400; i++)
+        {
+            var (card, groupId) = cards[rng.Next(cards.Length)];
+            var policy = new BillingPolicy(
+                rng.Next(3) == 0 ? 1 : (rng.Next(2) == 0 ? 5 : 15),
+                PartialUnitMode.Ceiling,
+                RateRemainderMode.Nearest);
+            var start = TehranTime.AddSeconds(T.At(2026, 6, 4, 0, 0), rng.Next(0, 4 * 86400));
+            var end = TehranTime.AddSeconds(start, rng.Next(30, 4 * 3600));
+            var session = new Session("s", [new PlaySegment("a", start, end, "st", groupId, PlayMode.Offline, 1)]);
+            var charge = SessionPricer.Price(session, card, policy: policy);
+            if (charge.Lines.Count != 1)
+            {
+                continue;
+            }
+
+            var line = charge.Lines[0];
+            var minuteStarts = BuildSegmentMinuteStarts(session, policy);
+            if (minuteStarts.Count != line.BilledMinutes)
+            {
+                continue;
+            }
+
+            var codePercent = rng.Next(3) == 0 ? 0 : rng.Next(1, 60);
+            var fixedToman = rng.Next(4) == 0 ? rng.Next(1, 20_000) : 0L;
+            DateTimeOffset? validFrom = rng.Next(2) == 0
+                ? TehranTime.AddSeconds(line.Start, rng.Next(-3600, (int)(line.End - line.Start).TotalSeconds))
+                : null;
+            var spec = new SessionDiscount(
+                LevelPercent: rng.Next(3) == 0 ? 0 : rng.Next(1, 30),
+                CodePercent: codePercent,
+                FixedToman: fixedToman,
+                ValidFrom: validFrom);
+            var packageMinutes = rng.Next(4) == 0 ? 0 : rng.Next(1, 45);
+            var balance = rng.Next(3) == 0
+                ? rng.Next(0, 50_000)
+                : rng.Next(0, 500_000);
+            var packages = packageMinutes > 0
+                ? new[] { new TimePackage("p", packageMinutes, 200_000) }
+                : Array.Empty<TimePackage>();
+
+            var (expectedMoneyMinutes, expectedMoneyNet) = OracleMoneyFirstPrefix(
+                line,
+                minuteStarts,
+                policy,
+                spec,
+                balance);
+            var settled = AccountSettlement.Settle(
+                charge,
+                new PcAccount("m", balance, packages),
+                new AccountPolicy(ConsumptionOrder.MoneyThenPackages),
+                billing: policy,
+                discount: spec);
+            var parts = settled.PackageCoveredToman + settled.MoneyConsumedToman + settled.DiscountToman
+                + (settled.Grace?.WaivedToman ?? 0) + settled.WriteOffToman + settled.UncoveredToman + settled.OmittedToman;
+            Assert.Equal(charge.TotalAmountToman, parts);
+            Assert.True(settled.WriteOffToman >= 0);
+            Assert.True(settled.OmittedToman >= 0);
+            if (packageMinutes == 0 && balance >= charge.TotalAmountToman - settled.DiscountToman)
+            {
+                Assert.Equal(expectedMoneyNet, settled.MoneyConsumedToman);
+            }
+
+            if (expectedMoneyMinutes > 0)
+            {
+                Assert.Equal(expectedMoneyMinutes, settled.MoneyDraws[0].Minutes);
+            }
+        }
+    }
+
+    internal static (long Minutes, long NetToman) OracleMoneyFirstPrefix(
+        PricedSlice line,
+        IReadOnlyList<DateTimeOffset> minuteStarts,
+        BillingPolicy policy,
+        SessionDiscount spec,
+        long balance)
+    {
+        var clean = line.AmountToman
+            == MoneyMath.ChargeForMinutes(line.HourlyRateToman, line.BilledMinutes, policy.Remainder)
+                - MoneyMath.ChargeForMinutes(line.HourlyRateToman, 0, policy.Remainder);
+        long MinuteGross(long i)
+        {
+            if (clean)
+            {
+                return MoneyMath.ChargeForMinutes(line.HourlyRateToman, i + 1, policy.Remainder)
+                    - MoneyMath.ChargeForMinutes(line.HourlyRateToman, i, policy.Remainder);
+            }
+
+            var before = i == 0 ? 0 : MoneyMath.MulDiv(line.AmountToman, i, line.BilledMinutes);
+            var after = i + 1 >= line.BilledMinutes
+                ? line.AmountToman
+                : MoneyMath.MulDiv(line.AmountToman, i + 1, line.BilledMinutes);
+            return after - before;
+        }
+
+        long allGross = 0;
+        long codeGross = 0;
+        long birthGross = 0;
+        long prevNet = 0;
+        long net = 0;
+        long minutes = 0;
+        var spendable = balance > 0 ? balance : 0;
+        for (long i = 0; i < line.BilledMinutes; i++)
+        {
+            var gross = MinuteGross(i);
+            var at = minuteStarts[(int)i];
+            allGross += gross;
+            if (CodeEligible(spec, at, line.GroupId))
+            {
+                codeGross += gross;
+            }
+
+            if (BirthEligible(spec, at))
+            {
+                birthGross += gross;
+            }
+
+            var nowNet = OracleNet(allGross, codeGross, birthGross, spec);
+            var marginal = nowNet - prevNet;
+            prevNet = nowNet;
+            if (net + marginal > spendable)
+            {
+                break;
+            }
+
+            net += marginal;
+            minutes++;
+        }
+
+        return (minutes, net);
+    }
+
     internal static long IndependentOracleDiscountForCharge(SessionCharge charge, SessionDiscount spec)
         => IndependentOracleDiscount(
             new Session("s", [new PlaySegment("a", charge.Lines[0].Start, LastLineEnd(charge), "st", charge.Lines[0].GroupId, PlayMode.Offline, 1)]),

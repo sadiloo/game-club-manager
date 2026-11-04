@@ -57,7 +57,8 @@ public sealed class StationDirectory
         _stations = new Dictionary<string, Station>(StringComparer.OrdinalIgnoreCase);
         foreach (var station in stations)
         {
-            if (string.IsNullOrWhiteSpace(station.Id))
+            var id = station.Id.Trim();
+            if (string.IsNullOrWhiteSpace(id))
             {
                 throw new BillingException("invalid_tariff", "Station id is required.");
             }
@@ -67,9 +68,10 @@ public sealed class StationDirectory
                 throw new BillingException("invalid_tariff", $"Station '{station.Id}' references unknown group '{station.GroupId}'.");
             }
 
-            if (!Bcl.TryAdd(_stations, station.Id, station))
+            var normalized = id == station.Id ? station : station with { Id = id };
+            if (!Bcl.TryAdd(_stations, id, normalized))
             {
-                throw new BillingException("invalid_tariff", $"Duplicate station '{station.Id}'.");
+                throw new BillingException("invalid_tariff", $"Duplicate station '{id}'.");
             }
         }
     }

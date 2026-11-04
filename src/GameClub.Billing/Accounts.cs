@@ -431,11 +431,16 @@ public static class AccountSettlement
         if (settledParts != charge.TotalAmountToman)
         {
             writeOff += charge.TotalAmountToman - settledParts;
-            if (writeOff < 0)
-            {
-                writeOff = 0;
-            }
         }
+
+        EnsureNonNegativeSettlement(
+            packageCovered,
+            moneyConsumed,
+            discountToman,
+            grace.Waived,
+            writeOff,
+            omitted,
+            uncovered);
 
         if (writeOff > 0)
         {
@@ -463,6 +468,29 @@ public static class AccountSettlement
             report,
             omitted,
             pricedDiscount.All);
+    }
+
+    private static void EnsureNonNegativeSettlement(
+        long packageCovered,
+        long moneyConsumed,
+        long discountToman,
+        long graceWaived,
+        long writeOff,
+        long omitted,
+        long uncovered)
+    {
+        if (packageCovered < 0
+            || moneyConsumed < 0
+            || discountToman < 0
+            || graceWaived < 0
+            || writeOff < 0
+            || omitted < 0
+            || uncovered < 0)
+        {
+            throw new BillingException(
+                BillingErrors.InvalidMoney,
+                "Settlement parts cannot be negative.");
+        }
     }
 
     private static void ApplyPart(
@@ -533,7 +561,6 @@ public static class AccountSettlement
         else
         {
             var spendable = money > 0 ? money : 0;
-            var moneyMinutes = MaxMoneyMinutes(part.AmountToman, part.BilledMinutes, spendable);
             var runPrefix = SessionPricer.BuildMinuteRunPrefix(minuteRuns);
             var partRunCharge = MoneyMath.ChargeForMinutes(part.HourlyRateToman, part.BilledMinutes, billing.Remainder)
                 - MoneyMath.ChargeForMinutes(part.HourlyRateToman, 0, billing.Remainder);
@@ -563,20 +590,27 @@ public static class AccountSettlement
                 return after - before;
             }
 
+            long moneyMinutes = 0;
             long moneyShare = 0;
             long netShare = 0;
-            for (long i = 0; i < moneyMinutes; i++)
+            for (long i = 0; i < part.BilledMinutes; i++)
             {
                 var piece = PartMinuteGross(i);
-                moneyShare += piece;
                 var atMinute = SessionPricer.BilledMinuteStart(minuteRuns, runPrefix, lineStart, minuteBase + i);
-                netShare += discount.Marginal(piece, atMinute, part.GroupId);
+                var marginal = discount.Marginal(piece, atMinute, part.GroupId);
+                if (netShare + marginal > spendable)
+                {
+                    break;
+                }
+
+                netShare += marginal;
+                moneyShare += piece;
                 discount.Commit(piece, atMinute, part.GroupId);
+                moneyMinutes++;
             }
 
-            var pay = netShare < spendable ? netShare : spendable;
-            money -= pay;
-            moneyConsumed += pay;
+            money -= netShare;
+            moneyConsumed += netShare;
 
             if (moneyShare > 0)
             {
@@ -602,19 +636,32 @@ public static class AccountSettlement
             packageMinutes += taken;
             packageCovered += coveredValue;
             long gross = 0;
-            ApplyMoney(ref money, part.HourlyRateToman, tailMinutes - taken, shortfall, part.ActiveSeconds, moneyMinutes, minuteBase + moneyMinutes, minuteRuns, lineStart, billing, discount, part.GroupId, grace, part.Start, part.SegmentId, ref moneyConsumed, ref uncovered, ref writeOff, ref omitted, ref gross);
+            var playedBefore = moneyMinutes + taken;
+            var tailMinuteBase = minuteBase + playedBefore;
+            ApplyMoney(
+                ref money,
+                part.HourlyRateToman,
+                tailMinutes - taken,
+                shortfall,
+                part.ActiveSeconds,
+                playedBefore,
+                tailMinuteBase,
+                minuteRuns,
+                lineStart,
+                billing,
+                discount,
+                part.GroupId,
+                grace,
+                part.Start,
+                part.SegmentId,
+                ref moneyConsumed,
+                ref uncovered,
+                ref writeOff,
+                ref omitted,
+                ref gross);
             if (gross > 0)
             {
                 moneyDraws.Add(new MoneyDraw(part.SegmentId, part.Start, tailMinutes - taken, gross));
-            }
-
-            if (pay < netShare)
-            {
-                writeOff -= netShare - pay;
-                if (writeOff < 0)
-                {
-                    writeOff = 0;
-                }
             }
         }
     }
