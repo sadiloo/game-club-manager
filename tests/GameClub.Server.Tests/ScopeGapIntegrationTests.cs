@@ -58,7 +58,7 @@ public sealed class ScopeGapIntegrationTests(GameClubWebApplicationFactory facto
         await _client.PostAsJsonAsync($"/api/sessions/{sessionId}/checkpoints", new { at = TestTimes.T(2026, 6, 3, 15, 0) });
         var stop = await _client.PostAsync($"/api/sessions/{sessionId}/stop", null);
         var invoice = await stop.Content.ReadFromJsonAsync<JsonElement>();
-        Assert.Equal(90_000, invoice.GetProperty("payableToman").GetInt64());
+        Assert.Equal(90_000, invoice.GetProperty("collectibleToman").GetInt64());
 
         using var scope = factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
@@ -109,7 +109,7 @@ public sealed class ScopeGapIntegrationTests(GameClubWebApplicationFactory facto
         }
 
         Assert.NotNull(invoice);
-        Assert.Equal(80_000, invoice!.PayableToman);
+        Assert.Equal(80_000, invoice!.CollectibleToman);
         using (var scope = factory.Services.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
