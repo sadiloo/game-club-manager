@@ -1,0 +1,10 @@
+---
+description: Writing or editing a feature spec in docs/specs
+globs: docs/specs/**
+alwaysApply: false
+---
+- Use docs/specs/_TEMPLATE.md. Number every rule and give each a worked
+  example with real numbers.
+- "Open questions" must be empty before Status becomes Approved.
+- After approval, a rule change bumps Version and adds a Changelog line;
+  never silently edit an approved rule.

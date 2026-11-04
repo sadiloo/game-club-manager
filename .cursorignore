@@ -1,0 +1,14 @@
+# Historical material, not requirements
+docs/archive/
+# Build and test outputs
+**/bin/
+**/obj/
+**/publish/
+**/packages/
+artifacts/
+**/TestResults/
+*.binlog
+*.trx
+*.nupkg
+.vs/
+*.user
