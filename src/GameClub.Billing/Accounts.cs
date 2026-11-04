@@ -320,7 +320,7 @@ internal sealed class DiscountLedger
             : _spec.LevelPercent)
             + (codeEligible ? _spec.CodePercent : 0);
         long percentDisc;
-        if (combinedRate >= _spec.Cap)
+        if (combinedRate >= 100)
         {
             percentDisc = gross;
         }

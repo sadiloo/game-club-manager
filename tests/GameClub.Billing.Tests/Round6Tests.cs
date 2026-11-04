@@ -695,7 +695,7 @@ public class Round6Tests
             : spec.LevelPercent)
             + (codeOn ? spec.CodePercent : 0);
         long percentDisc;
-        if (combinedRate >= spec.Cap)
+        if (combinedRate >= 100)
         {
             percentDisc = gross;
         }
