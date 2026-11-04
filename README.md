@@ -1,14 +1,13 @@
 # game-club-manager
 
-Gaming-cafe management. Agents start at [AGENTS.md](AGENTS.md). This file is a pointer, not the requirements.
+Gaming-cafe management. Agents start at [AGENTS.md](AGENTS.md).
 
-Domain terms: [docs/CONTEXT.md](docs/CONTEXT.md). Feature specs: `docs/specs/`.
+Until the rules move to [docs/CONTEXT.md](docs/CONTEXT.md), the business rules are the README sections from Domain through Still open. Those sections arrive when PR #1 and PR #2 merge. Nothing else in this file is a requirement.
 
-The long README (28.8KB on the kiosk branch, slightly longer on the billing branch) is not on `main`. After those PRs merge, shrink it to a pointer under 2KB. Move business rules into `docs/CONTEXT.md` and the rest into `docs/overview.md` or `docs/archive/`. Do not drop a rule.
+Feature specs: `docs/specs/`. Decisions: `docs/adr/`.
 
-Projects once those branches merge:
-
+- `src/GameClub.Server/` — ASP.NET Core API (.NET 10, not created yet)
 - `src/GameClub.Billing/` — pricing (netstandard2.0 and net10.0)
 - `src/GameClub.Kiosk.Core/` — kiosk logic tested on Linux
-- `src/GameClub.Kiosk/` — WPF shell, .NET Framework 4.8, Windows only
-- `src/GameClub.Kiosk.Guard/` — Windows service, .NET Framework 4.8
+- `src/GameClub.Kiosk/` — WPF shell, .NET Framework 4.8, compile-only on Linux
+- `src/GameClub.Kiosk.Guard/` — Windows service, .NET Framework 4.8, compile-only on Linux

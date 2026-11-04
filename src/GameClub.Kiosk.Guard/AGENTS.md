@@ -1,8 +1,8 @@
 # src/GameClub.Kiosk.Guard — .NET Framework 4.8 Windows service
-- Never build, run, or test this net48 service on the Linux cloud VM.
-  Do not try: no mono, no SDK installs, no reference-assembly workarounds.
-- It is not the WPF UI. The WPF shell is src/GameClub.Kiosk and has the
-  same ban. Shared logic belongs in src/GameClub.Kiosk.Core.
-- If the spec requires guard changes: make the edit, write
-  "kiosk guard not built locally — verify in Windows CI" in the PR, and
-  rely on the Windows CI job.
+- Linux can compile this project with scripts/agent/build.sh. It cannot
+  run or test it. No mono. Runtime checks happen in Windows CI.
+- Leave the net48 reference-assemblies package in the csproj.
+- Shared logic belongs in src/GameClub.Kiosk.Core. The WPF shell is
+  src/GameClub.Kiosk.
+- If the spec requires guard changes: compile with build.sh, write
+  "kiosk guard not run locally — verify in Windows CI" in the PR.

@@ -4,6 +4,11 @@ docs/archive/
 **/bin/
 **/obj/
 **/publish/
+**/packages/
+artifacts/
 **/TestResults/
 *.binlog
 *.trx
+*.nupkg
+.vs/
+*.user

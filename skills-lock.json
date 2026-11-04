@@ -8,13 +8,6 @@
       "computedHash": "b3eb40152b81f0c98fd2095a023c019452dbdce56f7540cc67fece2972db8369",
       "installMode": "copy"
     },
-    "filter-syntax": {
-      "source": "dotnet/skills",
-      "sourceType": "github",
-      "skillPath": "plugins/dotnet-test/skills/filter-syntax/SKILL.md",
-      "computedHash": "ecccc9830ed70ae0c107c3c1605544012701864a12798249e0a0219ff94fb513",
-      "installMode": "copy"
-    },
     "grill-with-docs": {
       "source": "mattpocock/skills",
       "sourceType": "github",
@@ -27,13 +20,6 @@
       "sourceType": "github",
       "skillPath": "skills/productivity/grilling/SKILL.md",
       "computedHash": "e40cc1d348f6d935e28f1e24474302d7368f0a400429271a43b35fe154891dc5",
-      "installMode": "copy"
-    },
-    "setup-matt-pocock-skills": {
-      "source": "mattpocock/skills",
-      "sourceType": "github",
-      "skillPath": "skills/engineering/setup-matt-pocock-skills/SKILL.md",
-      "computedHash": "50d6c45174f56a4323b24978f36fcc9169fae0b3abb026587bf636e468c4954c",
       "installMode": "copy"
     },
     "to-spec": {

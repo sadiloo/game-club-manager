@@ -1,9 +1,9 @@
 # src/GameClub.Kiosk — WPF, .NET Framework 4.8 (Windows only)
-- Never build, run, or test this WPF / net48 kiosk on the Linux cloud VM.
-  Do not try: no mono, no SDK installs, no reference-assembly workarounds.
+- Linux can compile this project with scripts/agent/build.sh. It cannot
+  run or test it. No mono. Runtime checks happen in Windows CI.
+- Leave the net48 reference-assemblies package in the csproj. It is what
+  makes the compile succeed.
 - Put pricing rules in src/GameClub.Billing. Put non-UI kiosk logic in
-  src/GameClub.Kiosk.Core, where Linux tests already run. Keep XAML and
-  code-behind thin.
-- If the spec requires kiosk UI changes: make the edit, write
-  "kiosk not built locally — verify in Windows CI" in the PR, and rely
-  on the Windows CI job.
+  src/GameClub.Kiosk.Core. Keep XAML and code-behind thin.
+- If the spec requires kiosk UI changes: compile with build.sh, write
+  "kiosk not run locally — verify in Windows CI" in the PR.

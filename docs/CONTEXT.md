@@ -2,9 +2,6 @@
 
 The business rules are not in this file yet.
 
-They live in the root README on the open pull requests, which this branch does not copy:
+Until they move here, after PR #1 and PR #2 merge, they are the README.md sections from Domain through Still open. Do not treat any other part of README.md as a rule.
 
-- PR #1, `cursor/billing-engine-ea70`
-- PR #2, `cursor/kiosk-client-76bd` (28807 bytes)
-
-After those PRs merge, move every business rule into this file verbatim and shrink that README to a pointer under 2KB. Put the non-rule remainder in `docs/overview.md` or `docs/archive/`. Do not drop a rule. Which heading is a rule and which is overview or archive is listed under Open questions on the setup PR; the heading list alone is not a classification.
+Past decisions belong in docs/adr/.
