@@ -1,0 +1,10 @@
+---
+description: Writing or fixing .NET tests
+globs: tests/**
+alwaysApply: false
+---
+- One behavior per test. Name tests as snake_case sentences describing
+  the behavior (match existing tests).
+- Use the spec's worked examples as test data; cite the rule number.
+- These projects use VSTest (xunit 2 + Microsoft.NET.Test.Sdk), not
+  Microsoft.Testing.Platform. Filter with FullyQualifiedName~.
