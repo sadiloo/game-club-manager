@@ -1,0 +1,12 @@
+---
+description: Writing or fixing .NET tests
+globs: tests/GameClub.Billing.Tests/**, tests/GameClub.Kiosk.Core.Tests/**, **/*Tests/**, **/*.Tests.csproj
+alwaysApply: false
+---
+- One behavior per test. Name: Method_Condition_Expected.
+- Use the spec's worked examples as test data; cite the rule number.
+- Iterate with scripts/agent/test.sh <proj> --filter "FullyQualifiedName~<Class>".
+- These projects use VSTest (xunit 2 + Microsoft.NET.Test.Sdk), not
+  Microsoft.Testing.Platform. Filter with FullyQualifiedName~.
+- Never delete, skip or loosen an assertion to get green. If a test
+  contradicts the spec, say so in the PR instead.

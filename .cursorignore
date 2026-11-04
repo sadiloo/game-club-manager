@@ -1,0 +1,9 @@
+# Historical material, not requirements
+docs/archive/
+# Build and test outputs
+**/bin/
+**/obj/
+**/publish/
+**/TestResults/
+*.binlog
+*.trx
