@@ -38,8 +38,8 @@ public sealed class Round9R8Tests
             issuedAt: start.AddMinutes(63));
         var st = result.Settlement;
         Assert.Equal(charge.TotalAmountToman, Parts(st));
-        Assert.Equal(71_281, st.MoneyConsumedToman);
-        Assert.Equal(33_220, st.DiscountToman);
+        Assert.Equal(70_241, st.MoneyConsumedToman);
+        Assert.Equal(34_260, st.DiscountToman);
         Assert.Equal(0, st.WriteOffToman);
         Assert.Null(st.Grace);
         Assert.Null(st.Alert);

@@ -124,7 +124,7 @@ public sealed class Round7Tests
         Assert.Equal(charge.TotalAmountToman, parts);
         Assert.Equal(51_816, settled.MoneyConsumedToman);
         Assert.Equal(0, settled.OmittedToman);
-        Assert.Equal(4_945, settled.WriteOffToman);
+        Assert.Equal(3_905, settled.WriteOffToman);
     }
 
     [Fact]

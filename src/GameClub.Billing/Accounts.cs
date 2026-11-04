@@ -154,11 +154,21 @@ internal sealed class DiscountLedger
     public DiscountLedger(SessionDiscount spec)
     {
         _spec = spec;
+        _fixedLeft = spec.FixedToman;
         if (spec.BirthdayPercent > 0 && spec.BirthDate is JalaliDate birth && !birth.IsEmpty)
         {
             _birthOnCache = new Dictionary<LocalDate, bool>();
         }
     }
+
+    internal readonly record struct LedgerState(
+        long All,
+        long Code,
+        long Birth,
+        long Net,
+        long PrevPercentTotal,
+        long PercentCarry,
+        long FixedLeft);
 
     public long All { get; private set; }
 
@@ -167,6 +177,12 @@ internal sealed class DiscountLedger
     public long BirthGross { get; private set; }
 
     private long _netAccum;
+
+    private long _prevPercentTotal;
+
+    private long _percentCarry;
+
+    private long _fixedLeft;
 
     internal bool IsTrivial =>
         _spec.LevelPercent == 0
@@ -227,25 +243,13 @@ internal sealed class DiscountLedger
 
     public long NetNow() => _netAccum;
 
-    public (long All, long Code, long Birth, long Net) Snapshot() => (All, CodeGross, BirthGross, _netAccum);
+    public LedgerState Snapshot()
+        => new(All, CodeGross, BirthGross, _netAccum, _prevPercentTotal, _percentCarry, _fixedLeft);
 
-    public long NetAt((long All, long Code, long Birth, long Net) state) => state.Net;
+    public long NetAt(LedgerState state) => state.Net;
 
-    public (long All, long Code, long Birth, long Net) Advance((long All, long Code, long Birth, long Net) state, long gross, DateTimeOffset at, string? groupId)
-    {
-        var marginal = MarginalOn(
-            state.All,
-            state.Code,
-            state.Birth,
-            gross,
-            at,
-            groupId);
-        return (
-            state.All + gross,
-            state.Code + (CodeOn(at, groupId) ? gross : 0),
-            state.Birth + (BirthOn(at) ? gross : 0),
-            state.Net + marginal);
-    }
+    public LedgerState Advance(LedgerState state, long gross, DateTimeOffset at, string? groupId)
+        => AdvanceState(state, gross, at, groupId);
 
     public long NetOf(long gross, DateTimeOffset at, string? groupId) => Marginal(gross, at, groupId);
 
@@ -261,7 +265,9 @@ internal sealed class DiscountLedger
             return add;
         }
 
-        return MarginalOn(All, CodeGross, BirthGross, add, at, groupId);
+        var before = Snapshot();
+        var after = AdvanceState(before, add, at, groupId);
+        return after.Net - before.Net;
     }
 
     public void Commit(long add, DateTimeOffset at, string? groupId)
@@ -271,52 +277,98 @@ internal sealed class DiscountLedger
             return;
         }
 
-        var marginal = Marginal(add, at, groupId);
-        All += add;
-        if (CodeOn(at, groupId))
-        {
-            CodeGross += add;
-        }
-
-        if (BirthOn(at))
-        {
-            BirthGross += add;
-        }
-
-        _netAccum += marginal;
+        var next = AdvanceState(Snapshot(), add, at, groupId);
+        All = next.All;
+        CodeGross = next.Code;
+        BirthGross = next.Birth;
+        _netAccum = next.Net;
+        _prevPercentTotal = next.PrevPercentTotal;
+        _percentCarry = next.PercentCarry;
+        _fixedLeft = next.FixedLeft;
     }
 
-    private long MarginalOn(long all, long codeG, long birthG, long add, DateTimeOffset at, string? groupId)
+    private LedgerState AdvanceState(LedgerState state, long gross, DateTimeOffset at, string? groupId)
     {
-        if (add <= 0)
+        if (gross <= 0)
         {
-            return 0;
+            return state;
         }
 
-        if (_spec.LevelPercent == 0 && _spec.BirthdayPercent == 0 && _spec.CodePercent == 0 && _spec.FixedToman == 0)
+        if (IsTrivial)
         {
-            return add;
+            var codeOn = CodeOn(at, groupId);
+            var birthOn = BirthOn(at);
+            return new LedgerState(
+                state.All + gross,
+                state.Code + (codeOn ? gross : 0),
+                state.Birth + (birthOn ? gross : 0),
+                state.Net + gross,
+                state.PrevPercentTotal,
+                state.PercentCarry,
+                state.FixedLeft);
         }
 
-        var codeAdd = CodeOn(at, groupId) ? add : 0;
-        var birthAdd = BirthOn(at) ? add : 0;
-        var before = UncappedNet(all, codeG, birthG);
-        var after = UncappedNet(all + add, codeG + codeAdd, birthG + birthAdd);
-        var marginal = after - before;
-        if (marginal < 0)
+        var targetBefore = TargetNet(state.All, state.Code, state.Birth, state.FixedLeft);
+
+        var codeEligible = CodeOn(at, groupId);
+        var birthEligible = BirthOn(at);
+        var all = state.All + gross;
+        var code = state.Code + (codeEligible ? gross : 0);
+        var birth = state.Birth + (birthEligible ? gross : 0);
+        var percentTotal = PercentTotal(all, code, birth);
+        var share = percentTotal - state.PrevPercentTotal + state.PercentCarry;
+        var combinedRate = (birthEligible
+            ? Math.Min(_spec.LevelPercent + _spec.BirthdayPercent, _spec.Cap)
+            : _spec.LevelPercent)
+            + (codeEligible ? _spec.CodePercent : 0);
+        long percentDisc;
+        long carry;
+        if (combinedRate > _spec.Cap)
         {
-            marginal = 0;
+            percentDisc = gross;
+            carry = 0;
+        }
+        else
+        {
+            percentDisc = share;
+            if (percentDisc > gross)
+            {
+                percentDisc = gross;
+            }
+
+            if (percentDisc < 0)
+            {
+                percentDisc = 0;
+            }
+
+            carry = share - percentDisc;
         }
 
-        if (marginal > add)
+        var fixedLeft = state.FixedLeft;
+        if (codeEligible && _spec.FixedToman > 0 && fixedLeft > 0)
         {
-            marginal = add;
+            var room = gross - percentDisc;
+            if (room < 0)
+            {
+                room = 0;
+            }
+
+            var fixedUse = fixedLeft < room ? fixedLeft : room;
+            fixedLeft -= fixedUse;
         }
 
-        return marginal;
+        var targetAfter = TargetNet(all, code, birth, fixedLeft);
+        var marginal = targetAfter - targetBefore;
+        return new LedgerState(all, code, birth, state.Net + marginal, percentTotal, carry, fixedLeft);
     }
 
-    private long UncappedNet(long all, long codeG, long birthG)
+    private long TargetNet(long all, long code, long birth, long fixedLeft)
+    {
+        var net = all - PercentTotal(all, code, birth) - (_spec.FixedToman - fixedLeft);
+        return net < 0 ? 0 : net;
+    }
+
+    private long PercentTotal(long all, long codeG, long birthG)
     {
         long levelOff;
         long birthOff;
@@ -349,19 +401,7 @@ internal sealed class DiscountLedger
         }
 
         var codeOff = MoneyMath.PercentOf(codeG, _spec.CodePercent);
-        long fixedOff = 0;
-        if (_spec.FixedToman > 0 && codeG > 0)
-        {
-            var room = codeG - codeOff;
-            if (room < 0)
-            {
-                room = 0;
-            }
-
-            fixedOff = _spec.FixedToman < room ? _spec.FixedToman : room;
-        }
-
-        return all - levelOff - birthOff - codeOff - fixedOff;
+        return levelOff + birthOff + codeOff;
     }
 }
 
