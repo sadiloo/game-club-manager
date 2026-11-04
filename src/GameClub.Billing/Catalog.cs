@@ -57,8 +57,8 @@ public sealed class StationDirectory
         _stations = new Dictionary<string, Station>(StringComparer.OrdinalIgnoreCase);
         foreach (var station in stations)
         {
-            var id = station.Id.Trim();
-            if (string.IsNullOrWhiteSpace(id))
+            var id = StationId.Normalize(station.Id);
+            if (string.IsNullOrEmpty(id))
             {
                 throw new BillingException("invalid_tariff", "Station id is required.");
             }
@@ -84,7 +84,7 @@ public sealed class StationDirectory
             return false;
         }
 
-        if (_stations.TryGetValue(stationId.Trim(), out var station) && _groups.TryGetValue(station.GroupId, out group!))
+        if (_stations.TryGetValue(StationId.Normalize(stationId), out var station) && _groups.TryGetValue(station.GroupId, out group!))
         {
             return true;
         }

@@ -242,6 +242,13 @@ public static class SessionPricer
                 {
                     throw new BillingException(BillingErrors.InvalidSession, "Segment kind does not match the station directory.");
                 }
+
+                if (!string.Equals(segment.GroupId, listed.Id, StringComparison.Ordinal))
+                {
+                    throw new BillingException(
+                        BillingErrors.InvalidSession,
+                        "Segment group does not match the station directory.");
+                }
             }
         }
 

@@ -390,6 +390,9 @@ public static class AccountSettlement
         var packageDraws = new List<PackageDraw>();
         var moneyDraws = new List<MoneyDraw>();
 
+        var pricingNet = BuildSessionPricingNet(charge, order, remaining, billing, discount ?? SessionDiscount.Empty);
+
+        long globalMinute = 0;
         foreach (var slice in charge.Lines)
         {
             var parts = Divide(slice, order, remaining);
@@ -401,6 +404,8 @@ public static class AccountSettlement
                     slice.MinuteRuns,
                     slice.Start,
                     minuteBase,
+                    globalMinute,
+                    pricingNet,
                     order,
                     remaining,
                     policy,
@@ -417,6 +422,7 @@ public static class AccountSettlement
                     packageDraws,
                     moneyDraws);
                 minuteBase += part.BilledMinutes;
+                globalMinute += part.BilledMinutes;
             }
         }
 
@@ -430,7 +436,9 @@ public static class AccountSettlement
         var settledParts = packageCovered + moneyConsumed + discountToman + grace.Waived + writeOff + omitted + uncovered;
         if (settledParts != charge.TotalAmountToman)
         {
-            writeOff += charge.TotalAmountToman - settledParts;
+            throw new BillingException(
+                BillingErrors.InvalidMoney,
+                "Settlement parts do not add up to the session gross.");
         }
 
         EnsureNonNegativeSettlement(
@@ -498,6 +506,8 @@ public static class AccountSettlement
         IReadOnlyList<ActiveMinuteRun>? minuteRuns,
         DateTimeOffset lineStart,
         long minuteBase,
+        long globalMinuteBase,
+        long[] pricingNet,
         IReadOnlyList<TimePackage> order,
         Dictionary<string, long> remaining,
         AccountPolicy policy,
@@ -592,29 +602,59 @@ public static class AccountSettlement
 
             long moneyMinutes = 0;
             long moneyShare = 0;
-            long netShare = 0;
+            var state = discount.Snapshot();
+            long prefixNet = 0;
             for (long i = 0; i < part.BilledMinutes; i++)
             {
                 var piece = PartMinuteGross(i);
                 var atMinute = SessionPricer.BilledMinuteStart(minuteRuns, runPrefix, lineStart, minuteBase + i);
-                var marginal = discount.Marginal(piece, atMinute, part.GroupId);
-                if (netShare + marginal > spendable)
+                long marginal;
+                if (pricingNet.Length > 0)
+                {
+                    marginal = pricingNet[globalMinuteBase + i + 1] - pricingNet[globalMinuteBase + i];
+                }
+                else
+                {
+                    var next = discount.Advance(state, piece, atMinute, part.GroupId);
+                    marginal = discount.NetAt(next) - discount.NetAt(state);
+                    state = next;
+                }
+
+                if (prefixNet + marginal > spendable)
                 {
                     break;
                 }
 
-                netShare += marginal;
+                prefixNet += marginal;
                 moneyShare += piece;
-                discount.Commit(piece, atMinute, part.GroupId);
                 moneyMinutes++;
             }
 
-            money -= netShare;
-            moneyConsumed += netShare;
-
-            if (moneyShare > 0)
+            long prefixGross = 0;
+            ApplyMoney(
+                ref money,
+                part.HourlyRateToman,
+                moneyMinutes,
+                moneyShare,
+                part.ActiveSeconds,
+                0,
+                minuteBase,
+                minuteRuns,
+                lineStart,
+                billing,
+                discount,
+                part.GroupId,
+                grace,
+                part.Start,
+                part.SegmentId,
+                ref moneyConsumed,
+                ref uncovered,
+                ref writeOff,
+                ref omitted,
+                ref prefixGross);
+            if (prefixGross > 0)
             {
-                moneyDraws.Add(new MoneyDraw(part.SegmentId, part.Start, moneyMinutes, moneyShare));
+                moneyDraws.Add(new MoneyDraw(part.SegmentId, part.Start, moneyMinutes, prefixGross));
             }
 
             var tailMinutes = part.BilledMinutes - moneyMinutes;
@@ -663,6 +703,106 @@ public static class AccountSettlement
             {
                 moneyDraws.Add(new MoneyDraw(part.SegmentId, part.Start, tailMinutes - taken, gross));
             }
+        }
+    }
+
+    private static long[] SeedSessionPricingNet(
+        SessionCharge charge,
+        IReadOnlyList<TimePackage> order,
+        Dictionary<string, long> remaining,
+        BillingPolicy billing,
+        DiscountLedger pricing)
+    {
+        if (pricing.IsTrivial)
+        {
+            return [];
+        }
+
+        var total = charge.TotalBilledMinutes;
+        var cumulative = new long[total + 1];
+        long global = 0;
+        foreach (var slice in charge.Lines)
+        {
+            var parts = Divide(slice, order, remaining);
+            long minuteBase = 0;
+            foreach (var part in parts)
+            {
+                if (part.BilledMinutes > 0)
+                {
+                    AppendPricingNet(
+                        pricing,
+                        part,
+                        slice.MinuteRuns,
+                        slice.Start,
+                        minuteBase,
+                        part.BilledMinutes,
+                        billing,
+                        cumulative,
+                        ref global);
+                }
+
+                minuteBase += part.BilledMinutes;
+            }
+        }
+
+        return cumulative;
+    }
+
+    private static long[] BuildSessionPricingNet(
+        SessionCharge charge,
+        IReadOnlyList<TimePackage> order,
+        Dictionary<string, long> remaining,
+        BillingPolicy billing,
+        SessionDiscount spec)
+    {
+        if (spec.LevelPercent == 0
+            && spec.BirthdayPercent == 0
+            && spec.CodePercent == 0
+            && spec.FixedToman == 0)
+        {
+            return [];
+        }
+
+        var scratch = new DiscountLedger(spec);
+        return SeedSessionPricingNet(charge, order, remaining, billing, scratch);
+    }
+
+    private static void AppendPricingNet(
+        DiscountLedger pricing,
+        SlicePart part,
+        IReadOnlyList<ActiveMinuteRun>? minuteRuns,
+        DateTimeOffset lineStart,
+        long minuteBase,
+        long count,
+        BillingPolicy billing,
+        long[] cumulative,
+        ref long global)
+    {
+        var runPrefix = SessionPricer.BuildMinuteRunPrefix(minuteRuns);
+        var partRunCharge = MoneyMath.ChargeForMinutes(part.HourlyRateToman, part.BilledMinutes, billing.Remainder)
+            - MoneyMath.ChargeForMinutes(part.HourlyRateToman, 0, billing.Remainder);
+        var partClean = partRunCharge == part.AmountToman;
+        for (long i = 0; i < count; i++)
+        {
+            long gross;
+            if (partClean)
+            {
+                gross = MoneyMath.ChargeForMinutes(part.HourlyRateToman, i + 1, billing.Remainder)
+                    - MoneyMath.ChargeForMinutes(part.HourlyRateToman, i, billing.Remainder);
+            }
+            else
+            {
+                var before = i == 0 ? 0 : MoneyMath.MulDiv(part.AmountToman, i, part.BilledMinutes);
+                var after = i + 1 >= part.BilledMinutes
+                    ? part.AmountToman
+                    : MoneyMath.MulDiv(part.AmountToman, i + 1, part.BilledMinutes);
+                gross = after - before;
+            }
+
+            var at = SessionPricer.BilledMinuteStart(minuteRuns, runPrefix, lineStart, minuteBase + i);
+            pricing.Commit(gross, at, part.GroupId);
+            global++;
+            cumulative[global] = pricing.NetNow();
         }
     }
 
@@ -1227,7 +1367,7 @@ public static class AccountSettlement
             drawnGross += CommitRange(taken, 1);
             var covered = taken + 1;
             var restCount = unpaidMinutes - covered;
-            var restNet = NetOf(covered, restCount) + discountCarry;
+            var restNet = NetOf(covered, restCount) - discountCarry;
             if (activeSeconds > (playedBeforeMinutes + covered) * 60L && restCount > 0)
             {
                 var pay = balance > 0 ? Math.Min(balance, restNet) : 0;
@@ -1247,7 +1387,7 @@ public static class AccountSettlement
                 omitted += restGross;
                 if (discountCarry > 0)
                 {
-                    omitted = Math.Max(0, omitted - discountCarry);
+                    omitted -= discountCarry;
                 }
             }
 
