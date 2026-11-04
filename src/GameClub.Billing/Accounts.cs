@@ -166,6 +166,8 @@ internal sealed class DiscountLedger
 
     public long BirthGross { get; private set; }
 
+    private long _netAccum;
+
     internal bool IsTrivial =>
         _spec.LevelPercent == 0
         && _spec.BirthdayPercent == 0
@@ -223,31 +225,68 @@ internal sealed class DiscountLedger
         return (_spec.Birthday ?? BirthdayWindow.ExactDay).Includes(birth, date);
     }
 
-    public long NetNow() => Compute(All, CodeGross, BirthGross);
+    public long NetNow() => _netAccum;
 
-    public (long All, long Code, long Birth) Snapshot() => (All, CodeGross, BirthGross);
+    public (long All, long Code, long Birth, long Net) Snapshot() => (All, CodeGross, BirthGross, _netAccum);
 
-    public long NetAt((long All, long Code, long Birth) state) => Compute(state.All, state.Code, state.Birth);
+    public long NetAt((long All, long Code, long Birth, long Net) state) => state.Net;
 
-    public (long All, long Code, long Birth) Advance((long All, long Code, long Birth) state, long gross, DateTimeOffset at, string? groupId)
+    public (long All, long Code, long Birth, long Net) Advance((long All, long Code, long Birth, long Net) state, long gross, DateTimeOffset at, string? groupId)
     {
+        var marginal = MarginalOn(
+            state.All,
+            state.Code,
+            state.Birth,
+            gross,
+            at,
+            groupId);
         return (
             state.All + gross,
             state.Code + (CodeOn(at, groupId) ? gross : 0),
-            state.Birth + (BirthOn(at) ? gross : 0));
+            state.Birth + (BirthOn(at) ? gross : 0),
+            state.Net + marginal);
     }
 
-    public long NetOf(long gross, DateTimeOffset at, string? groupId)
+    public long NetOf(long gross, DateTimeOffset at, string? groupId) => Marginal(gross, at, groupId);
+
+    public long Marginal(long add, DateTimeOffset at, string? groupId)
     {
-        if (gross <= 0)
+        if (add <= 0)
         {
             return 0;
         }
 
-        return Compute(gross, CodeOn(at, groupId) ? gross : 0, BirthOn(at) ? gross : 0);
+        if (IsTrivial)
+        {
+            return add;
+        }
+
+        return MarginalOn(All, CodeGross, BirthGross, add, at, groupId);
     }
 
-    public long Marginal(long add, DateTimeOffset at, string? groupId)
+    public void Commit(long add, DateTimeOffset at, string? groupId)
+    {
+        if (add <= 0)
+        {
+            return;
+        }
+
+        var marginal = Marginal(add, at, groupId);
+        All += add;
+        if (CodeOn(at, groupId))
+        {
+            CodeGross += add;
+        }
+
+        if (BirthOn(at))
+        {
+            BirthGross += add;
+        }
+
+        _netAccum += marginal;
+    }
+
+    private long MarginalOn(long all, long codeG, long birthG, long add, DateTimeOffset at, string? groupId)
     {
         if (add <= 0)
         {
@@ -259,34 +298,25 @@ internal sealed class DiscountLedger
             return add;
         }
 
-        var next = Compute(
-            All + add,
-            CodeGross + (CodeOn(at, groupId) ? add : 0),
-            BirthGross + (BirthOn(at) ? add : 0));
-        var delta = next - NetNow();
-        return delta;
+        var codeAdd = CodeOn(at, groupId) ? add : 0;
+        var birthAdd = BirthOn(at) ? add : 0;
+        var before = UncappedNet(all, codeG, birthG);
+        var after = UncappedNet(all + add, codeG + codeAdd, birthG + birthAdd);
+        var marginal = after - before;
+        if (marginal < 0)
+        {
+            marginal = 0;
+        }
+
+        if (marginal > add)
+        {
+            marginal = add;
+        }
+
+        return marginal;
     }
 
-    public void Commit(long add, DateTimeOffset at, string? groupId)
-    {
-        if (add <= 0)
-        {
-            return;
-        }
-
-        All += add;
-        if (CodeOn(at, groupId))
-        {
-            CodeGross += add;
-        }
-
-        if (BirthOn(at))
-        {
-            BirthGross += add;
-        }
-    }
-
-    private long Compute(long all, long codeG, long birthG)
+    private long UncappedNet(long all, long codeG, long birthG)
     {
         long levelOff;
         long birthOff;
@@ -331,8 +361,7 @@ internal sealed class DiscountLedger
             fixedOff = _spec.FixedToman < room ? _spec.FixedToman : room;
         }
 
-        var net = all - levelOff - birthOff - codeOff - fixedOff;
-        return net < 0 ? 0 : net;
+        return all - levelOff - birthOff - codeOff - fixedOff;
     }
 }
 
@@ -1358,8 +1387,7 @@ public static class AccountSettlement
         if (step > 1 && balance > 0)
         {
             var minuteNet = NetOf(taken, 1);
-            var waived = minuteNet > 0 ? minuteNet : 0;
-            var discountCarry = minuteNet < 0 ? -minuteNet : 0;
+            var waived = minuteNet;
             grace.Waived += waived;
             grace.Used = true;
             grace.At = Instant(minuteBase + taken);
@@ -1367,7 +1395,7 @@ public static class AccountSettlement
             drawnGross += CommitRange(taken, 1);
             var covered = taken + 1;
             var restCount = unpaidMinutes - covered;
-            var restNet = NetOf(covered, restCount) - discountCarry;
+            var restNet = NetOf(covered, restCount);
             if (activeSeconds > (playedBeforeMinutes + covered) * 60L && restCount > 0)
             {
                 var pay = balance > 0 ? Math.Min(balance, restNet) : 0;
@@ -1385,10 +1413,6 @@ public static class AccountSettlement
                 }
 
                 omitted += restGross;
-                if (discountCarry > 0)
-                {
-                    omitted -= discountCarry;
-                }
             }
 
             grace.Stopped = true;
@@ -1402,10 +1426,6 @@ public static class AccountSettlement
             {
                 var pay = balance;
                 var waived = minuteNet - pay;
-                if (waived < 0)
-                {
-                    waived = 0;
-                }
 
                 grace.Waived += waived;
                 grace.Used = true;

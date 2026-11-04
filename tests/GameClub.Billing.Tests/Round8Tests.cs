@@ -65,7 +65,7 @@ public sealed class Round8Tests
             issuedAt: start.AddMinutes(63));
         var st = result.Settlement;
         Assert.Equal(charge.TotalAmountToman, SettlementSum(st));
-        Assert.Equal(34_260, st.DiscountToman);
+        Assert.Equal(33_220, st.DiscountToman);
         Assert.Equal(70_000, st.MoneyConsumedToman);
         Assert.Equal(8, st.PackageMinutesConsumed);
         Assert.Null(st.Grace);

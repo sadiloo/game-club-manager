@@ -122,8 +122,9 @@ public sealed class Round7Tests
         var parts = settled.PackageCoveredToman + settled.MoneyConsumedToman + settled.DiscountToman
             + (settled.Grace?.WaivedToman ?? 0) + settled.WriteOffToman + settled.OmittedToman + settled.UncoveredToman;
         Assert.Equal(charge.TotalAmountToman, parts);
-        Assert.Equal(51_773, settled.MoneyConsumedToman);
-        Assert.Equal(7_321, settled.OmittedToman);
+        Assert.Equal(51_816, settled.MoneyConsumedToman);
+        Assert.Equal(0, settled.OmittedToman);
+        Assert.Equal(4_945, settled.WriteOffToman);
     }
 
     [Fact]

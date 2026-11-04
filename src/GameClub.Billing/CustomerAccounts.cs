@@ -226,19 +226,11 @@ public static class CustomerPlay
             new(InvoiceLineKind.Time, "PC time", moneyGross, date),
         };
         var payable = settled.MoneyConsumedToman;
-        var invoiceDiscount = moneyGross - payable - grace - settled.WriteOffToman - settled.UncoveredToman;
-        if (invoiceDiscount < 0)
-        {
-            invoiceDiscount = 0;
-        }
+        var invoiceDiscount = settled.DiscountToman;
 
         if (invoiceDiscount > 0)
         {
             lines.Add(new InvoiceLine(InvoiceLineKind.Discount, "PC discount", -invoiceDiscount, date));
-        }
-        else if (settled.DiscountToman > 0)
-        {
-            lines.Add(new InvoiceLine(InvoiceLineKind.Discount, "PC discount", -settled.DiscountToman, date));
         }
 
         if (grace > 0)
@@ -257,7 +249,20 @@ public static class CustomerPlay
         }
 
         var net = moneyGross - grace - invoiceDiscount - settled.WriteOffToman;
-        return new Invoice(lines, moneyGross, 0, 0, invoiceDiscount > 0 ? invoiceDiscount : settled.DiscountToman, net, 0, payable, null, grace);
+        var lineSum = 0L;
+        foreach (var line in lines)
+        {
+            lineSum += line.AmountToman;
+        }
+
+        if (lineSum != payable)
+        {
+            throw new BillingException(
+                BillingErrors.InvalidMoney,
+                "PC invoice lines do not sum to the payable amount.");
+        }
+
+        return new Invoice(lines, moneyGross, 0, 0, invoiceDiscount, net, 0, payable, null, grace);
     }
 
     public static RemainingTimeEstimate Estimate(
