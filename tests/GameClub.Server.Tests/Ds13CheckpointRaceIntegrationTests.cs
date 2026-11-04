@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using GameClub.Billing;
 using GameClub.Server.Data;
+using GameClub.Server.Data.Entities;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -56,6 +57,39 @@ public sealed class Ds13CheckpointRaceIntegrationTests(GameClubWebApplicationFac
             _ => throw new ArgumentOutOfRangeException(nameof(column)),
         };
         return dt is null ? 0 : new DateTimeOffset(DateTime.SpecifyKind(dt.Value, DateTimeKind.Utc)).ToUnixTimeSeconds();
+    }
+
+    [Fact]
+    public async Task stop_vs_backwards_checkpoint_race_ends_closed_with_one_invoice_or_manual_settle_with_none()
+    {
+        await ResetAsync();
+        var bad = new List<string>();
+        for (var round = 0; round < 30; round++)
+        {
+            var st = $"PC-RACE{round}";
+            await RegAsync(st);
+            factory.Clock.SetTehran(2026, 6, 3, 14, 0);
+            var id = await StartAsync(st);
+            factory.Clock.SetTehran(2026, 6, 3, 15, 0);
+            (await _client.PostAsJsonAsync($"/api/sessions/{id}/checkpoints", new { })).EnsureSuccessStatusCode();
+            factory.Clock.SetTehran(2026, 6, 3, 15, 1);
+            await Task.WhenAll(
+                Api().PostAsync($"/api/sessions/{id}/stop", null),
+                Api().PostAsJsonAsync($"/api/sessions/{id}/checkpoints", new { at = TestTimes.T(2026, 6, 3, 14, 0) }));
+
+            using var scope = factory.Services.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var session = await db.Sessions.AsNoTracking().SingleAsync(s => s.Id == id);
+            var inv = await db.Invoices.CountAsync(i => i.SessionId == id);
+            var ok = (session.Status == SessionStatus.Closed && inv == 1)
+                || (session.Status == SessionStatus.ManualSettle && inv == 0);
+            if (!ok)
+            {
+                bad.Add($"r{round}: status={session.Status} invoices={inv}");
+            }
+        }
+
+        Assert.True(bad.Count == 0, string.Join(" | ", bad));
     }
 
     [Fact]
