@@ -9,6 +9,7 @@ public static class BillingErrors
     public const string InvalidTime = "invalid_time";
     public const string InvalidDate = "invalid_date";
     public const string InvalidSession = "invalid_session";
+    public const string PcPause = "pc_pause";
     public const string InvalidAccount = "invalid_account";
     public const string InvalidPayment = "invalid_payment";
     public const string InvalidInvoice = "invalid_invoice";

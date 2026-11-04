@@ -7,7 +7,8 @@ public sealed record PlaySegment(
     string StationId,
     string GroupId,
     PlayMode Mode,
-    int PlayerCount);
+    int PlayerCount,
+    StationKind? Kind = null);
 
 public sealed record PauseInterval(DateTimeOffset Start, DateTimeOffset End);
 
@@ -51,12 +52,13 @@ public static class SessionPricer
         Session session,
         RateCard rates,
         SpecialDayCalendar? specialDays = null,
-        BillingPolicy? policy = null)
+        BillingPolicy? policy = null,
+        StationDirectory? stations = null)
     {
         specialDays ??= SpecialDayCalendar.Empty;
         policy ??= BillingPolicy.Default;
         policy.EnsureValid();
-        Validate(session);
+        Validate(session, stations);
 
         var pauses = NormalizePauses(session.Pauses);
         var fragments = new List<Fragment>();
@@ -112,7 +114,7 @@ public static class SessionPricer
         return new SessionCharge(session.Id, lines, active, minutes, amount);
     }
 
-    internal static void Validate(Session session)
+    internal static void Validate(Session session, StationDirectory? stations = null)
     {
         if (string.IsNullOrWhiteSpace(session.Id))
         {
@@ -165,6 +167,27 @@ public static class SessionPricer
             if (end < start)
             {
                 throw new BillingException(BillingErrors.InvalidSession, "A pause ends before it starts.");
+            }
+        }
+
+        if (session.Pauses.Count == 0)
+        {
+            return;
+        }
+
+        foreach (var segment in session.Segments)
+        {
+            var kind = segment.Kind;
+            if (kind is null && stations is not null)
+            {
+                kind = stations.GroupOf(segment.StationId).Kind;
+            }
+
+            if (kind == StationKind.Pc)
+            {
+                throw new BillingException(
+                    BillingErrors.PcPause,
+                    "A PC session cannot be paused. PC time stops only when the customer logs out.");
             }
         }
     }

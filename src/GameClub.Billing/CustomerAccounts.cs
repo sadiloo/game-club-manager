@@ -142,7 +142,8 @@ public static class CustomerPlay
         CustomerPricing? pricing = null,
         DiscountCode? code = null,
         DiscountPolicy? discounts = null,
-        DateTimeOffset? issuedAt = null)
+        DateTimeOffset? issuedAt = null,
+        RoundingPolicy? rounding = null)
     {
         account.Settings.EnsureValid();
         billing ??= BillingPolicy.Default;
@@ -187,7 +188,7 @@ public static class CustomerPlay
             }
 
             when = TehranTime.Ensure(when);
-            invoice = PcInvoice(charge, settled, when);
+            invoice = PcInvoice(charge, settled, when, rounding);
             if (invoice.PayableToman != debit)
             {
                 throw new BillingException(BillingErrors.InvalidMoney, "PC invoice payable does not match the balance debit.");
@@ -215,7 +216,7 @@ public static class CustomerPlay
         return new PcPlayResult(visible, updated, giftDrawn, realDrawn, invoice);
     }
 
-    private static Invoice PcInvoice(SessionCharge charge, Settlement settled, DateTimeOffset when)
+    private static Invoice PcInvoice(SessionCharge charge, Settlement settled, DateTimeOffset when, RoundingPolicy? rounding)
     {
         var grace = settled.Grace?.WaivedToman ?? 0;
         var moneyGross = charge.TotalAmountToman - settled.PackageCoveredToman;
@@ -248,6 +249,13 @@ public static class CustomerPlay
         if (payable < 0)
         {
             payable = 0;
+        }
+
+        // A prepaid PC invoice is paid from the PC balance. That balance is never rounded;
+        // pilot rounding (step 5,000, up) applies only to a counter remainder, which is zero here.
+        if (rounding is { Enabled: true } && payable < 0)
+        {
+            throw new BillingException(BillingErrors.InvalidMoney, "PC invoice payable cannot be negative.");
         }
 
         var net = moneyGross - grace - settled.DiscountToman - settled.WriteOffToman;

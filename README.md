@@ -54,7 +54,7 @@ A segment is what the caller already knows: the controller count changed, the me
 `SessionPricer.Price` takes the session, a rate card, a holiday calendar, and a `BillingPolicy`.
 
 1. Reject overlapping segments, a reversed interval, or a player count outside 1–4 for offline play. Any offset is rebuilt from its UTC instant at a fixed `+03:30`. A `DateTimeKind.Local` value is rejected so the machine offset is never used.
-2. Subtract pauses. A pause cuts every segment it overlaps. Time outside the session is ignored. Overlapping pauses are safe.
+2. Subtract pauses. A pause cuts every segment it overlaps. Time outside the session is ignored. Overlapping pauses are safe. A pause on a PC station is rejected (`pc_pause`): PC time stops only on logout. A console or table pause is allowed. The station kind comes from the segment or from the `StationDirectory` passed to `SessionPricer.Price`.
 3. Minutes and toman are separate rules. Minutes are the ceiling of played seconds (pauses excluded): 10 minutes 0 seconds is 10 minutes, and 10 minutes 20 seconds is 11. Minutes are never rounded half-up. Half-up applies only to toman, once per line: `hourly × minutes / 60`. Sixty PS5 minutes are exactly 110,000, not 60 × 1,833.
 4. Each minute is priced at the rate where that minute starts. A minute that crosses 08:30, midnight, or into a special day stays on the starting rate. Lines merge across a pause. They split only when the rate, the band, or the player count changes, so a paused session at one rate is one line and matches the same active time with no pause. Six hundred active seconds with three pauses is one line of 10 minutes, 18,333 toman. Forty active minutes with one pause is one line of 73,333, not two lines of 36,667.
 
