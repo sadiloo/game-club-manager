@@ -308,25 +308,21 @@ internal sealed class DiscountLedger
                 state.FixedLeft);
         }
 
-        var targetBefore = TargetNet(state.All, state.Code, state.Birth, state.FixedLeft);
-
         var codeEligible = CodeOn(at, groupId);
         var birthEligible = BirthOn(at);
         var all = state.All + gross;
         var code = state.Code + (codeEligible ? gross : 0);
         var birth = state.Birth + (birthEligible ? gross : 0);
         var percentTotal = PercentTotal(all, code, birth);
-        var share = percentTotal - state.PrevPercentTotal + state.PercentCarry;
+        var share = percentTotal - state.PrevPercentTotal;
         var combinedRate = (birthEligible
             ? Math.Min(_spec.LevelPercent + _spec.BirthdayPercent, _spec.Cap)
             : _spec.LevelPercent)
             + (codeEligible ? _spec.CodePercent : 0);
         long percentDisc;
-        long carry;
-        if (combinedRate > _spec.Cap)
+        if (combinedRate >= _spec.Cap)
         {
             percentDisc = gross;
-            carry = 0;
         }
         else
         {
@@ -340,11 +336,10 @@ internal sealed class DiscountLedger
             {
                 percentDisc = 0;
             }
-
-            carry = share - percentDisc;
         }
 
         var fixedLeft = state.FixedLeft;
+        long fixedUse = 0;
         if (codeEligible && _spec.FixedToman > 0 && fixedLeft > 0)
         {
             var room = gross - percentDisc;
@@ -353,19 +348,22 @@ internal sealed class DiscountLedger
                 room = 0;
             }
 
-            var fixedUse = fixedLeft < room ? fixedLeft : room;
+            fixedUse = fixedLeft < room ? fixedLeft : room;
             fixedLeft -= fixedUse;
         }
 
-        var targetAfter = TargetNet(all, code, birth, fixedLeft);
-        var marginal = targetAfter - targetBefore;
-        return new LedgerState(all, code, birth, state.Net + marginal, percentTotal, carry, fixedLeft);
-    }
+        var marginal = gross - percentDisc - fixedUse;
+        if (marginal < 0)
+        {
+            marginal = 0;
+        }
 
-    private long TargetNet(long all, long code, long birth, long fixedLeft)
-    {
-        var net = all - PercentTotal(all, code, birth) - (_spec.FixedToman - fixedLeft);
-        return net < 0 ? 0 : net;
+        if (marginal > gross)
+        {
+            marginal = gross;
+        }
+
+        return new LedgerState(all, code, birth, state.Net + marginal, percentTotal, 0, fixedLeft);
     }
 
     private long PercentTotal(long all, long codeG, long birthG)
