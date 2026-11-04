@@ -385,7 +385,6 @@ public static class AccountSettlement
         long uncovered = 0;
         long writeOff = 0;
         long omitted = 0;
-        var pricedDiscount = new DiscountLedger(discount ?? SessionDiscount.Empty);
         var grace = new GraceTracker { Enabled = graceMinuteEnabled && !shortfallIsUncovered, UncoveredShortfall = shortfallIsUncovered };
         var packageDraws = new List<PackageDraw>();
         var moneyDraws = new List<MoneyDraw>();
@@ -410,7 +409,7 @@ public static class AccountSettlement
                     remaining,
                     policy,
                     billing,
-                    pricedDiscount,
+                    discount ?? SessionDiscount.Empty,
                     grace,
                     ref money,
                     ref packageMinutes,
@@ -432,7 +431,10 @@ public static class AccountSettlement
 
         OperatorAlert? alert = null;
         DailyReportEntry? report = null;
-        var discountToman = pricedDiscount.All - pricedDiscount.NetNow();
+        var totalBilled = charge.TotalBilledMinutes;
+        var discountToman = pricingNet.Length > 0
+            ? charge.TotalAmountToman - pricingNet[totalBilled]
+            : 0;
         var settledParts = packageCovered + moneyConsumed + discountToman + grace.Waived + writeOff + omitted + uncovered;
         if (settledParts != charge.TotalAmountToman)
         {
@@ -475,7 +477,7 @@ public static class AccountSettlement
             alert,
             report,
             omitted,
-            pricedDiscount.All);
+            charge.TotalAmountToman);
     }
 
     private static void EnsureNonNegativeSettlement(
@@ -512,7 +514,7 @@ public static class AccountSettlement
         Dictionary<string, long> remaining,
         AccountPolicy policy,
         BillingPolicy billing,
-        DiscountLedger discount,
+        SessionDiscount discountSpec,
         GraceTracker grace,
         ref long money,
         ref long packageMinutes,
@@ -524,6 +526,7 @@ public static class AccountSettlement
         List<PackageDraw> packageDraws,
         List<MoneyDraw> moneyDraws)
     {
+        var discount = new DiscountLedger(discountSpec);
         if (part.BilledMinutes == 0 && part.AmountToman == 0)
         {
             return;
@@ -533,7 +536,7 @@ public static class AccountSettlement
         {
             var before = moneyConsumed;
             long gross = 0;
-            ApplyMoney(ref money, part.HourlyRateToman, 0, part.AmountToman, part.ActiveSeconds, 0, minuteBase, minuteRuns, lineStart, billing, discount, part.GroupId, grace, part.Start, part.SegmentId, ref moneyConsumed, ref uncovered, ref writeOff, ref omitted, ref gross);
+            ApplyMoney(ref money, part.HourlyRateToman, 0, part.AmountToman, part.ActiveSeconds, 0, minuteBase, minuteRuns, lineStart, billing, discount, part.GroupId, grace, part.Start, part.SegmentId, pricingNet, globalMinuteBase + minuteBase, ref moneyConsumed, ref uncovered, ref writeOff, ref omitted, ref gross);
             if (gross > 0)
             {
                 moneyDraws.Add(new MoneyDraw(part.SegmentId, part.Start, 0, gross));
@@ -554,15 +557,31 @@ public static class AccountSettlement
         if (policy.Order == ConsumptionOrder.PackagesThenMoney)
         {
             var taken = DrawPackages(part, part.BilledMinutes, order, remaining, packageDraws);
+            var partStart = globalMinuteBase + minuteBase;
+            long partNetTotal;
+            if (pricingNet.Length > 0)
+            {
+                partNetTotal = pricingNet[partStart + part.BilledMinutes] - pricingNet[partStart];
+            }
+            else
+            {
+                partNetTotal = part.AmountToman;
+            }
+
+            var coveredNet = pricingNet.Length > 0
+                ? pricingNet[partStart + taken] - pricingNet[partStart]
+                : taken >= part.BilledMinutes
+                    ? partNetTotal
+                    : MoneyMath.MulDiv(partNetTotal, taken, part.BilledMinutes);
             var coveredValue = taken >= part.BilledMinutes
                 ? part.AmountToman
                 : MoneyMath.MulDiv(part.AmountToman, taken, part.BilledMinutes);
             var moneyDue = part.AmountToman - coveredValue;
             packageMinutes += taken;
-            packageCovered += coveredValue;
+            packageCovered += coveredNet;
             long gross = 0;
             var moneyActive = taken >= part.BilledMinutes ? 0 : part.ActiveSeconds;
-            ApplyMoney(ref money, part.HourlyRateToman, part.BilledMinutes - taken, moneyDue, moneyActive, taken, minuteBase + taken, minuteRuns, lineStart, billing, discount, part.GroupId, grace, part.Start, part.SegmentId, ref moneyConsumed, ref uncovered, ref writeOff, ref omitted, ref gross);
+            ApplyMoney(ref money, part.HourlyRateToman, part.BilledMinutes - taken, moneyDue, moneyActive, taken, minuteBase + taken, minuteRuns, lineStart, billing, discount, part.GroupId, grace, part.Start, part.SegmentId, pricingNet, globalMinuteBase + minuteBase + taken, ref moneyConsumed, ref uncovered, ref writeOff, ref omitted, ref gross);
             if (gross > 0)
             {
                 moneyDraws.Add(new MoneyDraw(part.SegmentId, part.Start, part.BilledMinutes - taken, gross));
@@ -647,6 +666,8 @@ public static class AccountSettlement
                 grace,
                 part.Start,
                 part.SegmentId,
+                pricingNet,
+                globalMinuteBase + minuteBase,
                 ref moneyConsumed,
                 ref uncovered,
                 ref writeOff,
@@ -659,22 +680,42 @@ public static class AccountSettlement
 
             var tailMinutes = part.BilledMinutes - moneyMinutes;
             var tailAmount = part.AmountToman - moneyShare;
-            var taken = DrawPackages(part, tailMinutes, order, remaining, packageDraws);
-            long coveredValue;
-            long shortfall;
-            if (taken >= tailMinutes)
+            var tailStart = globalMinuteBase + minuteBase + moneyMinutes;
+            long tailNetTotal;
+            if (pricingNet.Length > 0)
             {
-                coveredValue = tailAmount;
+                tailNetTotal = pricingNet[tailStart + tailMinutes] - pricingNet[tailStart];
+            }
+            else
+            {
+                tailNetTotal = tailAmount;
+            }
+
+            var taken = DrawPackages(part, tailMinutes, order, remaining, packageDraws);
+            long coveredNet;
+            long shortfall;
+            if (pricingNet.Length > 0)
+            {
+                coveredNet = pricingNet[tailStart + taken] - pricingNet[tailStart];
+                var coveredGross = taken >= tailMinutes
+                    ? tailAmount
+                    : tailMinutes == 0 ? 0 : MoneyMath.MulDiv(tailAmount, taken, tailMinutes);
+                shortfall = tailAmount - coveredGross;
+            }
+            else if (taken >= tailMinutes)
+            {
+                coveredNet = tailNetTotal;
                 shortfall = 0;
             }
             else
             {
-                coveredValue = tailMinutes == 0 ? 0 : MoneyMath.MulDiv(tailAmount, taken, tailMinutes);
-                shortfall = tailAmount - coveredValue;
+                coveredNet = tailMinutes == 0 ? 0 : MoneyMath.MulDiv(tailNetTotal, taken, tailMinutes);
+                var coveredGross = tailMinutes == 0 ? 0 : MoneyMath.MulDiv(tailAmount, taken, tailMinutes);
+                shortfall = tailAmount - coveredGross;
             }
 
             packageMinutes += taken;
-            packageCovered += coveredValue;
+            packageCovered += coveredNet;
             long gross = 0;
             var playedBefore = moneyMinutes + taken;
             var tailMinuteBase = minuteBase + playedBefore;
@@ -694,6 +735,8 @@ public static class AccountSettlement
                 grace,
                 part.Start,
                 part.SegmentId,
+                pricingNet,
+                globalMinuteBase + tailMinuteBase,
                 ref moneyConsumed,
                 ref uncovered,
                 ref writeOff,
@@ -1125,6 +1168,8 @@ public static class AccountSettlement
         GraceTracker grace,
         DateTimeOffset at,
         string segmentId,
+        long[] sessionPricingNet,
+        long sessionPricingIndex,
         ref long consumed,
         ref long uncovered,
         ref long writeOff,
@@ -1175,6 +1220,20 @@ public static class AccountSettlement
                 return 0;
             }
 
+            if (sessionPricingNet.Length > 0)
+            {
+                var startIdx = sessionPricingIndex + fromLocal;
+                var endIdx = startIdx + count;
+                if (startIdx < 0 || endIdx >= sessionPricingNet.Length)
+                {
+                    throw new BillingException(
+                        BillingErrors.InvalidMoney,
+                        "Pricing index out of range for settlement.");
+                }
+
+                return sessionPricingNet[endIdx] - sessionPricingNet[startIdx];
+            }
+
             if (discount.IsTrivial)
             {
                 if (clean && fromLocal == 0 && count == unpaidMinutes)
@@ -1215,6 +1274,17 @@ public static class AccountSettlement
             if (count <= 0)
             {
                 return 0;
+            }
+
+            if (sessionPricingNet.Length > 0)
+            {
+                long rangeGross = 0;
+                for (long i = 0; i < count; i++)
+                {
+                    rangeGross += MinuteGross(minuteBase + fromLocal + i);
+                }
+
+                return rangeGross;
             }
 
             if (discount.IsTrivial)
@@ -1378,16 +1448,23 @@ public static class AccountSettlement
             }
             else
             {
-                long restGross = 0;
-                for (long i = 0; i < restCount; i++)
+                if (sessionPricingNet.Length > 0)
                 {
-                    restGross += MinuteGross(minuteBase + covered + i);
+                    omitted += NetOf(covered, restCount);
                 }
-
-                omitted += restGross;
-                if (discountCarry > 0)
+                else
                 {
-                    omitted -= discountCarry;
+                    long restGross = 0;
+                    for (long i = 0; i < restCount; i++)
+                    {
+                        restGross += MinuteGross(minuteBase + covered + i);
+                    }
+
+                    omitted += restGross;
+                    if (discountCarry > 0)
+                    {
+                        omitted -= discountCarry;
+                    }
                 }
             }
 
@@ -1432,13 +1509,20 @@ public static class AccountSettlement
             }
             else
             {
-                long restGross = 0;
-                for (long i = 0; i < restCount; i++)
+                if (sessionPricingNet.Length > 0)
                 {
-                    restGross += MinuteGross(minuteBase + taken + i);
+                    omitted += NetOf(taken, restCount);
                 }
+                else
+                {
+                    long restGross = 0;
+                    for (long i = 0; i < restCount; i++)
+                    {
+                        restGross += MinuteGross(minuteBase + taken + i);
+                    }
 
-                omitted += restGross;
+                    omitted += restGross;
+                }
             }
 
             grace.Stopped = true;
