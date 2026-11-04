@@ -155,6 +155,27 @@ public static class SessionPricer
             }
         }
 
+        if (stations is not null)
+        {
+            foreach (var segment in session.Segments)
+            {
+                if (segment.Kind is not StationKind stated)
+                {
+                    continue;
+                }
+
+                if (!stations.TryGetGroup(segment.StationId, out var listed))
+                {
+                    throw new BillingException(BillingErrors.InvalidSession, $"Unknown station '{segment.StationId}'.");
+                }
+
+                if (stated != listed.Kind)
+                {
+                    throw new BillingException(BillingErrors.InvalidSession, "Segment kind does not match the station directory.");
+                }
+            }
+        }
+
         if (session.Pauses is null)
         {
             return;
