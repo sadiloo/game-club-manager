@@ -17,6 +17,9 @@ public sealed record Session(string Id, IReadOnlyList<PlaySegment> Segments, IRe
 /// <summary>Billed minutes of one priced line that start on a Tehran civil date. Daily reports use this; the line itself is not split.</summary>
 public sealed record DateMinuteAllocation(LocalDate Date, long Minutes);
 
+/// <summary>Contiguous billed minutes on the wall clock within one priced line.</summary>
+public sealed record ActiveMinuteRun(DateTimeOffset Start, long Count);
+
 public sealed record PricedSlice(
     string SegmentId,
     string StationId,
@@ -31,7 +34,8 @@ public sealed record PricedSlice(
     RateSource Source,
     string? BandId,
     long AmountToman,
-    IReadOnlyList<DateMinuteAllocation>? ByDate = null);
+    IReadOnlyList<DateMinuteAllocation>? ByDate = null,
+    IReadOnlyList<ActiveMinuteRun>? MinuteRuns = null);
 
 public sealed record SessionCharge(
     string SessionId,
@@ -114,6 +118,30 @@ public static class SessionPricer
         return new SessionCharge(session.Id, lines, active, minutes, amount);
     }
 
+    internal static DateTimeOffset BilledMinuteStart(
+        IReadOnlyList<ActiveMinuteRun>? runs,
+        DateTimeOffset lineStart,
+        long index)
+    {
+        if (runs is null || runs.Count == 0)
+        {
+            return TehranTime.AddSeconds(lineStart, index * 60L);
+        }
+
+        var left = index;
+        foreach (var run in runs)
+        {
+            if (left < run.Count)
+            {
+                return TehranTime.AddSeconds(run.Start, left * 60L);
+            }
+
+            left -= run.Count;
+        }
+
+        return TehranTime.AddSeconds(lineStart, index * 60L);
+    }
+
     internal static void Validate(Session session, StationDirectory? stations = null)
     {
         if (string.IsNullOrWhiteSpace(session.Id))
@@ -159,17 +187,12 @@ public static class SessionPricer
         {
             foreach (var segment in session.Segments)
             {
-                if (segment.Kind is not StationKind stated)
-                {
-                    continue;
-                }
-
                 if (!stations.TryGetGroup(segment.StationId, out var listed))
                 {
                     throw new BillingException(BillingErrors.InvalidSession, $"Unknown station '{segment.StationId}'.");
                 }
 
-                if (stated != listed.Kind)
+                if (segment.Kind is StationKind stated && stated != listed.Kind)
                 {
                     throw new BillingException(BillingErrors.InvalidSession, "Segment kind does not match the station directory.");
                 }
@@ -495,7 +518,8 @@ public static class SessionPricer
         long HourlyRateToman,
         RateSource Source,
         string? BandId,
-        IReadOnlyList<DateMinuteAllocation> ByDate)
+        IReadOnlyList<DateMinuteAllocation> ByDate,
+        IReadOnlyList<ActiveMinuteRun> MinuteRuns)
     {
         public static SliceDraft From(
             Fragment fragment,
@@ -519,7 +543,8 @@ public static class SessionPricer
                 quote.HourlyRateToman,
                 quote.Source,
                 quote.BandId,
-                byDate);
+                byDate,
+                [new ActiveMinuteRun(start, minutes)]);
         }
 
         public bool CanMerge(SliceDraft next)
@@ -542,6 +567,7 @@ public static class SessionPricer
                 ActiveSeconds = ActiveSeconds + next.ActiveSeconds,
                 BilledMinutes = BilledMinutes + next.BilledMinutes,
                 ByDate = CombineDates(ByDate, next.ByDate),
+                MinuteRuns = CombineRuns(MinuteRuns, next.MinuteRuns),
             };
         }
 
@@ -562,7 +588,28 @@ public static class SessionPricer
                 Source,
                 BandId,
                 amount,
-                ByDate);
+                ByDate,
+                MinuteRuns);
+        }
+
+        private static IReadOnlyList<ActiveMinuteRun> CombineRuns(
+            IReadOnlyList<ActiveMinuteRun> left,
+            IReadOnlyList<ActiveMinuteRun> right)
+        {
+            if (right.Count == 0)
+            {
+                return left;
+            }
+
+            if (left.Count == 0)
+            {
+                return right;
+            }
+
+            var merged = new List<ActiveMinuteRun>(left.Count + right.Count);
+            merged.AddRange(left);
+            merged.AddRange(right);
+            return merged;
         }
 
         private static IReadOnlyList<DateMinuteAllocation> CombineDates(
@@ -788,6 +835,7 @@ public static class PrepaidPlanner
                     BilledMinutes = mergedMinutes,
                     AmountToman = mergedAmount,
                     ByDate = AppendMinute(last.ByDate, TehranTime.Date(minuteStart)),
+                    MinuteRuns = AppendMinuteRun(last.MinuteRuns, minuteStart),
                 };
             }
             else
@@ -808,7 +856,8 @@ public static class PrepaidPlanner
                     quote.Source,
                     quote.BandId,
                     marginal,
-                    [new DateMinuteAllocation(TehranTime.Date(minuteStart), 1)]));
+                    [new DateMinuteAllocation(TehranTime.Date(minuteStart), 1)],
+                    [new ActiveMinuteRun(minuteStart, 1)]));
             }
 
             if (step > 1 && marginal > 0)
@@ -915,6 +964,24 @@ public static class PrepaidPlanner
         return line.HourlyRateToman == quote.HourlyRateToman
             && line.Source == quote.Source
             && line.BandId == quote.BandId;
+    }
+
+    private static IReadOnlyList<ActiveMinuteRun> AppendMinuteRun(IReadOnlyList<ActiveMinuteRun>? runs, DateTimeOffset start)
+    {
+        var copy = runs is null ? new List<ActiveMinuteRun>() : new List<ActiveMinuteRun>(runs);
+        if (copy.Count > 0)
+        {
+            var last = copy[copy.Count - 1];
+            var nextStart = TehranTime.AddSeconds(last.Start, last.Count * 60L);
+            if (nextStart == start)
+            {
+                copy[copy.Count - 1] = new ActiveMinuteRun(last.Start, last.Count + 1);
+                return copy;
+            }
+        }
+
+        copy.Add(new ActiveMinuteRun(start, 1));
+        return copy;
     }
 
     private static IReadOnlyList<DateMinuteAllocation> AppendMinute(IReadOnlyList<DateMinuteAllocation>? dates, LocalDate date)

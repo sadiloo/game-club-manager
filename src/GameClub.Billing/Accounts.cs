@@ -149,10 +149,15 @@ public sealed record SessionDiscount(
 internal sealed class DiscountLedger
 {
     private readonly SessionDiscount _spec;
+    private readonly Dictionary<LocalDate, bool>? _birthOnCache;
 
     public DiscountLedger(SessionDiscount spec)
     {
         _spec = spec;
+        if (spec.BirthdayPercent > 0 && spec.BirthDate is JalaliDate birth && !birth.IsEmpty)
+        {
+            _birthOnCache = new Dictionary<LocalDate, bool>();
+        }
     }
 
     public long All { get; private set; }
@@ -189,10 +194,27 @@ internal sealed class DiscountLedger
 
     public bool BirthOn(DateTimeOffset at)
     {
-        return _spec.BirthdayPercent > 0
-            && _spec.BirthDate is JalaliDate birth
-            && !birth.IsEmpty
-            && (_spec.Birthday ?? BirthdayWindow.ExactDay).Includes(birth, TehranTime.Date(at));
+        if (_spec.BirthdayPercent <= 0
+            || _spec.BirthDate is not JalaliDate birth
+            || birth.IsEmpty)
+        {
+            return false;
+        }
+
+        var date = TehranTime.Date(at);
+        if (_birthOnCache is not null)
+        {
+            if (_birthOnCache.TryGetValue(date, out var cached))
+            {
+                return cached;
+            }
+
+            cached = (_spec.Birthday ?? BirthdayWindow.ExactDay).Includes(birth, date);
+            _birthOnCache[date] = cached;
+            return cached;
+        }
+
+        return (_spec.Birthday ?? BirthdayWindow.ExactDay).Includes(birth, date);
     }
 
     public long NetNow() => Compute(All, CodeGross, BirthGross);
@@ -236,7 +258,7 @@ internal sealed class DiscountLedger
             CodeGross + (CodeOn(at, groupId) ? add : 0),
             BirthGross + (BirthOn(at) ? add : 0));
         var delta = next - NetNow();
-        return delta < 0 ? 0 : delta;
+        return delta;
     }
 
     public void Commit(long add, DateTimeOffset at, string? groupId)
@@ -370,6 +392,7 @@ public static class AccountSettlement
             {
                 ApplyPart(
                     part,
+                    slice.MinuteRuns,
                     slice.Start,
                     minuteBase,
                     order,
@@ -427,7 +450,8 @@ public static class AccountSettlement
 
     private static void ApplyPart(
         SlicePart part,
-        DateTimeOffset runStart,
+        IReadOnlyList<ActiveMinuteRun>? minuteRuns,
+        DateTimeOffset lineStart,
         long minuteBase,
         IReadOnlyList<TimePackage> order,
         Dictionary<string, long> remaining,
@@ -454,7 +478,7 @@ public static class AccountSettlement
         {
             var before = moneyConsumed;
             long gross = 0;
-            ApplyMoney(ref money, part.HourlyRateToman, 0, part.AmountToman, part.ActiveSeconds, 0, minuteBase, runStart, billing, discount, part.GroupId, grace, part.Start, part.SegmentId, ref moneyConsumed, ref uncovered, ref writeOff, ref omitted, ref gross);
+            ApplyMoney(ref money, part.HourlyRateToman, 0, part.AmountToman, part.ActiveSeconds, 0, minuteBase, minuteRuns, lineStart, billing, discount, part.GroupId, grace, part.Start, part.SegmentId, ref moneyConsumed, ref uncovered, ref writeOff, ref omitted, ref gross);
             if (gross > 0)
             {
                 moneyDraws.Add(new MoneyDraw(part.SegmentId, part.Start, 0, gross));
@@ -483,7 +507,7 @@ public static class AccountSettlement
             packageCovered += coveredValue;
             long gross = 0;
             var moneyActive = taken >= part.BilledMinutes ? 0 : part.ActiveSeconds;
-            ApplyMoney(ref money, part.HourlyRateToman, part.BilledMinutes - taken, moneyDue, moneyActive, taken, minuteBase + taken, runStart, billing, discount, part.GroupId, grace, part.Start, part.SegmentId, ref moneyConsumed, ref uncovered, ref writeOff, ref omitted, ref gross);
+            ApplyMoney(ref money, part.HourlyRateToman, part.BilledMinutes - taken, moneyDue, moneyActive, taken, minuteBase + taken, minuteRuns, lineStart, billing, discount, part.GroupId, grace, part.Start, part.SegmentId, ref moneyConsumed, ref uncovered, ref writeOff, ref omitted, ref gross);
             if (gross > 0)
             {
                 moneyDraws.Add(new MoneyDraw(part.SegmentId, part.Start, part.BilledMinutes - taken, gross));
@@ -507,7 +531,7 @@ public static class AccountSettlement
                 }
 
                 allocated += piece;
-                var atMinute = TehranTime.AddSeconds(runStart, (minuteBase + i) * 60L);
+                var atMinute = SessionPricer.BilledMinuteStart(minuteRuns, lineStart, minuteBase + i);
                 netShare += discount.Marginal(piece, atMinute, part.GroupId);
                 discount.Commit(piece, atMinute, part.GroupId);
             }
@@ -544,7 +568,7 @@ public static class AccountSettlement
             packageMinutes += taken;
             packageCovered += coveredValue;
             long gross = 0;
-            ApplyMoney(ref money, part.HourlyRateToman, tailMinutes - taken, shortfall, part.ActiveSeconds, moneyMinutes, minuteBase + moneyMinutes, runStart, billing, discount, part.GroupId, grace, part.Start, part.SegmentId, ref moneyConsumed, ref uncovered, ref writeOff, ref omitted, ref gross);
+            ApplyMoney(ref money, part.HourlyRateToman, tailMinutes - taken, shortfall, part.ActiveSeconds, moneyMinutes, minuteBase + moneyMinutes, minuteRuns, lineStart, billing, discount, part.GroupId, grace, part.Start, part.SegmentId, ref moneyConsumed, ref uncovered, ref writeOff, ref omitted, ref gross);
             if (gross > 0)
             {
                 moneyDraws.Add(new MoneyDraw(part.SegmentId, part.Start, tailMinutes - taken, gross));
@@ -863,7 +887,8 @@ public static class AccountSettlement
         long activeSeconds,
         long playedBeforeMinutes,
         long minuteBase,
-        DateTimeOffset runStart,
+        IReadOnlyList<ActiveMinuteRun>? minuteRuns,
+        DateTimeOffset lineStart,
         BillingPolicy billing,
         DiscountLedger discount,
         string? groupId,
@@ -910,7 +935,7 @@ public static class AccountSettlement
             return after - before;
         }
 
-        DateTimeOffset Instant(long index) => TehranTime.AddSeconds(runStart, index * 60L);
+        DateTimeOffset Instant(long index) => SessionPricer.BilledMinuteStart(minuteRuns, lineStart, index);
 
         long NetOf(long fromLocal, long count)
         {
@@ -928,7 +953,7 @@ public static class AccountSettlement
             }
 
             var net = discount.NetAt(state) - startNet;
-            return net < 0 ? 0 : net;
+            return net;
         }
 
         long CommitRange(long fromLocal, long count)
