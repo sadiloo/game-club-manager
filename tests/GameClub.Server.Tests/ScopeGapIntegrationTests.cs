@@ -19,7 +19,8 @@ public sealed class ScopeGapIntegrationTests(GameClubWebApplicationFactory facto
         using var scope = factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         await db.Database.ExecuteSqlRawAsync("""
-            TRUNCATE audit_log, checkpoints, pause_intervals, play_segments, invoices, sessions, stations RESTART IDENTITY CASCADE;
+            TRUNCATE audit_log, checkpoints, pause_intervals, play_segments, invoices, sessions, rate_card_snapshot, stations RESTART IDENTITY CASCADE;
+            SELECT setval('invoice_number_seq', 1, false);
             UPDATE invoice_number_sequence SET "NextNumber" = 1;
             UPDATE rate_lines SET "HourlyToman" = 80000
               WHERE "GroupId" = 'pc-normal' AND "IsSpecialBand" = false AND "PlayMode" = 'Offline' AND "PlayerCount" = 1;

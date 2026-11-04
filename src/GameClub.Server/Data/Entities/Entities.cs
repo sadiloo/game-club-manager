@@ -54,6 +54,10 @@ public sealed class PlaySessionEntity
 
     public string? ManualSettleReason { get; set; }
 
+    public int RateCardSnapshotId { get; set; }
+
+    public RateCardSnapshotEntity? RateCardSnapshot { get; set; }
+
     public List<PlaySegmentEntity> Segments { get; set; } = [];
 
     public List<PauseIntervalEntity> Pauses { get; set; } = [];

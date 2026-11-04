@@ -23,7 +23,8 @@ public sealed class AcceptanceScenarioTests(GameClubWebApplicationFactory factor
         using var scope = factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         await db.Database.ExecuteSqlRawAsync("""
-            TRUNCATE audit_log, checkpoints, pause_intervals, play_segments, invoices, sessions, stations RESTART IDENTITY CASCADE;
+            TRUNCATE audit_log, checkpoints, pause_intervals, play_segments, invoices, sessions, rate_card_snapshot, stations RESTART IDENTITY CASCADE;
+            SELECT setval('invoice_number_seq', 1, false);
             UPDATE invoice_number_sequence SET "NextNumber" = 1;
             UPDATE rate_lines SET "HourlyToman" = 80000
               WHERE "GroupId" = 'pc-normal' AND "IsSpecialBand" = false AND "PlayMode" = 'Offline' AND "PlayerCount" = 1;
@@ -56,10 +57,10 @@ public sealed class AcceptanceScenarioTests(GameClubWebApplicationFactory factor
         factory.Clock.SetTehran(2026, 6, 3, 14, 0);
         var sessionId = await StartSession("PC-A", 1);
         factory.Clock.SetTehran(2026, 6, 3, 15, 0);
-        await _client.PostAsJsonAsync($"/api/sessions/{sessionId}/checkpoints", new { at = TestTimes.T(2026, 6, 3, 15, 0) });
+        await CheckpointAsync(sessionId);
         var stop = await _client.PostAsync($"/api/sessions/{sessionId}/stop", null);
         var invoice = await stop.Content.ReadFromJsonAsync<JsonElement>();
-        Assert.Equal(80_000, invoice.GetProperty("collectibleToman").GetInt64());
+        AssertInvoice(invoice, 80_000, 80_000);
     }
 
     [Fact]
@@ -71,10 +72,10 @@ public sealed class AcceptanceScenarioTests(GameClubWebApplicationFactory factor
         factory.Clock.SetTehran(2026, 6, 3, 14, 0);
         var sessionId = await StartSession("PC-B", 1);
         factory.Clock.SetTehran(2026, 6, 3, 15, 0);
-        await _client.PostAsJsonAsync($"/api/sessions/{sessionId}/checkpoints", new { at = TestTimes.T(2026, 6, 3, 15, 0) });
+        await CheckpointAsync(sessionId);
         var stop = await _client.PostAsync($"/api/sessions/{sessionId}/stop", null);
         var invoice = await stop.Content.ReadFromJsonAsync<JsonElement>();
-        Assert.Equal(110_000, invoice.GetProperty("collectibleToman").GetInt64());
+        AssertInvoice(invoice, 110_000, 110_000);
     }
 
     [Fact]
@@ -85,11 +86,10 @@ public sealed class AcceptanceScenarioTests(GameClubWebApplicationFactory factor
         factory.Clock.SetTehran(2026, 6, 3, 14, 0);
         var sessionId = await StartSession("PC-C", 1);
         factory.Clock.SetTehran(2026, 6, 3, 14, 50);
-        await _client.PostAsJsonAsync($"/api/sessions/{sessionId}/checkpoints", new { at = TestTimes.T(2026, 6, 3, 14, 50) });
+        await CheckpointAsync(sessionId);
         var stop = await _client.PostAsync($"/api/sessions/{sessionId}/stop", null);
         var invoice = await stop.Content.ReadFromJsonAsync<JsonElement>();
-        Assert.Equal(70_000, invoice.GetProperty("collectibleToman").GetInt64());
-        Assert.Equal(66_667, invoice.GetProperty("unroundedPayableToman").GetInt64());
+        AssertInvoice(invoice, 66_667, 70_000);
     }
 
     [Fact]
@@ -100,10 +100,10 @@ public sealed class AcceptanceScenarioTests(GameClubWebApplicationFactory factor
         factory.Clock.SetTehran(2026, 6, 3, 8, 0);
         var sessionId = await StartSession("PC-D", 1);
         factory.Clock.SetTehran(2026, 6, 3, 9, 0);
-        await _client.PostAsJsonAsync($"/api/sessions/{sessionId}/checkpoints", new { at = TestTimes.T(2026, 6, 3, 9, 0) });
+        await CheckpointAsync(sessionId);
         var stop = await _client.PostAsync($"/api/sessions/{sessionId}/stop", null);
         var invoice = await stop.Content.ReadFromJsonAsync<JsonElement>();
-        Assert.Equal(90_000, invoice.GetProperty("collectibleToman").GetInt64());
+        AssertInvoice(invoice, 90_000, 90_000);
     }
 
     [Fact]
@@ -114,10 +114,10 @@ public sealed class AcceptanceScenarioTests(GameClubWebApplicationFactory factor
         factory.Clock.SetTehran(2026, 6, 3, 2, 0);
         var sessionId = await StartSession("PC-E", 1);
         factory.Clock.SetTehran(2026, 6, 3, 3, 0);
-        await _client.PostAsJsonAsync($"/api/sessions/{sessionId}/checkpoints", new { at = TestTimes.T(2026, 6, 3, 3, 0) });
+        await CheckpointAsync(sessionId);
         var stop = await _client.PostAsync($"/api/sessions/{sessionId}/stop", null);
         var invoice = await stop.Content.ReadFromJsonAsync<JsonElement>();
-        Assert.Equal(130_000, invoice.GetProperty("collectibleToman").GetInt64());
+        AssertInvoice(invoice, 130_000, 130_000);
     }
 
     [Fact]
@@ -130,7 +130,7 @@ public sealed class AcceptanceScenarioTests(GameClubWebApplicationFactory factor
         factory.Clock.SetTehran(2026, 6, 3, 17, 36);
         var stop = await _client.PostAsync($"/api/sessions/{sessionId}/stop", null);
         var invoice = await stop.Content.ReadFromJsonAsync<JsonElement>();
-        Assert.Equal(450_000, invoice.GetProperty("collectibleToman").GetInt64());
+        AssertInvoice(invoice, 450_000, 450_000);
     }
 
     [Fact]
@@ -143,7 +143,7 @@ public sealed class AcceptanceScenarioTests(GameClubWebApplicationFactory factor
         factory.Clock.SetTehran(2026, 6, 3, 15, 45);
         var stop = await _client.PostAsync($"/api/sessions/{sessionId}/stop", null);
         var invoice = await stop.Content.ReadFromJsonAsync<JsonElement>();
-        Assert.Equal(280_000, invoice.GetProperty("collectibleToman").GetInt64());
+        AssertInvoice(invoice, 280_000, 280_000);
     }
 
     [Fact]
@@ -160,7 +160,7 @@ public sealed class AcceptanceScenarioTests(GameClubWebApplicationFactory factor
         factory.Clock.SetTehran(2026, 6, 3, 15, 20);
         var stop = await _client.PostAsync($"/api/sessions/{sessionId}/stop", null);
         var invoice = await stop.Content.ReadFromJsonAsync<JsonElement>();
-        Assert.Equal(110_000, invoice.GetProperty("collectibleToman").GetInt64());
+        AssertInvoice(invoice, 110_000, 110_000);
         using var scope = factory.Services.CreateScope();
         var actions = await scope.ServiceProvider.GetRequiredService<AppDbContext>().AuditLog.Select(a => a.Action).ToListAsync();
         Assert.Contains("session.pause", actions);
@@ -178,8 +178,12 @@ public sealed class AcceptanceScenarioTests(GameClubWebApplicationFactory factor
         var pause = await _client.PostAsync($"/api/sessions/{sessionId}/pause", null);
         Assert.Equal(HttpStatusCode.Conflict, pause.StatusCode);
         factory.Clock.SetTehran(2026, 6, 3, 15, 0);
+        await CheckpointAsync(sessionId);
         var live = await _client.GetFromJsonAsync<JsonElement>($"/api/sessions/{sessionId}/live-amount");
-        Assert.True(live.GetProperty("amountToman").GetInt64() >= 80_000);
+        Assert.Equal(80_000, live.GetProperty("amountToman").GetInt64());
+        var stop = await _client.PostAsync($"/api/sessions/{sessionId}/stop", null);
+        var invoice = await stop.Content.ReadFromJsonAsync<JsonElement>();
+        AssertInvoice(invoice, 80_000, 80_000);
     }
 
     [Fact]
@@ -204,7 +208,7 @@ public sealed class AcceptanceScenarioTests(GameClubWebApplicationFactory factor
         factory.Clock.SetTehran(2026, 6, 3, 14, 1, 5);
         var stop = await _client.PostAsync($"/api/sessions/{sessionId}/stop", null);
         var invoice = await stop.Content.ReadFromJsonAsync<JsonElement>();
-        Assert.Equal(5_000, invoice.GetProperty("collectibleToman").GetInt64());
+        AssertInvoice(invoice, 3_667, 5_000);
     }
 
     [Fact]
@@ -215,13 +219,14 @@ public sealed class AcceptanceScenarioTests(GameClubWebApplicationFactory factor
         factory.Clock.SetTehran(2026, 6, 3, 14, 0);
         var sessionId = await StartSession("PC-G", 1);
         factory.Clock.SetTehran(2026, 6, 3, 15, 0);
-        await _client.PostAsJsonAsync($"/api/sessions/{sessionId}/checkpoints", new { at = TestTimes.T(2026, 6, 3, 15, 0) });
+        await CheckpointAsync(sessionId);
         factory.Clock.SetTehran(2026, 6, 3, 15, 10);
         var sweep = await _client.PostAsync("/api/internal/dead-pc-sweep", null);
         Assert.Equal(HttpStatusCode.OK, sweep.StatusCode);
         using var scope = factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         var invoice = await db.Invoices.SingleAsync();
+        Assert.Equal(80_000, invoice.UnroundedPayableToman);
         Assert.Equal(80_000, invoice.CollectibleToman);
         var audit = await db.AuditLog.Where(a => a.Action == "session.stop").SingleAsync();
         Assert.Contains("auto-close", audit.DetailsJson);
@@ -235,7 +240,7 @@ public sealed class AcceptanceScenarioTests(GameClubWebApplicationFactory factor
         factory.Clock.SetTehran(2026, 6, 3, 14, 0);
         var sessionId = await StartSession("PC-H", 1);
         factory.Clock.SetTehran(2026, 6, 3, 15, 0);
-        await _client.PostAsJsonAsync($"/api/sessions/{sessionId}/checkpoints", new { at = TestTimes.T(2026, 6, 3, 15, 0) });
+        await CheckpointAsync(sessionId);
         await _client.PostAsJsonAsync($"/api/sessions/{sessionId}/checkpoints", new { at = TestTimes.T(2026, 6, 3, 14, 30) });
         var stop = await _client.PostAsync($"/api/sessions/{sessionId}/stop", null);
         Assert.Equal(HttpStatusCode.Conflict, stop.StatusCode);
@@ -259,10 +264,20 @@ public sealed class AcceptanceScenarioTests(GameClubWebApplicationFactory factor
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         Assert.True(await db.AuditLog.AnyAsync(a => a.Action == "session.start"));
         Assert.True(await db.AuditLog.AnyAsync(a => a.Action == "session.stop"));
-        await Assert.ThrowsAsync<PostgresException>(async () =>
-            await db.Database.ExecuteSqlRawAsync("UPDATE audit_log SET action = 'tamper' WHERE id = 1"));
-        await Assert.ThrowsAsync<PostgresException>(async () =>
-            await db.Database.ExecuteSqlRawAsync("DELETE FROM audit_log WHERE id = 1"));
+        var updateEx = await Assert.ThrowsAsync<PostgresException>(async () =>
+            await db.Database.ExecuteSqlRawAsync("UPDATE audit_log SET \"Action\" = 'tamper' WHERE \"Id\" = 1"));
+        Assert.Equal("P0001", updateEx.SqlState);
+        var deleteEx = await Assert.ThrowsAsync<PostgresException>(async () =>
+            await db.Database.ExecuteSqlRawAsync("DELETE FROM audit_log WHERE \"Id\" = 1"));
+        Assert.Equal("P0001", deleteEx.SqlState);
+
+        var row = await db.AuditLog.AsNoTracking().FirstAsync();
+        var tracked = await db.AuditLog.FirstAsync(a => a.Id == row.Id);
+        tracked.Action = "tamper-via-ef";
+        await Assert.ThrowsAsync<AuditLogAppendOnlyException>(() => db.SaveChangesAsync());
+        db.Entry(tracked).State = EntityState.Unchanged;
+        db.AuditLog.Remove(tracked);
+        await Assert.ThrowsAsync<AuditLogAppendOnlyException>(() => db.SaveChangesAsync());
     }
 
     [Fact]
@@ -277,8 +292,24 @@ public sealed class AcceptanceScenarioTests(GameClubWebApplicationFactory factor
         factory.Clock.SetTehran(2026, 6, 3, 16, 0);
         var stop = await _client.PostAsync($"/api/sessions/{sessionId}/stop", null);
         var invoice = await stop.Content.ReadFromJsonAsync<JsonElement>();
-        Assert.Equal(235_000, invoice.GetProperty("collectibleToman").GetInt64());
+        AssertInvoice(invoice, 235_000, 235_000);
     }
+
+    private static void AssertInvoice(JsonElement invoice, long unrounded, long collectible)
+    {
+        Assert.Equal(unrounded, invoice.GetProperty("unroundedPayableToman").GetInt64());
+        Assert.Equal(collectible, invoice.GetProperty("collectibleToman").GetInt64());
+        Assert.Equal(collectible - unrounded, invoice.GetProperty("roundingToman").GetInt64());
+    }
+
+    private static void AssertInvoice(long unrounded, long collectible, long expectedUnrounded, long expectedCollectible)
+    {
+        Assert.Equal(expectedUnrounded, unrounded);
+        Assert.Equal(expectedCollectible, collectible);
+    }
+
+    private Task CheckpointAsync(Guid sessionId)
+        => _client.PostAsJsonAsync($"/api/sessions/{sessionId}/checkpoints", new { });
 
     private async Task RegisterPc(string id, string groupId)
     {

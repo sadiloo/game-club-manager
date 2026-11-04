@@ -3,6 +3,8 @@ using Microsoft.EntityFrameworkCore;
 
 namespace GameClub.Server.Data;
 
+public sealed class AuditLogAppendOnlyException() : InvalidOperationException("audit_log is append-only");
+
 public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(options)
 {
     public DbSet<StationGroupEntity> StationGroups => Set<StationGroupEntity>();
@@ -54,6 +56,8 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             e.Property(x => x.Mode).HasConversion<string>();
             e.HasOne(x => x.Station).WithMany().HasForeignKey(x => x.StationId);
             e.HasOne(x => x.Invoice).WithOne(x => x.Session!).HasForeignKey<InvoiceEntity>(x => x.SessionId);
+            e.HasOne(x => x.RateCardSnapshot).WithMany().HasForeignKey(x => x.RateCardSnapshotId)
+                .OnDelete(DeleteBehavior.Restrict);
         });
 
         modelBuilder.Entity<PlaySegmentEntity>(e =>
@@ -114,5 +118,40 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             e.HasKey(x => x.Id);
             e.HasIndex(x => new { x.GroupId, x.PlayMode, x.PlayerCount, x.IsSpecialBand }).IsUnique();
         });
+    }
+
+    public override int SaveChanges()
+    {
+        RejectAuditLogMutations();
+        return base.SaveChanges();
+    }
+
+    public override int SaveChanges(bool acceptAllChangesOnSuccess)
+    {
+        RejectAuditLogMutations();
+        return base.SaveChanges(acceptAllChangesOnSuccess);
+    }
+
+    public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
+    {
+        RejectAuditLogMutations();
+        return base.SaveChangesAsync(cancellationToken);
+    }
+
+    public override Task<int> SaveChangesAsync(bool acceptAllChangesOnSuccess, CancellationToken cancellationToken = default)
+    {
+        RejectAuditLogMutations();
+        return base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
+    }
+
+    private void RejectAuditLogMutations()
+    {
+        foreach (var entry in ChangeTracker.Entries<AuditLogEntry>())
+        {
+            if (entry.State is EntityState.Modified or EntityState.Deleted)
+            {
+                throw new AuditLogAppendOnlyException();
+            }
+        }
     }
 }

@@ -4,6 +4,11 @@
     "title": "GameClub.Server",
     "version": "1.0"
   },
+  "security": [
+    {
+      "ApiKey": []
+    }
+  ],
   "paths": {
     "/api/audit": {
       "get": {
@@ -486,6 +491,14 @@
     }
   },
   "components": {
+    "securitySchemes": {
+      "ApiKey": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-Api-Key",
+        "description": "Branch API key (env GAMECLUB_API_KEY)."
+      }
+    },
     "schemas": {
       "CheckpointRequest": {
         "type": "object",
@@ -607,7 +620,8 @@
           "startedAt": {
             "type": "string",
             "format": "date-time",
-            "nullable": true
+            "nullable": true,
+            "description": "Rejected with 400 client_start_time; session start uses server time only."
           }
         },
         "additionalProperties": false

@@ -56,16 +56,22 @@ public sealed class StationService(AppDbContext db, AuditService audit)
             throw new ApiException(StatusCodes.Status400BadRequest, "unknown_group", $"Unknown group '{groupId}'.");
         }
 
-        if (await db.Stations.AnyAsync(s => EF.Functions.ILike(s.Id, id), ct))
+        if (await db.Stations.AnyAsync(s => s.Id == id, ct))
         {
             throw new ApiException(StatusCodes.Status409Conflict, "duplicate_station", $"Station '{id}' already exists.");
         }
 
-        var station = new StationEntity { Id = id, Name = name, GroupId = groupId };
-        db.Stations.Add(station);
-        await audit.AppendAsync("station.register", new { stationId = id, groupId }, ct);
-        await db.SaveChangesAsync(ct);
-        return station;
+        try
+        {
+            var station = new StationEntity { Id = id, Name = name, GroupId = groupId };
+            db.Stations.Add(station);
+            await audit.AppendAsync("station.register", new { stationId = id, groupId }, ct);
+            return station;
+        }
+        catch (DbUpdateException ex) when (PostgresErrors.IsStationIdUniqueViolation(ex))
+        {
+            throw new ApiException(StatusCodes.Status409Conflict, "duplicate_station", $"Station '{id}' already exists.");
+        }
     }
 
     public async Task<StationEntity> UpdateAsync(string stationId, string? name, string? groupId, CancellationToken ct)
@@ -85,8 +91,17 @@ public sealed class StationService(AppDbContext db, AuditService audit)
 
         if (groupId is not null)
         {
-            var group = await db.StationGroups.AsNoTracking().FirstOrDefaultAsync(g => g.Id == groupId, ct)
+            _ = await db.StationGroups.AsNoTracking().FirstOrDefaultAsync(g => g.Id == groupId, ct)
                 ?? throw new ApiException(StatusCodes.Status400BadRequest, "unknown_group", $"Unknown group '{groupId}'.");
+        }
+
+        if (groupId is not null && !string.Equals(groupId, station.GroupId, StringComparison.Ordinal))
+        {
+            if (await db.Sessions.AnyAsync(s => s.StationId == id && s.Status != SessionStatus.Closed, ct))
+            {
+                throw new ApiException(StatusCodes.Status409Conflict, "station_busy", "Station has an active session; group cannot change.");
+            }
+
             station.GroupId = groupId;
         }
 
@@ -119,8 +134,18 @@ public sealed class SessionBilling(AppDbContext db, RateConfigService rates)
 {
     public async Task<SessionCharge> BuildChargeAsync(PlaySessionEntity session, DateTime endUtc, CancellationToken ct = default)
     {
-        var snapshot = await rates.LoadAsync(ct);
+        var snapshot = await LoadSnapshotForSessionAsync(session, ct);
         return BuildCharge(session, endUtc, snapshot);
+    }
+
+    private async Task<BranchRatesSnapshot> LoadSnapshotForSessionAsync(PlaySessionEntity session, CancellationToken ct)
+    {
+        if (session.RateCardSnapshotId != 0)
+        {
+            return await rates.LoadSnapshotAsync(session.RateCardSnapshotId, ct);
+        }
+
+        return await rates.LoadAsync(ct);
     }
 
     public SessionCharge BuildCharge(PlaySessionEntity session, DateTime endUtc, BranchRatesSnapshot snapshot)
@@ -165,10 +190,15 @@ public sealed class SessionBilling(AppDbContext db, RateConfigService rates)
     }
 }
 
-public sealed class SessionCloser(AppDbContext db, RateConfigService rates, SessionBilling billing, AuditService audit)
+public sealed class SessionCloser(AppDbContext db, RateConfigService rates, SessionBilling billing, IClock clock)
 {
     public async Task<InvoiceEntity> CloseAsync(PlaySessionEntity session, DateTime endUtc, string auditReason, CancellationToken ct)
     {
+        if (session.Status == SessionStatus.Closed)
+        {
+            throw new ApiException(StatusCodes.Status409Conflict, "closed", "Session is closed.");
+        }
+
         foreach (var seg in session.Segments.Where(s => s.EndUtc is null))
         {
             seg.EndUtc = endUtc;
@@ -182,7 +212,9 @@ public sealed class SessionCloser(AppDbContext db, RateConfigService rates, Sess
         session.EndedAtUtc = endUtc;
         session.Status = SessionStatus.Closed;
 
-        var snapshot = await rates.LoadAsync(ct);
+        var snapshot = session.RateCardSnapshotId != 0
+            ? await rates.LoadSnapshotAsync(session.RateCardSnapshotId, ct)
+            : await rates.LoadAsync(ct);
         var charge = billing.BuildCharge(session, endUtc, snapshot);
         var timeLines = TimeChargeLine.FromSession(charge);
         var issuedAt = TimeMapping.ToTehran(endUtc);
@@ -209,17 +241,38 @@ public sealed class SessionCloser(AppDbContext db, RateConfigService rates, Sess
         };
         session.Invoice = invoice;
         db.Invoices.Add(invoice);
-        await audit.AppendAsync("session.stop", new { sessionId = session.Id, reason = auditReason, invoiceNumber = number }, ct);
-        await db.SaveChangesAsync(ct);
+        db.AuditLog.Add(new AuditLogEntry
+        {
+            AtUtc = clock.UtcNow.UtcDateTime,
+            Action = "session.stop",
+            DetailsJson = JsonSerializer.Serialize(new { sessionId = session.Id, reason = auditReason, invoiceNumber = number }),
+        });
+        try
+        {
+            await db.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateException ex) when (PostgresErrors.IsInvoiceSessionUniqueViolation(ex))
+        {
+            throw new ApiException(StatusCodes.Status409Conflict, "closed", "Session is closed.");
+        }
+
         return invoice;
     }
 
     private async Task<long> NextInvoiceNumberAsync(CancellationToken ct)
     {
-        var row = await db.InvoiceNumbers.SingleAsync(ct);
-        var number = row.NextNumber;
-        row.NextNumber = number + 1;
-        return number;
+        await db.Database.OpenConnectionAsync(ct);
+        try
+        {
+            await using var cmd = db.Database.GetDbConnection().CreateCommand();
+            cmd.CommandText = "SELECT nextval('invoice_number_seq')";
+            var value = await cmd.ExecuteScalarAsync(ct);
+            return Convert.ToInt64(value);
+        }
+        finally
+        {
+            await db.Database.CloseConnectionAsync();
+        }
     }
 }
 
@@ -228,10 +281,19 @@ public sealed class SessionService(
     IClock clock,
     AuditService audit,
     SessionBilling billing,
-    SessionCloser closer)
+    SessionCloser closer,
+    RateConfigService rates)
 {
     public async Task<PlaySessionEntity> StartAsync(string stationId, int playerCount, PlayMode mode, DateTimeOffset? startedAt, CancellationToken ct)
     {
+        if (startedAt.HasValue)
+        {
+            throw new ApiException(
+                StatusCodes.Status400BadRequest,
+                "client_start_time",
+                "Session start time is set by the server; do not send startedAt.");
+        }
+
         var normalizedId = StationIdNormalizer.Normalize(stationId);
         var station = await db.Stations.Include(s => s.Group).FirstOrDefaultAsync(s => s.Id == normalizedId, ct)
             ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Station not found.");
@@ -258,9 +320,8 @@ public sealed class SessionService(
             throw new ApiException(StatusCodes.Status400BadRequest, "invalid_players", "Player count must be 1–4.");
         }
 
-        var startUtc = startedAt.HasValue
-            ? TimeMapping.ToUtc(TehranTime.Ensure(startedAt.Value))
-            : clock.UtcNow.UtcDateTime;
+        var startUtc = clock.UtcNow.UtcDateTime;
+        var rateSnapshot = await rates.CreateSnapshotEntityAsync(ct);
 
         var session = new PlaySessionEntity
         {
@@ -271,6 +332,7 @@ public sealed class SessionService(
             Mode = mode,
             PlayerCount = playerCount,
             LastCheckpointUtc = station.Group.Kind == StationKind.Pc ? startUtc : null,
+            RateCardSnapshot = rateSnapshot,
         };
 
         session.Segments.Add(new PlaySegmentEntity
@@ -285,8 +347,15 @@ public sealed class SessionService(
         });
 
         db.Sessions.Add(session);
-        await audit.AppendAsync("session.start", new { sessionId = session.Id, stationId = station.Id, playerCount, mode = mode.ToString() }, ct);
-        await db.SaveChangesAsync(ct);
+        try
+        {
+            await audit.AppendAsync("session.start", new { sessionId = session.Id, stationId = station.Id, playerCount, mode = mode.ToString() }, ct);
+        }
+        catch (DbUpdateException ex) when (PostgresErrors.IsActiveSessionUniqueViolation(ex))
+        {
+            throw new ApiException(StatusCodes.Status409Conflict, "station_busy", "Station already has an open session.");
+        }
+
         return session;
     }
 
@@ -306,8 +375,15 @@ public sealed class SessionService(
         var now = clock.UtcNow.UtcDateTime;
         session.Status = SessionStatus.Paused;
         session.Pauses.Add(new PauseIntervalEntity { StartUtc = now });
-        await audit.AppendAsync("session.pause", new { sessionId }, ct);
-        await db.SaveChangesAsync(ct);
+        try
+        {
+            await audit.AppendAsync("session.pause", new { sessionId }, ct);
+            await db.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateException ex) when (PostgresErrors.IsOpenPauseUniqueViolation(ex))
+        {
+            throw new ApiException(StatusCodes.Status409Conflict, "already_paused", "Session is already paused.");
+        }
     }
 
     public async Task ResumeAsync(Guid sessionId, CancellationToken ct)
@@ -328,16 +404,37 @@ public sealed class SessionService(
 
     public async Task<InvoiceEntity> StopAsync(Guid sessionId, CancellationToken ct)
     {
-        var session = await LoadOpenSession(sessionId, ct);
-        if (session.Status == SessionStatus.ManualSettle)
+        var strategy = db.Database.CreateExecutionStrategy();
+        return await strategy.ExecuteAsync(async () =>
         {
-            throw new ApiException(StatusCodes.Status409Conflict, "manual_settle", "Session awaits manual settlement.");
-        }
+            await using var tx = await db.Database.BeginTransactionAsync(ct);
+            await db.Database.ExecuteSqlRawAsync(
+                """SELECT "Id" FROM sessions WHERE "Id" = {0} FOR UPDATE""",
+                sessionId);
 
-        var endUtc = session.Station!.Group!.Kind == StationKind.Pc
-            ? session.LastCheckpointUtc ?? session.StartedAtUtc
-            : clock.UtcNow.UtcDateTime;
-        return await closer.CloseAsync(session, endUtc, "stop", ct);
+            var session = await db.Sessions
+                .Include(s => s.Station)!.ThenInclude(st => st!.Group)
+                .Include(s => s.Segments)
+                .Include(s => s.Pauses)
+                .FirstOrDefaultAsync(s => s.Id == sessionId, ct)
+                ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Session not found.");
+            if (session.Status == SessionStatus.Closed)
+            {
+                throw new ApiException(StatusCodes.Status409Conflict, "closed", "Session is closed.");
+            }
+
+            if (session.Status == SessionStatus.ManualSettle)
+            {
+                throw new ApiException(StatusCodes.Status409Conflict, "manual_settle", "Session awaits manual settlement.");
+            }
+
+            var endUtc = session.Station!.Group!.Kind == StationKind.Pc
+                ? session.LastCheckpointUtc ?? session.StartedAtUtc
+                : clock.UtcNow.UtcDateTime;
+            var invoice = await closer.CloseAsync(session, endUtc, "stop", ct);
+            await tx.CommitAsync(ct);
+            return invoice;
+        });
     }
 
     public async Task RecordCheckpointAsync(Guid sessionId, DateTimeOffset? at, CancellationToken ct)
@@ -353,20 +450,25 @@ public sealed class SessionService(
             throw new ApiException(StatusCodes.Status409Conflict, "manual_settle", "Session awaits manual settlement.");
         }
 
-        var atUtc = at.HasValue ? TimeMapping.ToUtc(TehranTime.Ensure(at.Value)) : clock.UtcNow.UtcDateTime;
+        var serverNow = clock.UtcNow.UtcDateTime;
         var previous = session.LastCheckpointUtc ?? session.StartedAtUtc;
-        if (atUtc < previous)
+
+        if (at.HasValue)
         {
-            session.Status = SessionStatus.ManualSettle;
-            session.ManualSettleReason = "rejected_checkpoint";
-            await audit.AppendAsync("session.manual_settle", new { sessionId, reason = "rejected_checkpoint" }, ct);
-            await db.SaveChangesAsync(ct);
-            return;
+            var reportedUtc = TimeMapping.ToUtc(TehranTime.Ensure(at.Value));
+            if (reportedUtc < previous)
+            {
+                session.Status = SessionStatus.ManualSettle;
+                session.ManualSettleReason = "rejected_checkpoint";
+                await audit.AppendAsync("session.manual_settle", new { sessionId, reason = "rejected_checkpoint" }, ct);
+                await db.SaveChangesAsync(ct);
+                return;
+            }
         }
 
-        session.LastCheckpointUtc = atUtc;
-        session.Checkpoints.Add(new CheckpointEntity { AtUtc = atUtc });
-        await audit.AppendAsync("session.checkpoint", new { sessionId, atUtc }, ct);
+        session.LastCheckpointUtc = serverNow;
+        session.Checkpoints.Add(new CheckpointEntity { AtUtc = serverNow });
+        await audit.AppendAsync("session.checkpoint", new { sessionId, atUtc = serverNow }, ct);
         await db.SaveChangesAsync(ct);
     }
 
@@ -486,7 +588,7 @@ public interface IDeadPcMonitor
     Task<int> RunDueClosuresAsync(CancellationToken ct);
 }
 
-public sealed class DeadPcMonitor(AppDbContext db, IClock clock, SessionCloser closer) : IDeadPcMonitor
+public sealed class DeadPcMonitor(AppDbContext db, IClock clock, SessionCloser closer, ILogger<DeadPcMonitor> logger) : IDeadPcMonitor
 {
     public static readonly TimeSpan Timeout = TimeSpan.FromMinutes(10);
 
@@ -505,12 +607,21 @@ public sealed class DeadPcMonitor(AppDbContext db, IClock clock, SessionCloser c
                 && s.LastCheckpointUtc!.Value <= now - Timeout)
             .ToList();
 
+        var closed = 0;
         foreach (var session in due)
         {
-            await closer.CloseAsync(session, session.LastCheckpointUtc!.Value, "auto-close", ct);
+            try
+            {
+                await closer.CloseAsync(session, session.LastCheckpointUtc!.Value, "auto-close", ct);
+                closed++;
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Dead-PC auto-close failed for session {SessionId} on station {StationId}", session.Id, session.StationId);
+            }
         }
 
-        return due.Count;
+        return closed;
     }
 }
 

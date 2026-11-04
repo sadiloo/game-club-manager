@@ -91,10 +91,12 @@ public sealed class SessionsController(SessionService sessions, IDeadPcMonitor d
     [HttpPost]
     public async Task<IActionResult> Start(StartRequest body, CancellationToken ct)
     {
-        var mode = Enum.TryParse<GameClub.Billing.PlayMode>(body.Mode, true, out var parsed)
-            ? parsed
-            : GameClub.Billing.PlayMode.Offline;
-        var session = await sessions.StartAsync(body.StationId, body.PlayerCount, mode, body.StartedAt, ct);
+        if (!Enum.TryParse<GameClub.Billing.PlayMode>(body.Mode, true, out var parsed))
+        {
+            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_mode", $"Unknown play mode '{body.Mode}'.");
+        }
+
+        var session = await sessions.StartAsync(body.StationId, body.PlayerCount, parsed, body.StartedAt, ct);
         return Created($"/api/sessions/{session.Id}", new { session.Id, session.StationId, session.Status });
     }
 

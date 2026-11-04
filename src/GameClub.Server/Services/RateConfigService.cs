@@ -1,3 +1,4 @@
+using System.Text.Json;
 using GameClub.Billing;
 using GameClub.Server.Data;
 using GameClub.Server.Data.Entities;
@@ -47,6 +48,25 @@ public sealed class RateConfigService(AppDbContext db, AuditService audit)
 
     public async Task UpdateAsync(RateConfigUpdateRequest request, CancellationToken ct = default)
     {
+        if (request.RoundingStepToman <= 0)
+        {
+            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_rounding", "Rounding step must be positive.");
+        }
+
+        if (!request.RoundingDirection.Equals("Up", StringComparison.OrdinalIgnoreCase)
+            && !request.RoundingDirection.Equals("Down", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_rounding", "Rounding direction must be Up or Down.");
+        }
+
+        foreach (var line in request.Lines)
+        {
+            if (line.HourlyToman < 0)
+            {
+                throw new ApiException(StatusCodes.Status400BadRequest, "invalid_rate", "Hourly rate cannot be negative.");
+            }
+        }
+
         var rounding = await db.BranchRounding.SingleAsync(ct);
         rounding.StepToman = request.RoundingStepToman;
         rounding.Direction = request.RoundingDirection;
@@ -77,6 +97,58 @@ public sealed class RateConfigService(AppDbContext db, AuditService audit)
         await audit.AppendAsync("rate.change", new { request.RoundingStepToman, lineCount = request.Lines.Count }, ct);
         await db.SaveChangesAsync(ct);
     }
+
+    public async Task<BranchRatesSnapshot> LoadSnapshotAsync(int snapshotId, CancellationToken ct = default)
+    {
+        var row = await db.RateCardSnapshots.AsNoTracking().SingleAsync(s => s.Id == snapshotId, ct);
+        return DeserializeSnapshot(row.Json);
+    }
+
+    public async Task<RateCardSnapshotEntity> CreateSnapshotEntityAsync(CancellationToken ct = default)
+    {
+        var roundingRow = await db.BranchRounding.AsNoTracking().SingleAsync(ct);
+        var lines = await db.RateLines.AsNoTracking().ToListAsync(ct);
+        var payload = new StoredBranchRates(
+            roundingRow.StepToman,
+            roundingRow.Direction,
+            roundingRow.PcSpecialBandSurchargeToman,
+            lines.Select(l => new StoredRateLine(l.GroupId, l.PlayMode, l.PlayerCount, l.IsSpecialBand, l.HourlyToman)).ToList());
+        return new RateCardSnapshotEntity { Json = JsonSerializer.Serialize(payload) };
+    }
+
+    internal BranchRatesSnapshot DeserializeSnapshot(string json)
+    {
+        var stored = JsonSerializer.Deserialize<StoredBranchRates>(json)
+            ?? throw new InvalidOperationException("Invalid rate snapshot.");
+        var roundingRow = new BranchRoundingEntity
+        {
+            StepToman = stored.StepToman,
+            Direction = stored.Direction,
+            PcSpecialBandSurchargeToman = stored.PcSpecialBandSurchargeToman,
+        };
+        var lines = stored.Lines.Select(l => new RateLineEntity
+        {
+            GroupId = l.GroupId,
+            PlayMode = l.PlayMode,
+            PlayerCount = l.PlayerCount,
+            IsSpecialBand = l.IsSpecialBand,
+            HourlyToman = l.HourlyToman,
+        }).ToList();
+        return new BranchRatesSnapshot(BuildCard(lines, roundingRow.PcSpecialBandSurchargeToman), BuildRounding(roundingRow));
+    }
+
+    private sealed record StoredBranchRates(
+        long StepToman,
+        string Direction,
+        long PcSpecialBandSurchargeToman,
+        IReadOnlyList<StoredRateLine> Lines);
+
+    private sealed record StoredRateLine(
+        string GroupId,
+        string PlayMode,
+        int? PlayerCount,
+        bool IsSpecialBand,
+        long HourlyToman);
 
     private static RoundingPolicy BuildRounding(BranchRoundingEntity row)
     {

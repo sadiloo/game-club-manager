@@ -239,6 +239,9 @@ namespace GameClub.Server.Data.Migrations
                     b.Property<int>("PlayerCount")
                         .HasColumnType("integer");
 
+                    b.Property<int>("RateCardSnapshotId")
+                        .HasColumnType("integer");
+
                     b.Property<DateTime>("StartedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
@@ -251,6 +254,8 @@ namespace GameClub.Server.Data.Migrations
                         .HasColumnType("text");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("RateCardSnapshotId");
 
                     b.HasIndex("StationId");
 
@@ -397,11 +402,19 @@ namespace GameClub.Server.Data.Migrations
 
             modelBuilder.Entity("GameClub.Server.Data.Entities.PlaySessionEntity", b =>
                 {
+                    b.HasOne("GameClub.Server.Data.Entities.RateCardSnapshotEntity", "RateCardSnapshot")
+                        .WithMany()
+                        .HasForeignKey("RateCardSnapshotId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
                     b.HasOne("GameClub.Server.Data.Entities.StationEntity", "Station")
                         .WithMany()
                         .HasForeignKey("StationId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
+
+                    b.Navigation("RateCardSnapshot");
 
                     b.Navigation("Station");
                 });

@@ -1,5 +1,6 @@
 using GameClub.Server.Services;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using System.Text.Json;
 
 namespace GameClub.Server;
@@ -46,7 +47,26 @@ public sealed class ApiExceptionMiddleware(RequestDelegate next)
         {
             context.Response.StatusCode = ex.Status;
             context.Response.ContentType = "application/json";
-            await context.Response.WriteAsync(JsonSerializer.Serialize(new { code = ex.Code, message = ex.Message }));
+            await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = ex.Code, code = ex.Code, message = ex.Message }));
         }
+        catch (DbUpdateException ex) when (PostgresErrors.IsActiveSessionUniqueViolation(ex))
+        {
+            await WriteConflictAsync(context, "station_busy", "Station already has an open session.");
+        }
+        catch (DbUpdateException ex) when (PostgresErrors.IsOpenPauseUniqueViolation(ex))
+        {
+            await WriteConflictAsync(context, "already_paused", "Session is already paused.");
+        }
+        catch (DbUpdateException ex) when (PostgresErrors.IsInvoiceSessionUniqueViolation(ex))
+        {
+            await WriteConflictAsync(context, "closed", "Session is closed.");
+        }
+    }
+
+    private static async Task WriteConflictAsync(HttpContext context, string code, string message)
+    {
+        context.Response.StatusCode = StatusCodes.Status409Conflict;
+        context.Response.ContentType = "application/json";
+        await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = code, code, message }));
     }
 }
