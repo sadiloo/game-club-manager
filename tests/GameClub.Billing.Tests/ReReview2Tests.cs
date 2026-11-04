@@ -50,22 +50,23 @@ public class ReReview2Tests
             policy: policy);
         Assert.Equal(1, plan.Grace!.Minutes);
         Assert.Equal(11, plan.Lines.Sum(line => line.BilledMinutes));
+        Assert.Equal((2 * block) + 500 - MoneyMath.ChargeForMinutes(110_000, 10, RateRemainderMode.Nearest), plan.UnusedToman);
 
-        foreach (var granularity in new[] { 1, 5, 15 })
+        var minute = MoneyMath.ChargeForMinutes(110_000, 1, RateRemainderMode.Nearest);
+        foreach (var granularity in new[] { 5, 15 })
         {
             var coarse = new BillingPolicy(granularity, PartialUnitMode.Ceiling, RateRemainderMode.Nearest);
             var played = SessionPricer.Price(new Session("s", [
                 CafeFixture.Play("a", T.At(2026, 6, 2, 10, 0), T.At(2026, 6, 2, 10, 0, 1), "ps5-1", CafeFixture.Ps5, 1),
             ]), CafeFixture.Card(), policy: coarse);
             var play = CustomerPlay.Settle(played, Wallet(500), billing: coarse);
-            Assert.Equal(played.TotalAmountToman, play.ChargeInvoice!.TimeGrossToman);
-            Assert.Equal(1, play.Settlement.Grace!.Minutes);
-            Assert.Equal(0, play.Settlement.UncoveredToman);
-            Assert.Equal(played.TotalAmountToman - MoneyMath.ChargeForMinutes(110_000, 1, RateRemainderMode.Nearest), play.Settlement.WriteOffToman);
-            if (play.Settlement.WriteOffToman > 0)
-            {
-                Assert.Contains(play.ChargeInvoice.Lines, line => line.Kind == InvoiceLineKind.WriteOff);
-            }
+            Assert.Equal(minute, play.ChargeInvoice!.TimeGrossToman);
+            Assert.Equal(minute, play.Settlement.Grace!.WaivedToman);
+            Assert.Equal(0, play.Settlement.MoneyConsumedToman);
+            Assert.Equal(500, play.Account.PcMoneyToman);
+            Assert.Equal(0, play.Settlement.WriteOffToman);
+            Assert.Null(play.Settlement.Alert);
+            Assert.DoesNotContain(play.ChargeInvoice.Lines, line => line.Kind == InvoiceLineKind.WriteOff);
         }
     }
 
@@ -130,15 +131,22 @@ public class ReReview2Tests
             DiscountPolicy.Default,
             RoundingPolicy.Create(5_000),
             issued);
-        Assert.Equal(150_000, InvoiceCalculator.Calculate(request).PayableToman);
+        var calculated = InvoiceCalculator.Calculate(request);
+        Assert.Equal(150_000, calculated.PayableToman);
+        var (cashInvoice, cashAllocation) = InvoiceCalculator.Collect(
+            request,
+            [new Tender(PaymentMethod.Cash, 150_000)]);
+        Assert.True(cashAllocation.IsValid, cashAllocation.Errors.FirstOrDefault()?.Message);
+        Assert.Equal(calculated.PayableToman, cashInvoice.PayableToman);
+        Assert.Equal(calculated.PayableToman, cashAllocation.PayableToman);
 
-        var (invoice, allocation) = InvoiceCalculator.Collect(
+        var (mixed, allocation) = InvoiceCalculator.Collect(
             request,
             [new Tender(PaymentMethod.Wallet, 50_001, "m"), new Tender(PaymentMethod.Cash, 100_000)],
             [new MemberWallet("m", 50_001, 0)]);
         Assert.True(allocation.IsValid, allocation.Errors.FirstOrDefault()?.Message);
         Assert.Equal(150_001, allocation.PayableToman);
-        Assert.Equal(allocation.PayableToman, invoice.PayableToman);
+        Assert.Equal(allocation.PayableToman, mixed.PayableToman);
     }
 
     [Fact]
@@ -369,10 +377,11 @@ public class ReReview2Tests
             1,
             CafeFixture.Card(),
             policy: policy);
+        var minute = MoneyMath.ChargeForMinutes(110_000, 1, RateRemainderMode.Nearest);
         Assert.Equal(1, plan.Lines.Sum(line => line.BilledMinutes));
-        Assert.Null(plan.Grace);
-        Assert.Equal(MoneyMath.ChargeForMinutes(110_000, 1, RateRemainderMode.Nearest), plan.ConsumedToman);
-        Assert.True(plan.UnusedToman > 0);
+        Assert.Equal(minute, plan.Grace!.WaivedToman);
+        Assert.Equal(0, plan.ConsumedToman);
+        Assert.Equal(5_000, plan.UnusedToman);
     }
 
     private static CustomerAccount Wallet(long balance)

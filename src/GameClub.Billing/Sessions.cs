@@ -175,19 +175,37 @@ public static class SessionPricer
             return;
         }
 
-        foreach (var segment in session.Segments)
+        foreach (var pause in session.Pauses)
         {
-            var kind = segment.Kind;
-            if (kind is null && stations is not null)
+            foreach (var segment in session.Segments)
             {
-                kind = stations.GroupOf(segment.StationId).Kind;
-            }
+                if (pause.End <= segment.Start || pause.Start >= segment.End)
+                {
+                    continue;
+                }
 
-            if (kind == StationKind.Pc)
-            {
-                throw new BillingException(
-                    BillingErrors.PcPause,
-                    "A PC session cannot be paused. PC time stops only when the customer logs out.");
+                var kind = segment.Kind;
+                if (kind is null && stations is not null)
+                {
+                    if (!stations.TryGetGroup(segment.StationId, out var group))
+                    {
+                        throw new BillingException(BillingErrors.InvalidSession, $"Unknown station '{segment.StationId}'.");
+                    }
+
+                    kind = group.Kind;
+                }
+
+                if (kind is null)
+                {
+                    throw new BillingException(BillingErrors.InvalidSession, "Station kind is required when a pause overlaps a segment.");
+                }
+
+                if (kind == StationKind.Pc)
+                {
+                    throw new BillingException(
+                        BillingErrors.PcPause,
+                        "A PC session cannot be paused. PC time stops only when the customer logs out.");
+                }
             }
         }
     }
@@ -754,20 +772,20 @@ public static class PrepaidPlanner
                     [new DateMinuteAllocation(TehranTime.Date(minuteStart), 1)]));
             }
 
-            if (marginal > unused)
+            if (step > 1 && marginal > 0)
+            {
+                // The next block does not fit. The grace minute is free and the leftover balance stays.
+                grace = new GraceLine(1, marginal, minuteStart, segmentId);
+                lines = minuteLines;
+                end = TehranTime.AddSeconds(minuteStart, 60);
+            }
+            else if (marginal > unused)
             {
                 grace = new GraceLine(1, marginal - unused, minuteStart, segmentId);
                 lines = minuteLines;
                 end = TehranTime.AddSeconds(minuteStart, 60);
                 consumed = amountToman;
                 unused = 0;
-            }
-            else if (marginal > 0 && step > 1)
-            {
-                lines = minuteLines;
-                end = TehranTime.AddSeconds(minuteStart, 60);
-                consumed += marginal;
-                unused = amountToman - consumed;
             }
         }
 

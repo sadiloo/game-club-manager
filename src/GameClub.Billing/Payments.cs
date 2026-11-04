@@ -12,54 +12,36 @@ public enum PaymentMethod
 }
 
 /// <summary>
-/// A member wallet. Gift and real credit are one spendable balance. The basis fields
-/// keep the ratio from the last top-up so many small draws match one large draw.
-/// Gift credit does not expire and does not go negative. Debt sits on real credit.
+/// A member id plus the one <see cref="WalletPocket"/> that holds gift and real credit.
 /// </summary>
-public sealed record MemberWallet(
-    string MemberId,
-    long RealCreditToman,
-    long GiftCreditToman,
-    long BasisRealToman = 0,
-    long BasisGiftToman = 0,
-    long PositiveDrawnToman = 0,
-    long GiftDrawnFromBasisToman = 0)
+public sealed class MemberWallet
 {
-    public long BalanceToman => RealCreditToman + GiftCreditToman;
-
-    public long DebtToman => BalanceToman < 0 ? -BalanceToman : 0;
-
-    public WalletPocket ToPocket()
+    public MemberWallet(string memberId, long realCreditToman, long giftCreditToman)
+        : this(memberId, new WalletPocket(realCreditToman, giftCreditToman))
     {
-        var untouched = PositiveDrawnToman == 0
-            && GiftDrawnFromBasisToman == 0
-            && BasisRealToman == 0
-            && BasisGiftToman == 0;
-        if (untouched)
-        {
-            return new WalletPocket(RealCreditToman, GiftCreditToman);
-        }
-
-        return new WalletPocket(
-            RealCreditToman,
-            GiftCreditToman,
-            BasisRealToman,
-            BasisGiftToman,
-            PositiveDrawnToman,
-            GiftDrawnFromBasisToman);
     }
 
-    public static MemberWallet FromPocket(string memberId, WalletPocket pocket)
+    public MemberWallet(string memberId, WalletPocket pocket)
     {
-        return new MemberWallet(
-            memberId,
-            pocket.RealToman,
-            pocket.GiftToman,
-            pocket.BasisRealToman,
-            pocket.BasisGiftToman,
-            pocket.PositiveDrawnToman,
-            pocket.GiftDrawnFromBasisToman);
+        MemberId = memberId;
+        Pocket = pocket;
     }
+
+    public string MemberId { get; }
+
+    public WalletPocket Pocket { get; }
+
+    public long RealCreditToman => Pocket.RealToman;
+
+    public long GiftCreditToman => Pocket.GiftToman;
+
+    public long BalanceToman => Pocket.TotalToman;
+
+    public long DebtToman => Pocket.DebtToman;
+
+    public WalletPocket ToPocket() => Pocket;
+
+    public static MemberWallet FromPocket(string memberId, WalletPocket pocket) => new(memberId, pocket);
 }
 
 public sealed record Tender(PaymentMethod Method, long AmountToman, string? MemberId = null);
@@ -68,6 +50,7 @@ public static class PaymentErrors
 {
     public const string SumMismatch = "sum_mismatch";
     public const string NegativeAmount = "negative_amount";
+    public const string UnknownMethod = "unknown_method";
     public const string WalletMissingMember = "wallet_missing_member";
     public const string UnknownWallet = "unknown_wallet";
     public const string InsufficientWallet = "insufficient_wallet";
@@ -302,7 +285,7 @@ public readonly record struct WalletPocket
         else
         {
             var totalAfter = PositiveDrawnToman + fromPositive;
-            var giftShould = (totalAfter * BasisGiftToman) / basis;
+            var giftShould = MoneyMath.MulDiv(totalAfter, BasisGiftToman, basis);
             giftTake = giftShould - GiftDrawnFromBasisToman;
             if (giftTake < 0)
             {
@@ -318,9 +301,31 @@ public readonly record struct WalletPocket
             {
                 giftTake = positiveGift;
             }
+
+            var positiveRealTake = fromPositive - giftTake;
+            if (positiveRealTake > positiveReal)
+            {
+                giftTake = fromPositive - (positiveReal > 0 ? positiveReal : 0);
+                if (giftTake < 0)
+                {
+                    giftTake = 0;
+                }
+
+                if (giftTake > positiveGift)
+                {
+                    giftTake = positiveGift;
+                }
+            }
         }
 
         var realTake = fromPositive - giftTake + debtPart;
+        if (debt.MaxDebtToman == 0 && RealToman - realTake < 0)
+        {
+            updated = this;
+            giftDrawn = 0;
+            realDrawn = 0;
+            return false;
+        }
         if (GiftToman - giftTake < 0)
         {
             updated = this;
@@ -503,7 +508,7 @@ public static class PaymentAllocator
 
             if (tender.Method != PaymentMethod.Wallet)
             {
-                errors.Add(new PaymentError(PaymentErrors.NegativeAmount, $"Tender {index} has an unknown method."));
+                errors.Add(new PaymentError(PaymentErrors.UnknownMethod, $"Tender {index} has an unknown method."));
                 results[index] = new TenderResult(index, tender.Method, tender.AmountToman, tender.MemberId, 0, 0, false);
                 continue;
             }

@@ -74,14 +74,25 @@ public sealed class StationDirectory
         }
     }
 
-    public StationGroup GroupOf(string stationId)
+    public bool TryGetGroup(string stationId, out StationGroup group)
     {
-        if (!_stations.TryGetValue(stationId, out var station))
+        if (_stations.TryGetValue(stationId, out var station) && _groups.TryGetValue(station.GroupId, out group!))
         {
-            throw new BillingException("invalid_session", $"Unknown station '{stationId}'.");
+            return true;
         }
 
-        return _groups[station.GroupId];
+        group = null!;
+        return false;
+    }
+
+    public StationGroup GroupOf(string stationId)
+    {
+        if (!TryGetGroup(stationId, out var group))
+        {
+            throw new BillingException(BillingErrors.InvalidSession, $"Unknown station '{stationId}'.");
+        }
+
+        return group;
     }
 
     public PlaySegment Segment(
@@ -93,7 +104,7 @@ public sealed class StationDirectory
         int playerCount)
     {
         var group = GroupOf(stationId);
-        return new PlaySegment(id, start, end, stationId, group.Id, mode, playerCount);
+        return new PlaySegment(id, start, end, stationId, group.Id, mode, playerCount, group.Kind);
     }
 }
 

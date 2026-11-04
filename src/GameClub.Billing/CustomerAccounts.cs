@@ -142,8 +142,7 @@ public static class CustomerPlay
         CustomerPricing? pricing = null,
         DiscountCode? code = null,
         DiscountPolicy? discounts = null,
-        DateTimeOffset? issuedAt = null,
-        RoundingPolicy? rounding = null)
+        DateTimeOffset? issuedAt = null)
     {
         account.Settings.EnsureValid();
         billing ??= BillingPolicy.Default;
@@ -159,10 +158,10 @@ public static class CustomerPlay
             return new PcPlayResult(blocked, account);
         }
 
-        var timeDiscount = default(PcTimeDiscount);
+        SessionDiscount? discount = null;
         if (account.Settings.ApplyDiscountsToPc && charge.Lines.Count > 0)
         {
-            timeDiscount = DiscountFor(pricing, code, discounts, charge.Lines[0].GroupId, charge.Lines[0].Start);
+            discount = SessionDiscountFor(pricing, code, discounts, charge.Lines[0].GroupId, charge.Lines[0].Start);
         }
 
         var inDebt = money < 0;
@@ -173,7 +172,7 @@ public static class CustomerPlay
             policy,
             billing,
             account.Settings.GraceMinuteEnabled && !inDebt,
-            timeDiscount,
+            discount,
             shortfallIsUncovered: inDebt);
 
         var debit = settled.MoneyConsumedToman;
@@ -188,7 +187,7 @@ public static class CustomerPlay
             }
 
             when = TehranTime.Ensure(when);
-            invoice = PcInvoice(charge, settled, when, rounding);
+            invoice = PcInvoice(charge, settled, when);
             if (invoice.PayableToman != debit)
             {
                 throw new BillingException(BillingErrors.InvalidMoney, "PC invoice payable does not match the balance debit.");
@@ -216,14 +215,10 @@ public static class CustomerPlay
         return new PcPlayResult(visible, updated, giftDrawn, realDrawn, invoice);
     }
 
-    private static Invoice PcInvoice(SessionCharge charge, Settlement settled, DateTimeOffset when, RoundingPolicy? rounding)
+    private static Invoice PcInvoice(SessionCharge charge, Settlement settled, DateTimeOffset when)
     {
         var grace = settled.Grace?.WaivedToman ?? 0;
-        var moneyGross = charge.TotalAmountToman - settled.PackageCoveredToman;
-        if (moneyGross < 0)
-        {
-            moneyGross = 0;
-        }
+        var moneyGross = settled.InvoicedTimeToman;
 
         var date = TehranTime.Date(when);
         var lines = new List<InvoiceLine>
@@ -249,13 +244,6 @@ public static class CustomerPlay
         if (payable < 0)
         {
             payable = 0;
-        }
-
-        // A prepaid PC invoice is paid from the PC balance. That balance is never rounded;
-        // pilot rounding (step 5,000, up) applies only to a counter remainder, which is zero here.
-        if (rounding is { Enabled: true } && payable < 0)
-        {
-            throw new BillingException(BillingErrors.InvalidMoney, "PC invoice payable cannot be negative.");
         }
 
         var net = moneyGross - grace - settled.DiscountToman - settled.WriteOffToman;
@@ -309,6 +297,74 @@ public static class CustomerPlay
             account.Settings.GraceMinuteEnabled,
             timeDiscount);
         return estimate with { MoneyBalanceToman = money };
+    }
+
+    private static SessionDiscount SessionDiscountFor(
+        CustomerPricing? pricing,
+        DiscountCode? code,
+        DiscountPolicy? discounts,
+        string groupId,
+        DateTimeOffset at)
+    {
+        var policy = discounts ?? DiscountPolicy.Default;
+        policy.Birthday.EnsureValid();
+        var level = pricing?.LevelPercent ?? 0;
+        if (level < 0)
+        {
+            level = 0;
+        }
+
+        var birthday = 0;
+        JalaliDate? birth = null;
+        if (pricing?.BirthDate is JalaliDate born && !born.IsEmpty && pricing.BirthdayPercent > 0)
+        {
+            birthday = pricing.BirthdayPercent;
+            birth = born;
+        }
+
+        var codePercent = 0;
+        long fixedToman = 0;
+        IReadOnlyCollection<DayOfWeek>? days = null;
+        IReadOnlyCollection<string>? groups = null;
+        if (code is not null && code.Scope.HasFlag(ChargeScope.Time) && CodeWindowAllows(code, at))
+        {
+            if (code.AllowedGroupIds is not { Count: > 0 } limited || limited.Contains(groupId))
+            {
+                codePercent = code.Percent;
+                fixedToman = code.FixedToman;
+                days = code.AllowedWeekdays;
+                groups = code.AllowedGroupIds;
+            }
+        }
+
+        return new SessionDiscount
+        {
+            LevelPercent = level,
+            BirthdayPercent = birthday,
+            CodePercent = codePercent,
+            FixedToman = fixedToman,
+            Cap = policy.MaxCombinedPercent,
+            BirthDate = birth,
+            Birthday = policy.Birthday,
+            CodeWeekdays = days,
+            CodeGroups = groups,
+        };
+    }
+
+    private static bool CodeWindowAllows(DiscountCode code, DateTimeOffset at)
+    {
+        at = TehranTime.Ensure(at);
+        if (code.ValidFrom is DateTimeOffset from && at < TehranTime.Ensure(from))
+        {
+            return false;
+        }
+
+        if (code.ValidUntil is DateTimeOffset until && at >= TehranTime.Ensure(until))
+        {
+            return false;
+        }
+
+        return true;
     }
 
     internal static PcTimeDiscount DiscountFor(

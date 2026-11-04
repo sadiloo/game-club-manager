@@ -87,7 +87,9 @@ public sealed record Settlement(
     long DiscountToman = 0,
     long WriteOffToman = 0,
     OperatorAlert? Alert = null,
-    DailyReportEntry? ReportEntry = null)
+    DailyReportEntry? ReportEntry = null,
+    long OmittedToman = 0,
+    long InvoicedTimeToman = 0)
 {
     /// <summary>
     /// Time lines the customer still owes, at gross (paid + grace + discount), so a later grace
@@ -130,6 +132,162 @@ public sealed record RemainingTimeEstimate(
 /// A balance that is already negative (console debt on the shared wallet) blocks the
 /// session: packages are not consumed and the balance is left unchanged.
 /// </summary>
+/// <summary>
+/// One PC discount for the whole session. A percent is taken once on the running total.
+/// A fixed code is taken once. Birthday and weekday gates use each minute's Tehran date.
+/// </summary>
+public sealed class SessionDiscount
+{
+    public static SessionDiscount None { get; } = new();
+
+    public int LevelPercent { get; init; }
+
+    public int BirthdayPercent { get; init; }
+
+    public int CodePercent { get; init; }
+
+    public long FixedToman { get; init; }
+
+    public int Cap { get; init; } = 100;
+
+    public JalaliDate? BirthDate { get; init; }
+
+    public BirthdayWindow Birthday { get; init; } = BirthdayWindow.ExactDay;
+
+    public IReadOnlyCollection<DayOfWeek>? CodeWeekdays { get; init; }
+
+    public IReadOnlyCollection<string>? CodeGroups { get; init; }
+
+    public long All { get; private set; }
+
+    public long CodeGross { get; private set; }
+
+    public long BirthGross { get; private set; }
+
+    public bool CodeOn(LocalDate date, string? groupId)
+    {
+        if (CodePercent <= 0 && FixedToman <= 0)
+        {
+            return false;
+        }
+
+        if (CodeGroups is { Count: > 0 } groups && (groupId is null || !groups.Contains(groupId)))
+        {
+            return false;
+        }
+
+        return CodeWeekdays is not { Count: > 0 } days || days.Contains(date.DayOfWeek);
+    }
+
+    public bool BirthOn(LocalDate date)
+    {
+        return BirthdayPercent > 0
+            && BirthDate is JalaliDate birth
+            && !birth.IsEmpty
+            && Birthday.Includes(birth, date);
+    }
+
+    public long NetNow() => Compute(All, CodeGross, BirthGross);
+
+    public long Marginal(long add, LocalDate date)
+    {
+        return Marginal(add, date, null);
+    }
+
+    public long Marginal(long add, LocalDate date, string? groupId)
+    {
+        if (add <= 0)
+        {
+            return 0;
+        }
+
+        if (LevelPercent == 0 && BirthdayPercent == 0 && CodePercent == 0 && FixedToman == 0)
+        {
+            return add;
+        }
+
+        var next = Compute(
+            All + add,
+            CodeGross + (CodeOn(date, groupId) ? add : 0),
+            BirthGross + (BirthOn(date) ? add : 0));
+        var delta = next - NetNow();
+        return delta < 0 ? 0 : delta;
+    }
+
+    public void Commit(long add, LocalDate date)
+    {
+        Commit(add, date, null);
+    }
+
+    public void Commit(long add, LocalDate date, string? groupId)
+    {
+        if (add <= 0)
+        {
+            return;
+        }
+
+        All += add;
+        if (CodeOn(date, groupId))
+        {
+            CodeGross += add;
+        }
+
+        if (BirthOn(date))
+        {
+            BirthGross += add;
+        }
+    }
+
+    private long Compute(long all, long codeG, long birthG)
+    {
+        long levelOff;
+        long birthOff;
+        if (BirthdayPercent > 0 && birthG > 0)
+        {
+            var sum = LevelPercent + BirthdayPercent;
+            var rest = all - birthG;
+            if (rest < 0)
+            {
+                rest = 0;
+            }
+
+            if (sum <= Cap)
+            {
+                levelOff = MoneyMath.PercentOf(rest, LevelPercent) + MoneyMath.PercentOf(birthG, LevelPercent);
+                birthOff = MoneyMath.PercentOf(birthG, BirthdayPercent);
+            }
+            else
+            {
+                var combined = MoneyMath.PercentOf(birthG, Cap);
+                var levelShare = sum == 0 ? 0 : MoneyMath.MulDiv(combined, LevelPercent, sum);
+                levelOff = MoneyMath.PercentOf(rest, LevelPercent) + levelShare;
+                birthOff = combined - levelShare;
+            }
+        }
+        else
+        {
+            levelOff = MoneyMath.PercentOf(all, LevelPercent);
+            birthOff = 0;
+        }
+
+        var codeOff = MoneyMath.PercentOf(codeG, CodePercent);
+        long fixedOff = 0;
+        if (FixedToman > 0 && codeG > 0)
+        {
+            var room = codeG - codeOff;
+            if (room < 0)
+            {
+                room = 0;
+            }
+
+            fixedOff = FixedToman < room ? FixedToman : room;
+        }
+
+        var net = all - levelOff - birthOff - codeOff - fixedOff;
+        return net < 0 ? 0 : net;
+    }
+}
+
 public static class AccountSettlement
 {
     public static Settlement Settle(
@@ -138,7 +296,7 @@ public static class AccountSettlement
         AccountPolicy? policy = null,
         BillingPolicy? billing = null,
         bool graceMinuteEnabled = true,
-        PcTimeDiscount timeDiscount = default,
+        SessionDiscount? discount = null,
         bool shortfallIsUncovered = false)
     {
         policy ??= AccountPolicy.Default;
@@ -172,7 +330,8 @@ public static class AccountSettlement
         long moneyConsumed = 0;
         long uncovered = 0;
         long writeOff = 0;
-        long discountToman = 0;
+        long omitted = 0;
+        discount ??= new SessionDiscount();
         var grace = new GraceTracker { Enabled = graceMinuteEnabled && !shortfallIsUncovered, UncoveredShortfall = shortfallIsUncovered };
         var packageDraws = new List<PackageDraw>();
         var moneyDraws = new List<MoneyDraw>();
@@ -187,7 +346,7 @@ public static class AccountSettlement
                     remaining,
                     policy,
                     billing,
-                    timeDiscount,
+                    discount,
                     grace,
                     ref money,
                     ref packageMinutes,
@@ -195,7 +354,7 @@ public static class AccountSettlement
                     ref moneyConsumed,
                     ref uncovered,
                     ref writeOff,
-                    ref discountToman,
+                    ref omitted,
                     packageDraws,
                     moneyDraws);
             }
@@ -227,10 +386,12 @@ public static class AccountSettlement
             packageDraws,
             moneyDraws,
             grace.Waived > 0 ? new GraceLine(1, grace.Waived, grace.At, grace.SegmentId) : null,
-            discountToman,
+            discount.All - discount.NetNow(),
             writeOff,
             alert,
-            report);
+            report,
+            omitted,
+            discount.All);
     }
 
     private static void ApplyPart(
@@ -239,7 +400,7 @@ public static class AccountSettlement
         Dictionary<string, long> remaining,
         AccountPolicy policy,
         BillingPolicy billing,
-        PcTimeDiscount timeDiscount,
+        SessionDiscount discount,
         GraceTracker grace,
         ref long money,
         ref long packageMinutes,
@@ -247,7 +408,7 @@ public static class AccountSettlement
         ref long moneyConsumed,
         ref long uncovered,
         ref long writeOff,
-        ref long discountToman,
+        ref long omitted,
         List<PackageDraw> packageDraws,
         List<MoneyDraw> moneyDraws)
     {
@@ -260,7 +421,7 @@ public static class AccountSettlement
         {
             var before = moneyConsumed;
             long gross = 0;
-            ApplyMoney(ref money, part.HourlyRateToman, 0, part.AmountToman, billing, timeDiscount, grace, part.Start, part.SegmentId, ref moneyConsumed, ref uncovered, ref writeOff, ref discountToman, ref gross);
+            ApplyMoney(ref money, part.HourlyRateToman, 0, part.AmountToman, part.ActiveSeconds, billing, discount, TehranTime.Date(part.Start), grace, part.Start, part.SegmentId, ref moneyConsumed, ref uncovered, ref writeOff, ref omitted, ref gross);
             if (gross > 0)
             {
                 moneyDraws.Add(new MoneyDraw(part.SegmentId, part.Start, 0, gross));
@@ -288,7 +449,8 @@ public static class AccountSettlement
             packageMinutes += taken;
             packageCovered += coveredValue;
             long gross = 0;
-            ApplyMoney(ref money, part.HourlyRateToman, part.BilledMinutes - taken, moneyDue, billing, timeDiscount, grace, part.Start, part.SegmentId, ref moneyConsumed, ref uncovered, ref writeOff, ref discountToman, ref gross);
+            var moneyActive = taken >= part.BilledMinutes ? 0 : part.ActiveSeconds;
+            ApplyMoney(ref money, part.HourlyRateToman, part.BilledMinutes - taken, moneyDue, moneyActive, billing, discount, TehranTime.Date(part.Start), grace, part.Start, part.SegmentId, ref moneyConsumed, ref uncovered, ref writeOff, ref omitted, ref gross);
             if (gross > 0)
             {
                 moneyDraws.Add(new MoneyDraw(part.SegmentId, part.Start, part.BilledMinutes - taken, gross));
@@ -299,11 +461,12 @@ public static class AccountSettlement
             var spendable = money > 0 ? money : 0;
             var moneyMinutes = MaxMoneyMinutes(part.AmountToman, part.BilledMinutes, spendable);
             var moneyShare = MoneyShare(part.AmountToman, moneyMinutes, part.BilledMinutes);
-            var netShare = timeDiscount.Net(moneyShare);
+            var date = TehranTime.Date(part.Start);
+            var netShare = discount.Marginal(moneyShare, date);
             var pay = netShare < spendable ? netShare : spendable;
             money -= pay;
             moneyConsumed += pay;
-            discountToman += moneyShare - netShare;
+            discount.Commit(moneyShare, date);
             if (pay < netShare)
             {
                 writeOff += netShare - pay;
@@ -333,7 +496,7 @@ public static class AccountSettlement
             packageMinutes += taken;
             packageCovered += coveredValue;
             long gross = 0;
-            ApplyMoney(ref money, part.HourlyRateToman, tailMinutes - taken, shortfall, billing, timeDiscount, grace, part.Start, part.SegmentId, ref moneyConsumed, ref uncovered, ref writeOff, ref discountToman, ref gross);
+            ApplyMoney(ref money, part.HourlyRateToman, tailMinutes - taken, shortfall, tailMinutes * 60L, billing, discount, TehranTime.Date(part.Start), grace, part.Start, part.SegmentId, ref moneyConsumed, ref uncovered, ref writeOff, ref omitted, ref gross);
             if (gross > 0)
             {
                 moneyDraws.Add(new MoneyDraw(part.SegmentId, part.Start, tailMinutes - taken, gross));
@@ -639,25 +802,27 @@ public static class AccountSettlement
     }
 
     /// <summary>
-    /// Pays whole billing units the balance can afford at the net price. When a positive
-    /// balance cannot buy the next unit, one clock minute is granted and the session ends.
-    /// The unpaid part of that minute is grace. Minutes after it are written off, never debt.
-    /// <paramref name="drawnGross"/> is the gross of the minutes taken, including a grace minute.
+    /// Pays whole billing units the balance can afford at the session net price.
+    /// A minute block grants grace for the shortfall and spends the leftover.
+    /// A coarser block that does not fit grants that minute free and keeps the balance.
+    /// Minutes played past that end are written off. The unplayed rest of a block is omitted.
     /// </summary>
     private static void ApplyMoney(
         ref long balance,
         long hourlyRate,
         long unpaidMinutes,
         long moneyDue,
+        long activeSeconds,
         BillingPolicy billing,
-        PcTimeDiscount discount,
+        SessionDiscount discount,
+        LocalDate date,
         GraceTracker grace,
         DateTimeOffset at,
         string segmentId,
         ref long consumed,
         ref long uncovered,
         ref long writeOff,
-        ref long discountToman,
+        ref long omitted,
         ref long drawnGross)
     {
         if (moneyDue <= 0)
@@ -665,31 +830,6 @@ public static class AccountSettlement
             return;
         }
 
-        if (grace.Stopped || unpaidMinutes <= 0 || !grace.Enabled || grace.Used || hourlyRate <= 0)
-        {
-            var netDue = discount.Net(moneyDue);
-            var pay = balance > 0 ? Math.Min(balance, netDue) : 0;
-            balance -= pay;
-            consumed += pay;
-            if (grace.UncoveredShortfall)
-            {
-                uncovered += netDue - pay;
-            }
-            else
-            {
-                writeOff += netDue - pay;
-            }
-
-            discountToman += moneyDue - netDue;
-            if (pay > 0)
-            {
-                drawnGross += pay;
-            }
-
-            return;
-        }
-
-        var step = billing.GranularityMinutes;
         long GrossPrefix(long minutes)
         {
             if (minutes <= 0)
@@ -708,17 +848,37 @@ public static class AccountSettlement
                 : MoneyMath.MulDiv(moneyDue, minutes, unpaidMinutes);
         }
 
-        long NetPrefix(long minutes) => discount.Net(GrossPrefix(minutes));
+        if (grace.Stopped || unpaidMinutes <= 0 || !grace.Enabled || grace.Used || hourlyRate <= 0)
+        {
+            var netDue = discount.Marginal(moneyDue, date);
+            var pay = balance > 0 ? Math.Min(balance, netDue) : 0;
+            balance -= pay;
+            consumed += pay;
+            var shortfall = netDue - pay;
+            if (grace.UncoveredShortfall)
+            {
+                uncovered += shortfall;
+            }
+            else
+            {
+                writeOff += shortfall;
+            }
 
+            if (moneyDue > 0)
+            {
+                drawnGross += moneyDue;
+                discount.Commit(moneyDue, date);
+            }
+
+            return;
+        }
+
+        var step = billing.GranularityMinutes;
         long taken = 0;
         while (taken + step <= unpaidMinutes)
         {
-            var netStep = NetPrefix(taken + step) - NetPrefix(taken);
-            if (netStep < 0)
-            {
-                netStep = 0;
-            }
-
+            var stepGross = GrossPrefix(taken + step) - GrossPrefix(taken);
+            var netStep = discount.Marginal(stepGross, date);
             if (balance < netStep)
             {
                 break;
@@ -726,47 +886,106 @@ public static class AccountSettlement
 
             balance -= netStep;
             consumed += netStep;
+            drawnGross += stepGross;
+            discount.Commit(stepGross, date);
             taken += step;
         }
 
-        if (taken < unpaidMinutes && balance > 0)
+        if (taken >= unpaidMinutes)
         {
-            var minuteCount = taken + 1;
-            var netMinute = NetPrefix(minuteCount) - NetPrefix(taken);
-            if (netMinute < 0)
+            return;
+        }
+
+        if (step > 1)
+        {
+            var minuteGross = GrossPrefix(taken + 1) - GrossPrefix(taken);
+            if (minuteGross < 0)
             {
-                netMinute = 0;
+                minuteGross = 0;
             }
 
-            if (step > 1 && balance >= netMinute)
+            var minuteNet = discount.Marginal(minuteGross, date);
+            grace.Waived += minuteNet;
+            grace.Used = true;
+            grace.At = at;
+            grace.SegmentId = segmentId;
+            if (minuteGross > 0)
             {
-                balance -= netMinute;
-                consumed += netMinute;
-                taken = minuteCount;
+                drawnGross += minuteGross;
+                discount.Commit(minuteGross, date);
             }
-            else if (balance < netMinute)
+
+            var covered = taken + 1;
+            var restGross = moneyDue - GrossPrefix(covered);
+            if (restGross < 0)
+            {
+                restGross = 0;
+            }
+
+            if (activeSeconds > covered * 60L && restGross > 0)
+            {
+                writeOff += discount.Marginal(restGross, date);
+                drawnGross += restGross;
+                discount.Commit(restGross, date);
+            }
+            else
+            {
+                omitted += restGross;
+            }
+
+            grace.Stopped = true;
+            return;
+        }
+
+        if (balance > 0)
+        {
+            var minuteGross = GrossPrefix(taken + 1) - GrossPrefix(taken);
+            var minuteNet = discount.Marginal(minuteGross, date);
+            if (minuteNet < 0)
+            {
+                minuteNet = 0;
+            }
+
+            if (balance < minuteNet)
             {
                 var pay = balance;
-                grace.Waived += netMinute - pay;
+                grace.Waived += minuteNet - pay;
                 grace.Used = true;
                 grace.At = at;
                 grace.SegmentId = segmentId;
                 consumed += pay;
                 balance = 0;
-                taken = minuteCount;
+                if (minuteGross > 0)
+                {
+                    drawnGross += minuteGross;
+                    discount.Commit(minuteGross, date);
+                }
+
+                taken += 1;
             }
         }
 
         if (taken < unpaidMinutes)
         {
+            var restGross = moneyDue - GrossPrefix(taken);
+            if (restGross < 0)
+            {
+                restGross = 0;
+            }
+
+            if (activeSeconds > taken * 60L && restGross > 0)
+            {
+                writeOff += discount.Marginal(restGross, date);
+                drawnGross += restGross;
+                discount.Commit(restGross, date);
+            }
+            else
+            {
+                omitted += restGross;
+            }
+
             grace.Stopped = true;
         }
-
-        var netWhole = discount.Net(moneyDue);
-        var netTaken = NetPrefix(taken);
-        writeOff += netWhole - netTaken;
-        discountToman += moneyDue - netWhole;
-        drawnGross += GrossPrefix(taken);
     }
 }
 

@@ -207,11 +207,14 @@ public class ReviewFixesTests
             Assert.Equal(granularity, charge.TotalBilledMinutes);
             var settled = AccountSettlement.Settle(charge, new PcAccount("m", 500, []), billing: policy);
             Assert.Equal(1, settled.Grace!.Minutes);
-            Assert.Equal(minute - 500, settled.Grace.WaivedToman);
-            Assert.Equal(500, settled.MoneyConsumedToman);
+            Assert.Equal(minute, settled.Grace.WaivedToman);
+            Assert.Equal(0, settled.MoneyConsumedToman);
+            Assert.Equal(500, settled.UpdatedAccount.MoneyBalanceToman);
             Assert.Equal(0, settled.UncoveredToman);
-            Assert.Equal(charge.TotalAmountToman - minute, settled.WriteOffToman);
-            Assert.Equal(charge.TotalAmountToman, settled.PackageCoveredToman + settled.MoneyConsumedToman + settled.Grace.WaivedToman + settled.WriteOffToman + settled.UncoveredToman);
+            Assert.Equal(0, settled.WriteOffToman);
+            Assert.Null(settled.Alert);
+            Assert.Equal(charge.TotalAmountToman - minute, settled.OmittedToman);
+            Assert.Equal(charge.TotalAmountToman, settled.PackageCoveredToman + settled.MoneyConsumedToman + settled.Grace.WaivedToman + settled.WriteOffToman + settled.UncoveredToman + settled.OmittedToman);
         }
 
         var emptyWindow = new TimePackage(

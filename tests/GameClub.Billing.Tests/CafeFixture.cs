@@ -78,7 +78,7 @@ internal static class CafeFixture
         string groupId,
         int players,
         PlayMode mode = PlayMode.Offline)
-        => new(id, start, end, stationId, groupId, mode, players);
+        => new(id, start, end, stationId, groupId, mode, players, StationKind.Console);
 
     public static SessionCharge Price(Session session, BillingPolicy? policy = null, SpecialDayCalendar? specialDays = null)
         => SessionPricer.Price(session, Card(), specialDays, policy);

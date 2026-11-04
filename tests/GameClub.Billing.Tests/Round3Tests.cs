@@ -22,7 +22,7 @@ public class Round3Tests
             new WalletPocket(4_000, 0),
             new WalletPocket(0, 0),
             []);
-        var play = CustomerPlay.Settle(charge, account, rounding: PilotSeed.CounterRounding);
+        var play = CustomerPlay.Settle(charge, account);
 
         Assert.Equal(4_000, play.Settlement.MoneyConsumedToman);
         Assert.Equal(4_000, play.ChargeInvoice!.PayableToman);
@@ -31,7 +31,7 @@ public class Round3Tests
     }
 
     [Fact]
-    public void Grace_threshold_is_the_marginal_next_unit_1666_not_1667()
+    public void At_100_000_the_second_minute_is_1666_and_at_110_000_it_is_1834()
     {
         var card = new RateCardBuilder()
             .AddBase("flat", PlayMode.Offline, 1, 100_000)
@@ -42,6 +42,10 @@ public class Round3Tests
         Assert.Equal(3_333, two);
         var next = two - one;
         Assert.Equal(1_666, next);
+        var one110 = MoneyMath.ChargeForMinutes(110_000, 1, RateRemainderMode.Nearest);
+        var two110 = MoneyMath.ChargeForMinutes(110_000, 2, RateRemainderMode.Nearest);
+        Assert.Equal(1_833, one110);
+        Assert.Equal(1_834, two110 - one110);
 
         var budget = one + next - 1;
         var start = T.At(2026, 6, 2, 10, 0);
