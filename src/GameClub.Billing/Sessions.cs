@@ -177,11 +177,29 @@ public static class SessionPricer
 
         foreach (var pause in session.Pauses)
         {
+            if (pause.End <= pause.Start)
+            {
+                continue;
+            }
+
             foreach (var segment in session.Segments)
             {
                 if (pause.End <= segment.Start || pause.Start >= segment.End)
                 {
                     continue;
+                }
+
+                if (segment.Kind is StationKind stated && stations is not null)
+                {
+                    if (!stations.TryGetGroup(segment.StationId, out var listed))
+                    {
+                        throw new BillingException(BillingErrors.InvalidSession, $"Unknown station '{segment.StationId}'.");
+                    }
+
+                    if (stated != listed.Kind)
+                    {
+                        throw new BillingException(BillingErrors.InvalidSession, "Segment kind does not match the station directory.");
+                    }
                 }
 
                 var kind = segment.Kind;

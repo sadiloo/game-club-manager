@@ -356,6 +356,9 @@ public sealed record Invoice(
 
 public static class InvoiceCalculator
 {
+    public static Invoice Calculate(InvoiceRequest request, IReadOnlyList<Tender> tenders, IReadOnlyList<MemberWallet>? wallets = null)
+        => Collect(request, tenders, wallets).Invoice;
+
     public static Invoice Calculate(InvoiceRequest request)
     {
         TehranTime.Ensure(request.IssuedAt);
@@ -729,7 +732,7 @@ public static class InvoiceCalculator
     /// <summary>
     /// One rounding path. Per-line nets are taken after grace and discounts, balance tenders
     /// pay those nets exactly, and only the counter remainder is rounded. The invoice payable
-    /// is the allocator payable, so a wallet plus cash cannot disagree with <see cref="Calculate"/>.
+    /// is the allocator payable, so a wallet plus cash cannot disagree with the invoice preview.
     /// </summary>
     public static (Invoice Invoice, AllocationResult Allocation) Collect(
         InvoiceRequest request,

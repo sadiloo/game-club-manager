@@ -265,10 +265,10 @@ public static class CustomerPlay
     {
         account.Settings.EnsureValid();
         var money = account.Pc.TotalToman;
-        PcTimeDiscount? timeDiscount = null;
+        SessionDiscount? sessionDiscount = null;
         if (account.Settings.ApplyDiscountsToPc)
         {
-            timeDiscount = DiscountFor(pricing, code, discounts, groupId, at);
+            sessionDiscount = SessionDiscountFor(pricing, code, discounts, groupId, at);
         }
 
         if (BlocksPackages(account, money))
@@ -295,7 +295,7 @@ public static class CustomerPlay
             specialDays,
             policy,
             account.Settings.GraceMinuteEnabled,
-            timeDiscount);
+            sessionDiscount);
         return estimate with { MoneyBalanceToman = money };
     }
 
@@ -326,45 +326,30 @@ public static class CustomerPlay
         long fixedToman = 0;
         IReadOnlyCollection<DayOfWeek>? days = null;
         IReadOnlyCollection<string>? groups = null;
-        if (code is not null && code.Scope.HasFlag(ChargeScope.Time) && CodeWindowAllows(code, at))
+        DateTimeOffset? validFrom = null;
+        DateTimeOffset? validUntil = null;
+        if (code is not null && code.Scope.HasFlag(ChargeScope.Time))
         {
-            if (code.AllowedGroupIds is not { Count: > 0 } limited || limited.Contains(groupId))
-            {
-                codePercent = code.Percent;
-                fixedToman = code.FixedToman;
-                days = code.AllowedWeekdays;
-                groups = code.AllowedGroupIds;
-            }
+            codePercent = code.Percent;
+            fixedToman = code.FixedToman;
+            days = code.AllowedWeekdays;
+            groups = code.AllowedGroupIds;
+            validFrom = code.ValidFrom;
+            validUntil = code.ValidUntil;
         }
 
-        return new SessionDiscount
-        {
-            LevelPercent = level,
-            BirthdayPercent = birthday,
-            CodePercent = codePercent,
-            FixedToman = fixedToman,
-            Cap = policy.MaxCombinedPercent,
-            BirthDate = birth,
-            Birthday = policy.Birthday,
-            CodeWeekdays = days,
-            CodeGroups = groups,
-        };
-    }
-
-    private static bool CodeWindowAllows(DiscountCode code, DateTimeOffset at)
-    {
-        at = TehranTime.Ensure(at);
-        if (code.ValidFrom is DateTimeOffset from && at < TehranTime.Ensure(from))
-        {
-            return false;
-        }
-
-        if (code.ValidUntil is DateTimeOffset until && at >= TehranTime.Ensure(until))
-        {
-            return false;
-        }
-
-        return true;
+        return new SessionDiscount(
+            level,
+            birthday,
+            codePercent,
+            fixedToman,
+            policy.MaxCombinedPercent,
+            birth,
+            policy.Birthday,
+            days,
+            groups,
+            validFrom,
+            validUntil);
     }
 
     internal static PcTimeDiscount DiscountFor(

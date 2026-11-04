@@ -319,12 +319,16 @@ public readonly record struct WalletPocket
         }
 
         var realTake = fromPositive - giftTake + debtPart;
-        if (debt.MaxDebtToman == 0 && RealToman - realTake < 0)
+        if (debt.MaxDebtToman == 0)
         {
-            updated = this;
-            giftDrawn = 0;
-            realDrawn = 0;
-            return false;
+            var floor = RealToman < 0 ? RealToman : 0;
+            if (RealToman - realTake < floor)
+            {
+                updated = this;
+                giftDrawn = 0;
+                realDrawn = 0;
+                return false;
+            }
         }
         if (GiftToman - giftTake < 0)
         {

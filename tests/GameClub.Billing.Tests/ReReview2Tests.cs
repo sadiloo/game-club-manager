@@ -131,21 +131,22 @@ public class ReReview2Tests
             DiscountPolicy.Default,
             RoundingPolicy.Create(5_000),
             issued);
-        var calculated = InvoiceCalculator.Calculate(request);
-        Assert.Equal(150_000, calculated.PayableToman);
-        var (cashInvoice, cashAllocation) = InvoiceCalculator.Collect(
-            request,
-            [new Tender(PaymentMethod.Cash, 150_000)]);
-        Assert.True(cashAllocation.IsValid, cashAllocation.Errors.FirstOrDefault()?.Message);
-        Assert.Equal(calculated.PayableToman, cashInvoice.PayableToman);
-        Assert.Equal(calculated.PayableToman, cashAllocation.PayableToman);
-
+        Assert.Equal(150_000, InvoiceCalculator.Calculate(request).PayableToman);
+        var split = new Tender[]
+        {
+            new(PaymentMethod.Wallet, 50_001, "m"),
+            new(PaymentMethod.Cash, 100_000),
+        };
+        var wallets = new MemberWallet[] { new("m", 50_001, 0) };
+        var preview = InvoiceCalculator.Calculate(request, split, wallets);
         var (mixed, allocation) = InvoiceCalculator.Collect(
             request,
             [new Tender(PaymentMethod.Wallet, 50_001, "m"), new Tender(PaymentMethod.Cash, 100_000)],
             [new MemberWallet("m", 50_001, 0)]);
         Assert.True(allocation.IsValid, allocation.Errors.FirstOrDefault()?.Message);
+        Assert.Equal(150_001, preview.PayableToman);
         Assert.Equal(150_001, allocation.PayableToman);
+        Assert.Equal(preview.PayableToman, mixed.PayableToman);
         Assert.Equal(allocation.PayableToman, mixed.PayableToman);
     }
 
