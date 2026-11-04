@@ -46,6 +46,26 @@ namespace GameClub.Server.Data.Migrations
                     b.ToTable("audit_log", (string)null);
                 });
 
+            modelBuilder.Entity("GameClub.Server.Data.Entities.BranchRoundingEntity", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("Direction")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<long>("StepToman")
+                        .HasColumnType("bigint");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("branch_rounding", (string)null);
+                });
+
             modelBuilder.Entity("GameClub.Server.Data.Entities.CheckpointEntity", b =>
                 {
                     b.Property<long>("Id")
@@ -251,6 +271,39 @@ namespace GameClub.Server.Data.Migrations
                     b.ToTable("rate_card_snapshot", (string)null);
                 });
 
+            modelBuilder.Entity("GameClub.Server.Data.Entities.RateLineEntity", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
+                    b.Property<string>("GroupId")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<long>("HourlyToman")
+                        .HasColumnType("bigint");
+
+                    b.Property<bool>("IsSpecialBand")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("PlayMode")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<int?>("PlayerCount")
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("GroupId", "PlayMode", "PlayerCount", "IsSpecialBand")
+                        .IsUnique();
+
+                    b.ToTable("rate_lines", (string)null);
+                });
+
             modelBuilder.Entity("GameClub.Server.Data.Entities.StationEntity", b =>
                 {
                     b.Property<string>("Id")
@@ -259,6 +312,9 @@ namespace GameClub.Server.Data.Migrations
                     b.Property<string>("GroupId")
                         .IsRequired()
                         .HasColumnType("text");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean");
 
                     b.Property<string>("Name")
                         .IsRequired()

@@ -13,11 +13,34 @@ public sealed class StationsController(StationService stations) : ControllerBase
 
     public sealed record UpdateGroupRequest(string GroupId);
 
+    public sealed record UpdateStationRequest(string? Name, string? GroupId);
+
+    [HttpGet]
+    public async Task<IActionResult> List(CancellationToken ct)
+    {
+        var rows = await stations.ListAsync(ct);
+        return Ok(rows.Select(s => new { s.Id, s.Name, s.GroupId, s.IsActive }));
+    }
+
+    [HttpGet("{id}")]
+    public async Task<IActionResult> Get(string id, CancellationToken ct)
+    {
+        var station = await stations.GetAsync(id, ct);
+        return Ok(new { station.Id, station.Name, station.GroupId, station.IsActive });
+    }
+
     [HttpPost]
     public async Task<IActionResult> Register(RegisterRequest body, CancellationToken ct)
     {
         var station = await stations.RegisterAsync(body.Id, body.Name, body.GroupId, ct);
-        return Created($"/api/stations/{station.Id}", new { station.Id, station.Name, station.GroupId });
+        return Created($"/api/stations/{station.Id}", new { station.Id, station.Name, station.GroupId, station.IsActive });
+    }
+
+    [HttpPatch("{id}")]
+    public async Task<IActionResult> Update(string id, UpdateStationRequest body, CancellationToken ct)
+    {
+        var station = await stations.UpdateAsync(id, body.Name, body.GroupId, ct);
+        return Ok(new { station.Id, station.Name, station.GroupId, station.IsActive });
     }
 
     [HttpPatch("{id}/group")]
@@ -25,6 +48,33 @@ public sealed class StationsController(StationService stations) : ControllerBase
     {
         var station = await stations.UpdateGroupAsync(id, body.GroupId, ct);
         return Ok(new { station.Id, station.GroupId });
+    }
+
+    [HttpPost("{id}/deactivate")]
+    public async Task<IActionResult> Deactivate(string id, CancellationToken ct)
+    {
+        var station = await stations.DeactivateAsync(id, ct);
+        return Ok(new { station.Id, station.IsActive });
+    }
+}
+
+[ApiController]
+[Route("api/rates")]
+public sealed class RatesController(RateConfigService rates) : ControllerBase
+{
+    [HttpGet]
+    public async Task<IActionResult> Get(CancellationToken ct)
+    {
+        var config = await rates.GetConfigAsync(ct);
+        return Ok(config);
+    }
+
+    [HttpPut]
+    public async Task<IActionResult> Update(RateConfigUpdateRequest body, CancellationToken ct)
+    {
+        await rates.UpdateAsync(body, ct);
+        var config = await rates.GetConfigAsync(ct);
+        return Ok(config);
     }
 }
 

@@ -3,6 +3,7 @@ using GameClub.Billing;
 using GameClub.Server.Data;
 using GameClub.Server.Data.Entities;
 using GameClub.Server.Time;
+using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 
 namespace GameClub.Server.Services;
@@ -13,13 +14,6 @@ public static class TimeMapping
         => TehranTime.FromUtc(DateTime.SpecifyKind(utc, DateTimeKind.Utc));
 
     public static DateTime ToUtc(DateTimeOffset tehran) => TehranTime.Ensure(tehran).UtcDateTime;
-}
-
-public sealed class BranchRates
-{
-    public RateCard Card { get; init; } = PilotSeed.CreateCard();
-
-    public RoundingPolicy Rounding { get; init; } = PilotSeed.CounterRounding;
 }
 
 public sealed class AuditService(AppDbContext db, IClock clock)
@@ -38,6 +32,16 @@ public sealed class AuditService(AppDbContext db, IClock clock)
 
 public sealed class StationService(AppDbContext db, AuditService audit)
 {
+    public async Task<IReadOnlyList<StationEntity>> ListAsync(CancellationToken ct)
+        => await db.Stations.AsNoTracking().Include(s => s.Group).OrderBy(s => s.Id).ToListAsync(ct);
+
+    public async Task<StationEntity> GetAsync(string stationId, CancellationToken ct)
+    {
+        var id = StationIdNormalizer.Normalize(stationId);
+        return await db.Stations.AsNoTracking().Include(s => s.Group).FirstOrDefaultAsync(s => s.Id == id, ct)
+            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Station not found.");
+    }
+
     public async Task<StationEntity> RegisterAsync(string rawId, string name, string groupId, CancellationToken ct)
     {
         var id = StationIdNormalizer.Normalize(rawId);
@@ -64,23 +68,62 @@ public sealed class StationService(AppDbContext db, AuditService audit)
         return station;
     }
 
-    public async Task<StationEntity> UpdateGroupAsync(string stationId, string groupId, CancellationToken ct)
+    public async Task<StationEntity> UpdateAsync(string stationId, string? name, string? groupId, CancellationToken ct)
     {
         var id = StationIdNormalizer.Normalize(stationId);
         var station = await db.Stations.FirstOrDefaultAsync(s => s.Id == id, ct)
             ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Station not found.");
-        var group = await db.StationGroups.AsNoTracking().FirstOrDefaultAsync(g => g.Id == groupId, ct)
-            ?? throw new ApiException(StatusCodes.Status400BadRequest, "unknown_group", $"Unknown group '{groupId}'.");
-        station.GroupId = groupId;
-        await audit.AppendAsync("station.group_change", new { stationId = id, groupId }, ct);
+        if (!station.IsActive)
+        {
+            throw new ApiException(StatusCodes.Status409Conflict, "inactive", "Station is deactivated.");
+        }
+
+        if (name is not null)
+        {
+            station.Name = name;
+        }
+
+        if (groupId is not null)
+        {
+            var group = await db.StationGroups.AsNoTracking().FirstOrDefaultAsync(g => g.Id == groupId, ct)
+                ?? throw new ApiException(StatusCodes.Status400BadRequest, "unknown_group", $"Unknown group '{groupId}'.");
+            station.GroupId = groupId;
+        }
+
+        await audit.AppendAsync("station.update", new { stationId = id, name, groupId }, ct);
         await db.SaveChangesAsync(ct);
         return station;
     }
+
+    public async Task<StationEntity> DeactivateAsync(string stationId, CancellationToken ct)
+    {
+        var id = StationIdNormalizer.Normalize(stationId);
+        var station = await db.Stations.FirstOrDefaultAsync(s => s.Id == id, ct)
+            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Station not found.");
+        if (!station.IsActive)
+        {
+            return station;
+        }
+
+        station.IsActive = false;
+        await audit.AppendAsync("station.deactivate", new { stationId = id }, ct);
+        await db.SaveChangesAsync(ct);
+        return station;
+    }
+
+    public async Task<StationEntity> UpdateGroupAsync(string stationId, string groupId, CancellationToken ct)
+        => await UpdateAsync(stationId, null, groupId, ct);
 }
 
-public sealed class SessionBilling(AppDbContext db, BranchRates rates)
+public sealed class SessionBilling(AppDbContext db, RateConfigService rates)
 {
-    public SessionCharge BuildCharge(PlaySessionEntity session, DateTime endUtc)
+    public async Task<SessionCharge> BuildChargeAsync(PlaySessionEntity session, DateTime endUtc, CancellationToken ct = default)
+    {
+        var snapshot = await rates.LoadAsync(ct);
+        return BuildCharge(session, endUtc, snapshot);
+    }
+
+    public SessionCharge BuildCharge(PlaySessionEntity session, DateTime endUtc, BranchRatesSnapshot snapshot)
     {
         var directory = BuildDirectory();
         var segments = new List<PlaySegment>();
@@ -109,7 +152,7 @@ public sealed class SessionBilling(AppDbContext db, BranchRates rates)
         }
 
         var billingSession = new Session(session.Id.ToString(), segments, pauses);
-        return SessionPricer.Price(billingSession, rates.Card, stations: directory);
+        return SessionPricer.Price(billingSession, snapshot.Card, stations: directory);
     }
 
     private StationDirectory BuildDirectory()
@@ -122,7 +165,7 @@ public sealed class SessionBilling(AppDbContext db, BranchRates rates)
     }
 }
 
-public sealed class SessionCloser(AppDbContext db, BranchRates rates, SessionBilling billing, AuditService audit)
+public sealed class SessionCloser(AppDbContext db, RateConfigService rates, SessionBilling billing, AuditService audit)
 {
     public async Task<InvoiceEntity> CloseAsync(PlaySessionEntity session, DateTime endUtc, string auditReason, CancellationToken ct)
     {
@@ -139,7 +182,8 @@ public sealed class SessionCloser(AppDbContext db, BranchRates rates, SessionBil
         session.EndedAtUtc = endUtc;
         session.Status = SessionStatus.Closed;
 
-        var charge = billing.BuildCharge(session, endUtc);
+        var snapshot = await rates.LoadAsync(ct);
+        var charge = billing.BuildCharge(session, endUtc, snapshot);
         var timeLines = TimeChargeLine.FromSession(charge);
         var issuedAt = TimeMapping.ToTehran(endUtc);
         var invoiceCalc = InvoiceCalculator.Calculate(new InvoiceRequest(
@@ -149,7 +193,7 @@ public sealed class SessionCloser(AppDbContext db, BranchRates rates, SessionBil
             null,
             null,
             DiscountPolicy.Default,
-            rates.Rounding,
+            snapshot.Rounding,
             issuedAt));
 
         var number = await NextInvoiceNumberAsync(ct);
@@ -194,6 +238,11 @@ public sealed class SessionService(
         if (station.Group is null || string.IsNullOrWhiteSpace(station.GroupId))
         {
             throw new ApiException(StatusCodes.Status409Conflict, "no_group", "Station has no group.");
+        }
+
+        if (!station.IsActive)
+        {
+            throw new ApiException(StatusCodes.Status409Conflict, "inactive", "Station is deactivated.");
         }
 
         if (await db.Sessions.AnyAsync(
@@ -358,7 +407,13 @@ public sealed class SessionService(
         await db.SaveChangesAsync(ct);
     }
 
-    public long LiveAmount(PlaySessionEntity session)
+    public async Task<long> LiveAmountAsync(Guid sessionId, CancellationToken ct)
+    {
+        var session = await LoadOpenSession(sessionId, ct);
+        return await LiveAmountAsync(session, ct);
+    }
+
+    public async Task<long> LiveAmountAsync(PlaySessionEntity session, CancellationToken ct)
     {
         if (session.Status == SessionStatus.ManualSettle)
         {
@@ -366,13 +421,8 @@ public sealed class SessionService(
         }
 
         var endUtc = clock.UtcNow.UtcDateTime;
-        return billing.BuildCharge(session, endUtc).TotalAmountToman;
-    }
-
-    public async Task<long> LiveAmountAsync(Guid sessionId, CancellationToken ct)
-    {
-        var session = await LoadOpenSession(sessionId, ct);
-        return LiveAmount(session);
+        var charge = await billing.BuildChargeAsync(session, endUtc, ct);
+        return charge.TotalAmountToman;
     }
 
     private async Task<PlaySessionEntity> LoadOpenSession(Guid id, CancellationToken ct)
@@ -450,9 +500,19 @@ public sealed class DatabaseSeed
             db.InvoiceNumbers.Add(new InvoiceNumberSequence { Id = 1, NextNumber = 1 });
         }
 
-        if (!await db.RateCardSnapshots.AnyAsync(ct))
+        if (!await db.RateLines.AnyAsync(ct))
         {
-            db.RateCardSnapshots.Add(new RateCardSnapshotEntity { Id = 1, Json = "pilot-seed-v1" });
+            db.RateLines.AddRange(RateConfigService.PilotSeedLines());
+        }
+
+        if (!await db.BranchRounding.AnyAsync(ct))
+        {
+            db.BranchRounding.Add(new BranchRoundingEntity
+            {
+                Id = 1,
+                StepToman = 5_000,
+                Direction = "Up",
+            });
         }
 
         await db.SaveChangesAsync(ct);

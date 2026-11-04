@@ -27,6 +27,8 @@ public sealed class StationEntity
 
     public string GroupId { get; set; } = string.Empty;
 
+    public bool IsActive { get; set; } = true;
+
     public StationGroupEntity? Group { get; set; }
 }
 
@@ -154,4 +156,29 @@ public sealed class RateCardSnapshotEntity
     public int Id { get; set; }
 
     public string Json { get; set; } = string.Empty;
+}
+
+public sealed class BranchRoundingEntity
+{
+    public int Id { get; set; }
+
+    public long StepToman { get; set; }
+
+    public string Direction { get; set; } = "Up";
+}
+
+public sealed class RateLineEntity
+{
+    public long Id { get; set; }
+
+    public string GroupId { get; set; } = string.Empty;
+
+    public string PlayMode { get; set; } = string.Empty;
+
+    public int? PlayerCount { get; set; }
+
+    /// <summary>False = base hourly; true = 00:00–08:30 special band rate.</summary>
+    public bool IsSpecialBand { get; set; }
+
+    public long HourlyToman { get; set; }
 }

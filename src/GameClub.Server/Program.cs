@@ -12,13 +12,15 @@ public partial class Program
         var builder = WebApplication.CreateBuilder(args);
         builder.Services.AddControllers();
         builder.Services.AddSingleton<IClock, SystemClock>();
-        builder.Services.AddSingleton<BranchRates>();
+        builder.Services.Configure<DeadPcSweepOptions>(builder.Configuration.GetSection(DeadPcSweepOptions.SectionName));
+        builder.Services.AddScoped<RateConfigService>();
         builder.Services.AddScoped<AuditService>();
         builder.Services.AddScoped<StationService>();
         builder.Services.AddScoped<SessionBilling>();
         builder.Services.AddScoped<SessionCloser>();
         builder.Services.AddScoped<SessionService>();
         builder.Services.AddScoped<IDeadPcMonitor, DeadPcMonitor>();
+        builder.Services.AddHostedService<DeadPcSweepBackgroundService>();
 
         var connectionString = builder.Configuration.GetConnectionString("Default")
             ?? Environment.GetEnvironmentVariable("GAMECLUB_DATABASE")

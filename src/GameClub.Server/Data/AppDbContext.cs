@@ -25,6 +25,10 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
 
     public DbSet<RateCardSnapshotEntity> RateCardSnapshots => Set<RateCardSnapshotEntity>();
 
+    public DbSet<BranchRoundingEntity> BranchRounding => Set<BranchRoundingEntity>();
+
+    public DbSet<RateLineEntity> RateLines => Set<RateLineEntity>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<StationGroupEntity>(e =>
@@ -96,6 +100,19 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
         {
             e.ToTable("rate_card_snapshot");
             e.HasKey(x => x.Id);
+        });
+
+        modelBuilder.Entity<BranchRoundingEntity>(e =>
+        {
+            e.ToTable("branch_rounding");
+            e.HasKey(x => x.Id);
+        });
+
+        modelBuilder.Entity<RateLineEntity>(e =>
+        {
+            e.ToTable("rate_lines");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.GroupId, x.PlayMode, x.PlayerCount, x.IsSpecialBand }).IsUnique();
         });
     }
 }
