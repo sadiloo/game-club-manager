@@ -291,7 +291,7 @@ public class Round6Tests
 
     internal static long IndependentOracleDiscountForCharge(SessionCharge charge, SessionDiscount spec)
         => IndependentOracleDiscount(
-            new Session("s", [new PlaySegment("a", charge.Lines[0].Start, charge.Lines[^1].End, "st", charge.Lines[0].GroupId, PlayMode.Offline, 1)]),
+            new Session("s", [new PlaySegment("a", charge.Lines[0].Start, LastLineEnd(charge), "st", charge.Lines[0].GroupId, PlayMode.Offline, 1)]),
             charge,
             BillingPolicy.Default,
             spec);
@@ -435,7 +435,7 @@ public class Round6Tests
 
     private static long IndependentOracleDiscount(SessionCharge charge, SessionDiscount spec)
         => IndependentOracleDiscount(
-            new Session("s", [new PlaySegment("a", charge.Lines[0].Start, charge.Lines[^1].End, "st", charge.Lines[0].GroupId, PlayMode.Offline, 1)]),
+            new Session("s", [new PlaySegment("a", charge.Lines[0].Start, LastLineEnd(charge), "st", charge.Lines[0].GroupId, PlayMode.Offline, 1)]),
             charge,
             BillingPolicy.Default,
             spec);
@@ -532,6 +532,9 @@ public class Round6Tests
         => amount <= 0 || percent <= 0 ? 0 : (amount * percent) / 100;
 
     private static RateCard Flat() => new RateCardBuilder().AddBase("g", PlayMode.Offline, 1, 110_000).Build();
+
+    private static DateTimeOffset LastLineEnd(SessionCharge charge)
+        => charge.Lines[charge.Lines.Count - 1].End;
 
     private static SessionCharge Price(RateCard card, DateTimeOffset start, DateTimeOffset end, BillingPolicy? policy)
         => SessionPricer.Price(new Session("s", [

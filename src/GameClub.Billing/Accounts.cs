@@ -166,6 +166,12 @@ internal sealed class DiscountLedger
 
     public long BirthGross { get; private set; }
 
+    internal bool IsTrivial =>
+        _spec.LevelPercent == 0
+        && _spec.BirthdayPercent == 0
+        && _spec.CodePercent == 0
+        && _spec.FixedToman == 0;
+
     public bool CodeOn(DateTimeOffset at, string? groupId)
     {
         if (_spec.CodePercent <= 0 && _spec.FixedToman <= 0)
@@ -982,6 +988,29 @@ public static class AccountSettlement
                 return 0;
             }
 
+            if (discount.IsTrivial)
+            {
+                if (clean && fromLocal == 0 && count == unpaidMinutes)
+                {
+                    return moneyDue;
+                }
+
+                if (clean)
+                {
+                    var fromIndex = minuteBase + fromLocal;
+                    return MoneyMath.ChargeForMinutes(hourlyRate, fromIndex + count, remainder)
+                        - MoneyMath.ChargeForMinutes(hourlyRate, fromIndex, remainder);
+                }
+
+                long sum = 0;
+                for (long i = 0; i < count; i++)
+                {
+                    sum += MinuteGross(minuteBase + fromLocal + i);
+                }
+
+                return sum;
+            }
+
             var state = discount.Snapshot();
             var startNet = discount.NetAt(state);
             for (long i = 0; i < count; i++)
@@ -996,7 +1025,38 @@ public static class AccountSettlement
 
         long CommitRange(long fromLocal, long count)
         {
-            long added = 0;
+            if (count <= 0)
+            {
+                return 0;
+            }
+
+            if (discount.IsTrivial)
+            {
+                long added;
+                if (clean)
+                {
+                    var fromIndex = minuteBase + fromLocal;
+                    added = MoneyMath.ChargeForMinutes(hourlyRate, fromIndex + count, remainder)
+                        - MoneyMath.ChargeForMinutes(hourlyRate, fromIndex, remainder);
+                }
+                else
+                {
+                    added = 0;
+                    for (long i = 0; i < count; i++)
+                    {
+                        added += MinuteGross(minuteBase + fromLocal + i);
+                    }
+                }
+
+                if (added > 0)
+                {
+                    discount.Commit(added, Instant(minuteBase + fromLocal), groupId);
+                }
+
+                return added;
+            }
+
+            long addedGross = 0;
             for (long i = 0; i < count; i++)
             {
                 var index = minuteBase + fromLocal + i;
@@ -1006,11 +1066,11 @@ public static class AccountSettlement
                     continue;
                 }
 
-                added += gross;
+                addedGross += gross;
                 discount.Commit(gross, Instant(index), groupId);
             }
 
-            return added;
+            return addedGross;
         }
 
         if (unpaidMinutes <= 0 || !grace.Enabled || grace.Used || grace.Stopped || hourlyRate <= 0)

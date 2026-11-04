@@ -104,7 +104,30 @@ public sealed class Round7Tests
     }
 
     [Fact]
-    public void billed_minute_start_lookup_finishes_one_year_settle_within_twelve_milliseconds()
+    public void block_billing_net_of_keeps_negative_step_when_fixed_exceeds_minute_net()
+    {
+        var start = T.At(2026, 6, 2, 22, 0);
+        var flat = Flat();
+        var policy = new BillingPolicy(5, PartialUnitMode.Ceiling, RateRemainderMode.Nearest);
+        var charge = SessionPricer.Price(
+            new Session("x", [new PlaySegment("a", start, start.AddMinutes(51), "st", "g", PlayMode.Offline, 1)]),
+            flat,
+            policy: policy);
+        var spec = new SessionDiscount(LevelPercent: 28, FixedToman: 5_000, ValidFrom: T.At(2026, 6, 2, 22, 48));
+        var settled = AccountSettlement.Settle(
+            charge,
+            new PcAccount("m", 51_816, [new TimePackage("p", 8, 200_000)]),
+            billing: policy,
+            discount: spec);
+        var parts = settled.PackageCoveredToman + settled.MoneyConsumedToman + settled.DiscountToman
+            + (settled.Grace?.WaivedToman ?? 0) + settled.WriteOffToman + settled.OmittedToman + settled.UncoveredToman;
+        Assert.Equal(charge.TotalAmountToman, parts);
+        Assert.Equal(51_773, settled.MoneyConsumedToman);
+        Assert.Equal(7_321, settled.OmittedToman);
+    }
+
+    [Fact]
+    public void one_year_settle_stays_under_budget()
     {
         var flat = Flat();
         var policy = BillingPolicy.Default;
@@ -117,7 +140,8 @@ public sealed class Round7Tests
         var sw = Stopwatch.StartNew();
         _ = AccountSettlement.Settle(charge, new PcAccount("m", 10_000_000_000, []), billing: policy);
         sw.Stop();
-        Assert.True(sw.ElapsedMilliseconds < 250, $"one-year settle regressed to {sw.ElapsedMilliseconds} ms");
+        const int budgetMs = 15;
+        Assert.True(sw.ElapsedMilliseconds < budgetMs, $"one-year settle took {sw.ElapsedMilliseconds} ms (budget {budgetMs} ms)");
     }
 
     private static RateCard Flat() => new RateCardBuilder().AddBase("g", PlayMode.Offline, 1, 110_000).Build();
