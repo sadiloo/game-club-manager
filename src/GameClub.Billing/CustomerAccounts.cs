@@ -225,7 +225,18 @@ public static class CustomerPlay
         {
             new(InvoiceLineKind.Time, "PC time", moneyGross, date),
         };
-        if (settled.DiscountToman > 0)
+        var payable = settled.MoneyConsumedToman;
+        var invoiceDiscount = moneyGross - payable - grace - settled.WriteOffToman - settled.UncoveredToman;
+        if (invoiceDiscount < 0)
+        {
+            invoiceDiscount = 0;
+        }
+
+        if (invoiceDiscount > 0)
+        {
+            lines.Add(new InvoiceLine(InvoiceLineKind.Discount, "PC discount", -invoiceDiscount, date));
+        }
+        else if (settled.DiscountToman > 0)
         {
             lines.Add(new InvoiceLine(InvoiceLineKind.Discount, "PC discount", -settled.DiscountToman, date));
         }
@@ -240,14 +251,13 @@ public static class CustomerPlay
             lines.Add(new InvoiceLine(InvoiceLineKind.WriteOff, "Written off", -settled.WriteOffToman, date));
         }
 
-        var payable = moneyGross - settled.DiscountToman - grace - settled.WriteOffToman - settled.UncoveredToman;
-        if (payable < 0)
+        if (settled.UncoveredToman > 0)
         {
-            payable = 0;
+            lines.Add(new InvoiceLine(InvoiceLineKind.Time, "Uncovered", settled.UncoveredToman, date));
         }
 
-        var net = moneyGross - grace - settled.DiscountToman - settled.WriteOffToman;
-        return new Invoice(lines, moneyGross, 0, 0, settled.DiscountToman, net, 0, payable, null, grace);
+        var net = moneyGross - grace - invoiceDiscount - settled.WriteOffToman;
+        return new Invoice(lines, moneyGross, 0, 0, invoiceDiscount > 0 ? invoiceDiscount : settled.DiscountToman, net, 0, payable, null, grace);
     }
 
     public static RemainingTimeEstimate Estimate(

@@ -91,6 +91,78 @@ public sealed class Round9R8Tests
     }
 
     [Fact]
+    public void r8_1_money_first_conservation_corpus_payable_equals_debit()
+    {
+        var rng = new Random(708);
+        var flat = Flat();
+        var pilot = PilotSeed.CreateCard();
+        var cards = new (RateCard Card, string GroupId)[]
+        {
+            (pilot, PilotSeed.PcVipGroupId),
+            (pilot, PilotSeed.PcNormalGroupId),
+            (flat, "g"),
+        };
+        var titan = new CustomerPricing("Titan", 28, null, 0);
+        var birth = JalaliDate.FromGregorian(new LocalDate(2026, 6, 6));
+        var granularities = new[] { 1, 5, 15 };
+        for (var i = 0; i < 2_000; i++)
+        {
+            var (card, groupId) = cards[rng.Next(cards.Length)];
+            var g = granularities[rng.Next(granularities.Length)];
+            var policy = new BillingPolicy(g, PartialUnitMode.Ceiling, RateRemainderMode.Nearest);
+            var start = TehranTime.AddSeconds(T.At(2026, 6, 5, 20, 0), rng.Next(0, 8 * 3600));
+            var end = TehranTime.AddSeconds(start, rng.Next(30, 2 * 3600));
+            var charge = SessionPricer.Price(
+                new Session("x", [new PlaySegment("a", start, end, "st", groupId, PlayMode.Offline, 1)]),
+                card,
+                policy: policy);
+            var balance = rng.Next(0, 300_000);
+            var packages = rng.Next(3) == 0
+                ? new[] { new TimePackage("p", rng.Next(1, 60), 200_000) }
+                : Array.Empty<TimePackage>();
+            CustomerPricing? pricing = rng.Next(3) == 0 ? null : titan;
+            DiscountCode? code = null;
+            if (rng.Next(3) != 0)
+            {
+                code = new DiscountCode(
+                    "F",
+                    rng.Next(0, 30),
+                    rng.Next(4) == 0 ? rng.Next(1, 20_000) : 0,
+                    rng.Next(2) == 0 ? TehranTime.AddSeconds(start, rng.Next(0, 3600)) : null,
+                    null,
+                    null,
+                    null);
+            }
+
+            var account = new CustomerAccount(
+                "m",
+                WalletSettings.Shared with { ApplyDiscountsToPc = pricing is not null || code is not null },
+                new WalletPocket(balance, 0),
+                new WalletPocket(0, 0),
+                packages);
+            var result = CustomerPlay.Settle(
+                charge,
+                account,
+                policy: new AccountPolicy(ConsumptionOrder.MoneyThenPackages),
+                billing: policy,
+                pricing: pricing,
+                code: code,
+                issuedAt: charge.Lines[charge.Lines.Count - 1].End);
+            var st = result.Settlement;
+            Assert.Equal(charge.TotalAmountToman, Parts(st));
+            Assert.True(st.MoneyConsumedToman >= 0);
+            Assert.True(st.WriteOffToman >= 0);
+            Assert.True(st.DiscountToman >= 0);
+            Assert.True(result.Account.PcMoneyToman >= 0);
+            Assert.True(result.Account.PcMoneyToman <= balance);
+            if (result.ChargeInvoice is not null)
+            {
+                Assert.Equal(st.MoneyConsumedToman, result.ChargeInvoice.PayableToman);
+            }
+        }
+    }
+
+    [Fact]
     public void r8_3_station_lookup_is_case_insensitive_and_rejects_internal_space_aliases()
     {
         var group = new StationGroup("pcg", "PC", StationKind.Pc);
