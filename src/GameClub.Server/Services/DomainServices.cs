@@ -456,6 +456,14 @@ public sealed class SessionService(
         if (at.HasValue)
         {
             var reportedUtc = TimeMapping.ToUtc(TehranTime.Ensure(at.Value));
+            if (reportedUtc > serverNow.AddSeconds(60))
+            {
+                throw new ApiException(
+                    StatusCodes.Status400BadRequest,
+                    "checkpoint_in_future",
+                    "Checkpoint time cannot be more than 60 seconds ahead of server time.");
+            }
+
             if (reportedUtc < previous)
             {
                 session.Status = SessionStatus.ManualSettle;

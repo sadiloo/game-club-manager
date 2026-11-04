@@ -4,6 +4,7 @@ using System.Text.Json;
 using GameClub.Billing;
 using GameClub.Server.Data;
 using GameClub.Server.Data.Entities;
+using GameClub.Server.Services;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -151,18 +152,52 @@ public sealed class Pr4Review1IntegrationTests(GameClubWebApplicationFactory fac
     }
 
     [Fact]
-    public async Task checkpoint_records_server_time_and_ignores_client_at_for_billing()
+    public async Task po_default_9_future_checkpoint_at_returns_400_leaves_last_accepted_and_auto_close_works()
     {
         await ResetAsync();
-        await _client.PostAsJsonAsync("/api/stations", new { id = "PC-T", name = "PC-T", groupId = PilotSeed.PcNormalGroupId });
+        await _client.PostAsJsonAsync("/api/stations", new { id = "PC-FUT", name = "PC-FUT", groupId = PilotSeed.PcNormalGroupId });
         factory.Clock.SetTehran(2026, 6, 3, 14, 0);
-        var start = await _client.PostAsJsonAsync("/api/sessions", new { stationId = "PC-T", playerCount = 1 });
+        var start = await _client.PostAsJsonAsync("/api/sessions", new { stationId = "PC-FUT", playerCount = 1 });
         var id = (await start.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetGuid();
         factory.Clock.SetTehran(2026, 6, 3, 15, 0);
-        await _client.PostAsJsonAsync($"/api/sessions/{id}/checkpoints", new { at = TestTimes.T(2026, 6, 3, 18, 0) });
-        var stop = await _client.PostAsync($"/api/sessions/{id}/stop", null);
-        var inv = await stop.Content.ReadFromJsonAsync<JsonElement>();
-        Assert.Equal(80_000, inv.GetProperty("unroundedPayableToman").GetInt64());
+        Assert.Equal(HttpStatusCode.NoContent, (await _client.PostAsJsonAsync($"/api/sessions/{id}/checkpoints", new { })).StatusCode);
+        factory.Clock.SetTehran(2026, 6, 3, 15, 1);
+        var bad = await _client.PostAsJsonAsync($"/api/sessions/{id}/checkpoints", new { at = TestTimes.T(2026, 6, 3, 15, 6) });
+        Assert.Equal(HttpStatusCode.BadRequest, bad.StatusCode);
+        var err = await bad.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("checkpoint_in_future", err.GetProperty("error").GetString());
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var session = await db.Sessions.AsNoTracking().SingleAsync(s => s.Id == id);
+            Assert.Equal(TimeMapping.ToUtc(TestTimes.T(2026, 6, 3, 15, 0)), session.LastCheckpointUtc);
+            Assert.Equal(1, await db.Checkpoints.CountAsync());
+        }
+
+        factory.Clock.SetTehran(2026, 6, 3, 15, 10);
+        var sweep = await _client.PostAsync("/api/internal/dead-pc-sweep", null);
+        Assert.Equal(HttpStatusCode.OK, sweep.StatusCode);
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            Assert.Equal(SessionStatus.Closed, await db.Sessions.Where(s => s.Id == id).Select(s => s.Status).SingleAsync());
+            Assert.Equal(1, await db.Invoices.CountAsync());
+        }
+    }
+
+    [Fact]
+    public async Task checkpoint_within_sixty_seconds_records_server_now()
+    {
+        await ResetAsync();
+        await _client.PostAsJsonAsync("/api/stations", new { id = "PC-OK", name = "PC-OK", groupId = PilotSeed.PcNormalGroupId });
+        factory.Clock.SetTehran(2026, 6, 3, 14, 0);
+        var start = await _client.PostAsJsonAsync("/api/sessions", new { stationId = "PC-OK", playerCount = 1 });
+        var id = (await start.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetGuid();
+        factory.Clock.SetTehran(2026, 6, 3, 15, 0);
+        Assert.Equal(HttpStatusCode.NoContent, (await _client.PostAsJsonAsync($"/api/sessions/{id}/checkpoints", new { at = TestTimes.T(2026, 6, 3, 15, 0, 30) })).StatusCode);
+        using var scope = factory.Services.CreateScope();
+        var session = await scope.ServiceProvider.GetRequiredService<AppDbContext>().Sessions.AsNoTracking().SingleAsync(s => s.Id == id);
+        Assert.Equal(TimeMapping.ToUtc(TestTimes.T(2026, 6, 3, 15, 0)), session.LastCheckpointUtc);
     }
 
     [Fact]

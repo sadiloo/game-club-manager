@@ -246,17 +246,19 @@ public sealed class RobustnessTests(MainFactory f) : QaBase(f)
         var inv = await Stop(id);
         Assert.True(inv.L("unroundedPayableToman") == 110_000, $"server 14:00–15:00 must bill 110,000; got {inv.L("unroundedPayableToman")}");
     }
-    [Fact] public async Task QA_T2_client_checkpoint_at_in_future_is_ignored()
+    [Fact] public async Task QA_T2_future_client_checkpoint_at_returns_400_and_billing_uses_last_accepted()
     {
         await F.ResetAsync(); await Reg("PC-T", Normal); F.At(14, 0); var id = await Start("PC-T");
-        F.At(15, 0); await CpAt(id, QaFactory.T(18, 0)); // kiosk clock 3 h fast
+        F.At(15, 0); Assert.Equal(HttpStatusCode.NoContent, (await Cp(id)).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await CpAt(id, QaFactory.T(18, 0))).StatusCode);
         var inv = await Stop(id);
-        Assert.True(inv.L("unroundedPayableToman") == 80_000, $"client checkpoint 18:00 honoured: billed {inv.L("unroundedPayableToman")} instead of 80,000 (server 15:00)");
+        Assert.True(inv.L("unroundedPayableToman") == 80_000, $"bill to last accepted checkpoint 15:00; got {inv.L("unroundedPayableToman")}");
     }
-    [Fact] public async Task QA_T3_client_checkpoint_in_future_does_not_defeat_dead_pc_timeout()
+    [Fact] public async Task QA_T3_future_client_checkpoint_at_does_not_block_dead_pc_auto_close()
     {
         await F.ResetAsync(); await Reg("PC-T3", Normal); F.At(14, 0); var id = await Start("PC-T3");
-        F.At(15, 0); await CpAt(id, QaFactory.T(23, 0));
+        F.At(15, 0); Assert.Equal(HttpStatusCode.NoContent, (await Cp(id)).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await CpAt(id, QaFactory.T(23, 0))).StatusCode);
         F.At(15, 10); await C.PostAsync("/api/internal/dead-pc-sweep", null);
         Assert.Equal("Closed", await SessionStatus(id));
     }
