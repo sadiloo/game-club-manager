@@ -118,14 +118,60 @@ public static class SessionPricer
         return new SessionCharge(session.Id, lines, active, minutes, amount);
     }
 
+    internal static long[]? BuildMinuteRunPrefix(IReadOnlyList<ActiveMinuteRun>? runs)
+    {
+        if (runs is null || runs.Count == 0)
+        {
+            return null;
+        }
+
+        var prefix = new long[runs.Count];
+        long sum = 0;
+        for (var i = 0; i < runs.Count; i++)
+        {
+            sum += runs[i].Count;
+            prefix[i] = sum;
+        }
+
+        return prefix;
+    }
+
     internal static DateTimeOffset BilledMinuteStart(
         IReadOnlyList<ActiveMinuteRun>? runs,
+        DateTimeOffset lineStart,
+        long index)
+        => BilledMinuteStart(runs, null, lineStart, index);
+
+    internal static DateTimeOffset BilledMinuteStart(
+        IReadOnlyList<ActiveMinuteRun>? runs,
+        long[]? runEndPrefix,
         DateTimeOffset lineStart,
         long index)
     {
         if (runs is null || runs.Count == 0)
         {
             return TehranTime.AddSeconds(lineStart, index * 60L);
+        }
+
+        if (runEndPrefix is not null && runEndPrefix.Length == runs.Count)
+        {
+            var lo = 0;
+            var hi = runs.Count - 1;
+            while (lo < hi)
+            {
+                var mid = (lo + hi) / 2;
+                if (runEndPrefix[mid] <= index)
+                {
+                    lo = mid + 1;
+                }
+                else
+                {
+                    hi = mid;
+                }
+            }
+
+            var before = lo == 0 ? 0 : runEndPrefix[lo - 1];
+            return TehranTime.AddSeconds(runs[lo].Start, (index - before) * 60L);
         }
 
         var left = index;

@@ -420,6 +420,17 @@ public static class AccountSettlement
 
         OperatorAlert? alert = null;
         DailyReportEntry? report = null;
+        var discountToman = pricedDiscount.All - pricedDiscount.NetNow();
+        var settledParts = packageCovered + moneyConsumed + discountToman + grace.Waived + writeOff + omitted + uncovered;
+        if (settledParts != charge.TotalAmountToman)
+        {
+            writeOff += charge.TotalAmountToman - settledParts;
+            if (writeOff < 0)
+            {
+                writeOff = 0;
+            }
+        }
+
         if (writeOff > 0)
         {
             alert = new OperatorAlert("pc_overshoot", "PC time ran past the balance and was written off.", writeOff);
@@ -440,7 +451,7 @@ public static class AccountSettlement
             packageDraws,
             moneyDraws,
             grace.Waived > 0 ? new GraceLine(1, grace.Waived, grace.At, grace.SegmentId) : null,
-            pricedDiscount.All - pricedDiscount.NetNow(),
+            discountToman,
             writeOff,
             alert,
             report,
@@ -517,21 +528,42 @@ public static class AccountSettlement
         {
             var spendable = money > 0 ? money : 0;
             var moneyMinutes = MaxMoneyMinutes(part.AmountToman, part.BilledMinutes, spendable);
-            var moneyShare = MoneyShare(part.AmountToman, moneyMinutes, part.BilledMinutes);
-            long netShare = 0;
-            long allocated = 0;
-            for (long i = 0; i < moneyMinutes; i++)
+            var runPrefix = SessionPricer.BuildMinuteRunPrefix(minuteRuns);
+            var partRunCharge = MoneyMath.ChargeForMinutes(part.HourlyRateToman, part.BilledMinutes, billing.Remainder)
+                - MoneyMath.ChargeForMinutes(part.HourlyRateToman, 0, billing.Remainder);
+            var partClean = partRunCharge == part.AmountToman;
+            long PartMinuteGross(long i)
             {
-                var piece = i + 1 == moneyMinutes
-                    ? moneyShare - allocated
-                    : MoneyMath.MulDiv(moneyShare, i + 1, moneyMinutes) - allocated;
-                if (piece < 0)
+                if (i < 0 || i >= part.BilledMinutes)
                 {
-                    piece = 0;
+                    return 0;
                 }
 
-                allocated += piece;
-                var atMinute = SessionPricer.BilledMinuteStart(minuteRuns, lineStart, minuteBase + i);
+                if (partClean)
+                {
+                    return MoneyMath.ChargeForMinutes(part.HourlyRateToman, i + 1, billing.Remainder)
+                        - MoneyMath.ChargeForMinutes(part.HourlyRateToman, i, billing.Remainder);
+                }
+
+                if (part.BilledMinutes <= 0)
+                {
+                    return 0;
+                }
+
+                var before = i == 0 ? 0 : MoneyMath.MulDiv(part.AmountToman, i, part.BilledMinutes);
+                var after = i + 1 >= part.BilledMinutes
+                    ? part.AmountToman
+                    : MoneyMath.MulDiv(part.AmountToman, i + 1, part.BilledMinutes);
+                return after - before;
+            }
+
+            long moneyShare = 0;
+            long netShare = 0;
+            for (long i = 0; i < moneyMinutes; i++)
+            {
+                var piece = PartMinuteGross(i);
+                moneyShare += piece;
+                var atMinute = SessionPricer.BilledMinuteStart(minuteRuns, runPrefix, lineStart, minuteBase + i);
                 netShare += discount.Marginal(piece, atMinute, part.GroupId);
                 discount.Commit(piece, atMinute, part.GroupId);
             }
@@ -539,10 +571,6 @@ public static class AccountSettlement
             var pay = netShare < spendable ? netShare : spendable;
             money -= pay;
             moneyConsumed += pay;
-            if (pay < netShare)
-            {
-                writeOff += netShare - pay;
-            }
 
             if (moneyShare > 0)
             {
@@ -572,6 +600,15 @@ public static class AccountSettlement
             if (gross > 0)
             {
                 moneyDraws.Add(new MoneyDraw(part.SegmentId, part.Start, tailMinutes - taken, gross));
+            }
+
+            if (pay < netShare)
+            {
+                writeOff -= netShare - pay;
+                if (writeOff < 0)
+                {
+                    writeOff = 0;
+                }
             }
         }
     }
@@ -935,7 +972,8 @@ public static class AccountSettlement
             return after - before;
         }
 
-        DateTimeOffset Instant(long index) => SessionPricer.BilledMinuteStart(minuteRuns, lineStart, index);
+        var runPrefix = SessionPricer.BuildMinuteRunPrefix(minuteRuns);
+        DateTimeOffset Instant(long index) => SessionPricer.BilledMinuteStart(minuteRuns, runPrefix, lineStart, index);
 
         long NetOf(long fromLocal, long count)
         {
@@ -1010,6 +1048,37 @@ public static class AccountSettlement
 
         var step = billing.GranularityMinutes;
         long taken = 0;
+        var allNet = NetOf(0, unpaidMinutes);
+        if (balance >= allNet)
+        {
+            balance -= allNet;
+            consumed += allNet;
+            drawnGross += CommitRange(0, unpaidMinutes);
+            return;
+        }
+
+        if (step > 1)
+        {
+            var offset = minuteBase % step;
+            if (offset > 0 && taken < unpaidMinutes)
+            {
+                var partial = step - offset;
+                if (partial > unpaidMinutes - taken)
+                {
+                    partial = unpaidMinutes - taken;
+                }
+
+                var netPartial = NetOf(taken, partial);
+                if (balance >= netPartial)
+                {
+                    balance -= netPartial;
+                    consumed += netPartial;
+                    drawnGross += CommitRange(taken, partial);
+                    taken += partial;
+                }
+            }
+        }
+
         while (taken + step <= unpaidMinutes)
         {
             var netStep = NetOf(taken, step);
@@ -1029,17 +1098,29 @@ public static class AccountSettlement
             return;
         }
 
+        var remainingCount = unpaidMinutes - taken;
+        var remainingNet = NetOf(taken, remainingCount);
+        if (balance >= remainingNet)
+        {
+            balance -= remainingNet;
+            consumed += remainingNet;
+            drawnGross += CommitRange(taken, remainingCount);
+            return;
+        }
+
         if (step > 1 && balance > 0)
         {
             var minuteNet = NetOf(taken, 1);
-            grace.Waived += minuteNet;
+            var waived = minuteNet > 0 ? minuteNet : 0;
+            var discountCarry = minuteNet < 0 ? -minuteNet : 0;
+            grace.Waived += waived;
             grace.Used = true;
             grace.At = Instant(minuteBase + taken);
             grace.SegmentId = segmentId;
             drawnGross += CommitRange(taken, 1);
             var covered = taken + 1;
             var restCount = unpaidMinutes - covered;
-            var restNet = NetOf(covered, restCount);
+            var restNet = NetOf(covered, restCount) + discountCarry;
             if (activeSeconds > (playedBeforeMinutes + covered) * 60L && restCount > 0)
             {
                 var pay = balance > 0 ? Math.Min(balance, restNet) : 0;
@@ -1057,6 +1138,10 @@ public static class AccountSettlement
                 }
 
                 omitted += restGross;
+                if (discountCarry > 0)
+                {
+                    omitted = Math.Max(0, omitted - discountCarry);
+                }
             }
 
             grace.Stopped = true;
@@ -1069,7 +1154,13 @@ public static class AccountSettlement
             if (balance < minuteNet)
             {
                 var pay = balance;
-                grace.Waived += minuteNet - pay;
+                var waived = minuteNet - pay;
+                if (waived < 0)
+                {
+                    waived = 0;
+                }
+
+                grace.Waived += waived;
                 grace.Used = true;
                 grace.At = Instant(minuteBase + taken);
                 grace.SegmentId = segmentId;

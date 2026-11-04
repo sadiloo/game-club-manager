@@ -54,7 +54,7 @@ public sealed class StationDirectory
             }
         }
 
-        _stations = new Dictionary<string, Station>(StringComparer.Ordinal);
+        _stations = new Dictionary<string, Station>(StringComparer.OrdinalIgnoreCase);
         foreach (var station in stations)
         {
             if (string.IsNullOrWhiteSpace(station.Id))
@@ -76,7 +76,13 @@ public sealed class StationDirectory
 
     public bool TryGetGroup(string stationId, out StationGroup group)
     {
-        if (_stations.TryGetValue(stationId, out var station) && _groups.TryGetValue(station.GroupId, out group!))
+        if (string.IsNullOrWhiteSpace(stationId))
+        {
+            group = null!;
+            return false;
+        }
+
+        if (_stations.TryGetValue(stationId.Trim(), out var station) && _groups.TryGetValue(station.GroupId, out group!))
         {
             return true;
         }

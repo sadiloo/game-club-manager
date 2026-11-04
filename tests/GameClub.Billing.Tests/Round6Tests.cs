@@ -200,6 +200,7 @@ public class Round6Tests
             (flat, "g"),
         };
         var granularities = new[] { 1, 5, 15 };
+        var balances = new long[] { 5_000, 50_000, 500_000, 5_000_000, 1_000_000_000 };
 
         for (var i = 0; i < 500; i++)
         {
@@ -210,32 +211,29 @@ public class Round6Tests
                 RateRemainderMode.Nearest);
             var start = TehranTime.AddSeconds(T.At(2026, 6, 4, 0, 0), rng.Next(0, 4 * 86400));
             var end = TehranTime.AddSeconds(start, rng.Next(30, 6 * 3600));
-            SessionCharge charge;
+            Session session;
+            StationDirectory? stations = null;
             if (rng.Next(4) == 0)
             {
                 var gapStart = T.At(2026, 6, 5, 22, 0);
-                charge = SessionPricer.Price(
-                    new Session(
-                        "gap",
-                        [
-                            new PlaySegment("a", gapStart, gapStart.AddHours(1), "st", groupId, PlayMode.Offline, 1),
-                            new PlaySegment("b", T.At(2026, 6, 6, 0, 30), T.At(2026, 6, 6, 1, 30), "st", groupId, PlayMode.Offline, 1),
-                        ]),
-                    card,
-                    policy: policy);
+                session = new Session(
+                    "gap",
+                    [
+                        new PlaySegment("a", gapStart, gapStart.AddHours(1), "st", groupId, PlayMode.Offline, 1),
+                        new PlaySegment("b", T.At(2026, 6, 6, 0, 30), T.At(2026, 6, 6, 1, 30), "st", groupId, PlayMode.Offline, 1),
+                    ]);
             }
             else if (rng.Next(3) == 0 && groupId == "g")
             {
-                charge = ConsolePauseCharge();
+                session = ConsolePauseSession(out stations);
+                card = new RateCardBuilder().AddBase("ps", PlayMode.Offline, 1, 110_000).Build();
             }
             else
             {
-                charge = SessionPricer.Price(
-                    new Session("s", [new PlaySegment("a", start, end, "st", groupId, PlayMode.Offline, 1)]),
-                    card,
-                    policy: policy);
+                session = new Session("s", [new PlaySegment("a", start, end, "st", groupId, PlayMode.Offline, 1)]);
             }
 
+            var charge = SessionPricer.Price(session, card, stations: stations, policy: policy);
             var level = rng.Next(3) == 0 ? 0 : rng.Next(1, 40);
             var codePercent = rng.Next(3) == 0 ? 0 : rng.Next(1, 60);
             var fixedToman = rng.Next(3) == 0 ? rng.Next(1, 30_000) : 0L;
@@ -266,16 +264,37 @@ public class Round6Tests
                 ValidFrom: validFrom,
                 ValidUntil: validUntil);
 
-            var expectedDiscount = IndependentOracleDiscount(charge, spec);
+            var expectedDiscount = IndependentOracleDiscount(session, charge, policy, spec);
+            var balance = balances[rng.Next(balances.Length)];
+            TimePackage[] packages = rng.Next(3) == 0
+                ? [new TimePackage("p", rng.Next(1, 30), 200_000)]
+                : [];
+            var order = rng.Next(2) == 0
+                ? ConsumptionOrder.PackagesThenMoney
+                : ConsumptionOrder.MoneyThenPackages;
             var settled = AccountSettlement.Settle(
                 charge,
-                new PcAccount("m", 1_000_000_000, []),
+                new PcAccount("m", balance, packages),
+                new AccountPolicy(order),
                 billing: policy,
                 discount: spec);
-            Assert.Equal(expectedDiscount, settled.DiscountToman);
-            Assert.Equal(charge.TotalAmountToman - expectedDiscount, settled.MoneyConsumedToman);
+            if (packages.Length == 0)
+            {
+                Assert.Equal(expectedDiscount, settled.DiscountToman);
+            }
+
+            var parts = settled.PackageCoveredToman + settled.MoneyConsumedToman + settled.DiscountToman
+                + (settled.Grace?.WaivedToman ?? 0) + settled.WriteOffToman + settled.UncoveredToman + settled.OmittedToman;
+            Assert.Equal(charge.TotalAmountToman, parts);
         }
     }
+
+    internal static long IndependentOracleDiscountForCharge(SessionCharge charge, SessionDiscount spec)
+        => IndependentOracleDiscount(
+            new Session("s", [new PlaySegment("a", charge.Lines[0].Start, charge.Lines[^1].End, "st", charge.Lines[0].GroupId, PlayMode.Offline, 1)]),
+            charge,
+            BillingPolicy.Default,
+            spec);
 
     private static long Discount(SessionCharge charge, SessionDiscount spec)
         => AccountSettlement.Settle(charge, new PcAccount("m", 100_000_000, []), discount: spec).DiscountToman;
@@ -288,31 +307,42 @@ public class Round6Tests
 
     private static SessionCharge GapLineCharge() => SessionPricer.Price(GapSession(), Flat());
 
-    private static SessionCharge ConsolePauseCharge()
+    private static Session ConsolePauseSession(out StationDirectory stations)
     {
-        var dir = new StationDirectory(
+        stations = new StationDirectory(
             [new StationGroup("ps", "PS5", StationKind.Console)],
             [new Station("ps-1", "PS5 1", "ps")]);
-        var card = new RateCardBuilder().AddBase("ps", PlayMode.Offline, 1, 110_000).Build();
-        var session = new Session(
+        return new Session(
             "c",
             [new PlaySegment("a", T.At(2026, 6, 2, 10, 0), T.At(2026, 6, 2, 11, 30), "ps-1", "ps", PlayMode.Offline, 1, StationKind.Console)],
             [new PauseInterval(T.At(2026, 6, 2, 10, 15), T.At(2026, 6, 2, 10, 45))]);
-        return SessionPricer.Price(session, card, stations: dir);
     }
 
-    private static long IndependentOracleDiscount(SessionCharge charge, SessionDiscount spec)
+    private static SessionCharge ConsolePauseCharge()
     {
+        _ = ConsolePauseSession(out var dir);
+        var card = new RateCardBuilder().AddBase("ps", PlayMode.Offline, 1, 110_000).Build();
+        return SessionPricer.Price(ConsolePauseSession(out _), card, stations: dir);
+    }
+
+    private static long IndependentOracleDiscount(
+        Session session,
+        SessionCharge charge,
+        BillingPolicy policy,
+        SessionDiscount spec)
+    {
+        var minuteStarts = BuildSegmentMinuteStarts(session, policy);
         long allGross = 0;
         long codeGross = 0;
         long birthGross = 0;
+        long offset = 0;
         foreach (var line in charge.Lines)
         {
             for (long m = 0; m < line.BilledMinutes; m++)
             {
                 var gross = OracleHalfUp(line.HourlyRateToman, m + 1) - OracleHalfUp(line.HourlyRateToman, m);
                 allGross += gross;
-                var at = OracleMinuteStart(line, m);
+                var at = minuteStarts[(int)(offset + m)];
                 if (CodeEligible(spec, at, line.GroupId))
                 {
                     codeGross += gross;
@@ -323,32 +353,92 @@ public class Round6Tests
                     birthGross += gross;
                 }
             }
+
+            offset += line.BilledMinutes;
         }
 
         return allGross - OracleNet(allGross, codeGross, birthGross, spec);
     }
 
-    private static DateTimeOffset OracleMinuteStart(PricedSlice line, long index)
+    private static List<DateTimeOffset> BuildSegmentMinuteStarts(Session session, BillingPolicy policy)
     {
-        var runs = line.MinuteRuns;
-        if (runs is null || runs.Count == 0)
+        var list = new List<DateTimeOffset>();
+        foreach (var seg in session.Segments.OrderBy(s => s.Start))
         {
-            return TehranTime.AddSeconds(line.Start, index * 60L);
+            foreach (var (pieceStart, pieceEnd) in SubtractPauses(seg.Start, seg.End, session.Pauses))
+            {
+                var start = TehranTime.Ensure(pieceStart);
+                var end = TehranTime.Ensure(pieceEnd);
+                var activeSeconds = (long)(end - start).TotalSeconds;
+                if (activeSeconds <= 0)
+                {
+                    continue;
+                }
+
+                var billed = MoneyMath.BilledMinutes(activeSeconds, policy);
+                for (long m = 0; m < billed; m++)
+                {
+                    list.Add(TehranTime.AddSeconds(start, m * 60L));
+                }
+            }
         }
 
-        var left = index;
-        foreach (var run in runs)
+        return list;
+    }
+
+    private static IEnumerable<(DateTimeOffset Start, DateTimeOffset End)> SubtractPauses(
+        DateTimeOffset start,
+        DateTimeOffset end,
+        IReadOnlyList<PauseInterval>? pauses)
+    {
+        var pieces = new List<(DateTimeOffset Start, DateTimeOffset End)> { (TehranTime.Ensure(start), TehranTime.Ensure(end)) };
+        if (pauses is null || pauses.Count == 0)
         {
-            if (left < run.Count)
+            foreach (var piece in pieces)
             {
-                return TehranTime.AddSeconds(run.Start, left * 60L);
+                yield return piece;
             }
 
-            left -= run.Count;
+            yield break;
         }
 
-        return TehranTime.AddSeconds(line.Start, index * 60L);
+        foreach (var pause in pauses)
+        {
+            var next = new List<(DateTimeOffset Start, DateTimeOffset End)>();
+            foreach (var piece in pieces)
+            {
+                if (pause.End <= piece.Start || pause.Start >= piece.End)
+                {
+                    next.Add(piece);
+                    continue;
+                }
+
+                if (pause.Start > piece.Start)
+                {
+                    next.Add((piece.Start, pause.Start));
+                }
+
+                if (pause.End < piece.End)
+                {
+                    next.Add((pause.End, piece.End));
+                }
+            }
+
+            pieces = next;
+        }
+
+        foreach (var piece in pieces)
+        {
+            yield return piece;
+        }
     }
+
+    private static long IndependentOracleDiscount(SessionCharge charge, SessionDiscount spec)
+        => IndependentOracleDiscount(
+            new Session("s", [new PlaySegment("a", charge.Lines[0].Start, charge.Lines[^1].End, "st", charge.Lines[0].GroupId, PlayMode.Offline, 1)]),
+            charge,
+            BillingPolicy.Default,
+            spec);
 
     private static long OracleHalfUp(long rate, long minutes)
         => (rate * minutes * 2 + 60) / 120;
