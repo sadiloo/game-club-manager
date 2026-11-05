@@ -200,6 +200,17 @@ public sealed class OperatorPanelController(
         return NoContent();
     }
 
+    [HttpPost("payments/{paymentLineId:long}/reject")]
+    public async Task<IActionResult> RejectPayment(long paymentLineId, CancellationToken ct)
+    {
+        await invoices.RejectCardToCardAsync(paymentLineId, ct);
+        return NoContent();
+    }
+
+    [HttpGet("payments/pending-card-to-card")]
+    public async Task<IActionResult> PendingCardToCardPayments(CancellationToken ct)
+        => Ok(await invoices.ListPendingCardToCardAsync(ct));
+
     [HttpGet("destination-cards")]
     public async Task<IActionResult> DestinationCards(CancellationToken ct) => Ok(await destinationCards.ListAsync(ct));
 

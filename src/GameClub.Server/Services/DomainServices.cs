@@ -212,7 +212,7 @@ public sealed class SessionCloser(
         IReadOnlyList<OperatorBillService.PaymentInput> payments,
         CancellationToken ct)
     {
-        if (payments.Count == 0)
+        if (payments.Count == 0 && bill.CollectibleToman != 0)
         {
             throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", "At least one payment line is required.");
         }

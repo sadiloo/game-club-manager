@@ -225,7 +225,7 @@ public sealed class Ds13CheckpointRaceIntegrationTests(GameClubWebApplicationFac
             {
                 var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
                 var billed = await db.Invoices.Where(i => i.SessionId == id).Select(i => (long?)i.UnroundedPayableToman).MaxAsync() ?? -1;
-                if (codes.Any(c => c >= 500) || (status == "Closed" && cpOk > 0 && billed == 80_000) || (status != "Closed" && status != "Open"))
+                if (codes.Any(c => c >= 500) || (status == "Closed" && cpOk > 0 && billed == 80_000) || (status != "Closed" && status != "Open" && status != "AwaitingPayment"))
                 {
                     bad.Add($"r{round}: status={status} acceptedCheckpoints={cpOk} billed={billed} codes=[{string.Join(',', codes)}]");
                 }

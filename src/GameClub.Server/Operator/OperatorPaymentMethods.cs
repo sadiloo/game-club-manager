@@ -5,7 +5,7 @@ namespace GameClub.Server.Operator;
 
 internal static class OperatorPaymentMethods
 {
-    private static readonly HashSet<string> Allowed = new(StringComparer.Ordinal)
+    private static readonly HashSet<string> Allowed = new(StringComparer.OrdinalIgnoreCase)
     {
         "Cash",
         "CardReader",
@@ -19,12 +19,16 @@ internal static class OperatorPaymentMethods
             throw new ApiException(StatusCodes.Status400BadRequest, "unknown_method", $"Unknown payment method '{method}'.");
         }
 
-        return method switch
+        if (method.Equals("Cash", StringComparison.OrdinalIgnoreCase))
         {
-            "Cash" => PaymentMethod.Cash,
-            "CardReader" => PaymentMethod.CardReader,
-            "CardToCard" => PaymentMethod.CardToCard,
-            _ => throw new ApiException(StatusCodes.Status400BadRequest, "unknown_method", $"Unknown payment method '{method}'."),
-        };
+            return PaymentMethod.Cash;
+        }
+
+        if (method.Equals("CardReader", StringComparison.OrdinalIgnoreCase))
+        {
+            return PaymentMethod.CardReader;
+        }
+
+        return PaymentMethod.CardToCard;
     }
 }

@@ -13,7 +13,7 @@ using Microsoft.Extensions.Hosting;
 
 namespace GameClub.Server.Tests;
 
-public sealed class GameClubWebApplicationFactory : WebApplicationFactory<Program>
+public class GameClubWebApplicationFactory : WebApplicationFactory<Program>
 {
     public MutableClock Clock { get; } = new(DateTimeOffset.UtcNow);
 
@@ -72,12 +72,17 @@ public sealed class GameClubWebApplicationFactory : WebApplicationFactory<Progra
         }
 
         var host = base.CreateHost(builder);
+        SeedDatabase(host);
+        return host;
+    }
+
+    private static void SeedDatabase(IHost host)
+    {
         using var scope = host.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         db.Database.Migrate();
         DatabaseSeed.EnsureAsync(db).GetAwaiter().GetResult();
         Program.ApplyAuditImmutabilityAsync(db).GetAwaiter().GetResult();
-        return host;
     }
 }
 

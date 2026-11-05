@@ -55,6 +55,7 @@ public sealed class OperatorBillService(
     IClock clock,
     AuditService audit,
     BillCalculator calculator,
+    SessionBilling billing,
     SessionCloser closer,
     OperatorPolicies policies)
 {
@@ -146,16 +147,38 @@ public sealed class OperatorBillService(
                 throw new ApiException(StatusCodes.Status409Conflict, "invalid_state", "Session is not awaiting payment.");
             }
 
-            var tenders = payments.Select(p => new Tender(OperatorPaymentMethods.Parse(p.Method), p.AmountToman)).ToList();
-            var split = PaymentSplitter.Split(bill.CollectibleToman, tenders);
-            if (!split.IsValid)
+            if (bill.CollectibleToman == 0)
             {
-                throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", split.Errors.FirstOrDefault()?.Message ?? "Invalid payment.");
-            }
+                if (payments.Count > 0)
+                {
+                    if (payments.Any(p => p.AmountToman > 0))
+                    {
+                        var positiveTenders = payments
+                            .Select(p => new Tender(OperatorPaymentMethods.Parse(p.Method), p.AmountToman))
+                            .ToList();
+                        var positiveSplit = PaymentSplitter.Split(0, positiveTenders);
+                        if (!positiveSplit.IsValid)
+                        {
+                            throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", positiveSplit.Errors.FirstOrDefault()?.Message ?? "Invalid payment.");
+                        }
+                    }
 
-            if (payments.Count == 0 || payments.All(p => p.AmountToman <= 0))
+                    throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", "At least one positive payment line is required.");
+                }
+            }
+            else
             {
-                throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", "At least one positive payment line is required.");
+                if (payments.Count == 0 || payments.All(p => p.AmountToman <= 0))
+                {
+                    throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", "At least one positive payment line is required.");
+                }
+
+                var tenders = payments.Select(p => new Tender(OperatorPaymentMethods.Parse(p.Method), p.AmountToman)).ToList();
+                var split = PaymentSplitter.Split(bill.CollectibleToman, tenders);
+                if (!split.IsValid)
+                {
+                    throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", split.Errors.FirstOrDefault()?.Message ?? "Invalid payment.");
+                }
             }
 
             var invoice = await closer.FinalizeFromPendingAsync(session, bill, payments, innerCt);
@@ -226,6 +249,10 @@ public sealed class OperatorBillService(
             ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Session not found.");
         var bill = session.PendingBill
             ?? throw new ApiException(StatusCodes.Status409Conflict, "no_bill", "No bill for this session.");
+        var charge = await billing.BuildChargeAsync(session, bill.FrozenAtUtc, ct);
+        var hourlyBySegment = charge.Lines
+            .GroupBy(l => l.SegmentId)
+            .ToDictionary(g => g.Key, g => g.First().HourlyRateToman);
         var segments = session.Segments
             .OrderBy(s => s.StartUtc)
             .Select(s => new
@@ -233,6 +260,7 @@ public sealed class OperatorBillService(
                 s.SegmentKey,
                 s.PlayerCount,
                 mode = s.Mode.ToString(),
+                hourlyToman = hourlyBySegment.GetValueOrDefault(s.SegmentKey),
                 startUtc = s.StartUtc,
                 endUtc = s.EndUtc,
             })
@@ -499,6 +527,31 @@ public sealed class OperatorInvoiceService(
         await audit.AppendAsync("invoice.void", new { number, reason, before, after = new { invoice.Status } }, ct);
         await db.SaveChangesAsync(ct);
     }
+
+    public async Task<IReadOnlyList<object>> ListPendingCardToCardAsync(CancellationToken ct)
+    {
+        var rows = await db.PaymentLines.AsNoTracking()
+            .Include(p => p.Invoice)
+            .Where(p => p.Method == PaymentMethod.CardToCard && p.ConfirmationStatus == PaymentConfirmationStatus.Pending)
+            .OrderBy(p => p.Id)
+            .Select(p => new PendingCardToCardRow(
+                p.Id,
+                p.Invoice!.Number,
+                p.AmountToman,
+                p.DestinationCardId,
+                p.Reference,
+                p.Invoice!.SessionId))
+            .ToListAsync(ct);
+        return rows.Cast<object>().ToList();
+    }
+
+    private sealed record PendingCardToCardRow(
+        long Id,
+        long InvoiceNumber,
+        long AmountToman,
+        string? DestinationCardId,
+        string? Reference,
+        Guid SessionId);
 
     public async Task ConfirmCardToCardAsync(long paymentLineId, CancellationToken ct)
     {

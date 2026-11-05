@@ -9,6 +9,20 @@ function showError(msg) {
   el.textContent = msg || "";
 }
 
+function fmtTehran(iso) {
+  if (!iso) return "—";
+  return new Date(iso).toLocaleString("en-GB", {
+    timeZone: "Asia/Tehran",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+}
+
+function cashTendered() {
+  return paymentDraft.filter((l) => l.method === "Cash").reduce((s, l) => s + l.amountToman, 0);
+}
+
 async function api(path, options = {}) {
   showError("");
   const res = await fetch(path, {
@@ -45,7 +59,11 @@ document.getElementById("loginBtn").onclick = async () => {
     destinationCards = (await api("/api/operator/destination-cards")) || [];
     await refreshGrid();
     await refreshManualSettle();
-    setInterval(refreshGrid, 10000);
+    await refreshPendingC2c();
+    setInterval(async () => {
+      await refreshGrid();
+      await refreshPendingC2c();
+    }, 10000);
   } catch (e) {
     document.getElementById("loginError").textContent = String(e.message);
     document.getElementById("loginError").classList.remove("hidden");
@@ -75,6 +93,34 @@ async function refreshGrid() {
   }
 }
 
+async function refreshPendingC2c() {
+  const list = await api("/api/operator/payments/pending-card-to-card");
+  const ul = document.getElementById("pendingC2cList");
+  ul.replaceChildren();
+  for (const row of list || []) {
+    const li = document.createElement("li");
+    li.textContent = `#${row.invoiceNumber} — ${row.amountToman} toman`;
+    if (row.destinationCardId) li.textContent += ` → ${row.destinationCardId}`;
+    const confirmBtn = document.createElement("button");
+    confirmBtn.type = "button";
+    confirmBtn.textContent = "Confirm transfer";
+    confirmBtn.onclick = async () => {
+      await api(`/api/operator/payments/${row.id}/confirm`, { method: "POST" });
+      await refreshPendingC2c();
+    };
+    const rejectBtn = document.createElement("button");
+    rejectBtn.type = "button";
+    rejectBtn.textContent = "Reject";
+    rejectBtn.onclick = async () => {
+      await api(`/api/operator/payments/${row.id}/reject`, { method: "POST" });
+      await refreshPendingC2c();
+    };
+    li.appendChild(confirmBtn);
+    li.appendChild(rejectBtn);
+    ul.appendChild(li);
+  }
+}
+
 async function refreshManualSettle() {
   const list = await api("/api/operator/manual-settle-queue");
   const ul = document.getElementById("manualSettleList");
@@ -91,7 +137,30 @@ async function refreshManualSettle() {
       await refreshManualSettle();
       await refreshGrid();
     };
+    const endInput = document.createElement("input");
+    endInput.type = "datetime-local";
+    endInput.dataset.sessionId = row.sessionId;
+    const btnB = document.createElement("button");
+    btnB.type = "button";
+    btnB.textContent = "Bill to end time";
+    btnB.onclick = async () => {
+      const raw = endInput.value;
+      if (!raw) {
+        showError("Enter an end time.");
+        return;
+      }
+      const endAt = `${raw}:00+03:30`;
+      await api(`/api/operator/sessions/${row.sessionId}/manual-settle`, {
+        method: "POST",
+        body: JSON.stringify({ endAt }),
+      });
+      await openBillScreen(row.sessionId);
+      await refreshManualSettle();
+      await refreshGrid();
+    };
     li.appendChild(btnA);
+    li.appendChild(endInput);
+    li.appendChild(btnB);
     ul.appendChild(li);
   }
 }
@@ -100,14 +169,24 @@ function renderBill(bill) {
   document.getElementById("bill").classList.remove("hidden");
   const d = document.getElementById("billDetail");
   const segText = (bill.segments || [])
-    .map((s) => `${s.segmentKey}: ${s.playerCount}p ${s.mode}`)
-    .join("; ");
+    .map(
+      (s) =>
+        `${s.segmentKey}: ${s.playerCount}p ${s.mode} @ ${s.hourlyToman ?? "?"} toman/h ` +
+        `${fmtTehran(s.startUtc)}–${fmtTehran(s.endUtc)}`,
+    )
+    .join("\n");
   d.textContent =
     `Group ${bill.groupId || ""} · players ${bill.playerCount ?? "?"}\n` +
     `Unrounded ${bill.unroundedPayableToman} + rounding ${bill.roundingToman} = collect ${bill.collectibleToman}` +
     (bill.surchargeToman ? ` (surcharge ${bill.surchargeToman})` : "") +
-    (segText ? `\nSegments: ${segText}` : "");
-  document.getElementById("billAmount")?.remove();
+    (segText ? `\nSegments:\n${segText}` : "");
+  const changeEl = document.getElementById("cashChange");
+  if (changeEl) {
+    const cash = cashTendered();
+    const collect = bill.collectibleToman ?? 0;
+    changeEl.textContent =
+      collect > 0 && cash > 0 ? `Cash tendered ${cash}; change ${Math.max(0, cash - collect)} toman` : "";
+  }
 }
 
 function renderPaymentLines() {
@@ -124,6 +203,9 @@ function renderPaymentLines() {
     del.onclick = () => {
       paymentDraft.splice(idx, 1);
       renderPaymentLines();
+      api(`/api/operator/sessions/${selectedSessionId}/bill`)
+        .then(renderBill)
+        .catch(() => {});
     };
     row.appendChild(del);
     box.appendChild(row);
@@ -201,6 +283,9 @@ document.getElementById("addCashLineBtn").onclick = () => {
   if (amountToman == null || Number.isNaN(amountToman)) return;
   paymentDraft.push({ method: "Cash", amountToman });
   renderPaymentLines();
+  api(`/api/operator/sessions/${selectedSessionId}/bill`)
+    .then(renderBill)
+    .catch(() => {});
 };
 
 document.getElementById("addCardLineBtn").onclick = () => {
@@ -230,24 +315,19 @@ document.getElementById("surchargeBtn").onclick = async () => {
 document.getElementById("confirmBtn").onclick = async () => {
   const bill = await api(`/api/operator/sessions/${selectedSessionId}/bill`);
   let payments = paymentDraft;
-  if (payments.length === 0) {
+  if (bill.collectibleToman === 0) {
+    payments = [];
+  } else if (payments.length === 0) {
     payments = [{ method: "Cash", amountToman: bill.collectibleToman }];
   }
-  const result = await api(`/api/operator/sessions/${selectedSessionId}/bill/confirm`, {
+  await api(`/api/operator/sessions/${selectedSessionId}/bill/confirm`, {
     method: "POST",
     body: JSON.stringify({ payments }),
   });
-  if (result && result.number) {
-    const inv = await api(`/api/operator/invoices/${result.number}`);
-    for (const p of inv.payments || []) {
-      if (p.method === "CardToCard" && p.status === "Pending") {
-        await api(`/api/operator/payments/${p.id}/confirm`, { method: "POST" });
-      }
-    }
-  }
   selectedSessionId = null;
   document.getElementById("bill").classList.add("hidden");
   await refreshGrid();
+  await refreshPendingC2c();
 };
 
 document.getElementById("cancelBillBtn").onclick = async () => {

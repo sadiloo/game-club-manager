@@ -273,11 +273,16 @@ public sealed class AcceptanceScenarioTests(GameClubWebApplicationFactory factor
         await RegisterPc("PC-I", PilotSeed.PcNormalGroupId);
         factory.Clock.SetTehran(2026, 6, 3, 14, 0);
         var sessionId = await StartSession("PC-I", 1);
-        factory.Clock.SetTehran(2026, 6, 3, 14, 5);
-        await CheckpointAsync(sessionId, TestTimes.T(2026, 6, 3, 14, 5));
+        factory.Clock.SetTehran(2026, 6, 3, 14, 0, 40);
         var stop = await _client.PostAsync($"/api/sessions/{sessionId}/stop", null);
+        stop.EnsureSuccessStatusCode();
         var stopBody = await stop.Content.ReadFromJsonAsync<JsonElement>();
-        await S3TestHelpers.FinishPcPaymentAsync(factory, sessionId, stopBody.GetProperty("collectibleToman").GetInt64());
+        Assert.Equal(0, stopBody.GetProperty("collectibleToman").GetInt64());
+        var op = await factory.CreateOperatorClientAsync();
+        var confirm = await op.PostAsJsonAsync(
+            $"/api/operator/sessions/{sessionId}/bill/confirm",
+            new { payments = Array.Empty<object>() });
+        confirm.EnsureSuccessStatusCode();
         using var scope = factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         Assert.True(await db.AuditLog.AnyAsync(a => a.Action == "session.start"));

@@ -128,6 +128,9 @@ public sealed class Pr5OperatorPanelUiFlowTests(GameClubWebApplicationFactory fa
         Assert.Contains("player-count", js);
         Assert.Contains("CardToCard", js);
         Assert.Contains("showError", js);
-        Assert.Contains("invoices/", js);
+        Assert.Contains("pending-card-to-card", js);
+        Assert.Contains("Bill to end time", js);
+        Assert.Contains("hourlyToman", js);
+        Assert.Contains("fmtTehran", js);
     }
 }
