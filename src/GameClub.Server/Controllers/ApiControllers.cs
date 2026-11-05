@@ -117,14 +117,8 @@ public sealed class SessionsController(SessionService sessions, IDeadPcMonitor d
     [HttpPost("{id:guid}/stop")]
     public async Task<IActionResult> Stop(Guid id, CancellationToken ct)
     {
-        var invoice = await sessions.StopAsync(id, ct);
-        return Ok(new
-        {
-            invoice.Number,
-            unroundedPayableToman = invoice.UnroundedPayableToman,
-            roundingToman = invoice.RoundingToman,
-            collectibleToman = invoice.CollectibleToman,
-        });
+        var body = await sessions.StopAsync(id, ct);
+        return Ok(body);
     }
 
     public sealed record ManualSettleRequest(DateTimeOffset? EndAt = null);
@@ -132,13 +126,12 @@ public sealed class SessionsController(SessionService sessions, IDeadPcMonitor d
     [HttpPost("{id:guid}/manual-settle")]
     public async Task<IActionResult> ManualSettle(Guid id, ManualSettleRequest body, CancellationToken ct)
     {
-        var invoice = await sessions.ResolveManualSettleAsync(id, body.EndAt, ct);
+        var pending = await sessions.ResolveManualSettleAsync(id, body.EndAt, ct);
         return Ok(new
         {
-            invoice.Number,
-            unroundedPayableToman = invoice.UnroundedPayableToman,
-            roundingToman = invoice.RoundingToman,
-            collectibleToman = invoice.CollectibleToman,
+            unroundedPayableToman = pending.UnroundedPayableToman,
+            roundingToman = pending.RoundingToman,
+            collectibleToman = pending.CollectibleToman,
         });
     }
 

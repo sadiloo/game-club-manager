@@ -81,7 +81,9 @@ public sealed class Ds13CheckpointRaceIntegrationTests(GameClubWebApplicationFac
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
             var session = await db.Sessions.AsNoTracking().SingleAsync(s => s.Id == id);
             var inv = await db.Invoices.CountAsync(i => i.SessionId == id);
+            var pending = await db.PendingBills.CountAsync(i => i.SessionId == id);
             var ok = (session.Status == SessionStatus.Closed && inv == 1)
+                || (session.Status == SessionStatus.AwaitingPayment && pending == 1 && inv == 0)
                 || (session.Status == SessionStatus.ManualSettle && inv == 0);
             if (!ok)
             {
@@ -112,7 +114,8 @@ public sealed class Ds13CheckpointRaceIntegrationTests(GameClubWebApplicationFac
             var stopResponse = await stopTask;
             var cpResponse = await cpTask;
             var status = await SessionStatusAsync(id);
-            if (status != "Closed" && stopResponse.StatusCode == HttpStatusCode.OK)
+            if (stopResponse.StatusCode == HttpStatusCode.OK
+                && status is not "Closed" and not "AwaitingPayment" and not "ManualSettle")
             {
                 var m = await _client.PostAsJsonAsync($"/api/sessions/{id}/manual-settle", new { });
                 bad.Add($"r{round}: stop={(int)stopResponse.StatusCode} cp={(int)cpResponse.StatusCode} status={status} resolve={(int)m.StatusCode}");
@@ -147,9 +150,13 @@ public sealed class Ds13CheckpointRaceIntegrationTests(GameClubWebApplicationFac
             {
                 var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
                 var inv = await db.Invoices.CountAsync(i => i.SessionId == id);
+                var pending = await db.PendingBills.CountAsync(i => i.SessionId == id);
                 var lastCp = await EpochAsync(id, "LastCheckpointUtc");
                 var billedEnd = await EpochAsync(id, "EndedAtUtc");
-                if (codes.Any(c => c >= 500) || (inv == 1 && status != "Closed") || (inv == 1 && lastCp != billedEnd))
+                if (codes.Any(c => c >= 500)
+                    || (inv == 1 && status != "Closed")
+                    || (pending == 1 && status != "AwaitingPayment")
+                    || (inv == 1 && lastCp != billedEnd))
                 {
                     bad.Add($"r{round}: status={status} invoices={inv} lastCp-billedEnd={lastCp - billedEnd}s codes=[{string.Join(',', codes)}]");
                 }

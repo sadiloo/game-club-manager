@@ -100,17 +100,17 @@ public sealed class ScopeGapIntegrationTests(GameClubWebApplicationFactory facto
         await _client.PostAsJsonAsync($"/api/sessions/{sessionId}/checkpoints", new { at = TestTimes.T(2026, 6, 3, 15, 0) });
         factory.Clock.SetTehran(2026, 6, 3, 15, 10);
 
-        InvoiceEntity? invoice = null;
-        for (var attempt = 0; attempt < 40 && invoice is null; attempt++)
+        PendingBillEntity? pending = null;
+        for (var attempt = 0; attempt < 40 && pending is null; attempt++)
         {
             await Task.Delay(250);
             using var scope = factory.Services.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            invoice = await db.Invoices.FirstOrDefaultAsync();
+            pending = await db.PendingBills.FirstOrDefaultAsync();
         }
 
-        Assert.NotNull(invoice);
-        Assert.Equal(80_000, invoice!.CollectibleToman);
+        Assert.NotNull(pending);
+        Assert.Equal(80_000, pending!.CollectibleToman);
         using (var scope = factory.Services.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();

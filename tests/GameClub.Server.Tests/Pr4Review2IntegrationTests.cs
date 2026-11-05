@@ -111,8 +111,8 @@ public sealed class Pr4Review2IntegrationTests(GameClubWebApplicationFactory fac
         foreach (var st in new[] { "PC-F1", "PC-F3" })
         {
             var session = await db.Sessions.SingleAsync(s => s.StationId == st);
-            Assert.Equal(SessionStatus.Closed, session.Status);
-            Assert.Equal(80_000, await db.Invoices.Where(i => i.SessionId == session.Id).Select(i => i.CollectibleToman).SingleAsync());
+            Assert.Equal(SessionStatus.AwaitingPayment, session.Status);
+            Assert.Equal(80_000, await db.PendingBills.Where(i => i.SessionId == session.Id).Select(i => i.CollectibleToman).SingleAsync());
         }
     }
 

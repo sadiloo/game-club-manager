@@ -17,7 +17,16 @@ public sealed class ApiKeyMiddleware(RequestDelegate next, IConfiguration config
             return;
         }
 
-        if (context.Request.Path.StartsWithSegments("/swagger"))
+        if (context.Request.Path.StartsWithSegments("/swagger")
+            || context.Request.Path.StartsWithSegments("/operator")
+            || context.Request.Path.StartsWithSegments("/api/operator/auth/login"))
+        {
+            await next(context);
+            return;
+        }
+
+        if (context.Request.Path.StartsWithSegments("/api/operator")
+            && context.Items["OperatorAuthenticated"] is true)
         {
             await next(context);
             return;
