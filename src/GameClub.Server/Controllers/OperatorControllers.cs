@@ -78,7 +78,34 @@ public sealed class OperatorPanelController(
     public async Task<IActionResult> OpenBill(Guid sessionId, CancellationToken ct)
     {
         var bill = await bills.OpenConsoleBillAsync(sessionId, ct);
-        return Ok(BillDto(bill));
+        return Ok(await BillResponseAsync(sessionId, bill, ct));
+    }
+
+    [HttpGet("sessions/{sessionId:guid}/bill")]
+    public async Task<IActionResult> GetBill(Guid sessionId, CancellationToken ct)
+        => Ok(await bills.GetBillDetailAsync(sessionId, ct));
+
+    [HttpPost("sessions/{sessionId:guid}/pause")]
+    public async Task<IActionResult> PauseSession(Guid sessionId, CancellationToken ct)
+    {
+        await sessions.PauseAsync(sessionId, ct);
+        return NoContent();
+    }
+
+    [HttpPost("sessions/{sessionId:guid}/resume")]
+    public async Task<IActionResult> ResumeSession(Guid sessionId, CancellationToken ct)
+    {
+        await sessions.ResumeAsync(sessionId, ct);
+        return NoContent();
+    }
+
+    public sealed record PlayerCountBody(int PlayerCount);
+
+    [HttpPatch("sessions/{sessionId:guid}/player-count")]
+    public async Task<IActionResult> ChangePlayerCount(Guid sessionId, PlayerCountBody body, CancellationToken ct)
+    {
+        await sessions.ChangePlayerCountAsync(sessionId, body.PlayerCount, ct);
+        return NoContent();
     }
 
     [HttpPost("sessions/{sessionId:guid}/bill/cancel")]
@@ -94,8 +121,7 @@ public sealed class OperatorPanelController(
     public async Task<IActionResult> Surcharge(Guid sessionId, SurchargeRequest body, CancellationToken ct)
     {
         await bills.AddSurchargeAsync(sessionId, body.Reason, ct);
-        var bill = await bills.GetPendingAsync(sessionId, ct);
-        return Ok(BillDto(bill!));
+        return Ok(await bills.GetBillDetailAsync(sessionId, ct));
     }
 
     public sealed record ConfirmRequest(IReadOnlyList<OperatorBillService.PaymentInput> Payments);
@@ -128,7 +154,7 @@ public sealed class OperatorPanelController(
     {
         manualSettleQueue.EnsureMayResolve();
         var pending = await sessions.ResolveManualSettleAsync(sessionId, body.EndAt, ct);
-        return Ok(BillDto(pending));
+        return Ok(await bills.GetBillDetailAsync(sessionId, ct));
     }
 
     [HttpGet("invoices/{number:long}")]
@@ -198,6 +224,18 @@ public sealed class OperatorPanelController(
         var role = Enum.Parse<UserRole>(body.Role, true);
         var user = await users.CreateAsync(body.Username, body.Pin, role, ct);
         return Created($"/api/operator/users/{user.Id}", new { user.Id, user.Username, role = user.Role.ToString() });
+    }
+
+    private async Task<object> BillResponseAsync(Guid sessionId, PendingBillEntity bill, CancellationToken ct)
+    {
+        try
+        {
+            return await bills.GetBillDetailAsync(sessionId, ct);
+        }
+        catch (ApiException ex) when (ex.Code == "no_bill")
+        {
+            return BillDto(bill);
+        }
     }
 
     private static object BillDto(PendingBillEntity bill) => new

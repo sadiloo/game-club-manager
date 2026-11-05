@@ -46,6 +46,7 @@ public sealed class GameClubWebApplicationFactory : WebApplicationFactory<Progra
 
         builder.UseSetting("ConnectionStrings:Default", ConnectionString);
         builder.UseSetting($"{DeadPcSweepOptions.SectionName}:SweepIntervalSeconds", "1");
+        builder.UseSetting("OperatorSessionSecret", "test-operator-secret");
         builder.ConfigureServices(services =>
         {
             services.RemoveAll<IClock>();

@@ -138,7 +138,9 @@ public sealed class Pr4Review2IntegrationTests(GameClubWebApplicationFactory fac
         }
 
         using var scope = factory.Services.CreateScope();
-        Assert.Equal(1, await scope.ServiceProvider.GetRequiredService<AppDbContext>().Invoices.CountAsync(i => i.SessionId == id));
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        Assert.Equal(1, await db.PendingBills.CountAsync(p => p.SessionId == id));
+        Assert.Equal(0, await db.Invoices.CountAsync(i => i.SessionId == id));
     }
 
     [Fact]

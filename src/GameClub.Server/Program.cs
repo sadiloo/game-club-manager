@@ -39,6 +39,16 @@ public partial class Program
             ?? Environment.GetEnvironmentVariable("GAMECLUB_DATABASE")
             ?? "Host=localhost;Database=gameclub;Username=postgres;Password=postgres";
 
+        if (!builder.Environment.IsDevelopment())
+        {
+            var operatorSecret = builder.Configuration["OperatorSessionSecret"];
+            if (string.IsNullOrWhiteSpace(operatorSecret) || operatorSecret == "dev-operator-secret")
+            {
+                throw new InvalidOperationException(
+                    "OperatorSessionSecret must be set to a non-default value when not running in Development.");
+            }
+        }
+
         builder.Services.AddDbContext<AppDbContext>(options => options.UseNpgsql(connectionString));
 
         var app = builder.Build();

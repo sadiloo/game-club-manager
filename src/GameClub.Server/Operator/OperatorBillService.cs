@@ -146,11 +146,16 @@ public sealed class OperatorBillService(
                 throw new ApiException(StatusCodes.Status409Conflict, "invalid_state", "Session is not awaiting payment.");
             }
 
-            var tenders = payments.Select(p => new Tender(ParseMethod(p.Method), p.AmountToman)).ToList();
+            var tenders = payments.Select(p => new Tender(OperatorPaymentMethods.Parse(p.Method), p.AmountToman)).ToList();
             var split = PaymentSplitter.Split(bill.CollectibleToman, tenders);
             if (!split.IsValid)
             {
                 throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", split.Errors.FirstOrDefault()?.Message ?? "Invalid payment.");
+            }
+
+            if (payments.Count == 0 || payments.All(p => p.AmountToman <= 0))
+            {
+                throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", "At least one positive payment line is required.");
             }
 
             var invoice = await closer.FinalizeFromPendingAsync(session, bill, payments, innerCt);
@@ -186,13 +191,70 @@ public sealed class OperatorBillService(
         return bill;
     }
 
+    public async Task<PendingBillEntity> CreateMachineStopPendingBillAsync(
+        PlaySessionEntity session,
+        DateTime endUtc,
+        CancellationToken ct)
+    {
+        ApplyPlayEnd(session, endUtc);
+        var amounts = await calculator.ComputeAsync(session, endUtc, 0, ct);
+        var bill = new PendingBillEntity
+        {
+            Id = Guid.NewGuid(),
+            SessionId = session.Id,
+            FrozenAtUtc = endUtc,
+            OpenedAtUtc = clock.UtcNow.UtcDateTime,
+            UnroundedPayableToman = amounts.UnroundedPayableToman,
+            RoundingToman = amounts.RoundingToman,
+            CollectibleToman = amounts.CollectibleToman,
+            Source = "console_stop",
+            StopReason = "stop",
+        };
+        session.Status = SessionStatus.AwaitingPayment;
+        session.PendingBill = bill;
+        db.PendingBills.Add(bill);
+        return bill;
+    }
+
+    public async Task<object> GetBillDetailAsync(Guid sessionId, CancellationToken ct)
+    {
+        var session = await db.Sessions.AsNoTracking()
+            .Include(s => s.Segments)
+            .Include(s => s.PendingBill)
+            .Include(s => s.Station)!.ThenInclude(st => st!.Group)
+            .FirstOrDefaultAsync(s => s.Id == sessionId, ct)
+            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Session not found.");
+        var bill = session.PendingBill
+            ?? throw new ApiException(StatusCodes.Status409Conflict, "no_bill", "No bill for this session.");
+        var segments = session.Segments
+            .OrderBy(s => s.StartUtc)
+            .Select(s => new
+            {
+                s.SegmentKey,
+                s.PlayerCount,
+                mode = s.Mode.ToString(),
+                startUtc = s.StartUtc,
+                endUtc = s.EndUtc,
+            })
+            .ToList();
+        return new
+        {
+            bill.SessionId,
+            playerCount = session.PlayerCount,
+            groupId = session.Station!.GroupId,
+            unroundedPayableToman = bill.UnroundedPayableToman,
+            roundingToman = bill.RoundingToman,
+            collectibleToman = bill.CollectibleToman,
+            surchargeToman = bill.SurchargeToman,
+            frozenAtUtc = bill.FrozenAtUtc,
+            source = bill.Source,
+            stopReason = bill.StopReason,
+            segments,
+        };
+    }
+
     public async Task<PendingBillEntity?> GetPendingAsync(Guid sessionId, CancellationToken ct)
         => await db.PendingBills.AsNoTracking().FirstOrDefaultAsync(b => b.SessionId == sessionId, ct);
-
-    private static PaymentMethod ParseMethod(string method)
-        => Enum.TryParse<PaymentMethod>(method, true, out var parsed)
-            ? parsed
-            : throw new ApiException(StatusCodes.Status400BadRequest, "unknown_method", $"Unknown payment method '{method}'.");
 
     private static void ApplyPlayEnd(PlaySessionEntity session, DateTime endUtc)
     {
@@ -308,7 +370,9 @@ public sealed class OperatorGridService(AppDbContext db, SessionService sessions
             .Include(s => s.PendingBill)
             .Where(s => s.Status != SessionStatus.Closed)
             .ToListAsync(ct);
-        var byStation = openSessions.ToDictionary(s => s.StationId);
+        var byStation = openSessions
+            .GroupBy(s => s.StationId)
+            .ToDictionary(g => g.Key, g => PickTileSession(g.ToList()));
 
         var tiles = new List<object>();
         foreach (var station in stations)
@@ -359,6 +423,29 @@ public sealed class OperatorGridService(AppDbContext db, SessionService sessions
         }
 
         return tiles;
+    }
+
+    private static PlaySessionEntity PickTileSession(IReadOnlyList<PlaySessionEntity> onStation)
+    {
+        if (onStation.Count == 1)
+        {
+            return onStation[0];
+        }
+
+        static int Priority(SessionStatus status) => status switch
+        {
+            SessionStatus.Open => 0,
+            SessionStatus.Paused => 1,
+            SessionStatus.BillOpen => 2,
+            SessionStatus.AwaitingPayment => 3,
+            SessionStatus.ManualSettle => 4,
+            _ => 5,
+        };
+
+        return onStation
+            .OrderBy(s => Priority(s.Status))
+            .ThenByDescending(s => s.StartedAtUtc)
+            .First();
     }
 
     private static string MapStatus(PlaySessionEntity session) => session.Status switch

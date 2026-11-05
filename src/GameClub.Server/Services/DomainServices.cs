@@ -204,8 +204,6 @@ public sealed class SessionBilling(AppDbContext db, RateConfigService rates)
 
 public sealed class SessionCloser(
     AppDbContext db,
-    RateConfigService rates,
-    SessionBilling billing,
     IClock clock)
 {
     public async Task<InvoiceEntity> FinalizeFromPendingAsync(
@@ -214,6 +212,11 @@ public sealed class SessionCloser(
         IReadOnlyList<OperatorBillService.PaymentInput> payments,
         CancellationToken ct)
     {
+        if (payments.Count == 0)
+        {
+            throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", "At least one payment line is required.");
+        }
+
         var number = await NextInvoiceNumberAsync(ct);
         var invoice = new InvoiceEntity
         {
@@ -231,7 +234,12 @@ public sealed class SessionCloser(
         };
         foreach (var pay in payments)
         {
-            var method = Enum.Parse<PaymentMethod>(pay.Method, true);
+            var method = OperatorPaymentMethods.Parse(pay.Method);
+            if (pay.AmountToman <= 0)
+            {
+                throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", "Payment amounts must be positive.");
+            }
+
             invoice.PaymentLines.Add(new PaymentLineEntity
             {
                 Method = method,
@@ -253,75 +261,8 @@ public sealed class SessionCloser(
         return invoice;
     }
 
-    public async Task<InvoiceEntity> CloseAsync(PlaySessionEntity session, DateTime endUtc, string auditReason, CancellationToken ct)
-    {
-        if (session.Status == SessionStatus.Closed)
-        {
-            throw new ApiException(StatusCodes.Status409Conflict, "closed", "Session is closed.");
-        }
-
-        var snapshot = session.RateCardSnapshotId != 0
-            ? await rates.LoadSnapshotAsync(session.RateCardSnapshotId, ct)
-            : await rates.LoadAsync(ct);
-        var charge = billing.BuildCharge(session, endUtc, snapshot);
-        var timeLines = TimeChargeLine.FromSession(charge);
-        var issuedAt = TimeMapping.ToTehran(endUtc);
-        var invoiceCalc = InvoiceCalculator.Calculate(new InvoiceRequest(
-            timeLines,
-            [],
-            [],
-            null,
-            null,
-            DiscountPolicy.Default,
-            snapshot.Rounding,
-            issuedAt));
-
-        foreach (var seg in session.Segments.Where(s => s.EndUtc is null))
-        {
-            seg.EndUtc = endUtc;
-        }
-
-        foreach (var pause in session.Pauses.Where(p => p.EndUtc is null))
-        {
-            pause.EndUtc = endUtc;
-        }
-
-        session.EndedAtUtc = endUtc;
-        session.Status = SessionStatus.Closed;
-
-        var number = await NextInvoiceNumberAsync(ct);
-        var invoice = new InvoiceEntity
-        {
-            Id = Guid.NewGuid(),
-            Number = number,
-            SessionId = session.Id,
-            UnroundedPayableToman = invoiceCalc.NetBeforeRoundingToman,
-            RoundingToman = invoiceCalc.RoundingToman,
-            CollectibleToman = invoiceCalc.PayableToman,
-            SurchargeToman = 0,
-            BilledToUtc = endUtc,
-            IssuedAtUtc = endUtc,
-            Status = "confirmed",
-        };
-        session.Invoice = invoice;
-        db.Invoices.Add(invoice);
-        db.AuditLog.Add(new AuditLogEntry
-        {
-            AtUtc = clock.UtcNow.UtcDateTime,
-            Action = "session.stop",
-            DetailsJson = JsonSerializer.Serialize(new { sessionId = session.Id, reason = auditReason, invoiceNumber = number }),
-        });
-        try
-        {
-            await db.SaveChangesAsync(ct);
-        }
-        catch (DbUpdateException ex) when (PostgresErrors.IsInvoiceSessionUniqueViolation(ex))
-        {
-            throw new ApiException(StatusCodes.Status409Conflict, "closed", "Session is closed.");
-        }
-
-        return invoice;
-    }
+    public Task<InvoiceEntity> CloseAsync(PlaySessionEntity session, DateTime endUtc, string auditReason, CancellationToken ct)
+        => throw new InvalidOperationException("Sessions must close through operator bill confirmation with payment lines.");
 
     private async Task<long> NextInvoiceNumberAsync(CancellationToken ct)
     {
@@ -345,7 +286,6 @@ public sealed class SessionService(
     IClock clock,
     AuditService audit,
     SessionBilling billing,
-    SessionCloser closer,
     RateConfigService rates,
     OperatorBillService operatorBills)
 {
@@ -449,6 +389,11 @@ public sealed class SessionService(
                 throw new ApiException(StatusCodes.Status409Conflict, "manual_settle", "Session awaits manual settlement.");
             }
 
+            if (session.Status is SessionStatus.BillOpen or SessionStatus.AwaitingPayment)
+            {
+                throw new ApiException(StatusCodes.Status409Conflict, "awaiting_payment", "Session already has an open bill.");
+            }
+
             if (session.Status == SessionStatus.Paused)
             {
                 throw new ApiException(StatusCodes.Status409Conflict, "already_paused", "Session is already paused.");
@@ -473,6 +418,11 @@ public sealed class SessionService(
             if (session.Status == SessionStatus.ManualSettle)
             {
                 throw new ApiException(StatusCodes.Status409Conflict, "manual_settle", "Session awaits manual settlement.");
+            }
+
+            if (session.Status is SessionStatus.BillOpen or SessionStatus.AwaitingPayment)
+            {
+                throw new ApiException(StatusCodes.Status409Conflict, "awaiting_payment", "Session already has an open bill.");
             }
 
             if (session.Status != SessionStatus.Paused)
@@ -505,24 +455,13 @@ public sealed class SessionService(
                 var endUtc = session.LastCheckpointUtc ?? session.StartedAtUtc;
                 var bill = await operatorBills.CreatePcPendingBillAsync(session, endUtc, "pc_stop", "logout", innerCt);
                 await audit.AppendAsync("session.stop", new { sessionId, reason = "stop", pendingBillId = bill.Id }, innerCt);
-                return (object)new
-                {
-                    pending = true,
-                    unroundedPayableToman = bill.UnroundedPayableToman,
-                    roundingToman = bill.RoundingToman,
-                    collectibleToman = bill.CollectibleToman,
-                };
+                return PendingStopBody(bill);
             }
 
-            var invoice = await closer.CloseAsync(session, clock.UtcNow.UtcDateTime, "stop", innerCt);
-            return (object)new
-            {
-                pending = false,
-                invoice.Number,
-                unroundedPayableToman = invoice.UnroundedPayableToman,
-                roundingToman = invoice.RoundingToman,
-                collectibleToman = invoice.CollectibleToman,
-            };
+            var consoleEnd = clock.UtcNow.UtcDateTime;
+            var consoleBill = await operatorBills.CreateMachineStopPendingBillAsync(session, consoleEnd, innerCt);
+            await audit.AppendAsync("session.stop", new { sessionId, reason = "stop", pendingBillId = consoleBill.Id }, innerCt);
+            return PendingStopBody(consoleBill);
         }, ct);
 
     public Task RecordCheckpointAsync(Guid sessionId, DateTimeOffset? at, CancellationToken ct)
@@ -598,6 +537,11 @@ public sealed class SessionService(
                 throw new ApiException(StatusCodes.Status409Conflict, "manual_settle", "Session awaits manual settlement.");
             }
 
+            if (session.Status is SessionStatus.BillOpen or SessionStatus.AwaitingPayment)
+            {
+                throw new ApiException(StatusCodes.Status409Conflict, "awaiting_payment", "Session already has an open bill.");
+            }
+
             if (playerCount is < 1 or > 4)
             {
                 throw new ApiException(StatusCodes.Status400BadRequest, "invalid_players", "Player count must be 1–4.");
@@ -609,7 +553,8 @@ public sealed class SessionService(
             }
 
             var now = clock.UtcNow.UtcDateTime;
-            var openSegment = session.Segments.Single(s => s.EndUtc is null);
+            var openSegment = session.Segments.SingleOrDefault(s => s.EndUtc is null)
+                ?? throw new ApiException(StatusCodes.Status409Conflict, "awaiting_payment", "Session already has an open bill.");
             openSegment.EndUtc = now;
             var nextKey = ((char)('a' + session.Segments.Count)).ToString();
             session.Segments.Add(new PlaySegmentEntity
@@ -759,6 +704,14 @@ public sealed class SessionService(
             return result;
         });
     }
+
+    private static object PendingStopBody(PendingBillEntity bill) => new
+    {
+        pending = true,
+        unroundedPayableToman = bill.UnroundedPayableToman,
+        roundingToman = bill.RoundingToman,
+        collectibleToman = bill.CollectibleToman,
+    };
 }
 
 public interface IDeadPcMonitor

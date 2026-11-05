@@ -32,6 +32,7 @@ public class QaFactory : WebApplicationFactory<Program>
         Environment.SetEnvironmentVariable("GAMECLUB_API_KEY", "qa-key");
         b.UseSetting("ConnectionStrings:Default", Conn);
         b.UseSetting("GAMECLUB_API_KEY", "qa-key");
+        b.UseSetting("OperatorSessionSecret", "qa-operator-secret");
         b.UseSetting("DeadPc:SweepIntervalSeconds", "3600");
         b.ConfigureServices(s => { s.RemoveAll<IClock>(); s.AddSingleton<IClock>(Clock); });
     }

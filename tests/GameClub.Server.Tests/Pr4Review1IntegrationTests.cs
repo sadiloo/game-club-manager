@@ -138,6 +138,7 @@ public sealed class Pr4Review1IntegrationTests(GameClubWebApplicationFactory fac
         var stop2 = await _client.PostAsync($"/api/sessions/{id2}/stop", null);
         var inv2 = await stop2.Content.ReadFromJsonAsync<JsonElement>();
         Assert.Equal(120_000, inv2.GetProperty("unroundedPayableToman").GetInt64());
+        await S3TestHelpers.FinishPcPaymentAsync(factory, id2, inv2.GetProperty("collectibleToman").GetInt64());
     }
 
     [Fact]
@@ -313,7 +314,9 @@ public sealed class Pr4Review1IntegrationTests(GameClubWebApplicationFactory fac
         Assert.Equal(1, codes.Count(c => c == 200));
         Assert.True(codes.All(c => c is 200 or 409));
         using var scope = factory.Services.CreateScope();
-        Assert.Equal(1, await scope.ServiceProvider.GetRequiredService<AppDbContext>().Invoices.CountAsync());
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        Assert.Equal(1, await db.PendingBills.CountAsync());
+        Assert.Equal(0, await db.Invoices.CountAsync());
     }
 
     [Fact]

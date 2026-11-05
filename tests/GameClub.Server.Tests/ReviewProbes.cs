@@ -178,14 +178,15 @@ public sealed class ReviewProbes(GameClubWebApplicationFactory factory, ITestOut
         factory.Clock.SetTehran(2026, 6, 3, 15, 20);
         Log("S9 stop@15:20: " + await Show(await c.PostAsync($"/api/sessions/{s11}/stop", null)));
         Log("stop again: " + await Show(await c.PostAsync($"/api/sessions/{s11}/stop", null)));
-        // PS5 special band and pause-then-stop
-        var s2 = await Start("PS5-S");
+        await Reg("PS5-S2", GameTimerReference.Ps5GroupId);
+        var s2 = await Start("PS5-S2");
         factory.Clock.SetTehran(2026, 6, 3, 15, 50);
         await c.PostAsync($"/api/sessions/{s2}/pause", null);
         factory.Clock.SetTehran(2026, 6, 3, 16, 50);
         Log("stop while paused (15:20-15:50 played, 1p) expect 55,000: " + await Show(await c.PostAsync($"/api/sessions/{s2}/stop", null)));
+        await Reg("PS5-S3", GameTimerReference.Ps5GroupId);
         factory.Clock.SetTehran(2026, 6, 4, 2, 0);
-        var s3 = await Start("PS5-S");
+        var s3 = await Start("PS5-S3");
         factory.Clock.SetTehran(2026, 6, 4, 3, 0);
         Log("PS5 1p 02:00-03:00 special expect 160,000: " + await Show(await c.PostAsync($"/api/sessions/{s3}/stop", null)));
         Log("player-count on PC → " + await Task.Run(async () => { await Reg("PC-PC", PilotSeed.PcNormalGroupId); var p = await Start("PC-PC"); return await Show(await c.PatchAsJsonAsync($"/api/sessions/{p}/player-count", new { playerCount = 2 })); }));

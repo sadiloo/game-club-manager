@@ -28,7 +28,23 @@ public abstract class QaBase(QaFactory f)
     {
         var r = await C.PostAsync($"/api/sessions/{id}/stop", null);
         Assert.True(r.StatusCode == HttpStatusCode.OK, $"stop: {(int)r.StatusCode} {await r.Content.ReadAsStringAsync()}");
-        return await r.Json();
+        var json = await r.Json();
+        if (json.TryGetProperty("pending", out var pending) && pending.GetBoolean())
+        {
+            await ConfirmPendingBill(id, json.L("collectibleToman"));
+        }
+
+        return json;
+    }
+
+    protected async Task ConfirmPendingBill(Guid sessionId, long collectibleToman)
+    {
+        var login = await C.PostAsJsonAsync("/api/operator/auth/login", new { username = "operator", pin = "1111" });
+        Assert.Equal(HttpStatusCode.OK, login.StatusCode);
+        var confirm = await C.PostAsJsonAsync(
+            $"/api/operator/sessions/{sessionId}/bill/confirm",
+            new { payments = new[] { new { method = "Cash", amountToman = collectibleToman } } });
+        Assert.True(confirm.IsSuccessStatusCode, await confirm.Content.ReadAsStringAsync());
     }
     protected async Task<long> Live(Guid id) => (await C.GetFromJsonAsync<JsonElement>($"/api/sessions/{id}/live-amount")).L("amountToman");
 
