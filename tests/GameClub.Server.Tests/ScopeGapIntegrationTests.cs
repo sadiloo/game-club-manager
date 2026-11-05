@@ -94,6 +94,9 @@ public sealed class ScopeGapIntegrationTests(GameClubWebApplicationFactory facto
     [Fact]
     public async Task hosted_dead_pc_sweep_auto_closes_with_fake_clock()
     {
+        factory.DeadPcBackgroundSweepEnabled = true;
+        try
+        {
         await ResetAsync();
         await _client.PostAsJsonAsync("/api/stations", new { id = "PC-SWEEP", name = "PC", groupId = PilotSeed.PcNormalGroupId });
         factory.Clock.SetTehran(2026, 6, 3, 14, 0);
@@ -119,6 +122,11 @@ public sealed class ScopeGapIntegrationTests(GameClubWebApplicationFactory facto
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
             var audit = await db.AuditLog.Where(a => a.Action == "session.stop").SingleAsync();
             Assert.Contains("auto-close", audit.DetailsJson);
+        }
+        }
+        finally
+        {
+            factory.DeadPcBackgroundSweepEnabled = false;
         }
     }
 }

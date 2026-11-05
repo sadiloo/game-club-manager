@@ -17,6 +17,12 @@ public sealed class GameClubWebApplicationFactory : WebApplicationFactory<Progra
 {
     public MutableClock Clock { get; } = new(DateTimeOffset.UtcNow);
 
+    /// <summary>
+    /// When false (default), the test host does not run periodic dead-PC sweeps.
+    /// Enable only in tests that assert on the hosted background timer.
+    /// </summary>
+    public bool DeadPcBackgroundSweepEnabled { get; set; }
+
     public string ConnectionString { get; private set; } = "";
 
     public HttpClient CreateClientWithKey()
@@ -51,6 +57,9 @@ public sealed class GameClubWebApplicationFactory : WebApplicationFactory<Progra
         {
             services.RemoveAll<IClock>();
             services.AddSingleton<IClock>(Clock);
+            services.AddSingleton(_ => this);
+            services.RemoveAll<IHostedService>();
+            services.AddHostedService<TestDeadPcSweepBackgroundService>();
         });
     }
 

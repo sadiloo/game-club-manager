@@ -39,6 +39,9 @@ public sealed class ReviewProbes(GameClubWebApplicationFactory factory, ITestOut
 
     [Fact] public async Task P01_group_change_mid_session()
     {
+        factory.DeadPcBackgroundSweepEnabled = true;
+        try
+        {
         await Reset(); Log("== P01 mid-session group change (Normal->VIP) ==");
         await Reg("PC-X", PilotSeed.PcNormalGroupId); await Reg("PC-Y", PilotSeed.PcNormalGroupId);
         factory.Clock.SetTehran(2026, 6, 3, 14, 0);
@@ -55,6 +58,11 @@ public sealed class ReviewProbes(GameClubWebApplicationFactory factory, ITestOut
         try { Log("manual sweep: " + await Show(await c.PostAsync("/api/internal/dead-pc-sweep", null))); } catch (Exception e) { Log("sweep threw: " + e.GetType().Name + " " + e.Message); }
         await Task.Delay(2500); // hosted sweep runs every 1 s in tests
         Log($"after sweeps: PC-X={Db(d => d.Sessions.Single(s => s.Id == sx).Status)} PC-Y={Db(d => d.Sessions.Single(s => s.Id == sy).Status)} invoices={Db(d => d.Invoices.Count())}");
+        }
+        finally
+        {
+            factory.DeadPcBackgroundSweepEnabled = false;
+        }
     }
 
     [Fact] public async Task P02_concurrent_start_same_station()
@@ -235,6 +243,9 @@ public sealed class ReviewProbes2(GameClubWebApplicationFactory factory)
 
     [Fact] public async Task P11_sweep_jam_by_unclosable_session()
     {
+        factory.DeadPcBackgroundSweepEnabled = true;
+        try
+        {
         using (var s = factory.Services.CreateScope())
             await s.ServiceProvider.GetRequiredService<AppDbContext>().Database.ExecuteSqlRawAsync("TRUNCATE audit_log, checkpoints, pause_intervals, play_segments, invoices, sessions, stations RESTART IDENTITY CASCADE;");
         Log("== P11 dead-PC sweep with one unclosable session ==");
@@ -257,5 +268,10 @@ public sealed class ReviewProbes2(GameClubWebApplicationFactory factory)
         using var sc = factory.Services.CreateScope();
         var db = sc.ServiceProvider.GetRequiredService<AppDbContext>();
         Log("statuses after 3 s of hosted sweeps: " + string.Join(",", db.Sessions.OrderBy(x => x.StationId).Select(x => x.StationId + "=" + x.Status).ToList()) + " invoices=" + db.Invoices.Count());
+        }
+        finally
+        {
+            factory.DeadPcBackgroundSweepEnabled = false;
+        }
     }
 }
