@@ -1,0 +1,14 @@
+<Project>
+  <!-- SQLitePCLRaw copies Windows natives only when OS is Windows_NT.
+       A Linux build must still ship e_sqlite3.dll beside the kiosk and the guard. -->
+  <Target Name="BundleWindowsSqlite" AfterTargets="Build">
+    <ItemGroup>
+      <_SqliteX64 Include="$(NuGetPackageRoot)sqlitepclraw.lib.e_sqlite3\**\runtimes\win-x64\native\e_sqlite3.dll" />
+      <_SqliteX86 Include="$(NuGetPackageRoot)sqlitepclraw.lib.e_sqlite3\**\runtimes\win-x86\native\e_sqlite3.dll" />
+    </ItemGroup>
+    <Error Text="Windows e_sqlite3.dll was not found in the NuGet cache. Restore sqlitepclraw.lib.e_sqlite3 before building the kiosk." Condition="'@(_SqliteX64)' == '' or '@(_SqliteX86)' == ''" />
+    <MakeDir Directories="$(OutputPath)runtimes\win-x64\native;$(OutputPath)runtimes\win-x86\native" />
+    <Copy SourceFiles="@(_SqliteX64)" DestinationFolder="$(OutputPath)runtimes\win-x64\native\" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(_SqliteX86)" DestinationFolder="$(OutputPath)runtimes\win-x86\native\" SkipUnchangedFiles="true" />
+  </Target>
+</Project>

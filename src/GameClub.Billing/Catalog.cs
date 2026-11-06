@@ -395,6 +395,58 @@ public sealed class RateCard
 
         return found;
     }
+
+    public TariffDocument ToDocument()
+    {
+        var document = new TariffDocument();
+        foreach (var band in Bands)
+        {
+            document.Bands.Add(new BandDocument
+            {
+                Id = band.Id,
+                GroupId = band.GroupId,
+                Name = band.Name,
+                Start = band.Start.ToString(),
+                End = band.End.ToString(),
+            });
+        }
+
+        foreach (var pair in _base)
+        {
+            document.BaseRates.Add(RateRow(pair.Key, pair.Value));
+        }
+
+        foreach (var pair in _bands)
+        {
+            var row = RateRow(pair.Key.Key, pair.Value);
+            row.BandId = pair.Key.BandId;
+            document.BandRates.Add(row);
+        }
+
+        foreach (var pair in _weekdays)
+        {
+            var row = RateRow(pair.Key.Key, pair.Value);
+            row.Weekday = (int)pair.Key.Day;
+            document.WeekdayRates.Add(row);
+        }
+
+        foreach (var pair in _special)
+        {
+            var row = RateRow(pair.Key.Key, pair.Value);
+            row.TableId = pair.Key.TableId;
+            document.SpecialRates.Add(row);
+        }
+
+        return document;
+    }
+
+    private static RateDocument RateRow(TariffKey key, long hourly) => new()
+    {
+        GroupId = key.GroupId,
+        Mode = (int)key.Mode,
+        PlayerCount = key.PlayerCount,
+        HourlyToman = hourly,
+    };
 }
 
 public sealed class RateCardBuilder
