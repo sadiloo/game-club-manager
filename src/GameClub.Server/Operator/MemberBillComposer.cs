@@ -49,8 +49,7 @@ public sealed class MemberBillComposer
                 accountPolicy,
                 BillingPolicy.Default,
                 graceMinuteEnabled: false);
-            var moneyLines = packageSettlement.MoneyTimeLines();
-            timeLines = moneyLines.Count > 0 ? moneyLines : TimeChargeLine.FromSession(charge);
+            timeLines = packageSettlement.MoneyTimeLines();
         }
         else
         {
@@ -58,10 +57,6 @@ public sealed class MemberBillComposer
         }
         var buffet = OpenSaleMapper.ToBuffetLines(saleLines);
         var services = OpenSaleMapper.ToServiceLines(saleLines).ToList();
-        if (surchargeToman > 0)
-        {
-            services.Add(new ServiceLine("manual-surcharge", "سورشارژ", surchargeToman));
-        }
 
         var issuedAt = TimeMapping.ToTehran(billedToUtc);
         var request = new InvoiceRequest(
@@ -89,10 +84,12 @@ public sealed class MemberBillComposer
             invoice = InvoiceCalculator.Calculate(request);
         }
 
+        var (unrounded, rounding, collectible) = ApplyPostRoundSurcharge(invoice, surchargeToman, previewTenders is { Count: > 0 }, allocation);
+
         return new MemberBillResult(
-            invoice.NetBeforeRoundingToman,
-            invoice.RoundingToman,
-            invoice.PayableToman,
+            unrounded,
+            rounding,
+            collectible,
             surchargeToman,
             invoice.TimeGrossToman,
             invoice.BuffetGrossToman,
@@ -136,10 +133,12 @@ public sealed class MemberBillComposer
             invoice = InvoiceCalculator.Calculate(request);
         }
 
+        var (unrounded, rounding, collectible) = ApplyPostRoundSurcharge(invoice, 0, previewTenders is { Count: > 0 }, allocation);
+
         return new MemberBillResult(
-            invoice.NetBeforeRoundingToman,
-            invoice.RoundingToman,
-            invoice.PayableToman,
+            unrounded,
+            rounding,
+            collectible,
             0,
             invoice.TimeGrossToman,
             invoice.BuffetGrossToman,
@@ -150,6 +149,29 @@ public sealed class MemberBillComposer
             allocation,
             null,
             pricing);
+    }
+
+    private static (long Unrounded, long Rounding, long Collectible) ApplyPostRoundSurcharge(
+        Invoice invoice,
+        long surchargeToman,
+        bool usedCollect,
+        AllocationResult? allocation)
+    {
+        var unrounded = MoneyMath.CheckedAdd(invoice.NetBeforeRoundingToman, surchargeToman);
+        long collectible;
+        long rounding;
+        if (usedCollect && allocation is { IsValid: true })
+        {
+            collectible = MoneyMath.CheckedAdd(allocation.PayableToman, surchargeToman);
+            rounding = collectible - unrounded;
+        }
+        else
+        {
+            collectible = MoneyMath.CheckedAdd(invoice.PayableToman, surchargeToman);
+            rounding = collectible - unrounded;
+        }
+
+        return (unrounded, rounding, collectible);
     }
 
     private static IReadOnlyList<TimeChargeLine> TimeChargeLinesFromCharge(SessionCharge charge)

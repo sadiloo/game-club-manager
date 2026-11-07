@@ -51,7 +51,14 @@ public sealed class BillCalculator(
     {
         var snapshot = await rates.LoadAsync(ct);
         var settings = await memberContext.LoadSettingsAsync(ct);
-        var (member, _) = await memberContext.LoadMemberStateAsync(customerId, ct);
+        CustomerMemberEntity? member = null;
+        IReadOnlyList<TimePackage> packages = [];
+        if (customerId is Guid id)
+        {
+            member = await memberContext.EnsureMemberAsync(id, ct);
+            (_, packages) = await memberContext.LoadMemberStateAsync(id, ct);
+        }
+
         return ToBillAmounts(MemberBillComposer.ComputeBuffetOnly(saleLines, snapshot, customerId, member, settings, previewTenders));
     }
 
@@ -85,7 +92,14 @@ public sealed class BillCalculator(
             : await rates.LoadAsync(ct);
         var charge = billing.BuildCharge(session, endUtc, snapshot);
         var settings = await memberContext.LoadSettingsAsync(ct);
-        var (member, packages) = await memberContext.LoadMemberStateAsync(session.CustomerId, ct);
+        CustomerMemberEntity? member = null;
+        IReadOnlyList<TimePackage> packages = [];
+        if (session.CustomerId is Guid cid)
+        {
+            member = await memberContext.EnsureMemberAsync(cid, ct);
+            (_, packages) = await memberContext.LoadMemberStateAsync(cid, ct);
+        }
+
         return MemberBillComposer.Compute(
             charge,
             snapshot,
@@ -395,6 +409,73 @@ public sealed class OperatorBillService(
         session.PendingBill = bill;
         db.PendingBills.Add(bill);
         return bill;
+    }
+
+    public async Task<object> PreviewBillAsync(
+        Guid sessionId,
+        IReadOnlyList<PaymentInput> payments,
+        CancellationToken ct)
+    {
+        var session = await db.Sessions.AsNoTracking()
+            .Include(s => s.Customer)
+            .Include(s => s.Segments)
+            .Include(s => s.PendingBill)
+            .Include(s => s.Station)!.ThenInclude(st => st!.Group)
+            .FirstOrDefaultAsync(s => s.Id == sessionId, ct)
+            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Session not found.");
+        var bill = session.PendingBill
+            ?? throw new ApiException(StatusCodes.Status409Conflict, "no_bill", "No bill for this session.");
+        var saleLines = await db.OpenSales.AsNoTracking()
+            .Include(o => o.Lines).ThenInclude(l => l.CatalogItem)
+            .Where(o => o.SessionId == sessionId)
+            .SelectMany(o => o.Lines)
+            .ToListAsync(ct);
+        var tenders = ToTenders(payments, session.CustomerId);
+        var amounts = await calculator.ComputeWithTendersAsync(
+            session,
+            bill.FrozenAtUtc,
+            bill.SurchargeToman,
+            saleLines,
+            tenders,
+            ct);
+        var charge = await billing.BuildChargeAsync(session, bill.FrozenAtUtc, ct);
+        var hourlyBySegment = charge.Lines
+            .GroupBy(l => l.SegmentId)
+            .ToDictionary(g => g.Key, g => g.First().HourlyRateToman);
+        var segments = session.Segments
+            .OrderBy(s => s.StartUtc)
+            .Select(s => new
+            {
+                s.SegmentKey,
+                s.PlayerCount,
+                mode = s.Mode.ToString(),
+                hourlyToman = hourlyBySegment.GetValueOrDefault(s.SegmentKey),
+                startUtc = s.StartUtc,
+                endUtc = s.EndUtc,
+            })
+            .ToList();
+        var sale = await db.OpenSales.AsNoTracking()
+            .Include(o => o.Lines).ThenInclude(l => l.CatalogItem)
+            .FirstOrDefaultAsync(o => o.SessionId == sessionId, ct);
+        return new
+        {
+            bill.SessionId,
+            playerCount = session.PlayerCount,
+            groupId = session.Station!.GroupId,
+            unroundedPayableToman = amounts.UnroundedPayableToman,
+            roundingToman = amounts.RoundingToman,
+            collectibleToman = amounts.CollectibleToman,
+            surchargeToman = bill.SurchargeToman,
+            timeGrossToman = amounts.TimeGrossToman,
+            buffetGrossToman = amounts.BuffetGrossToman,
+            servicesGrossToman = amounts.ServicesGrossToman,
+            saleLines = sale is null ? Array.Empty<SaleLineDto>() : OpenSaleMapper.ToDtos(sale.Lines),
+            frozenAtUtc = bill.FrozenAtUtc,
+            source = bill.Source,
+            stopReason = bill.StopReason,
+            segments,
+            linkedCustomer = CustomerMapper.ToLinkedChip(session.Customer),
+        };
     }
 
     public async Task<object> GetBillDetailAsync(Guid sessionId, CancellationToken ct)

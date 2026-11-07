@@ -233,36 +233,100 @@ function renderCustomerChip(linked) {
   displayedLinkedCustomer = linked || null;
   const chip = document.getElementById("customerChip");
   const walletBox = document.getElementById("walletActions");
+  const balanceEl = document.getElementById("walletBalance");
   if (!linked) {
     chip.classList.add("hidden");
     chip.textContent = "";
     walletBox.classList.add("hidden");
+    if (balanceEl) balanceEl.textContent = "";
     return;
   }
   const code = linked.membershipCode ? ` · کارت ${linked.membershipCode}` : "";
   chip.textContent = `پیوسته: ${linked.name} — ${linked.mobile}${code}`;
   chip.classList.remove("hidden");
   walletBox.classList.remove("hidden");
+  refreshWalletBalance().catch(() => {});
 }
 
-document.getElementById("walletTopUpCash").onclick = async () => {
+async function refreshWalletBalance() {
   const linked = displayedLinkedCustomer;
+  const el = document.getElementById("walletBalance");
+  if (!linked || !el) return;
+  const w = await api(`/api/operator/members/customers/${linked.id}/wallet`);
+  el.textContent = `کیف پول: واقعی ${w.realToman} · هدیه ${w.giftToman} · کل ${w.spendableToman}`;
+}
+
+async function resolveLinkedCustomerForWallet() {
+  if (displayedLinkedCustomer) return displayedLinkedCustomer;
+  if (billTarget === "buffet-only" && buffetOpenSaleId) {
+    const sale = await api(`/api/operator/buffet-only/${buffetOpenSaleId}`);
+    return sale.linkedCustomer || null;
+  }
+  if (selectedSessionId) {
+    const sale = await api(`/api/operator/sessions/${selectedSessionId}/sale`);
+    return sale.linkedCustomer || null;
+  }
+  return null;
+}
+
+async function refreshBillPreview() {
+  if (!paymentDraft.length) return;
+  const payments = paymentDraft.map((line) => ({
+    method: line.method,
+    amountToman: line.amountToman,
+    destinationCardId: line.destinationCardId,
+    reference: line.reference,
+  }));
+  try {
+    if (billTarget === "buffet-only" && buffetOpenSaleId) {
+      const res = await api(`/api/operator/buffet-only/${buffetOpenSaleId}/bill/preview`, {
+        method: "POST",
+        body: JSON.stringify({ payments }),
+      });
+      renderBuffetOnlyCheckoutBill(res);
+      return;
+    }
+    if (selectedSessionId) {
+      const bill = await api(`/api/operator/sessions/${selectedSessionId}/bill/preview`, {
+        method: "POST",
+        body: JSON.stringify({ payments }),
+      });
+      renderBill(bill);
+    }
+  } catch (_) {}
+}
+
+async function walletTopUp(method) {
+  const linked = await resolveLinkedCustomerForWallet();
   if (!linked) {
     showError("عضوی پیوسته نیست.");
     return;
   }
   const raw = window.prompt("مبلغ شارژ (تومان)", "50000");
   if (!raw) return;
-  const amountToman = Number(raw);
+  const amountToman = Number(String(raw).replace(/,/g, ""));
   if (!Number.isFinite(amountToman) || amountToman <= 0) {
     showError("مبلغ نامعتبر است.");
     return;
   }
+  const body = { method, amountToman };
+  if (method === "CardToCard") {
+    body.destinationCardId = window.prompt("کارت مقصد", destinationCards[0]?.id || "") || undefined;
+    body.reference = window.prompt("ارجاع", "") || undefined;
+  }
   await api(`/api/operator/members/customers/${linked.id}/wallet/top-up`, {
     method: "POST",
-    body: JSON.stringify({ method: "Cash", amountToman }),
+    body: JSON.stringify(body),
   });
-};
+  renderCustomerChip(linked);
+}
+
+const walletTopUpCashBtn = document.getElementById("walletTopUpCash");
+if (walletTopUpCashBtn) walletTopUpCashBtn.onclick = () => walletTopUp("Cash").catch(() => {});
+const walletTopUpCardBtn = document.getElementById("walletTopUpCard");
+if (walletTopUpCardBtn) walletTopUpCardBtn.onclick = () => walletTopUp("CardReader").catch(() => {});
+const walletTopUpC2cBtn = document.getElementById("walletTopUpC2c");
+if (walletTopUpC2cBtn) walletTopUpC2cBtn.onclick = () => walletTopUp("CardToCard").catch(() => {});
 
 async function linkCustomer(customerId) {
   const ctx = customerLinkContext();
@@ -374,15 +438,19 @@ document.getElementById("loginBtn").onclick = async () => {
     currentRole = user.role;
     document.getElementById("login").classList.add("hidden");
     document.getElementById("app").classList.remove("hidden");
+    const mgr = document.getElementById("managerPanel");
+    if (mgr) mgr.classList.toggle("hidden", currentRole !== "Manager" && currentRole !== "Owner");
     destinationCards = (await api("/api/operator/destination-cards")) || [];
     await refreshGrid();
     await refreshLowStock();
     await refreshManualSettle();
     await refreshPendingC2c();
+    await refreshPendingWalletTopups();
     setInterval(async () => {
       await refreshGrid();
       await refreshLowStock();
       await refreshPendingC2c();
+      await refreshPendingWalletTopups();
     }, 10000);
   } catch (e) {
     document.getElementById("loginError").textContent = String(e.message);
@@ -400,7 +468,12 @@ document.getElementById("buffetCloseBtn").onclick = () => {
 document.getElementById("buffetCheckoutBtn").onclick = async () => {
   const bill = await api(`/api/operator/buffet-only/${buffetOpenSaleId}/checkout`, { method: "POST" });
   billTarget = "buffet-only";
+  selectedSessionId = null;
   document.getElementById("bill").classList.remove("hidden");
+  let sale = null;
+  try {
+    sale = await api(`/api/operator/buffet-only/${buffetOpenSaleId}`);
+  } catch (_) {}
   renderBill({
     collectibleToman: bill.collectibleToman,
     unroundedPayableToman: bill.unroundedPayableToman,
@@ -408,8 +481,9 @@ document.getElementById("buffetCheckoutBtn").onclick = async () => {
     timeGrossToman: bill.timeGrossToman,
     buffetGrossToman: bill.buffetGrossToman,
     servicesGrossToman: bill.servicesGrossToman,
-    saleLines: [],
+    saleLines: sale?.lines ?? [],
     segments: [],
+    linkedCustomer: sale?.linkedCustomer,
   });
   paymentDraft = [];
   renderPaymentLines();
@@ -600,10 +674,14 @@ function renderPaymentLines() {
     del.onclick = () => {
       paymentDraft.splice(idx, 1);
       renderPaymentLines();
+      refreshBillPreview().catch(() => {});
     };
     row.appendChild(del);
     box.appendChild(row);
   });
+  if (paymentDraft.length > 0) {
+    refreshBillPreview().catch(() => {});
+  }
 }
 
 async function openBillScreen(sessionId) {
@@ -719,11 +797,13 @@ document.getElementById("addC2cLineBtn").onclick = () => {
   renderPaymentLines();
 };
 
-document.getElementById("addWalletLineBtn").onclick = () => {
-  if (!displayedLinkedCustomer) {
+document.getElementById("addWalletLineBtn").onclick = async () => {
+  const linked = await resolveLinkedCustomerForWallet();
+  if (!linked) {
     showError("برای پرداخت کیف پول، عضو را پیوند دهید.");
     return;
   }
+  renderCustomerChip(linked);
   const amountToman = promptAmount("مبلغ کیف پول");
   if (amountToman == null || Number.isNaN(amountToman)) return;
   paymentDraft.push({ method: "Wallet", amountToman });
@@ -790,3 +870,131 @@ document.getElementById("voidInvoiceBtn").onclick = async () => {
   await api(`/api/operator/invoices/${n}/void`, { method: "POST", body: JSON.stringify({ reason }) });
   document.getElementById("invoiceDetail").textContent = "باطل شد.";
 };
+
+async function refreshPendingWalletTopups() {
+  const ul = document.getElementById("pendingWalletList");
+  if (!ul) return;
+  const list = (await api("/api/operator/members/wallet/pending")) || [];
+  ul.replaceChildren();
+  for (const row of list) {
+    const li = document.createElement("li");
+    li.textContent = `#${row.id} — ${row.amountToman}`;
+    const ok = document.createElement("button");
+    ok.type = "button";
+    ok.textContent = "تأیید";
+    ok.onclick = async () => {
+      await api(`/api/operator/members/wallet/pending/${row.id}/confirm`, { method: "POST" });
+      await refreshPendingWalletTopups();
+    };
+    const no = document.createElement("button");
+    no.type = "button";
+    no.textContent = "رد";
+    no.onclick = async () => {
+      await api(`/api/operator/members/wallet/pending/${row.id}/reject`, { method: "POST" });
+      await refreshPendingWalletTopups();
+    };
+    li.append(ok, no);
+    ul.appendChild(li);
+  }
+}
+
+const bindClick = (id, fn) => {
+  const el = document.getElementById(id);
+  if (el) el.onclick = fn;
+};
+
+bindClick("prepaidDurationBtn", async () => {
+  if (!selectedSessionId) return;
+  const minutes = Number(window.prompt("دقیقه", "60"));
+  if (!Number.isFinite(minutes) || minutes <= 0) return;
+  await api(`/api/operator/sessions/${selectedSessionId}/prepaid/duration`, {
+    method: "POST",
+    body: JSON.stringify({ minutes }),
+  });
+});
+
+bindClick("prepaidAmountBtn", async () => {
+  if (!selectedSessionId) return;
+  const amountToman = Number(String(window.prompt("مبلغ", "55000")).replace(/,/g, ""));
+  if (!Number.isFinite(amountToman) || amountToman <= 0) return;
+  await api(`/api/operator/sessions/${selectedSessionId}/prepaid/amount`, {
+    method: "POST",
+    body: JSON.stringify({ amountToman }),
+  });
+});
+
+bindClick("mgrGiftBtn", async () => {
+  const linked = await resolveLinkedCustomerForWallet();
+  if (!linked) return showError("عضو پیوسته نیست.");
+  await api(`/api/operator/members/customers/${linked.id}/wallet/gift`, {
+    method: "POST",
+    body: JSON.stringify({ giftToman: Number(window.prompt("هدیه", "10000")) }),
+  });
+  await refreshWalletBalance();
+});
+
+bindClick("mgrOpeningBtn", async () => {
+  const linked = await resolveLinkedCustomerForWallet();
+  if (!linked) return showError("عضو پیوسته نیست.");
+  await api(`/api/operator/members/customers/${linked.id}/opening-balance`, {
+    method: "POST",
+    body: JSON.stringify({
+      realToman: Number(window.prompt("واقعی", "0") || "0"),
+      giftToman: Number(window.prompt("هدیه", "0") || "0"),
+      debtToman: Number(window.prompt("بدهی", "0") || "0") || undefined,
+      lifetimeHours: Number(window.prompt("ساعت", "0") || "0") || undefined,
+    }),
+  });
+  await refreshWalletBalance();
+});
+
+bindClick("mgrFloorBtn", async () => {
+  const raw = window.prompt("سقف نسیه (منفی)", "-50000");
+  await api("/api/operator/members/settings/debt-floor", {
+    method: "PUT",
+    body: JSON.stringify({ floorToman: raw === "" ? null : Number(raw) }),
+  });
+});
+
+bindClick("mgrBirthdayBtn", async () => {
+  await api("/api/operator/members/settings/birthday", {
+    method: "PUT",
+    body: JSON.stringify({ percent: 10, windowKind: "birth_month", windowDays: 1, anchor: "on_and_after" }),
+  });
+});
+
+bindClick("mgrCustBirthdayBtn", async () => {
+  const linked = await resolveLinkedCustomerForWallet();
+  if (!linked) return;
+  await api(`/api/operator/members/customers/${linked.id}/birthday`, {
+    method: "PUT",
+    body: JSON.stringify({ year: 1380, month: 1, day: 1 }),
+  });
+});
+
+bindClick("mgrPackageBtn", async () => {
+  const id = window.prompt("شناسه بسته", "pkg120");
+  if (!id) return;
+  await api(`/api/operator/members/packages/${id}`, {
+    method: "PUT",
+    body: JSON.stringify({
+      name: "۲ ساعت",
+      priceToman: 220_000,
+      minutes: 120,
+      expiresAfterDays: null,
+      allowedGroupIdsJson: null,
+    }),
+  });
+});
+
+bindClick("mgrSellPackageBtn", async () => {
+  const linked = await resolveLinkedCustomerForWallet();
+  if (!linked) return;
+  await api(`/api/operator/members/customers/${linked.id}/packages/sell`, {
+    method: "POST",
+    body: JSON.stringify({
+      productId: window.prompt("شناسه", "pkg120"),
+      payments: [{ method: "Cash", amountToman: 220_000 }],
+    }),
+  });
+});

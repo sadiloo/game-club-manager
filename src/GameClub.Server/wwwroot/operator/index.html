@@ -60,7 +60,10 @@
       <h2>مشتری</h2>
       <div id="customerChip" class="hidden"></div>
       <div id="walletActions" class="hidden">
+        <p id="walletBalance"></p>
         <button type="button" id="walletTopUpCash">شارژ نقدی کیف پول</button>
+        <button type="button" id="walletTopUpCard">شارژ کارتخوان</button>
+        <button type="button" id="walletTopUpC2c">شارژ کارت‌به‌کارت</button>
       </div>
       <label>جستجو (موبایل، نام، کارت)
         <input id="customerSearch" type="search" autocomplete="off" placeholder="0912… یا نام یا کد عضویت" />
@@ -79,6 +82,9 @@
     <section id="sessionActions" class="panel hidden">
       <h2>جلسه</h2>
       <p id="sessionLabel"></p>
+      <p id="prepaidStatus"></p>
+      <button id="prepaidDurationBtn" type="button">رزرو زمان (دقیقه)</button>
+      <button id="prepaidAmountBtn" type="button">رزرو مبلغ</button>
       <button id="pauseBtn" type="button">توقف</button>
       <button id="resumeBtn" type="button">ادامه</button>
       <label>بازیکن
@@ -98,6 +104,23 @@
     <section id="pendingC2cPanel" class="panel">
       <h2>کارت‌به‌کارت در انتظار</h2>
       <ul id="pendingC2cList"></ul>
+    </section>
+
+    <section id="pendingWalletPanel" class="panel">
+      <h2>شارژ کیف پول در انتظار</h2>
+      <ul id="pendingWalletList"></ul>
+    </section>
+
+    <section id="managerPanel" class="panel hidden">
+      <h2>مدیر</h2>
+      <button id="mgrGiftBtn" type="button">اعتبار هدیه</button>
+      <button id="mgrOpeningBtn" type="button">مانده افتتاحیه</button>
+      <button id="mgrFloorBtn" type="button">سقف نسیه</button>
+      <button id="mgrLadderBtn" type="button">جدول سطح‌ها (JSON)</button>
+      <button id="mgrBirthdayBtn" type="button">تنظیم تولد</button>
+      <button id="mgrCustBirthdayBtn" type="button">تاریخ تولد عضو</button>
+      <button id="mgrPackageBtn" type="button">تعریف بسته</button>
+      <button id="mgrSellPackageBtn" type="button">فروش بسته</button>
     </section>
 
     <section id="bill" class="panel hidden">

@@ -53,18 +53,7 @@ public static class MemberWalletMapper
         {
             pocket = new WalletPocket(real, pocket.GiftToman, pocket.BasisRealToman, pocket.BasisGiftToman, pocket.PositiveDrawnToman, pocket.GiftDrawnFromBasisToman);
             pocket = WalletPocketMath.Add(pocket, realToman, 0);
-            if (pocket.RealToman > 0 || pocket.GiftToman > 0)
-            {
-                var posReal = pocket.RealToman > 0 ? pocket.RealToman : 0;
-                var posGift = pocket.GiftToman > 0 ? pocket.GiftToman : 0;
-                pocket = new WalletPocket(
-                    pocket.RealToman,
-                    pocket.GiftToman,
-                    posReal,
-                    posGift,
-                    0,
-                    0);
-            }
+            pocket = RefreshSpendBasis(pocket);
         }
         else
         {
@@ -93,14 +82,25 @@ public static class MemberWalletMapper
         }
 
         pocket = WalletPocketMath.Add(pocket, 0, giftToman);
-        var posReal = pocket.RealToman > 0 ? pocket.RealToman : 0;
-        var posGift = pocket.GiftToman > 0 ? pocket.GiftToman : 0;
-        if (posReal + posGift > 0 && pocket.BasisRealToman + pocket.BasisGiftToman == 0)
+        return RefreshSpendBasis(pocket);
+    }
+
+    /// <summary>Recompute gift/real split basis after a top-up so later gift credit participates in proportional spend.</summary>
+    public static WalletPocket RefreshSpendBasis(WalletPocket pocket)
+    {
+        if (pocket.GiftToman < 0)
         {
-            pocket = new WalletPocket(pocket.RealToman, pocket.GiftToman, posReal, posGift, pocket.PositiveDrawnToman, pocket.GiftDrawnFromBasisToman);
+            return pocket;
         }
 
-        return pocket;
+        var posReal = pocket.RealToman > 0 ? pocket.RealToman : 0;
+        var posGift = pocket.GiftToman > 0 ? pocket.GiftToman : 0;
+        if (posReal + posGift == 0)
+        {
+            return new WalletPocket(pocket.RealToman, pocket.GiftToman, 0, 0, 0, 0);
+        }
+
+        return new WalletPocket(pocket.RealToman, pocket.GiftToman, posReal, posGift, 0, 0);
     }
 }
 

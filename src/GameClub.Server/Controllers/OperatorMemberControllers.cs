@@ -83,10 +83,49 @@ public sealed class OperatorMemberController(
 
     public sealed record PackageSellRequest(string ProductId, IReadOnlyList<OperatorBillService.PaymentInput> Payments);
 
+    [HttpGet("packages")]
+    public async Task<IActionResult> ListPackages(CancellationToken ct)
+        => Ok(await packages.ListProductsAsync(ct));
+
+    public sealed record PackageProductBody(string Name, long PriceToman, long Minutes, int? ExpiresAfterDays, string? AllowedGroupIdsJson);
+
+    [HttpPut("packages/{productId}")]
+    public async Task<IActionResult> UpsertPackage(string productId, PackageProductBody body, CancellationToken ct)
+    {
+        await packages.UpsertProductAsync(productId, body.Name, body.PriceToman, body.Minutes, body.ExpiresAfterDays, body.AllowedGroupIdsJson, ct);
+        return NoContent();
+    }
+
     [HttpPost("customers/{customerId:guid}/packages/sell")]
     public async Task<IActionResult> SellPackage(Guid customerId, PackageSellRequest body, CancellationToken ct)
     {
         await packages.SellPackageAsync(customerId, body.ProductId, body.Payments, ct);
+        return NoContent();
+    }
+
+    [HttpGet("wallet/pending")]
+    public async Task<IActionResult> ListPendingWalletTopUps(CancellationToken ct)
+        => Ok(await wallet.ListPendingTopUpsAsync(ct));
+
+    [HttpGet("settings/birthday")]
+    public async Task<IActionResult> GetBirthdaySettings(CancellationToken ct)
+        => Ok(await wallet.GetBirthdaySettingsAsync(ct));
+
+    public sealed record BirthdaySettingsBody(int Percent, string WindowKind, int WindowDays, string Anchor);
+
+    [HttpPut("settings/birthday")]
+    public async Task<IActionResult> BirthdaySettings(BirthdaySettingsBody body, CancellationToken ct)
+    {
+        await wallet.UpdateBirthdaySettingsAsync(body.Percent, body.WindowKind, body.WindowDays, body.Anchor, ct);
+        return NoContent();
+    }
+
+    public sealed record CustomerBirthdayBody(int Year, int Month, int Day);
+
+    [HttpPut("customers/{customerId:guid}/birthday")]
+    public async Task<IActionResult> SetCustomerBirthday(Guid customerId, CustomerBirthdayBody body, CancellationToken ct)
+    {
+        await wallet.SetCustomerBirthdayAsync(customerId, body.Year, body.Month, body.Day, ct);
         return NoContent();
     }
 }

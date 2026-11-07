@@ -39,6 +39,7 @@ public partial class Program
         builder.Services.AddScoped<OperatorMemberWalletService>();
         builder.Services.AddScoped<OperatorMemberBillingService>();
         builder.Services.AddScoped<OperatorPackageService>();
+        builder.Services.AddScoped<OperatorPrepaidService>();
         builder.Services.AddScoped<IDeadPcMonitor, DeadPcMonitor>();
         builder.Services.AddHostedService<DeadPcSweepBackgroundService>();
 

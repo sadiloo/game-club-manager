@@ -451,6 +451,41 @@ public sealed class OperatorBuffetSaleService(
         }, ct);
     }
 
+    public async Task<object> PreviewBuffetOnlyBillAsync(
+        Guid openSaleId,
+        IReadOnlyList<OperatorBillService.PaymentInput> payments,
+        CancellationToken ct)
+    {
+        var sale = await db.OpenSales.AsNoTracking()
+            .Include(o => o.Lines).ThenInclude(l => l.CatalogItem)
+            .Include(o => o.PendingBill)
+            .Include(o => o.Customer)
+            .FirstOrDefaultAsync(o => o.Id == openSaleId && o.IsBuffetOnly, ct)
+            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Buffet-only sale not found.");
+        var bill = sale.PendingBill
+            ?? throw new ApiException(StatusCodes.Status409Conflict, "no_bill", "No bill for this sale.");
+        var tenders = payments.Select(p => new Tender(
+            OperatorPaymentMethods.Parse(p.Method),
+            p.AmountToman,
+            OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet ? sale.CustomerId?.ToString() : null)).ToList();
+        var amounts = await calculator.ComputeBuffetOnlyAsync(sale.Lines, sale.CustomerId, tenders, ct);
+        return new
+        {
+            openSaleId = sale.Id,
+            lines = OpenSaleMapper.ToDtos(sale.Lines),
+            linkedCustomer = CustomerMapper.ToLinkedChip(sale.Customer),
+            bill = new
+            {
+                unroundedPayableToman = amounts.UnroundedPayableToman,
+                roundingToman = amounts.RoundingToman,
+                collectibleToman = amounts.CollectibleToman,
+                timeGrossToman = amounts.TimeGrossToman,
+                buffetGrossToman = amounts.BuffetGrossToman,
+                servicesGrossToman = amounts.ServicesGrossToman,
+            },
+        };
+    }
+
     public async Task<object> GetBuffetOnlyBillAsync(Guid openSaleId, CancellationToken ct)
     {
         var sale = await db.OpenSales.AsNoTracking()

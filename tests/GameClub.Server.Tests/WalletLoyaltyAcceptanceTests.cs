@@ -151,15 +151,13 @@ public sealed class WalletLoyaltyAcceptanceTests(GameClubWebApplicationFactory f
         await mgr.PostAsync($"/api/operator/sessions/{sessionId}/bill/open", null);
         var bill = await mgr.GetFromJsonAsync<JsonElement>($"/api/operator/sessions/{sessionId}/bill");
         var collectible = bill.GetProperty("collectibleToman").GetInt64();
-        await mgr.PostAsJsonAsync($"/api/operator/sessions/{sessionId}/bill/confirm", new
-        {
-            payments = new[] { new { method = "Cash", amountToman = collectible } },
-        });
+        Assert.Equal(0, collectible);
+        await mgr.PostAsJsonAsync($"/api/operator/sessions/{sessionId}/bill/confirm", new { payments = Array.Empty<object>() });
         using (var scope = factory.Services.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
             var remain = await db.CustomerPackages.Where(p => p.CustomerId == customerId).Select(p => p.RemainingMinutes).SingleAsync();
-            Assert.True(remain < 120);
+            Assert.Equal(90, remain);
         }
     }
 
