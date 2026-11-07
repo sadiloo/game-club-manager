@@ -46,6 +46,11 @@ public sealed class OperatorPrepaidService(
 
     public async Task<object> StartAmountAsync(Guid sessionId, long amountToman, CancellationToken ct)
     {
+        if (amountToman <= 0)
+        {
+            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_amount", "Prepaid amount must be positive.");
+        }
+
         var session = await LoadOpenConsoleSessionAsync(sessionId, ct);
         if (session.PrepaidKind != PrepaidSessionKind.None)
         {
@@ -73,6 +78,20 @@ public sealed class OperatorPrepaidService(
             throw new ApiException(StatusCodes.Status400BadRequest, "billing_error", ex.Message);
         }
 
+        var seg0 = session.Segments.OrderBy(s => s.StartUtc).First();
+        var opening = RateResolver.Resolve(snapshot.Card, SpecialDayCalendar.Empty, start, seg0.GroupId, seg0.Mode, seg0.PlayerCount);
+        var policy = BillingPolicy.Default;
+        var oneMinute = MoneyMath.ChargeForMinutes(opening.HourlyRateToman, policy.GranularityMinutes, policy.Remainder);
+        if (amountToman < oneMinute)
+        {
+            throw new ApiException(StatusCodes.Status400BadRequest, "below_minimum", "Amount is below the tariff minimum play time.");
+        }
+
+        if (plan.GrantedActiveSeconds <= 0)
+        {
+            throw new ApiException(StatusCodes.Status400BadRequest, "below_minimum", "Amount is below the tariff minimum play time.");
+        }
+
         session.PrepaidKind = PrepaidSessionKind.Amount;
         session.PrepaidBookedActiveSeconds = plan.GrantedActiveSeconds;
         session.PrepaidAmountBudgetToman = amountToman;
@@ -86,6 +105,7 @@ public sealed class OperatorPrepaidService(
     {
         var session = await db.Sessions.AsNoTracking()
             .Include(s => s.Pauses)
+            .Include(s => s.Segments)
             .FirstOrDefaultAsync(s => s.Id == sessionId, ct)
             ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Session not found.");
         var active = await ActivePlaySecondsAsync(session, clock.UtcNow.UtcDateTime, ct);

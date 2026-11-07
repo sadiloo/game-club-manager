@@ -120,6 +120,19 @@ public sealed class OperatorMemberController(
         return NoContent();
     }
 
+    public sealed record DiscountCapBody(int MaxCombinedPercent);
+
+    [HttpGet("settings/discount-cap")]
+    public async Task<IActionResult> GetDiscountCap(CancellationToken ct)
+        => Ok(await wallet.GetCombinedDiscountCapAsync(ct));
+
+    [HttpPut("settings/discount-cap")]
+    public async Task<IActionResult> DiscountCap(DiscountCapBody body, CancellationToken ct)
+    {
+        await wallet.UpdateCombinedDiscountCapAsync(body.MaxCombinedPercent, ct);
+        return NoContent();
+    }
+
     public sealed record CustomerBirthdayBody(int Year, int Month, int Day);
 
     [HttpPut("customers/{customerId:guid}/birthday")]

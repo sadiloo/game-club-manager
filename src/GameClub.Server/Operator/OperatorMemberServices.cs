@@ -37,8 +37,32 @@ public sealed class OperatorMemberContext(AppDbContext db)
 
         row = new CustomerMemberEntity { CustomerId = customerId };
         db.CustomerMembers.Add(row);
-        await db.SaveChangesAsync(ct);
+        try
+        {
+            await db.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateException)
+        {
+            foreach (var entry in db.ChangeTracker.Entries<CustomerMemberEntity>().Where(e => e.State == EntityState.Added).ToList())
+            {
+                entry.State = EntityState.Detached;
+            }
+
+            row = await db.CustomerMembers.FirstAsync(m => m.CustomerId == customerId, ct);
+        }
+
         return row;
+    }
+
+    public async Task<CustomerMemberEntity> ReloadMemberForUpdateAsync(Guid customerId, CancellationToken ct)
+    {
+        _ = await EnsureMemberAsync(customerId, ct);
+        await db.Database.ExecuteSqlRawAsync(
+            """SELECT "CustomerId" FROM customer_members WHERE "CustomerId" = {0} FOR UPDATE""",
+            customerId);
+        var member = await db.CustomerMembers.FirstAsync(m => m.CustomerId == customerId, ct);
+        await db.Entry(member).ReloadAsync(ct);
+        return member;
     }
 
     public async Task<(CustomerMemberEntity? Member, IReadOnlyList<TimePackage> Packages)> LoadMemberStateAsync(Guid? customerId, CancellationToken ct)
@@ -128,7 +152,7 @@ public sealed class OperatorMemberWalletService(
             throw new ApiException(StatusCodes.Status400BadRequest, "invalid_method", "Invalid top-up method.");
         }
 
-        _ = await members.EnsureMemberAsync(customerId, ct);
+        await members.EnsureMemberAsync(customerId, ct);
         if (method == PaymentMethod.CardToCard)
         {
             db.PendingWalletTopUps.Add(new PendingWalletTopUpEntity
@@ -208,20 +232,28 @@ public sealed class OperatorMemberWalletService(
 
     public async Task RejectPendingTopUpAsync(long pendingId, CancellationToken ct)
     {
-        var pending = await db.PendingWalletTopUps.FirstOrDefaultAsync(p => p.Id == pendingId, ct)
+        _ = await db.PendingWalletTopUps.AsNoTracking().FirstOrDefaultAsync(p => p.Id == pendingId, ct)
             ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Pending top-up not found.");
-        if (pending.Status != PendingWalletTopUpStatus.Pending)
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        var updated = await db.PendingWalletTopUps
+            .Where(p => p.Id == pendingId && p.Status == PendingWalletTopUpStatus.Pending)
+            .ExecuteUpdateAsync(
+                s => s.SetProperty(p => p.Status, PendingWalletTopUpStatus.Rejected),
+                ct);
+        if (updated == 0)
         {
             throw new ApiException(StatusCodes.Status409Conflict, "not_pending", "Top-up is not pending.");
         }
 
+        var pending = await db.PendingWalletTopUps.AsNoTracking().FirstAsync(p => p.Id == pendingId, ct);
         var member = await db.CustomerMembers.AsNoTracking().FirstOrDefaultAsync(m => m.CustomerId == pending.CustomerId, ct);
         var spendableBefore = (member?.RealToman ?? 0) + (member?.GiftToman ?? 0);
-        pending.Status = PendingWalletTopUpStatus.Rejected;
         await audit.AppendAsync("wallet.topup.rejected", new { pendingId, spendableBefore }, ct);
         await db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
         if (member is not null)
         {
+            member = await db.CustomerMembers.AsNoTracking().FirstAsync(m => m.CustomerId == pending.CustomerId, ct);
             var spendableAfter = member.RealToman + member.GiftToman;
             if (spendableAfter != spendableBefore)
             {
@@ -267,11 +299,7 @@ public sealed class OperatorMemberWalletService(
     public async Task RecordOpeningBalanceAsync(Guid customerId, OpeningBalanceRequest body, CancellationToken ct)
     {
         EnsureManager();
-        var member = await members.EnsureMemberAsync(customerId, ct);
-        if (member.HasOpeningBalance)
-        {
-            throw new ApiException(StatusCodes.Status409Conflict, "opening_exists", "Opening balance already recorded.");
-        }
+        await members.EnsureMemberAsync(customerId, ct);
 
         if (body.GiftToman is < 0)
         {
@@ -288,82 +316,111 @@ public sealed class OperatorMemberWalletService(
             throw new ApiException(StatusCodes.Status400BadRequest, "invalid_opening", "Opening cannot include both real money and debt.");
         }
 
-        var before = new
+        var hasMoneyFields = body.RealToman is not null || body.GiftToman is not null || body.DebtToman is not null;
+        if (!hasMoneyFields && body.LifetimeHours is null && body.LevelName is null)
         {
-            member.RealToman,
-            member.GiftToman,
-            hours = member.LifetimePlayMinutes / 60,
-        };
-
-        var settings = await members.LoadSettingsAsync(ct);
-        var ladder = MemberSettingsMapper.LoadLadder(settings);
-        long hoursBefore = member.LifetimePlayMinutes / 60;
-        long hours = hoursBefore;
-        if (body.LifetimeHours is long h)
-        {
-            hours = h;
-            member.LifetimePlayMinutes = h * 60;
-        }
-        else if (body.LevelName is string levelName)
-        {
-            var row = ladder.Levels.FirstOrDefault(l => l.Name.Equals(levelName, StringComparison.Ordinal))
-                ?? throw new ApiException(StatusCodes.Status400BadRequest, "invalid_level", "Unknown level.");
-            hours = row.MinimumLifetimeHours;
-            member.LifetimePlayMinutes = hours * 60;
+            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_opening", "Enter opening amounts or play hours.");
         }
 
-        if (body.RealToman is long real)
+        await WithMemberWriteLockAsync(customerId, async (_, member, innerCt) =>
         {
-            member.RealToman = real;
-        }
-
-        if (body.GiftToman is long gift)
-        {
-            member.GiftToman = gift;
-        }
-
-        if (body.DebtToman is long debt && debt > 0)
-        {
-            member.RealToman = -debt;
-        }
-
-        var pocket = MemberWalletMapper.RefreshSpendBasis(MemberWalletMapper.ToPocket(member));
-        MemberWalletMapper.ApplyPocket(member, pocket);
-        member.HasOpeningBalance = true;
-
-        var ledgerReal = member.RealToman;
-        var ledgerGift = body.GiftToman ?? 0;
-        db.WalletLedger.Add(new WalletLedgerEntryEntity
-        {
-            CustomerId = customerId,
-            AtUtc = clock.UtcNow.UtcDateTime,
-            Kind = WalletLedgerKind.OpeningBalance,
-            RealDeltaToman = ledgerReal,
-            GiftDeltaToman = ledgerGift,
-            Label = "مانده‌ی افتتاحیه",
-            ActorUserId = op.UserId,
-        });
-
-        if (member.LifetimePlayMinutes > hoursBefore * 60)
-        {
-            db.LoyaltyHourLedger.Add(new LoyaltyHourLedgerEntity
+            if (member.HasOpeningBalance)
             {
-                CustomerId = customerId,
-                AtUtc = clock.UtcNow.UtcDateTime,
-                DeltaMinutes = member.LifetimePlayMinutes - hoursBefore * 60,
-                Reason = "opening_balance",
-                ActorUserId = op.UserId,
-            });
-        }
+                throw new ApiException(StatusCodes.Status409Conflict, "opening_exists", "Opening balance already recorded.");
+            }
 
-        var after = new
-        {
-            member.RealToman,
-            member.GiftToman,
-            hours = member.LifetimePlayMinutes / 60,
-        };
-        await audit.AppendAsync("member.opening_balance", new { customerId, before, after, body }, ct);
-        await db.SaveChangesAsync(ct);
+            var spendableBefore = member.RealToman + member.GiftToman;
+            if (!hasMoneyFields && spendableBefore != 0)
+            {
+                throw new ApiException(StatusCodes.Status400BadRequest, "invalid_opening", "Enter opening wallet amounts.");
+            }
+
+            var before = new
+            {
+                member.RealToman,
+                member.GiftToman,
+                hours = member.LifetimePlayMinutes / 60,
+            };
+
+            var settings = await members.LoadSettingsAsync(innerCt);
+            var ladder = MemberSettingsMapper.LoadLadder(settings);
+            long hoursBefore = member.LifetimePlayMinutes / 60;
+            if (body.LifetimeHours is long h)
+            {
+                member.LifetimePlayMinutes = h * 60;
+            }
+            else if (body.LevelName is string levelName)
+            {
+                var row = ladder.Levels.FirstOrDefault(l => l.Name.Equals(levelName, StringComparison.Ordinal))
+                    ?? throw new ApiException(StatusCodes.Status400BadRequest, "invalid_level", "Unknown level.");
+                member.LifetimePlayMinutes = row.MinimumLifetimeHours * 60;
+            }
+
+            var realBefore = member.RealToman;
+            var giftBefore = member.GiftToman;
+            long ledgerReal;
+            long ledgerGift = body.GiftToman ?? 0;
+            if (body.DebtToman is long debt && debt > 0)
+            {
+                member.RealToman = -debt;
+                ledgerReal = -debt;
+            }
+            else
+            {
+                if (body.RealToman is long real)
+                {
+                    member.RealToman = MoneyMath.CheckedAdd(realBefore, real);
+                    ledgerReal = real;
+                }
+                else
+                {
+                    ledgerReal = 0;
+                }
+
+                if (body.GiftToman is long gift)
+                {
+                    member.GiftToman = MoneyMath.CheckedAdd(giftBefore, gift);
+                }
+            }
+
+            var pocket = MemberWalletMapper.RefreshSpendBasis(MemberWalletMapper.ToPocket(member));
+            MemberWalletMapper.ApplyPocket(member, pocket);
+            member.HasOpeningBalance = true;
+
+            if (ledgerReal != 0 || ledgerGift != 0)
+            {
+                db.WalletLedger.Add(new WalletLedgerEntryEntity
+                {
+                    CustomerId = customerId,
+                    AtUtc = clock.UtcNow.UtcDateTime,
+                    Kind = WalletLedgerKind.OpeningBalance,
+                    RealDeltaToman = ledgerReal,
+                    GiftDeltaToman = ledgerGift,
+                    Label = "مانده‌ی افتتاحیه",
+                    ActorUserId = op.UserId,
+                });
+            }
+
+            if (member.LifetimePlayMinutes > hoursBefore * 60)
+            {
+                db.LoyaltyHourLedger.Add(new LoyaltyHourLedgerEntity
+                {
+                    CustomerId = customerId,
+                    AtUtc = clock.UtcNow.UtcDateTime,
+                    DeltaMinutes = member.LifetimePlayMinutes - hoursBefore * 60,
+                    Reason = "opening_balance",
+                    ActorUserId = op.UserId,
+                });
+            }
+
+            var after = new
+            {
+                member.RealToman,
+                member.GiftToman,
+                hours = member.LifetimePlayMinutes / 60,
+            };
+            await audit.AppendAsync("member.opening_balance", new { customerId, before, after, body }, innerCt);
+        }, ct);
     }
 
     private async Task WithMemberWriteLockAsync(
@@ -378,6 +435,7 @@ public sealed class OperatorMemberWalletService(
                 """SELECT "CustomerId" FROM customer_members WHERE "CustomerId" = {0} FOR UPDATE""",
                 customerId);
             var member = await db.CustomerMembers.FirstAsync(m => m.CustomerId == customerId, ct);
+            await db.Entry(member).ReloadAsync(ct);
             await action(db, member, ct);
             await db.SaveChangesAsync(ct);
         }
@@ -437,6 +495,26 @@ public sealed class OperatorMemberWalletService(
         await db.SaveChangesAsync(ct);
     }
 
+    public async Task UpdateCombinedDiscountCapAsync(int maxCombinedPercent, CancellationToken ct)
+    {
+        EnsureManager();
+        if (maxCombinedPercent is < 0 or > 100)
+        {
+            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_cap", "Combined discount cap must be between 0 and 100.");
+        }
+
+        var settings = await db.BranchMemberSettings.FirstAsync(ct);
+        settings.MaxCombinedDiscountPercent = maxCombinedPercent;
+        await audit.AppendAsync("settings.discount_cap", new { maxCombinedPercent }, ct);
+        await db.SaveChangesAsync(ct);
+    }
+
+    public async Task<object> GetCombinedDiscountCapAsync(CancellationToken ct)
+    {
+        var settings = await members.LoadSettingsAsync(ct);
+        return new { maxCombinedPercent = settings.MaxCombinedDiscountPercent };
+    }
+
     public async Task SetCustomerBirthdayAsync(Guid customerId, int year, int month, int day, CancellationToken ct)
     {
         EnsureManager();
@@ -492,7 +570,7 @@ public sealed class OperatorMemberBillingService(AppDbContext db)
 {
     public async Task ApplyWalletPaymentsAsync(
         Guid customerId,
-        CustomerMemberEntity member,
+        CustomerMemberEntity _,
         AllocationResult allocation,
         Guid invoiceId,
         CancellationToken ct)
@@ -502,16 +580,11 @@ public sealed class OperatorMemberBillingService(AppDbContext db)
             throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", "Wallet allocation failed.");
         }
 
+        var member = await db.CustomerMembers.FirstAsync(m => m.CustomerId == customerId, ct);
         await db.Database.ExecuteSqlRawAsync(
             """SELECT "CustomerId" FROM customer_members WHERE "CustomerId" = {0} FOR UPDATE""",
             customerId);
-
-        var walletResult = allocation.Tenders.FirstOrDefault(t => t.Method == PaymentMethod.Wallet && t.Accepted);
-        var remaining = allocation.RemainingWallets.FirstOrDefault(w => w.MemberId == customerId.ToString());
-        if (remaining is not null)
-        {
-            MemberWalletMapper.ApplyPocket(member, remaining.Pocket);
-        }
+        await db.Entry(member).ReloadAsync(ct);
 
         long realDrawn = 0;
         long giftDrawn = 0;
@@ -523,6 +596,10 @@ public sealed class OperatorMemberBillingService(AppDbContext db)
 
         if (realDrawn != 0 || giftDrawn != 0)
         {
+            var pocket = MemberWalletMapper.ToPocket(member);
+            pocket = WalletPocketMath.Add(pocket, -realDrawn, -giftDrawn);
+            pocket = MemberWalletMapper.RefreshSpendBasis(pocket);
+            MemberWalletMapper.ApplyPocket(member, pocket);
             db.WalletLedger.Add(new WalletLedgerEntryEntity
             {
                 CustomerId = customerId,
@@ -654,6 +731,7 @@ public sealed class OperatorPackageService(
     AppDbContext db,
     AuditService audit,
     OperatorMemberContext members,
+    OperatorContext op,
     IClock clock)
 {
     public async Task SellPackageAsync(Guid customerId, string productId, IReadOnlyList<OperatorBillService.PaymentInput> payments, CancellationToken ct)
@@ -662,26 +740,75 @@ public sealed class OperatorPackageService(
             ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Package not found.");
 
         await members.EnsureMemberAsync(customerId, ct);
+        if (payments.Any(p => OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet))
+        {
+            await members.ReloadMemberForUpdateAsync(customerId, ct);
+        }
+
+        var member = await db.CustomerMembers.FirstAsync(m => m.CustomerId == customerId, ct);
         var tenders = payments.Select(p => new Tender(OperatorPaymentMethods.Parse(p.Method), p.AmountToman, customerId.ToString())).ToList();
         var split = PaymentSplitter.Split(product.PriceToman, tenders, [
-            MemberWalletMapper.ToMemberWallet(customerId, await members.EnsureMemberAsync(customerId, ct)),
+            MemberWalletMapper.ToMemberWallet(customerId, member),
         ]);
         if (!split.IsValid)
         {
             throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", split.Errors.FirstOrDefault()?.Message ?? "Invalid payment.");
         }
 
-        var member = await db.CustomerMembers.FirstAsync(m => m.CustomerId == customerId, ct);
+        var invoiceId = Guid.NewGuid();
+        var number = await NextInvoiceNumberAsync(ct);
+        var invoice = new InvoiceEntity
+        {
+            Id = invoiceId,
+            Number = number,
+            CustomerId = customerId,
+            TimeGrossToman = 0,
+            BuffetGrossToman = product.PriceToman,
+            ServicesGrossToman = 0,
+            UnroundedPayableToman = product.PriceToman,
+            RoundingToman = 0,
+            CollectibleToman = product.PriceToman,
+            IssuedAtUtc = clock.UtcNow.UtcDateTime,
+            BilledToUtc = clock.UtcNow.UtcDateTime,
+            Status = "confirmed",
+        };
+        foreach (var pay in payments)
+        {
+            var method = OperatorPaymentMethods.Parse(pay.Method);
+            var splitLine = split.Tenders.FirstOrDefault(t => t.Method == method && t.AmountToman == pay.AmountToman && t.Accepted);
+            invoice.PaymentLines.Add(new PaymentLineEntity
+            {
+                Method = method,
+                AmountToman = pay.AmountToman,
+                ConfirmationStatus = PaymentConfirmationStatus.Settled,
+                WalletCustomerId = method == PaymentMethod.Wallet ? customerId : null,
+                WalletRealDrawnToman = splitLine?.RealDrawnToman ?? 0,
+                WalletGiftDrawnToman = splitLine?.GiftDrawnToman ?? 0,
+            });
+        }
+
+        db.Invoices.Add(invoice);
+
         var walletTender = split.Tenders.FirstOrDefault(t => t.Method == PaymentMethod.Wallet && t.Accepted);
         if (walletTender is not null)
         {
+            member = await members.ReloadMemberForUpdateAsync(customerId, ct);
             var pocket = MemberWalletMapper.ToPocket(member);
-            if (!pocket.TrySpend(walletTender.AmountToman, DebtPolicy.None, out var updated, out _, out _))
+            pocket = WalletPocketMath.Add(pocket, -walletTender.RealDrawnToman, -walletTender.GiftDrawnToman);
+            pocket = MemberWalletMapper.RefreshSpendBasis(pocket);
+            MemberWalletMapper.ApplyPocket(member, pocket);
+            db.WalletLedger.Add(new WalletLedgerEntryEntity
             {
-                throw new ApiException(StatusCodes.Status400BadRequest, "insufficient_wallet", "Insufficient wallet.");
-            }
-
-            MemberWalletMapper.ApplyPocket(member, updated);
+                CustomerId = customerId,
+                AtUtc = clock.UtcNow.UtcDateTime,
+                Kind = WalletLedgerKind.PackagePurchase,
+                RealDeltaToman = -walletTender.RealDrawnToman,
+                GiftDeltaToman = -walletTender.GiftDrawnToman,
+                Method = PaymentMethod.Wallet,
+                Label = "package",
+                InvoiceId = invoiceId,
+                ActorUserId = op.UserId,
+            });
         }
 
         var pkgId = Guid.NewGuid();
@@ -698,22 +825,32 @@ public sealed class OperatorPackageService(
                 : null,
         });
 
-        if (walletTender is not null)
-        {
-            db.WalletLedger.Add(new WalletLedgerEntryEntity
-            {
-                CustomerId = customerId,
-                AtUtc = clock.UtcNow.UtcDateTime,
-                Kind = WalletLedgerKind.PackagePurchase,
-                RealDeltaToman = -walletTender.RealDrawnToman,
-                GiftDeltaToman = -walletTender.GiftDrawnToman,
-                Label = "package",
-                ActorUserId = null,
-            });
-        }
-
-        await audit.AppendAsync("package.sold", new { customerId, productId, product.Minutes, pkgId }, ct);
+        await audit.AppendAsync("package.sold", new { customerId, productId, product.Minutes, pkgId, invoiceId, payments }, ct);
         await db.SaveChangesAsync(ct);
+    }
+
+    private async Task<long> NextInvoiceNumberAsync(CancellationToken ct)
+    {
+        await db.Database.OpenConnectionAsync(ct);
+        try
+        {
+            await using var cmd = db.Database.GetDbConnection().CreateCommand();
+            cmd.CommandText = "SELECT nextval('invoice_number_seq')";
+            var value = await cmd.ExecuteScalarAsync(ct);
+            return Convert.ToInt64(value);
+        }
+        finally
+        {
+            await db.Database.CloseConnectionAsync();
+        }
+    }
+
+    private void EnsureManager()
+    {
+        if (op.Role is not UserRole.Manager and not UserRole.Owner)
+        {
+            throw new ApiException(StatusCodes.Status403Forbidden, "forbidden", "Manager permission required.");
+        }
     }
 
     public async Task<IReadOnlyList<object>> ListProductsAsync(CancellationToken ct)
@@ -739,6 +876,7 @@ public sealed class OperatorPackageService(
         string? allowedGroupIdsJson,
         CancellationToken ct)
     {
+        EnsureManager();
         if (string.IsNullOrWhiteSpace(id))
         {
             throw new ApiException(StatusCodes.Status400BadRequest, "invalid_id", "Package id is required.");

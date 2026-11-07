@@ -65,6 +65,20 @@ namespace GameClub.Server.Data.Migrations
                 nullable: false,
                 defaultValue: 0L);
 
+            migrationBuilder.AddColumn<long>(
+                name: "LevelDiscountToman",
+                table: "invoices",
+                type: "bigint",
+                nullable: false,
+                defaultValue: 0L);
+
+            migrationBuilder.AddColumn<long>(
+                name: "BirthdayDiscountToman",
+                table: "invoices",
+                type: "bigint",
+                nullable: false,
+                defaultValue: 0L);
+
             migrationBuilder.CreateTable(
                 name: "branch_member_settings",
                 columns: table => new
@@ -77,7 +91,8 @@ namespace GameClub.Server.Data.Migrations
                     BirthdayWindowKind = table.Column<string>(type: "text", nullable: false),
                     BirthdayWindowDays = table.Column<int>(type: "integer", nullable: false),
                     BirthdayWindowAnchor = table.Column<string>(type: "text", nullable: false),
-                    PackageConsumptionOrder = table.Column<string>(type: "text", nullable: false)
+                    PackageConsumptionOrder = table.Column<string>(type: "text", nullable: false),
+                    MaxCombinedDiscountPercent = table.Column<int>(type: "integer", nullable: false, defaultValue: 100)
                 },
                 constraints: table =>
                 {

@@ -34,7 +34,7 @@ public static class MemberSettingsMapper
             "day_window" => BirthdayWindow.DaysOnAndAfter(row.BirthdayWindowDays),
             _ => BirthdayWindow.ExactDay,
         };
-        return new DiscountPolicy(DiscountPolicy.DefaultMaxCombinedPercent, birthday);
+        return new DiscountPolicy(row.MaxCombinedDiscountPercent, birthday);
     }
 
     public static AccountPolicy LoadAccountPolicy(BranchMemberSettingsEntity row)

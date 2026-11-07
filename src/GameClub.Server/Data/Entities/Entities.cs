@@ -219,6 +219,10 @@ public sealed class InvoiceEntity
     public InvoiceMemberEffectEntity? MemberEffect { get; set; }
 
     public long DiscountToman { get; set; }
+
+    public long LevelDiscountToman { get; set; }
+
+    public long BirthdayDiscountToman { get; set; }
 }
 
 public sealed class PendingBillEntity

@@ -49,6 +49,8 @@ public sealed class BranchMemberSettingsEntity
 
     /// <summary>packages_then_money | money_then_packages</summary>
     public string PackageConsumptionOrder { get; set; } = "packages_then_money";
+
+    public int MaxCombinedDiscountPercent { get; set; } = 100;
 }
 
 public sealed class CustomerMemberEntity

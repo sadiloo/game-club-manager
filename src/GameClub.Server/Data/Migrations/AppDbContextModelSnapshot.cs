@@ -79,6 +79,9 @@ namespace GameClub.Server.Data.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<int>("MaxCombinedDiscountPercent")
+                        .HasColumnType("integer");
+
                     b.Property<long?>("WalletDebtFloorToman")
                         .HasColumnType("bigint");
 
@@ -377,6 +380,12 @@ namespace GameClub.Server.Data.Migrations
                         .HasColumnType("uuid");
 
                     b.Property<long>("DiscountToman")
+                        .HasColumnType("bigint");
+
+                    b.Property<long>("BirthdayDiscountToman")
+                        .HasColumnType("bigint");
+
+                    b.Property<long>("LevelDiscountToman")
                         .HasColumnType("bigint");
 
                     b.Property<DateTime>("IssuedAtUtc")

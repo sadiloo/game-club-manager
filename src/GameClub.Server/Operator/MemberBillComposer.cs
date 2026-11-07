@@ -57,6 +57,11 @@ public sealed class MemberBillComposer
         }
         var buffet = OpenSaleMapper.ToBuffetLines(saleLines);
         var services = OpenSaleMapper.ToServiceLines(saleLines).ToList();
+        var usingCollect = previewTenders is { Count: > 0 } && customerId is not null && member is not null;
+        if (usingCollect && surchargeToman > 0)
+        {
+            services.Add(new ServiceLine("pa10", "۵٬۰۰۰+", surchargeToman));
+        }
 
         var issuedAt = TimeMapping.ToTehran(billedToUtc);
         var request = new InvoiceRequest(
@@ -71,11 +76,11 @@ public sealed class MemberBillComposer
 
         AllocationResult? allocation = null;
         Invoice invoice;
-        if (previewTenders is { Count: > 0 } tenders && customerId is Guid cid && member is not null)
+        if (usingCollect && customerId is Guid cid && member is not null)
         {
             var wallets = new[] { MemberWalletMapper.ToMemberWallet(cid, member) };
             var debt = MemberSettingsMapper.LoadDebtPolicy(settings);
-            var (collected, alloc) = InvoiceCalculator.Collect(request, tenders, wallets, debt);
+            var (collected, alloc) = InvoiceCalculator.Collect(request, previewTenders!, wallets, debt);
             invoice = collected;
             allocation = alloc;
         }
@@ -84,7 +89,8 @@ public sealed class MemberBillComposer
             invoice = InvoiceCalculator.Calculate(request);
         }
 
-        var (unrounded, rounding, collectible) = ApplyPostRoundSurcharge(invoice, surchargeToman, previewTenders is { Count: > 0 }, allocation);
+        var postSurcharge = usingCollect && surchargeToman > 0 ? 0 : surchargeToman;
+        var (unrounded, rounding, collectible) = ApplyPostRoundSurcharge(invoice, postSurcharge, usingCollect, allocation);
 
         return new MemberBillResult(
             unrounded,

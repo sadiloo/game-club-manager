@@ -435,6 +435,7 @@ public sealed class OperatorBuffetSaleService(
             var bill = sale.PendingBill
                 ?? await db.PendingBills.FirstOrDefaultAsync(b => b.OpenSaleId == sale.Id, innerCt)
                 ?? throw new ApiException(StatusCodes.Status409Conflict, "no_bill", "No bill awaiting confirmation.");
+            await bills.LockMemberWalletRowIfNeededAsync(sale.CustomerId, payments, innerCt);
             var tenders = payments.Select(p => new Tender(
                 OperatorPaymentMethods.Parse(p.Method),
                 p.AmountToman,

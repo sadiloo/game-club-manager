@@ -134,8 +134,21 @@ public sealed class OperatorBillService(
     BillCalculator calculator,
     SessionBilling billing,
     SessionCloser closer,
-    OperatorPolicies policies)
+    OperatorPolicies policies,
+    OperatorMemberContext memberContext)
 {
+    private static bool UsesWallet(IReadOnlyList<PaymentInput> payments)
+        => payments.Any(p => OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet);
+
+    public async Task LockMemberWalletRowIfNeededAsync(Guid? customerId, IReadOnlyList<PaymentInput> payments, CancellationToken ct)
+    {
+        if (customerId is not Guid id || !UsesWallet(payments))
+        {
+            return;
+        }
+
+        await memberContext.ReloadMemberForUpdateAsync(id, ct);
+    }
     private static List<Tender> ToTenders(IReadOnlyList<PaymentInput> payments, Guid? customerId)
         => payments.Select(p =>
         {
@@ -195,13 +208,19 @@ public sealed class OperatorBillService(
                 throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", "Wallet allocation failed.");
             }
 
-            if (alloc.PayableToman != collectibleToman)
+            var surchargeAlreadyInCollect = detail is { SurchargeToman: > 0 }
+                && detail.InvoicePreview.Lines.Any(l =>
+                    l.Kind == InvoiceLineKind.Service && l.AmountToman == detail.SurchargeToman);
+            var allocPayable = MoneyMath.CheckedAdd(
+                alloc.PayableToman,
+                surchargeAlreadyInCollect ? 0 : detail?.SurchargeToman ?? 0);
+            if (allocPayable != collectibleToman)
             {
                 throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", "Payable total does not match allocation.");
             }
 
             var tendered = payments.Sum(p => p.AmountToman);
-            if (tendered != alloc.PayableToman)
+            if (tendered != allocPayable)
             {
                 throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", "Tender total does not match payable.");
             }
@@ -335,6 +354,7 @@ public sealed class OperatorBillService(
             }
 
             var saleLines = await LoadSaleLinesAsync(session.Id, innerCt);
+            await LockMemberWalletRowIfNeededAsync(session.CustomerId, payments, innerCt);
             var tenders = ToTenders(payments, session.CustomerId);
             var amounts = await calculator.ComputeWithTendersAsync(
                 session,

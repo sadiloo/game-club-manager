@@ -310,6 +310,8 @@ public sealed class SessionCloser(
             CollectibleToman = amounts.CollectibleToman,
             SurchargeToman = amounts.SurchargeToman,
             DiscountToman = amounts.DiscountToman,
+            LevelDiscountToman = SplitMemberDiscounts(amounts.Detail).Level,
+            BirthdayDiscountToman = SplitMemberDiscounts(amounts.Detail).Birthday,
             BilledToUtc = bill.FrozenAtUtc,
             IssuedAtUtc = clock.UtcNow.UtcDateTime,
             Status = "confirmed",
@@ -342,6 +344,31 @@ public sealed class SessionCloser(
         }
 
         return invoice;
+    }
+
+    private static (long Level, long Birthday) SplitMemberDiscounts(MemberBillResult? detail)
+    {
+        if (detail?.InvoicePreview is not { } preview)
+        {
+            return (0, 0);
+        }
+
+        long level = 0;
+        long birthday = 0;
+        foreach (var line in preview.Lines.Where(l => l.Kind == InvoiceLineKind.Discount))
+        {
+            var amount = -line.AmountToman;
+            if (line.Description.Contains("Birthday", StringComparison.OrdinalIgnoreCase))
+            {
+                birthday = MoneyMath.CheckedAdd(birthday, amount);
+            }
+            else
+            {
+                level = MoneyMath.CheckedAdd(level, amount);
+            }
+        }
+
+        return (level, birthday);
     }
 
     private static void CopyCatalogLines(InvoiceEntity invoice, IEnumerable<OpenSaleLineEntity> lines)
