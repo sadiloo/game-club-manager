@@ -31,6 +31,8 @@
     #customerChip { background: #e8eaf6; padding: 0.35rem 0.5rem; border-radius: 6px; margin: 0.35rem 0; font-size: 0.9rem; }
     .customer-hit { display: block; width: 100%; text-align: right; margin: 0.2rem 0; }
     #customerSearchResults { max-height: 10rem; overflow: auto; border: 1px solid #ddd; padding: 0.35rem; margin: 0.25rem 0; border-radius: 6px; }
+    .alert { background: #fff3e0; border: 1px solid #e65100; color: #bf360c; padding: 0.5rem 0.75rem; border-radius: 8px; font-weight: 600; }
+    #prepaidGlobalAlert { margin: 0.5rem 0; }
   </style>
 </head>
 <body>
@@ -43,6 +45,7 @@
   </section>
   <section id="app" class="hidden">
     <h1>سالن</h1>
+    <p id="prepaidGlobalAlert" class="hidden" role="alert"></p>
     <p id="error" role="alert"></p>
     <p id="lowStockList"></p>
     <div id="grid"></div>
@@ -59,6 +62,12 @@
     <section id="customerPanel" class="panel">
       <h2>مشتری</h2>
       <div id="customerChip" class="hidden"></div>
+      <div id="walletActions" class="hidden">
+        <p id="walletBalance"></p>
+        <button type="button" id="walletTopUpCash">شارژ نقدی کیف پول</button>
+        <button type="button" id="walletTopUpCard">شارژ کارتخوان</button>
+        <button type="button" id="walletTopUpC2c">شارژ کارت‌به‌کارت</button>
+      </div>
       <label>جستجو (موبایل، نام، کارت)
         <input id="customerSearch" type="search" autocomplete="off" placeholder="0912… یا نام یا کد عضویت" />
       </label>
@@ -76,6 +85,9 @@
     <section id="sessionActions" class="panel hidden">
       <h2>جلسه</h2>
       <p id="sessionLabel"></p>
+      <p id="prepaidStatus"></p>
+      <button id="prepaidDurationBtn" type="button">رزرو زمان (دقیقه)</button>
+      <button id="prepaidAmountBtn" type="button">رزرو مبلغ</button>
       <button id="pauseBtn" type="button">توقف</button>
       <button id="resumeBtn" type="button">ادامه</button>
       <label>بازیکن
@@ -85,6 +97,7 @@
       </label>
       <button id="playerCountBtn" type="button">تغییر تعداد</button>
       <button id="openBillBtn" type="button">باز کردن صورتحساب</button>
+      <button id="opSellPackageBtn" type="button">فروش بسته</button>
     </section>
 
     <section id="manualSettlePanel" class="panel">
@@ -97,6 +110,23 @@
       <ul id="pendingC2cList"></ul>
     </section>
 
+    <section id="pendingWalletPanel" class="panel">
+      <h2>شارژ کیف پول در انتظار</h2>
+      <ul id="pendingWalletList"></ul>
+    </section>
+
+    <section id="managerPanel" class="panel hidden">
+      <h2>مدیر</h2>
+      <button id="mgrGiftBtn" type="button">اعتبار هدیه</button>
+      <button id="mgrOpeningBtn" type="button">مانده افتتاحیه</button>
+      <button id="mgrFloorBtn" type="button">سقف نسیه</button>
+      <button id="mgrLadderBtn" type="button">جدول سطح‌ها (JSON)</button>
+      <button id="mgrBirthdayBtn" type="button">تنظیم تولد</button>
+      <button id="mgrCustBirthdayBtn" type="button">تاریخ تولد عضو</button>
+      <button id="mgrPackageBtn" type="button">تعریف بسته</button>
+      <button id="mgrSellPackageBtn" type="button">فروش بسته</button>
+    </section>
+
     <section id="bill" class="panel hidden">
       <h2>صورتحساب</h2>
       <div id="billDetail"></div>
@@ -106,6 +136,7 @@
       <button id="addCashLineBtn" type="button">نقد</button>
       <button id="addCardLineBtn" type="button">کارتخوان</button>
       <button id="addC2cLineBtn" type="button">کارت‌به‌کارت</button>
+      <button id="addWalletLineBtn" type="button">کیف پول</button>
       <button id="openBuffetFromBillBtn" type="button">بوفه</button>
       <button id="surchargeBtn" type="button">+۵٬۰۰۰</button>
       <button id="confirmBtn" type="button">تأیید پرداخت</button>

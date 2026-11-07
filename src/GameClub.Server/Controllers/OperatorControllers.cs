@@ -41,6 +41,7 @@ public sealed class OperatorPanelController(
     OperatorCatalogService catalog,
     OperatorBuffetSaleService buffetSales,
     OperatorCustomerService customers,
+    OperatorPrepaidService prepaid,
     OperatorContext context) : ControllerBase
 {
     [HttpGet("grid")]
@@ -142,6 +143,10 @@ public sealed class OperatorPanelController(
     public async Task<IActionResult> GetBill(Guid sessionId, CancellationToken ct)
         => Ok(await bills.GetBillDetailAsync(sessionId, ct));
 
+    [HttpPost("sessions/{sessionId:guid}/bill/preview")]
+    public async Task<IActionResult> PreviewBill(Guid sessionId, ConfirmRequest body, CancellationToken ct)
+        => Ok(await bills.PreviewBillAsync(sessionId, body.Payments, ct));
+
     [HttpPost("sessions/{sessionId:guid}/pause")]
     public async Task<IActionResult> PauseSession(Guid sessionId, CancellationToken ct)
     {
@@ -182,6 +187,29 @@ public sealed class OperatorPanelController(
     }
 
     public sealed record ConfirmRequest(IReadOnlyList<OperatorBillService.PaymentInput> Payments);
+
+    public sealed record PrepaidDurationBody(int Minutes);
+
+    [HttpPost("sessions/{sessionId:guid}/prepaid/duration")]
+    public async Task<IActionResult> PrepaidDuration(Guid sessionId, PrepaidDurationBody body, CancellationToken ct)
+        => Ok(await prepaid.StartDurationAsync(sessionId, body.Minutes, ct));
+
+    public sealed record PrepaidAmountBody(long AmountToman);
+
+    [HttpPost("sessions/{sessionId:guid}/prepaid/amount")]
+    public async Task<IActionResult> PrepaidAmount(Guid sessionId, PrepaidAmountBody body, CancellationToken ct)
+        => Ok(await prepaid.StartAmountAsync(sessionId, body.AmountToman, ct));
+
+    [HttpGet("sessions/{sessionId:guid}/prepaid")]
+    public async Task<IActionResult> PrepaidStatus(Guid sessionId, CancellationToken ct)
+        => Ok(await prepaid.GetStatusAsync(sessionId, ct));
+
+    [HttpPost("sessions/{sessionId:guid}/prepaid/dismiss-alert")]
+    public async Task<IActionResult> DismissPrepaidAlert(Guid sessionId, CancellationToken ct)
+    {
+        await prepaid.MarkEndAlertSentAsync(sessionId, ct);
+        return NoContent();
+    }
 
     [HttpPost("sessions/{sessionId:guid}/bill/confirm")]
     public async Task<IActionResult> ConfirmBill(Guid sessionId, ConfirmRequest body, CancellationToken ct)
@@ -234,6 +262,9 @@ public sealed class OperatorPanelController(
             invoice.TimeGrossToman,
             invoice.BuffetGrossToman,
             invoice.ServicesGrossToman,
+            invoice.DiscountToman,
+            invoice.LevelDiscountToman,
+            invoice.BirthdayDiscountToman,
             invoice.UnroundedPayableToman,
             invoice.RoundingToman,
             invoice.CollectibleToman,
@@ -350,6 +381,10 @@ public sealed class OperatorPanelController(
     [HttpDelete("buffet-only/{openSaleId:guid}/lines/{lineId:long}")]
     public async Task<IActionResult> RemoveBuffetOnlyLine(Guid openSaleId, long lineId, CancellationToken ct)
         => Ok(await buffetSales.RemoveLineFromOpenSaleAsync(openSaleId, lineId, ct));
+
+    [HttpPost("buffet-only/{openSaleId:guid}/bill/preview")]
+    public async Task<IActionResult> PreviewBuffetOnlyBill(Guid openSaleId, ConfirmRequest body, CancellationToken ct)
+        => Ok(await buffetSales.PreviewBuffetOnlyBillAsync(openSaleId, body.Payments, ct));
 
     [HttpPost("buffet-only/{openSaleId:guid}/checkout")]
     public async Task<IActionResult> CheckoutBuffetOnly(Guid openSaleId, CancellationToken ct)

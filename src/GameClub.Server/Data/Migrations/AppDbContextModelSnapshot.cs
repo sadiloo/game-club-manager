@@ -49,6 +49,47 @@ namespace GameClub.Server.Data.Migrations
                     b.ToTable("audit_log", (string)null);
                 });
 
+            modelBuilder.Entity("GameClub.Server.Data.Entities.BranchMemberSettingsEntity", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<int>("BirthdayPercent")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("BirthdayWindowAnchor")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<int>("BirthdayWindowDays")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("BirthdayWindowKind")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("LevelLadderJson")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("PackageConsumptionOrder")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<int>("MaxCombinedDiscountPercent")
+                        .HasColumnType("integer");
+
+                    b.Property<long?>("WalletDebtFloorToman")
+                        .HasColumnType("bigint");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("branch_member_settings", (string)null);
+                });
+
             modelBuilder.Entity("GameClub.Server.Data.Entities.BranchRoundingEntity", b =>
                 {
                     b.Property<int>("Id")
@@ -180,6 +221,93 @@ namespace GameClub.Server.Data.Migrations
                     b.ToTable("customers", (string)null);
                 });
 
+            modelBuilder.Entity("GameClub.Server.Data.Entities.CustomerMemberEntity", b =>
+                {
+                    b.Property<Guid>("CustomerId")
+                        .HasColumnType("uuid");
+
+                    b.Property<long>("BasisGiftToman")
+                        .HasColumnType("bigint");
+
+                    b.Property<long>("BasisRealToman")
+                        .HasColumnType("bigint");
+
+                    b.Property<int?>("BirthDay")
+                        .HasColumnType("integer");
+
+                    b.Property<int?>("BirthMonth")
+                        .HasColumnType("integer");
+
+                    b.Property<int?>("BirthYear")
+                        .HasColumnType("integer");
+
+                    b.Property<long>("GiftDrawnFromBasisToman")
+                        .HasColumnType("bigint");
+
+                    b.Property<long>("GiftToman")
+                        .HasColumnType("bigint");
+
+                    b.Property<bool>("HasOpeningBalance")
+                        .HasColumnType("boolean");
+
+                    b.Property<long>("LifetimePlayMinutes")
+                        .HasColumnType("bigint");
+
+                    b.Property<long>("PositiveDrawnToman")
+                        .HasColumnType("bigint");
+
+                    b.Property<long>("RealToman")
+                        .HasColumnType("bigint");
+
+                    b.HasKey("CustomerId");
+
+                    b.ToTable("customer_members", (string)null);
+                });
+
+            modelBuilder.Entity("GameClub.Server.Data.Entities.CustomerPackageEntity", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("AllowedGroupIdsJson")
+                        .HasColumnType("text");
+
+                    b.Property<Guid>("CustomerId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("ExpiresAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<long>("FaceValueToman")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("HourWindowJson")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<Guid?>("PurchaseInvoiceId")
+                        .HasColumnType("uuid");
+
+                    b.Property<long>("RemainingMinutes")
+                        .HasColumnType("bigint");
+
+                    b.Property<DateTime?>("ValidFromUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime?>("ValidToUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CustomerId");
+
+                    b.ToTable("customer_packages", (string)null);
+                });
+
             modelBuilder.Entity("GameClub.Server.Data.Entities.DestinationCardEntity", b =>
                 {
                     b.Property<string>("Id")
@@ -254,6 +382,15 @@ namespace GameClub.Server.Data.Migrations
                     b.Property<Guid?>("CustomerId")
                         .HasColumnType("uuid");
 
+                    b.Property<long>("DiscountToman")
+                        .HasColumnType("bigint");
+
+                    b.Property<long>("BirthdayDiscountToman")
+                        .HasColumnType("bigint");
+
+                    b.Property<long>("LevelDiscountToman")
+                        .HasColumnType("bigint");
+
                     b.Property<DateTime>("IssuedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
@@ -306,6 +443,40 @@ namespace GameClub.Server.Data.Migrations
                     b.ToTable("invoices", (string)null);
                 });
 
+            modelBuilder.Entity("GameClub.Server.Data.Entities.InvoiceMemberEffectEntity", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
+                    b.Property<Guid>("CustomerId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("InvoiceId")
+                        .HasColumnType("uuid");
+
+                    b.Property<long>("LoyaltyMinutesPosted")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("PackageDrawsJson")
+                        .HasColumnType("text");
+
+                    b.Property<long>("WalletGiftDrawnToman")
+                        .HasColumnType("bigint");
+
+                    b.Property<long>("WalletRealDrawnToman")
+                        .HasColumnType("bigint");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("InvoiceId")
+                        .IsUnique();
+
+                    b.ToTable("invoice_member_effects", (string)null);
+                });
+
             modelBuilder.Entity("GameClub.Server.Data.Entities.InvoiceNumberSequence", b =>
                 {
                     b.Property<int>("Id")
@@ -320,6 +491,38 @@ namespace GameClub.Server.Data.Migrations
                     b.HasKey("Id");
 
                     b.ToTable("invoice_number_sequence", (string)null);
+                });
+
+            modelBuilder.Entity("GameClub.Server.Data.Entities.LoyaltyHourLedgerEntity", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
+                    b.Property<Guid?>("ActorUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("AtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("CustomerId")
+                        .HasColumnType("uuid");
+
+                    b.Property<long>("DeltaMinutes")
+                        .HasColumnType("bigint");
+
+                    b.Property<Guid?>("InvoiceId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("loyalty_hour_ledger", (string)null);
                 });
 
             modelBuilder.Entity("GameClub.Server.Data.Entities.OpenSaleEntity", b =>
@@ -417,6 +620,35 @@ namespace GameClub.Server.Data.Migrations
                     b.ToTable("operator_users", (string)null);
                 });
 
+            modelBuilder.Entity("GameClub.Server.Data.Entities.PackageProductEntity", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasColumnType("text");
+
+                    b.Property<string>("AllowedGroupIdsJson")
+                        .HasColumnType("text");
+
+                    b.Property<int?>("ExpiresAfterDays")
+                        .HasColumnType("integer");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean");
+
+                    b.Property<long>("Minutes")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<long>("PriceToman")
+                        .HasColumnType("bigint");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("package_products", (string)null);
+                });
+
             modelBuilder.Entity("GameClub.Server.Data.Entities.PauseIntervalEntity", b =>
                 {
                     b.Property<long>("Id")
@@ -468,6 +700,15 @@ namespace GameClub.Server.Data.Migrations
 
                     b.Property<string>("Reference")
                         .HasColumnType("text");
+
+                    b.Property<Guid?>("WalletCustomerId")
+                        .HasColumnType("uuid");
+
+                    b.Property<long>("WalletGiftDrawnToman")
+                        .HasColumnType("bigint");
+
+                    b.Property<long>("WalletRealDrawnToman")
+                        .HasColumnType("bigint");
 
                     b.HasKey("Id");
 
@@ -544,6 +785,47 @@ namespace GameClub.Server.Data.Migrations
                     b.ToTable("pending_bills", (string)null);
                 });
 
+            modelBuilder.Entity("GameClub.Server.Data.Entities.PendingWalletTopUpEntity", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
+                    b.Property<Guid?>("ActorUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<long>("AmountToman")
+                        .HasColumnType("bigint");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("CustomerId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("DestinationCardId")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Method")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Reference")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CustomerId");
+
+                    b.ToTable("pending_wallet_topups", (string)null);
+                });
+
             modelBuilder.Entity("GameClub.Server.Data.Entities.PlaySegmentEntity", b =>
                 {
                     b.Property<long>("Id")
@@ -616,6 +898,19 @@ namespace GameClub.Server.Data.Migrations
 
                     b.Property<int>("PlayerCount")
                         .HasColumnType("integer");
+
+                    b.Property<long?>("PrepaidAmountBudgetToman")
+                        .HasColumnType("bigint");
+
+                    b.Property<long?>("PrepaidBookedActiveSeconds")
+                        .HasColumnType("bigint");
+
+                    b.Property<bool>("PrepaidEndAlertSent")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("PrepaidKind")
+                        .IsRequired()
+                        .HasColumnType("text");
 
                     b.Property<int>("RateCardSnapshotId")
                         .HasColumnType("integer");
@@ -768,6 +1063,55 @@ namespace GameClub.Server.Data.Migrations
                     b.ToTable("station_groups", (string)null);
                 });
 
+            modelBuilder.Entity("GameClub.Server.Data.Entities.WalletLedgerEntryEntity", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
+                    b.Property<Guid?>("ActorUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("AtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("CustomerId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("DestinationCardId")
+                        .HasColumnType("text");
+
+                    b.Property<long>("GiftDeltaToman")
+                        .HasColumnType("bigint");
+
+                    b.Property<Guid?>("InvoiceId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Label")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Method")
+                        .HasColumnType("text");
+
+                    b.Property<long>("RealDeltaToman")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("Reference")
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CustomerId");
+
+                    b.ToTable("wallet_ledger", (string)null);
+                });
+
             modelBuilder.Entity("GameClub.Server.Data.Entities.CatalogItemEntity", b =>
                 {
                     b.HasOne("GameClub.Server.Data.Entities.CatalogCategoryEntity", "Category")
@@ -788,6 +1132,28 @@ namespace GameClub.Server.Data.Migrations
                         .IsRequired();
 
                     b.Navigation("Session");
+                });
+
+            modelBuilder.Entity("GameClub.Server.Data.Entities.CustomerMemberEntity", b =>
+                {
+                    b.HasOne("GameClub.Server.Data.Entities.CustomerEntity", "Customer")
+                        .WithMany()
+                        .HasForeignKey("CustomerId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Customer");
+                });
+
+            modelBuilder.Entity("GameClub.Server.Data.Entities.CustomerPackageEntity", b =>
+                {
+                    b.HasOne("GameClub.Server.Data.Entities.CustomerMemberEntity", "Member")
+                        .WithMany()
+                        .HasForeignKey("CustomerId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Member");
                 });
 
             modelBuilder.Entity("GameClub.Server.Data.Entities.InvoiceCatalogLineEntity", b =>
@@ -820,6 +1186,17 @@ namespace GameClub.Server.Data.Migrations
                     b.Navigation("OpenSale");
 
                     b.Navigation("Session");
+                });
+
+            modelBuilder.Entity("GameClub.Server.Data.Entities.InvoiceMemberEffectEntity", b =>
+                {
+                    b.HasOne("GameClub.Server.Data.Entities.InvoiceEntity", "Invoice")
+                        .WithOne("MemberEffect")
+                        .HasForeignKey("GameClub.Server.Data.Entities.InvoiceMemberEffectEntity", "InvoiceId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Invoice");
                 });
 
             modelBuilder.Entity("GameClub.Server.Data.Entities.OpenSaleEntity", b =>
@@ -899,6 +1276,17 @@ namespace GameClub.Server.Data.Migrations
                     b.Navigation("Session");
                 });
 
+            modelBuilder.Entity("GameClub.Server.Data.Entities.PendingWalletTopUpEntity", b =>
+                {
+                    b.HasOne("GameClub.Server.Data.Entities.CustomerMemberEntity", "Member")
+                        .WithMany()
+                        .HasForeignKey("CustomerId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Member");
+                });
+
             modelBuilder.Entity("GameClub.Server.Data.Entities.PlaySegmentEntity", b =>
                 {
                     b.HasOne("GameClub.Server.Data.Entities.PlaySessionEntity", "Session")
@@ -957,6 +1345,17 @@ namespace GameClub.Server.Data.Migrations
                     b.Navigation("Group");
                 });
 
+            modelBuilder.Entity("GameClub.Server.Data.Entities.WalletLedgerEntryEntity", b =>
+                {
+                    b.HasOne("GameClub.Server.Data.Entities.CustomerMemberEntity", "Member")
+                        .WithMany()
+                        .HasForeignKey("CustomerId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Member");
+                });
+
             modelBuilder.Entity("GameClub.Server.Data.Entities.CatalogCategoryEntity", b =>
                 {
                     b.Navigation("Items");
@@ -965,6 +1364,8 @@ namespace GameClub.Server.Data.Migrations
             modelBuilder.Entity("GameClub.Server.Data.Entities.InvoiceEntity", b =>
                 {
                     b.Navigation("CatalogLines");
+
+                    b.Navigation("MemberEffect");
 
                     b.Navigation("PaymentLines");
                 });

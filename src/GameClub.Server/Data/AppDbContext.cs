@@ -53,6 +53,22 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
 
     public DbSet<CustomerEntity> Customers => Set<CustomerEntity>();
 
+    public DbSet<BranchMemberSettingsEntity> BranchMemberSettings => Set<BranchMemberSettingsEntity>();
+
+    public DbSet<CustomerMemberEntity> CustomerMembers => Set<CustomerMemberEntity>();
+
+    public DbSet<WalletLedgerEntryEntity> WalletLedger => Set<WalletLedgerEntryEntity>();
+
+    public DbSet<PendingWalletTopUpEntity> PendingWalletTopUps => Set<PendingWalletTopUpEntity>();
+
+    public DbSet<CustomerPackageEntity> CustomerPackages => Set<CustomerPackageEntity>();
+
+    public DbSet<PackageProductEntity> PackageProducts => Set<PackageProductEntity>();
+
+    public DbSet<LoyaltyHourLedgerEntity> LoyaltyHourLedger => Set<LoyaltyHourLedgerEntity>();
+
+    public DbSet<InvoiceMemberEffectEntity> InvoiceMemberEffects => Set<InvoiceMemberEffectEntity>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<StationGroupEntity>(e =>
@@ -85,6 +101,7 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             e.HasKey(x => x.Id);
             e.Property(x => x.Status).HasConversion<string>();
             e.Property(x => x.Mode).HasConversion<string>();
+            e.Property(x => x.PrepaidKind).HasConversion<string>();
             e.HasOne(x => x.Customer).WithMany().HasForeignKey(x => x.CustomerId);
             e.HasOne(x => x.Station).WithMany().HasForeignKey(x => x.StationId);
             e.HasOne(x => x.Invoice).WithOne(x => x.Session).HasForeignKey<InvoiceEntity>(x => x.SessionId)
@@ -123,6 +140,7 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             e.HasIndex(x => x.Number).IsUnique();
             e.HasOne(x => x.Customer).WithMany().HasForeignKey(x => x.CustomerId);
             e.HasOne(x => x.OpenSale).WithMany().HasForeignKey(x => x.OpenSaleId);
+            e.HasOne(x => x.MemberEffect).WithOne(x => x.Invoice).HasForeignKey<InvoiceMemberEffectEntity>(x => x.InvoiceId);
         });
 
         modelBuilder.Entity<PendingBillEntity>(e =>
@@ -234,6 +252,64 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             e.ToTable("rate_lines");
             e.HasKey(x => x.Id);
             e.HasIndex(x => new { x.GroupId, x.PlayMode, x.PlayerCount, x.IsSpecialBand }).IsUnique();
+        });
+
+        modelBuilder.Entity<BranchMemberSettingsEntity>(e =>
+        {
+            e.ToTable("branch_member_settings");
+            e.HasKey(x => x.Id);
+        });
+
+        modelBuilder.Entity<CustomerMemberEntity>(e =>
+        {
+            e.ToTable("customer_members");
+            e.HasKey(x => x.CustomerId);
+            e.HasOne(x => x.Customer).WithMany().HasForeignKey(x => x.CustomerId);
+        });
+
+        modelBuilder.Entity<WalletLedgerEntryEntity>(e =>
+        {
+            e.ToTable("wallet_ledger");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Kind).HasConversion<string>();
+            e.Property(x => x.Method).HasConversion<string>();
+            e.HasOne(x => x.Member).WithMany().HasForeignKey(x => x.CustomerId);
+        });
+
+        modelBuilder.Entity<PendingWalletTopUpEntity>(e =>
+        {
+            e.ToTable("pending_wallet_topups");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Method).HasConversion<string>();
+            e.Property(x => x.Status).HasConversion<string>();
+            e.HasOne(x => x.Member).WithMany().HasForeignKey(x => x.CustomerId);
+        });
+
+        modelBuilder.Entity<CustomerPackageEntity>(e =>
+        {
+            e.ToTable("customer_packages");
+            e.HasKey(x => x.Id);
+            e.HasOne(x => x.Member).WithMany().HasForeignKey(x => x.CustomerId);
+        });
+
+        modelBuilder.Entity<PackageProductEntity>(e =>
+        {
+            e.ToTable("package_products");
+            e.HasKey(x => x.Id);
+        });
+
+        modelBuilder.Entity<LoyaltyHourLedgerEntity>(e =>
+        {
+            e.ToTable("loyalty_hour_ledger");
+            e.HasKey(x => x.Id);
+        });
+
+        modelBuilder.Entity<InvoiceMemberEffectEntity>(e =>
+        {
+            e.ToTable("invoice_member_effects");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => x.InvoiceId).IsUnique();
+            e.HasOne(x => x.Invoice).WithOne(x => x.MemberEffect).HasForeignKey<InvoiceMemberEffectEntity>(x => x.InvoiceId);
         });
     }
 

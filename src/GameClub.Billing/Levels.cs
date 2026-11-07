@@ -10,10 +10,10 @@ public sealed record CustomerLevel(string Name, long MinimumLifetimeHours, int D
 /// <summary>
 /// The cafe's customer levels. An admin edits the ladder by passing a new list to
 /// <see cref="Create"/>: change a name, the whole-hour threshold, or the percent, and add or remove rows.
-/// The first level is 0 hours. Later thresholds are strictly higher. Percents are 0–100 and names are unique.
-/// <see cref="Resolve"/> returns the highest row the customer has reached. With a valid ladder that is never null
-/// for a non-negative hour count.
-/// <see cref="Default"/> is the ladder a new branch starts with (Bronze 5% … Titan 28%). It is not a Game Timer tariff.
+/// Thresholds are whole hours and must be strictly ascending. Percents are 0–100 and names are unique.
+/// The first threshold may be greater than 0; <see cref="Resolve"/> then returns null below that threshold (0% level discount).
+/// Otherwise <see cref="Resolve"/> returns the highest row reached.
+/// <see cref="Default"/> is the editable Game Timer 4.3 sample for a new branch.
 /// </summary>
 public sealed class LevelLadder
 {
@@ -28,11 +28,6 @@ public sealed class LevelLadder
         if (levels is null || levels.Count == 0)
         {
             throw new BillingException(BillingErrors.InvalidLevel, "A level ladder needs at least one level.");
-        }
-
-        if (levels[0].MinimumLifetimeHours != 0)
-        {
-            throw new BillingException(BillingErrors.InvalidLevel, "The first level must start at 0 hours.");
         }
 
         var names = new HashSet<string>(StringComparer.Ordinal);
@@ -73,18 +68,18 @@ public sealed class LevelLadder
     }
 
     /// <summary>
-    /// Default ladder for a new branch: Bronze 5% at 0 hours, Silver 8% at 30, Gold 12% at 80,
-    /// Platinum 16% at 150, Diamond 20% at 300, Titan 28% at 500. Replace it with <see cref="Create"/>
-    /// when the cafe wants different rows. The hours are whole hours and are the product default, not a Game Timer export.
+    /// Game Timer 4.3 sample ladder for a new branch (editable by the cafe).
     /// </summary>
     public static LevelLadder Default { get; } = Create(
     [
-        new CustomerLevel("Bronze", 0, 5),
-        new CustomerLevel("Silver", 30, 8),
-        new CustomerLevel("Gold", 80, 12),
-        new CustomerLevel("Platinum", 150, 16),
-        new CustomerLevel("Diamond", 300, 20),
-        new CustomerLevel("Titan", 500, 28),
+        new CustomerLevel("Bronze", 50, 5),
+        new CustomerLevel("Silver", 100, 10),
+        new CustomerLevel("Gold", 150, 15),
+        new CustomerLevel("Crystal", 200, 20),
+        new CustomerLevel("Master", 250, 24),
+        new CustomerLevel("Champion", 300, 26),
+        new CustomerLevel("Titan", 350, 28),
+        new CustomerLevel("Legend", 400, 30),
     ]);
 
     /// <summary>Same object as <see cref="Default"/>.</summary>
@@ -95,6 +90,11 @@ public sealed class LevelLadder
         if (lifetimeHours < 0)
         {
             throw new BillingException(BillingErrors.InvalidLevel, "Lifetime hours cannot be negative.");
+        }
+
+        if (_levels[0].MinimumLifetimeHours > lifetimeHours)
+        {
+            return null;
         }
 
         CustomerLevel? match = null;

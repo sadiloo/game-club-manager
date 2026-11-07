@@ -23,8 +23,10 @@ public class InvariantAndReferenceTests
 
         Assert.Equal(5, GameTimerReference.ExampleLevelSeed.Levels[0].DiscountPercent);
         Assert.Equal("Bronze", GameTimerReference.ExampleLevelSeed.Levels[0].Name);
-        Assert.Equal(28, GameTimerReference.ExampleLevelSeed.Levels[GameTimerReference.ExampleLevelSeed.Levels.Count - 1].DiscountPercent);
-        Assert.Equal("Titan", GameTimerReference.ExampleLevelSeed.Levels[GameTimerReference.ExampleLevelSeed.Levels.Count - 1].Name);
+        Assert.Equal(50, GameTimerReference.ExampleLevelSeed.Levels[0].MinimumLifetimeHours);
+        var last = GameTimerReference.ExampleLevelSeed.Levels[GameTimerReference.ExampleLevelSeed.Levels.Count - 1];
+        Assert.Equal(30, last.DiscountPercent);
+        Assert.Equal("Legend", last.Name);
     }
 
     [Fact]

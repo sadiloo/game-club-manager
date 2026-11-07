@@ -435,12 +435,56 @@ public sealed class OperatorBuffetSaleService(
             var bill = sale.PendingBill
                 ?? await db.PendingBills.FirstOrDefaultAsync(b => b.OpenSaleId == sale.Id, innerCt)
                 ?? throw new ApiException(StatusCodes.Status409Conflict, "no_bill", "No bill awaiting confirmation.");
-            bills.ValidatePayments(bill.CollectibleToman, payments);
+            await bills.LockMemberWalletRowIfNeededAsync(sale.CustomerId, payments, innerCt);
+            var tenders = payments.Select(p => new Tender(
+                OperatorPaymentMethods.Parse(p.Method),
+                p.AmountToman,
+                OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet ? sale.CustomerId?.ToString() : null)).ToList();
+            var amounts = await calculator.ComputeBuffetOnlyAsync(sale.Lines, sale.CustomerId, tenders, innerCt);
+            bill.UnroundedPayableToman = amounts.UnroundedPayableToman;
+            bill.RoundingToman = amounts.RoundingToman;
+            bill.CollectibleToman = amounts.CollectibleToman;
+            bills.ValidatePayments(amounts.CollectibleToman, payments, amounts.Detail, sale.CustomerId);
             await db.Entry(sale).Collection(o => o.Lines).Query().Include(l => l.CatalogItem).LoadAsync(innerCt);
-            var invoice = await closer.FinalizeBuffetOnlyAsync(sale, bill, payments, innerCt);
+            var invoice = await closer.FinalizeBuffetOnlyAsync(sale, bill, payments, amounts, innerCt);
             await audit.AppendAsync("buffet_only.confirm", new { openSaleId, invoice.Number, invoice.CollectibleToman }, innerCt);
             return invoice;
         }, ct);
+    }
+
+    public async Task<object> PreviewBuffetOnlyBillAsync(
+        Guid openSaleId,
+        IReadOnlyList<OperatorBillService.PaymentInput> payments,
+        CancellationToken ct)
+    {
+        var sale = await db.OpenSales.AsNoTracking()
+            .Include(o => o.Lines).ThenInclude(l => l.CatalogItem)
+            .Include(o => o.PendingBill)
+            .Include(o => o.Customer)
+            .FirstOrDefaultAsync(o => o.Id == openSaleId && o.IsBuffetOnly, ct)
+            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Buffet-only sale not found.");
+        var bill = sale.PendingBill
+            ?? throw new ApiException(StatusCodes.Status409Conflict, "no_bill", "No bill for this sale.");
+        var tenders = payments.Select(p => new Tender(
+            OperatorPaymentMethods.Parse(p.Method),
+            p.AmountToman,
+            OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet ? sale.CustomerId?.ToString() : null)).ToList();
+        var amounts = await calculator.ComputeBuffetOnlyAsync(sale.Lines, sale.CustomerId, tenders, ct);
+        return new
+        {
+            openSaleId = sale.Id,
+            lines = OpenSaleMapper.ToDtos(sale.Lines),
+            linkedCustomer = CustomerMapper.ToLinkedChip(sale.Customer),
+            bill = new
+            {
+                unroundedPayableToman = amounts.UnroundedPayableToman,
+                roundingToman = amounts.RoundingToman,
+                collectibleToman = amounts.CollectibleToman,
+                timeGrossToman = amounts.TimeGrossToman,
+                buffetGrossToman = amounts.BuffetGrossToman,
+                servicesGrossToman = amounts.ServicesGrossToman,
+            },
+        };
     }
 
     public async Task<object> GetBuffetOnlyBillAsync(Guid openSaleId, CancellationToken ct)
