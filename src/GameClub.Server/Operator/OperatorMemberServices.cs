@@ -767,12 +767,6 @@ public sealed class OperatorMemberBillingService(AppDbContext db, OperatorMember
             return;
         }
 
-        var member = await db.CustomerMembers.FirstOrDefaultAsync(m => m.CustomerId == customerId, ct);
-        if (member is null)
-        {
-            return;
-        }
-
         long realRestore = 0;
         long giftRestore = 0;
         foreach (var entry in purchaseLedger)
@@ -781,25 +775,39 @@ public sealed class OperatorMemberBillingService(AppDbContext db, OperatorMember
             giftRestore = MoneyMath.CheckedAdd(giftRestore, -entry.GiftDeltaToman);
         }
 
-        if (realRestore != 0 || giftRestore != 0)
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        try
         {
-            var pocket = MemberWalletMapper.ToPocket(member);
-            pocket = WalletPocketMath.Add(pocket, realRestore, giftRestore);
-            MemberWalletMapper.ApplyPocket(member, pocket);
-        }
-
-        foreach (var entry in purchaseLedger)
-        {
-            db.WalletLedger.Add(new WalletLedgerEntryEntity
+            _ = await members.ReloadMemberForUpdateAsync(customerId, ct);
+            if (realRestore != 0 || giftRestore != 0)
             {
-                CustomerId = customerId,
-                AtUtc = DateTime.UtcNow,
-                Kind = WalletLedgerKind.InvoiceVoidReversal,
-                RealDeltaToman = -entry.RealDeltaToman,
-                GiftDeltaToman = -entry.GiftDeltaToman,
-                InvoiceId = invoice.Id,
-                Label = "package_sale_void",
-            });
+                var member = await db.CustomerMembers.FirstAsync(m => m.CustomerId == customerId, ct);
+                var pocket = MemberWalletMapper.ToPocket(member);
+                pocket = WalletPocketMath.Add(pocket, realRestore, giftRestore);
+                MemberWalletMapper.ApplyPocket(member, pocket);
+            }
+
+            foreach (var entry in purchaseLedger)
+            {
+                db.WalletLedger.Add(new WalletLedgerEntryEntity
+                {
+                    CustomerId = customerId,
+                    AtUtc = DateTime.UtcNow,
+                    Kind = WalletLedgerKind.InvoiceVoidReversal,
+                    RealDeltaToman = -entry.RealDeltaToman,
+                    GiftDeltaToman = -entry.GiftDeltaToman,
+                    InvoiceId = invoice.Id,
+                    Label = "package_sale_void",
+                });
+            }
+
+            await db.SaveChangesAsync(ct);
+            await tx.CommitAsync(ct);
+        }
+        catch
+        {
+            await tx.RollbackAsync(ct);
+            throw;
         }
     }
 }

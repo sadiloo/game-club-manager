@@ -477,6 +477,7 @@ public sealed class OperatorBillService(
         var sale = await db.OpenSales.AsNoTracking()
             .Include(o => o.Lines).ThenInclude(l => l.CatalogItem)
             .FirstOrDefaultAsync(o => o.SessionId == sessionId, ct);
+        var (levelDiscountToman, birthdayDiscountToman) = SplitMemberDiscounts(amounts.Detail);
         return new
         {
             bill.SessionId,
@@ -489,6 +490,8 @@ public sealed class OperatorBillService(
             timeGrossToman = amounts.TimeGrossToman,
             buffetGrossToman = amounts.BuffetGrossToman,
             servicesGrossToman = amounts.ServicesGrossToman,
+            levelDiscountToman,
+            birthdayDiscountToman,
             saleLines = sale is null ? Array.Empty<SaleLineDto>() : OpenSaleMapper.ToDtos(sale.Lines),
             frozenAtUtc = bill.FrozenAtUtc,
             source = bill.Source,
@@ -528,6 +531,9 @@ public sealed class OperatorBillService(
         var sale = await db.OpenSales.AsNoTracking()
             .Include(o => o.Lines).ThenInclude(l => l.CatalogItem)
             .FirstOrDefaultAsync(o => o.SessionId == sessionId, ct);
+        var saleLines = sale?.Lines.ToList() ?? [];
+        var amounts = await calculator.ComputeAsync(session, bill.FrozenAtUtc, bill.SurchargeToman, saleLines, ct);
+        var (levelDiscountToman, birthdayDiscountToman) = SplitMemberDiscounts(amounts.Detail);
         return new
         {
             bill.SessionId,
@@ -540,6 +546,8 @@ public sealed class OperatorBillService(
             timeGrossToman = bill.TimeGrossToman,
             buffetGrossToman = bill.BuffetGrossToman,
             servicesGrossToman = bill.ServicesGrossToman,
+            levelDiscountToman,
+            birthdayDiscountToman,
             saleLines = sale is null ? Array.Empty<SaleLineDto>() : OpenSaleMapper.ToDtos(sale.Lines),
             frozenAtUtc = bill.FrozenAtUtc,
             source = bill.Source,
@@ -651,6 +659,31 @@ public sealed class OperatorBillService(
             await action(s, inner);
             return false;
         }, ct);
+
+    private static (long Level, long Birthday) SplitMemberDiscounts(MemberBillResult? detail)
+    {
+        if (detail?.InvoicePreview is not { } preview)
+        {
+            return (0, 0);
+        }
+
+        long level = 0;
+        long birthday = 0;
+        foreach (var line in preview.Lines.Where(l => l.Kind == InvoiceLineKind.Discount))
+        {
+            var amount = -line.AmountToman;
+            if (line.Description.Contains("Birthday", StringComparison.OrdinalIgnoreCase))
+            {
+                birthday = MoneyMath.CheckedAdd(birthday, amount);
+            }
+            else
+            {
+                level = MoneyMath.CheckedAdd(level, amount);
+            }
+        }
+
+        return (level, birthday);
+    }
 }
 
 public sealed class OperatorGridService(AppDbContext db, SessionService sessions)
