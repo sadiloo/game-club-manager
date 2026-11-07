@@ -560,6 +560,7 @@ public sealed class OperatorInvoiceService(
             throw new ApiException(StatusCodes.Status403Forbidden, "forbidden", "Card-to-card confirmation is disabled.");
         }
 
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
         var updated = await db.PaymentLines
             .Where(p => p.Id == paymentLineId && p.ConfirmationStatus == PaymentConfirmationStatus.Pending)
             .ExecuteUpdateAsync(
@@ -577,7 +578,7 @@ public sealed class OperatorInvoiceService(
         }
 
         await audit.AppendAsync("payment.card_to_card_confirmed", new { paymentLineId }, ct);
-        await db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
     }
 
     public async Task RejectCardToCardAsync(long paymentLineId, CancellationToken ct)
@@ -587,6 +588,7 @@ public sealed class OperatorInvoiceService(
             throw new ApiException(StatusCodes.Status403Forbidden, "forbidden", "Card-to-card confirmation is disabled.");
         }
 
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
         var updated = await db.PaymentLines
             .Where(p => p.Id == paymentLineId && p.ConfirmationStatus == PaymentConfirmationStatus.Pending)
             .ExecuteUpdateAsync(
@@ -615,7 +617,7 @@ public sealed class OperatorInvoiceService(
         }
 
         await audit.AppendAsync("payment.card_to_card_rejected", new { paymentLineId }, ct);
-        await db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
     }
 }
 
