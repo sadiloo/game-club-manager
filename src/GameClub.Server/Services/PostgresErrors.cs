@@ -33,6 +33,12 @@ public static class PostgresErrors
     public static bool IsStationIdUniqueViolation(DbUpdateException ex)
         => IsUniqueViolation(ex, "PK_stations") || IsUniqueViolation(ex, "IX_stations_Id");
 
+    public static bool IsCustomerMobileUniqueViolation(DbUpdateException ex)
+        => IsUniqueViolation(ex, "IX_customers_Mobile");
+
+    public static bool IsCustomerMembershipCodeUniqueViolation(DbUpdateException ex)
+        => IsUniqueViolation(ex, "IX_customers_MembershipCodeKey");
+
     private static bool IsUniqueViolation(DbUpdateException ex, string constraintName)
     {
         for (Exception? current = ex; current is not null; current = current.InnerException)

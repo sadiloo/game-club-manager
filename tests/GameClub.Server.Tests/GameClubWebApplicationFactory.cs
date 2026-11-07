@@ -90,7 +90,7 @@ internal static class S3TestHelpers
 {
     public const string TruncateSql = """
         TRUNCATE invoice_catalog_lines, open_sale_lines, open_sales, catalog_items, catalog_categories RESTART IDENTITY CASCADE;
-        TRUNCATE rejected_card_to_card, payment_lines, pending_bills, audit_log, checkpoints, pause_intervals, play_segments, invoices, sessions, rate_card_snapshot, stations, destination_cards RESTART IDENTITY CASCADE;
+        TRUNCATE rejected_card_to_card, payment_lines, pending_bills, audit_log, checkpoints, pause_intervals, play_segments, invoices, sessions, customers, rate_card_snapshot, stations, destination_cards RESTART IDENTITY CASCADE;
         TRUNCATE operator_users RESTART IDENTITY CASCADE;
         SELECT setval('invoice_number_seq', 1, false);
         UPDATE invoice_number_sequence SET "NextNumber" = 1;

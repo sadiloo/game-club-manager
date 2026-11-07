@@ -7,6 +7,8 @@ let catalog = [];
 let buffetOpenSaleId = null;
 let buffetMode = "session";
 let billTarget = null;
+let customerSearchTimer = null;
+let displayedLinkedCustomer = null;
 
 function resetBuffetOnlyContext() {
   buffetMode = "session";
@@ -135,6 +137,7 @@ function renderBuffetOnlyCheckoutBill(sale) {
     servicesGrossToman: b.servicesGrossToman ?? 0,
     saleLines: sale.lines ?? [],
     segments: [],
+    linkedCustomer: sale.linkedCustomer,
   });
 }
 
@@ -149,6 +152,7 @@ async function renderBuffetSale() {
   } else {
     return;
   }
+  renderCustomerChip(sale.linkedCustomer);
   const lines = sale.lines || [];
   for (const line of lines) {
     const row = document.createElement("div");
@@ -200,6 +204,127 @@ async function openBuffetPanel(tile) {
   renderBuffetCategories();
   await renderBuffetSale();
 }
+
+function customerLinkContext() {
+  if (billTarget === "buffet-only" && buffetOpenSaleId) {
+    return { openSaleId: buffetOpenSaleId };
+  }
+  if (selectedSessionId) {
+    return { sessionId: selectedSessionId };
+  }
+  return null;
+}
+
+function renderCustomerChip(linked) {
+  displayedLinkedCustomer = linked || null;
+  const chip = document.getElementById("customerChip");
+  if (!linked) {
+    chip.classList.add("hidden");
+    chip.textContent = "";
+    return;
+  }
+  const code = linked.membershipCode ? ` · کارت ${linked.membershipCode}` : "";
+  chip.textContent = `پیوسته: ${linked.name} — ${linked.mobile}${code}`;
+  chip.classList.remove("hidden");
+}
+
+async function linkCustomer(customerId) {
+  const ctx = customerLinkContext();
+  if (!ctx) {
+    showError("ابتدا یک جلسه یا فروش بوفه را انتخاب کنید.");
+    return;
+  }
+  if (ctx.sessionId) {
+    const linked = await api(`/api/operator/sessions/${ctx.sessionId}/customer`, {
+      method: "PUT",
+      body: JSON.stringify({ customerId }),
+    });
+    renderCustomerChip(linked);
+  } else if (ctx.openSaleId) {
+    const linked = await api(`/api/operator/buffet-only/${ctx.openSaleId}/customer`, {
+      method: "PUT",
+      body: JSON.stringify({ customerId }),
+    });
+    renderCustomerChip(linked);
+  }
+  await refreshGrid();
+}
+
+async function clearCustomerLink() {
+  const ctx = customerLinkContext();
+  if (!ctx) {
+    return;
+  }
+  if (ctx.sessionId) {
+    await api(`/api/operator/sessions/${ctx.sessionId}/customer`, {
+      method: "PUT",
+      body: JSON.stringify({ customerId: null }),
+    });
+  } else if (ctx.openSaleId) {
+    await api(`/api/operator/buffet-only/${ctx.openSaleId}/customer`, {
+      method: "PUT",
+      body: JSON.stringify({ customerId: null }),
+    });
+  }
+  renderCustomerChip(null);
+  await refreshGrid();
+}
+
+async function runCustomerSearch(q) {
+  const box = document.getElementById("customerSearchResults");
+  box.replaceChildren();
+  const trimmed = (q || "").trim();
+  if (!trimmed) {
+    return;
+  }
+  const rows = (await api(`/api/operator/customers/search?q=${encodeURIComponent(trimmed)}`)) || [];
+  for (const row of rows) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "customer-hit";
+    const code = row.membershipCode ? ` · ${row.membershipCode}` : "";
+    btn.textContent = `${row.name} — ${row.mobile}${code}`;
+    btn.onclick = () => linkCustomer(row.id);
+    box.appendChild(btn);
+  }
+}
+
+document.getElementById("customerSearch").oninput = () => {
+  clearTimeout(customerSearchTimer);
+  customerSearchTimer = setTimeout(() => {
+    runCustomerSearch(document.getElementById("customerSearch").value).catch(() => {});
+  }, 250);
+};
+
+document.getElementById("customerCreateBtn").onclick = async () => {
+  const ctx = customerLinkContext();
+  if (!ctx) {
+    showError("ابتدا یک جلسه یا فروش بوفه را انتخاب کنید.");
+    return;
+  }
+  const name = document.getElementById("customerName").value;
+  const mobile = document.getElementById("customerMobile").value;
+  const membershipCode = document.getElementById("customerCode").value || null;
+  const body = {
+    name,
+    mobile,
+    membershipCode,
+    linkSessionId: ctx.sessionId || null,
+    linkOpenSaleId: ctx.openSaleId || null,
+  };
+  const created = await api("/api/operator/customers", { method: "POST", body: JSON.stringify(body) });
+  renderCustomerChip(created);
+  document.getElementById("customerName").value = "";
+  document.getElementById("customerMobile").value = "";
+  document.getElementById("customerCode").value = "";
+  await refreshGrid();
+  if (ctx.sessionId && !document.getElementById("bill").classList.contains("hidden")) {
+    const bill = await api(`/api/operator/sessions/${ctx.sessionId}/bill`);
+    renderBill(bill);
+  }
+};
+
+document.getElementById("customerClearBtn").onclick = () => clearCustomerLink().catch(() => {});
 
 document.getElementById("loginBtn").onclick = async () => {
   try {
@@ -416,6 +541,7 @@ function renderBill(bill) {
     `جمع ${bill.unroundedPayableToman} + رند ${bill.roundingToman} = ${bill.collectibleToman}` +
     (segText ? `\nبخش‌ها:\n${segText}` : "");
   renderBillSaleLines(bill.saleLines);
+  renderCustomerChip(bill.linkedCustomer);
   const changeEl = document.getElementById("cashChange");
   if (changeEl) {
     const cash = cashTendered();
@@ -482,6 +608,7 @@ async function onTileClick(t) {
   }
   document.getElementById("sessionActions").classList.remove("hidden");
   document.getElementById("sessionLabel").textContent = `${t.id} — ${t.status}`;
+  renderCustomerChip(t.linkedCustomer);
   document.getElementById("pauseBtn").classList.toggle("hidden", t.status !== "Playing");
   document.getElementById("resumeBtn").classList.toggle("hidden", t.status !== "Paused");
   document.getElementById("openBillBtn").classList.toggle("hidden", (t.groupId || "").startsWith("pc"));

@@ -287,15 +287,26 @@ public sealed class OperatorBuffetSaleService(
 
     public async Task<object> GetSessionSaleAsync(Guid sessionId, CancellationToken ct)
     {
+        var session = await db.Sessions.AsNoTracking()
+            .Include(s => s.Customer)
+            .FirstOrDefaultAsync(s => s.Id == sessionId, ct);
         var sale = await db.OpenSales.AsNoTracking()
             .Include(o => o.Lines).ThenInclude(l => l.CatalogItem)
             .FirstOrDefaultAsync(o => o.SessionId == sessionId, ct);
         if (sale is null)
         {
-            return new { sessionId, lines = Array.Empty<SaleLineDto>(), timeGrossToman = 0L, buffetGrossToman = 0L, servicesGrossToman = 0L };
+            return new
+            {
+                sessionId,
+                lines = Array.Empty<SaleLineDto>(),
+                timeGrossToman = 0L,
+                buffetGrossToman = 0L,
+                servicesGrossToman = 0L,
+                linkedCustomer = CustomerMapper.ToLinkedChip(session?.Customer),
+            };
         }
 
-        return MapSale(sale);
+        return MapSale(sale, session?.Customer);
     }
 
     public async Task<object> AddLineToSessionAsync(Guid sessionId, string catalogItemId, long? customAmountToman, CancellationToken ct)
@@ -311,7 +322,7 @@ public sealed class OperatorBuffetSaleService(
             await AddLineCoreAsync(sale, catalogItemId, customAmountToman, innerCt);
             await RefreshSessionPendingBillIfAnyAsync(session, sale, innerCt);
             await audit.AppendAsync("sale.line_add", new { sessionId, catalogItemId, customAmountToman }, innerCt);
-            return MapSale(sale);
+            return await MapSaleWithCustomerAsync(sale, innerCt);
         }, ct);
     }
 
@@ -327,7 +338,7 @@ public sealed class OperatorBuffetSaleService(
             await db.Entry(sale).Collection(o => o.Lines).Query().Include(l => l.CatalogItem).LoadAsync(innerCt);
             await RefreshSessionPendingBillIfAnyAsync(session, sale, innerCt);
             await audit.AppendAsync("sale.line_remove", new { sessionId, lineId }, innerCt);
-            return MapSale(sale);
+            return await MapSaleWithCustomerAsync(sale, innerCt);
         }, ct);
     }
 
@@ -353,7 +364,7 @@ public sealed class OperatorBuffetSaleService(
             await AddLineCoreAsync(sale, catalogItemId, customAmountToman, innerCt);
             await RefreshOpenSalePendingBillIfAnyAsync(sale, innerCt);
             await audit.AppendAsync("sale.line_add", new { openSaleId, catalogItemId, customAmountToman }, innerCt);
-            return MapSale(sale);
+            return await MapSaleWithCustomerAsync(sale, innerCt);
         }, ct);
     }
 
@@ -367,7 +378,7 @@ public sealed class OperatorBuffetSaleService(
             await db.Entry(sale).Collection(o => o.Lines).Query().Include(l => l.CatalogItem).LoadAsync(innerCt);
             await RefreshOpenSalePendingBillIfAnyAsync(sale, innerCt);
             await audit.AppendAsync("sale.line_remove", new { openSaleId, lineId }, innerCt);
-            return MapSale(sale);
+            return await MapSaleWithCustomerAsync(sale, innerCt);
         }, ct);
     }
 
@@ -437,6 +448,7 @@ public sealed class OperatorBuffetSaleService(
         var sale = await db.OpenSales.AsNoTracking()
             .Include(o => o.Lines).ThenInclude(l => l.CatalogItem)
             .Include(o => o.PendingBill)
+            .Include(o => o.Customer)
             .FirstOrDefaultAsync(o => o.Id == openSaleId && o.IsBuffetOnly, ct)
             ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Buffet-only sale not found.");
         var bill = sale.PendingBill;
@@ -444,6 +456,7 @@ public sealed class OperatorBuffetSaleService(
         {
             openSaleId = sale.Id,
             lines = OpenSaleMapper.ToDtos(sale.Lines),
+            linkedCustomer = CustomerMapper.ToLinkedChip(sale.Customer),
             bill = bill is null ? null : new
             {
                 bill.UnroundedPayableToman,
@@ -456,10 +469,32 @@ public sealed class OperatorBuffetSaleService(
         };
     }
 
-    private static object MapSale(OpenSaleEntity sale)
+    private async Task<object> MapSaleWithCustomerAsync(OpenSaleEntity sale, CancellationToken ct)
+    {
+        CustomerEntity? linked = null;
+        if (sale.IsBuffetOnly)
+        {
+            if (sale.CustomerId is Guid customerId)
+            {
+                linked = await db.Customers.AsNoTracking().FirstOrDefaultAsync(c => c.Id == customerId, ct);
+            }
+        }
+        else if (sale.SessionId is Guid sessionId)
+        {
+            linked = await db.Sessions.AsNoTracking()
+                .Where(s => s.Id == sessionId)
+                .Select(s => s.Customer)
+                .FirstOrDefaultAsync(ct);
+        }
+
+        return MapSale(sale, linked);
+    }
+
+    private static object MapSale(OpenSaleEntity sale, CustomerEntity? sessionCustomer = null)
     {
         var buffet = MoneyMath.CheckedSum(sale.Lines.Where(l => l.Kind == SaleLineKind.Buffet).Select(l => l.LineTotalToman));
         var services = MoneyMath.CheckedSum(sale.Lines.Where(l => l.Kind == SaleLineKind.Service).Select(l => l.LineTotalToman));
+        var linked = sale.IsBuffetOnly ? sale.Customer : sessionCustomer;
         return new
         {
             openSaleId = sale.Id,
@@ -468,6 +503,7 @@ public sealed class OperatorBuffetSaleService(
             timeGrossToman = 0L,
             buffetGrossToman = buffet,
             servicesGrossToman = services,
+            linkedCustomer = CustomerMapper.ToLinkedChip(linked),
         };
     }
 

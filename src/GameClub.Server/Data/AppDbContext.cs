@@ -51,6 +51,8 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
 
     public DbSet<InvoiceCatalogLineEntity> InvoiceCatalogLines => Set<InvoiceCatalogLineEntity>();
 
+    public DbSet<CustomerEntity> Customers => Set<CustomerEntity>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<StationGroupEntity>(e =>
@@ -69,12 +71,21 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             e.Property(x => x.DefaultPlayMode).HasConversion<string>();
         });
 
+        modelBuilder.Entity<CustomerEntity>(e =>
+        {
+            e.ToTable("customers");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => x.Mobile).IsUnique();
+            e.HasIndex(x => x.MembershipCodeKey).IsUnique();
+        });
+
         modelBuilder.Entity<PlaySessionEntity>(e =>
         {
             e.ToTable("sessions");
             e.HasKey(x => x.Id);
             e.Property(x => x.Status).HasConversion<string>();
             e.Property(x => x.Mode).HasConversion<string>();
+            e.HasOne(x => x.Customer).WithMany().HasForeignKey(x => x.CustomerId);
             e.HasOne(x => x.Station).WithMany().HasForeignKey(x => x.StationId);
             e.HasOne(x => x.Invoice).WithOne(x => x.Session).HasForeignKey<InvoiceEntity>(x => x.SessionId)
                 .IsRequired(false);
@@ -110,6 +121,7 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             e.ToTable("invoices");
             e.HasKey(x => x.Id);
             e.HasIndex(x => x.Number).IsUnique();
+            e.HasOne(x => x.Customer).WithMany().HasForeignKey(x => x.CustomerId);
             e.HasOne(x => x.OpenSale).WithMany().HasForeignKey(x => x.OpenSaleId);
         });
 
@@ -142,6 +154,7 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             e.ToTable("open_sales");
             e.HasKey(x => x.Id);
             e.HasIndex(x => x.SessionId).IsUnique();
+            e.HasOne(x => x.Customer).WithMany().HasForeignKey(x => x.CustomerId);
             e.HasOne(x => x.Session).WithMany().HasForeignKey(x => x.SessionId);
         });
 

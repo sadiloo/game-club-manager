@@ -34,6 +34,7 @@ public partial class Program
         builder.Services.AddScoped<DestinationCardService>();
         builder.Services.AddScoped<OperatorCatalogService>();
         builder.Services.AddScoped<OperatorBuffetSaleService>();
+        builder.Services.AddScoped<OperatorCustomerService>();
         builder.Services.AddScoped<IDeadPcMonitor, DeadPcMonitor>();
         builder.Services.AddHostedService<DeadPcSweepBackgroundService>();
 
