@@ -89,6 +89,7 @@ public class GameClubWebApplicationFactory : WebApplicationFactory<Program>
 internal static class S3TestHelpers
 {
     public const string TruncateSql = """
+        TRUNCATE invoice_catalog_lines, open_sale_lines, open_sales, catalog_items, catalog_categories RESTART IDENTITY CASCADE;
         TRUNCATE rejected_card_to_card, payment_lines, pending_bills, audit_log, checkpoints, pause_intervals, play_segments, invoices, sessions, rate_card_snapshot, stations, destination_cards RESTART IDENTITY CASCADE;
         TRUNCATE operator_users RESTART IDENTITY CASCADE;
         SELECT setval('invoice_number_seq', 1, false);
@@ -168,6 +169,12 @@ internal static class HttpClientExtensions
         {
             Content = JsonContent.Create(body),
         };
+        return client.SendAsync(request);
+    }
+
+    public static Task<HttpResponseMessage> PutAsJsonAsync<T>(this HttpClient client, string url, T body)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Put, url) { Content = JsonContent.Create(body) };
         return client.SendAsync(request);
     }
 }

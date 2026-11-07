@@ -47,7 +47,8 @@ public sealed class AcceptanceScenarioTests(GameClubWebApplicationFactory factor
         Assert.Equal(HttpStatusCode.Conflict, dup.StatusCode);
         using (var scope = factory.Services.CreateScope())
         {
-            var count = await scope.ServiceProvider.GetRequiredService<AppDbContext>().Stations.CountAsync();
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var count = await db.Stations.CountAsync(s => s.Id != BuffetSaleConstants.VirtualStationId);
             Assert.Equal(1, count);
         }
     }

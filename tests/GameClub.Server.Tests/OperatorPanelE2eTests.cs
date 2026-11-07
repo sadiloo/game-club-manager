@@ -285,4 +285,26 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
         var confirmDb = confirmScope.ServiceProvider.GetRequiredService<AppDbContext>();
         Assert.Equal(110_000, (await confirmDb.Invoices.SingleAsync()).CollectibleToman);
     }
+
+    [Fact]
+    public async Task s3b_panel_buffet_icon_adds_line_without_stopping_session()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var op = await factory.CreateOperatorClientAsync();
+        await S3TestHelpers.RegisterConsole(_api, op, "PS5-BUF", 1);
+        factory.Clock.SetTehran(2026, 6, 3, 14, 0);
+        var sessionId = await S3TestHelpers.StartSession(_api, "PS5-BUF", 1);
+        var page = await LoginAsync(op);
+        await page.EvaluateAsync("() => refreshGrid()");
+        await page.WaitForSelectorAsync(".tile[data-station-id='PS5-BUF'] .buffet-icon");
+        await page.ClickAsync(".tile[data-station-id='PS5-BUF'] .buffet-icon");
+        await page.WaitForSelectorAsync("#buffetPanel:not(.hidden)");
+        await page.ClickAsync("#buffetCategories .cat");
+        await page.ClickAsync("#buffetCategories .cat-item >> nth=0");
+        await page.WaitForSelectorAsync("#buffetSaleLines .sale-line");
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        Assert.Equal(SessionStatus.Open, (await db.Sessions.SingleAsync(s => s.Id == sessionId)).Status);
+        Assert.True(await db.OpenSaleLines.AnyAsync());
+    }
 }

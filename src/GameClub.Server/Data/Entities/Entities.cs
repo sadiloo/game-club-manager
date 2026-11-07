@@ -145,9 +145,19 @@ public sealed class InvoiceEntity
 
     public long Number { get; set; }
 
-    public Guid SessionId { get; set; }
+    public Guid? SessionId { get; set; }
 
     public PlaySessionEntity? Session { get; set; }
+
+    public Guid? OpenSaleId { get; set; }
+
+    public OpenSaleEntity? OpenSale { get; set; }
+
+    public long TimeGrossToman { get; set; }
+
+    public long BuffetGrossToman { get; set; }
+
+    public long ServicesGrossToman { get; set; }
 
     /// <summary>Exact session payable before PA-8 rounding (unrounded).</summary>
     public long UnroundedPayableToman { get; set; }
@@ -171,15 +181,27 @@ public sealed class InvoiceEntity
     public string? StopReason { get; set; }
 
     public List<PaymentLineEntity> PaymentLines { get; set; } = [];
+
+    public List<InvoiceCatalogLineEntity> CatalogLines { get; set; } = [];
 }
 
 public sealed class PendingBillEntity
 {
     public Guid Id { get; set; }
 
-    public Guid SessionId { get; set; }
+    public Guid? SessionId { get; set; }
 
     public PlaySessionEntity? Session { get; set; }
+
+    public Guid? OpenSaleId { get; set; }
+
+    public OpenSaleEntity? OpenSale { get; set; }
+
+    public long TimeGrossToman { get; set; }
+
+    public long BuffetGrossToman { get; set; }
+
+    public long ServicesGrossToman { get; set; }
 
     public DateTime FrozenAtUtc { get; set; }
 
@@ -312,4 +334,117 @@ public sealed class RateLineEntity
     public bool IsSpecialBand { get; set; }
 
     public long HourlyToman { get; set; }
+}
+
+public enum CatalogProductKind
+{
+    Stocked = 0,
+    Unstocked = 1,
+    ServiceFixed = 2,
+    ServiceCustom = 3,
+}
+
+public enum SaleLineKind
+{
+    Buffet = 0,
+    Service = 1,
+}
+
+public static class BuffetSaleConstants
+{
+    public const string VirtualStationId = "buffet-only";
+
+    public const string VirtualGroupId = "buffet-only";
+}
+
+public sealed class CatalogCategoryEntity
+{
+    public string Id { get; set; } = string.Empty;
+
+    public string Name { get; set; } = string.Empty;
+
+    public int SortOrder { get; set; }
+
+    public List<CatalogItemEntity> Items { get; set; } = [];
+}
+
+public sealed class CatalogItemEntity
+{
+    public string Id { get; set; } = string.Empty;
+
+    public string CategoryId { get; set; } = string.Empty;
+
+    public CatalogCategoryEntity? Category { get; set; }
+
+    public string Name { get; set; } = string.Empty;
+
+    public CatalogProductKind Kind { get; set; }
+
+    public long UnitPriceToman { get; set; }
+
+    /// <summary>Stocks for <see cref="CatalogProductKind.Stocked"/> only.</summary>
+    public int? StockQuantity { get; set; }
+
+    public int? LowStockWarningThreshold { get; set; }
+
+    public bool IsActive { get; set; } = true;
+}
+
+public sealed class OpenSaleEntity
+{
+    public Guid Id { get; set; }
+
+    public Guid? SessionId { get; set; }
+
+    public PlaySessionEntity? Session { get; set; }
+
+    public string StationId { get; set; } = string.Empty;
+
+    public bool IsBuffetOnly { get; set; }
+
+    public List<OpenSaleLineEntity> Lines { get; set; } = [];
+
+    public PendingBillEntity? PendingBill { get; set; }
+}
+
+public sealed class OpenSaleLineEntity
+{
+    public long Id { get; set; }
+
+    public Guid OpenSaleId { get; set; }
+
+    public OpenSaleEntity? OpenSale { get; set; }
+
+    public string CatalogItemId { get; set; } = string.Empty;
+
+    public CatalogItemEntity? CatalogItem { get; set; }
+
+    public SaleLineKind Kind { get; set; }
+
+    public int Quantity { get; set; }
+
+    public long UnitPriceToman { get; set; }
+
+    public long LineTotalToman { get; set; }
+}
+
+public sealed class InvoiceCatalogLineEntity
+{
+    public long Id { get; set; }
+
+    public Guid InvoiceId { get; set; }
+
+    public InvoiceEntity? Invoice { get; set; }
+
+    public string CatalogItemId { get; set; } = string.Empty;
+
+    public string Name { get; set; } = string.Empty;
+
+    public SaleLineKind Kind { get; set; }
+
+    public int Quantity { get; set; }
+
+    public long UnitPriceToman { get; set; }
+
+    public long LineTotalToman { get; set; }
 }

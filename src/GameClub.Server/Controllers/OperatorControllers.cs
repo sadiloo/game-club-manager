@@ -38,6 +38,8 @@ public sealed class OperatorPanelController(
     StationService stations,
     DestinationCardService destinationCards,
     OperatorUserService users,
+    OperatorCatalogService catalog,
+    OperatorBuffetSaleService buffetSales,
     OperatorContext context) : ControllerBase
 {
     [HttpGet("grid")]
@@ -164,6 +166,9 @@ public sealed class OperatorPanelController(
         return Ok(new
         {
             invoice.Number,
+            invoice.TimeGrossToman,
+            invoice.BuffetGrossToman,
+            invoice.ServicesGrossToman,
             invoice.UnroundedPayableToman,
             invoice.RoundingToman,
             invoice.CollectibleToman,
@@ -210,6 +215,109 @@ public sealed class OperatorPanelController(
     [HttpGet("payments/pending-card-to-card")]
     public async Task<IActionResult> PendingCardToCardPayments(CancellationToken ct)
         => Ok(await invoices.ListPendingCardToCardAsync(ct));
+
+    [HttpGet("catalog")]
+    public async Task<IActionResult> Catalog(CancellationToken ct) => Ok(await catalog.ListCatalogAsync(ct));
+
+    [HttpGet("catalog/low-stock")]
+    public async Task<IActionResult> LowStock(CancellationToken ct) => Ok(await catalog.LowStockAsync(ct));
+
+    [HttpPut("catalog/items/{id}")]
+    public async Task<IActionResult> PutCatalogItem(string id, PutCatalogItemRequest body, CancellationToken ct)
+    {
+        var item = await catalog.UpsertItemAsync(new OperatorCatalogService.CatalogItemInput(
+            id,
+            body.CategoryId,
+            body.Name,
+            body.Kind,
+            body.UnitPriceToman,
+            body.StockQuantity,
+            body.LowStockWarningThreshold), ct);
+        return Ok(new { item.Id, item.Name, kind = item.Kind.ToString(), item.UnitPriceToman, item.StockQuantity, item.LowStockWarningThreshold });
+    }
+
+    public sealed record PutCatalogItemRequest(
+        string CategoryId,
+        string Name,
+        string Kind,
+        long UnitPriceToman,
+        int? StockQuantity,
+        int? LowStockWarningThreshold);
+
+    [HttpPost("catalog/items/{id}/stock-adjust")]
+    public async Task<IActionResult> AdjustStock(string id, StockAdjustRequest body, CancellationToken ct)
+    {
+        await catalog.AdjustStockAsync(id, body.Delta, body.Reason, ct);
+        return NoContent();
+    }
+
+    public sealed record StockAdjustRequest(int Delta, string? Reason);
+
+    [HttpGet("sessions/{sessionId:guid}/sale")]
+    public async Task<IActionResult> GetSessionSale(Guid sessionId, CancellationToken ct)
+        => Ok(await buffetSales.GetSessionSaleAsync(sessionId, ct));
+
+    public sealed record SaleLineRequest(string CatalogItemId, long? CustomAmountToman);
+
+    [HttpPost("sessions/{sessionId:guid}/sale/lines")]
+    public async Task<IActionResult> AddSessionSaleLine(Guid sessionId, SaleLineRequest body, CancellationToken ct)
+        => Ok(await buffetSales.AddLineToSessionAsync(sessionId, body.CatalogItemId, body.CustomAmountToman, ct));
+
+    [HttpDelete("sessions/{sessionId:guid}/sale/lines/{lineId:long}")]
+    public async Task<IActionResult> RemoveSessionSaleLine(Guid sessionId, long lineId, CancellationToken ct)
+        => Ok(await buffetSales.RemoveLineFromSessionAsync(sessionId, lineId, ct));
+
+    [HttpPost("buffet-only/start")]
+    public async Task<IActionResult> StartBuffetOnly(CancellationToken ct)
+    {
+        var sale = await buffetSales.StartBuffetOnlyAsync(ct);
+        return Ok(new { openSaleId = sale.Id });
+    }
+
+    [HttpGet("buffet-only/{openSaleId:guid}")]
+    public async Task<IActionResult> GetBuffetOnly(Guid openSaleId, CancellationToken ct)
+        => Ok(await buffetSales.GetBuffetOnlyBillAsync(openSaleId, ct));
+
+    [HttpPost("buffet-only/{openSaleId:guid}/lines")]
+    public async Task<IActionResult> AddBuffetOnlyLine(Guid openSaleId, SaleLineRequest body, CancellationToken ct)
+        => Ok(await buffetSales.AddLineToOpenSaleAsync(openSaleId, body.CatalogItemId, body.CustomAmountToman, ct));
+
+    [HttpDelete("buffet-only/{openSaleId:guid}/lines/{lineId:long}")]
+    public async Task<IActionResult> RemoveBuffetOnlyLine(Guid openSaleId, long lineId, CancellationToken ct)
+        => Ok(await buffetSales.RemoveLineFromOpenSaleAsync(openSaleId, lineId, ct));
+
+    [HttpPost("buffet-only/{openSaleId:guid}/checkout")]
+    public async Task<IActionResult> CheckoutBuffetOnly(Guid openSaleId, CancellationToken ct)
+    {
+        var bill = await buffetSales.CheckoutBuffetOnlyAsync(openSaleId, ct);
+        return Ok(new
+        {
+            openSaleId,
+            unroundedPayableToman = bill.UnroundedPayableToman,
+            roundingToman = bill.RoundingToman,
+            collectibleToman = bill.CollectibleToman,
+            timeGrossToman = bill.TimeGrossToman,
+            buffetGrossToman = bill.BuffetGrossToman,
+            servicesGrossToman = bill.ServicesGrossToman,
+        });
+    }
+
+    [HttpPost("buffet-only/{openSaleId:guid}/confirm")]
+    public async Task<IActionResult> ConfirmBuffetOnly(Guid openSaleId, ConfirmRequest body, CancellationToken ct)
+    {
+        var invoice = await buffetSales.ConfirmBuffetOnlyAsync(openSaleId, body.Payments, ct);
+        return Ok(new
+        {
+            invoice.Number,
+            invoice.TimeGrossToman,
+            invoice.BuffetGrossToman,
+            invoice.ServicesGrossToman,
+            unroundedPayableToman = invoice.UnroundedPayableToman,
+            roundingToman = invoice.RoundingToman,
+            collectibleToman = invoice.CollectibleToman,
+            status = invoice.Status,
+        });
+    }
 
     [HttpGet("destination-cards")]
     public async Task<IActionResult> DestinationCards(CancellationToken ct) => Ok(await destinationCards.ListAsync(ct));

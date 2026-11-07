@@ -13,6 +13,9 @@ public sealed record BillAmounts(
     long RoundingToman,
     long CollectibleToman,
     long SurchargeToman,
+    long TimeGrossToman,
+    long BuffetGrossToman,
+    long ServicesGrossToman,
     DateTime BilledToUtc);
 
 public sealed class BillCalculator(SessionBilling billing, RateConfigService rates)
@@ -21,6 +24,48 @@ public sealed class BillCalculator(SessionBilling billing, RateConfigService rat
         PlaySessionEntity session,
         DateTime endUtc,
         long surchargeToman,
+        IReadOnlyList<OpenSaleLineEntity>? saleLines,
+        CancellationToken ct)
+        => await ComputeCoreAsync(session, endUtc, surchargeToman, saleLines ?? [], ct);
+
+    public Task<BillAmounts> ComputeAsync(
+        PlaySessionEntity session,
+        DateTime endUtc,
+        long surchargeToman,
+        CancellationToken ct)
+        => ComputeCoreAsync(session, endUtc, surchargeToman, [], ct);
+
+    public async Task<BillAmounts> ComputeBuffetOnlyAsync(IReadOnlyList<OpenSaleLineEntity> saleLines, CancellationToken ct)
+    {
+        var snapshot = await rates.LoadAsync(ct);
+        var buffet = OpenSaleMapper.ToBuffetLines(saleLines);
+        var services = OpenSaleMapper.ToServiceLines(saleLines);
+        var issuedAt = TehranTime.Ensure(DateTimeOffset.UtcNow);
+        var calc = InvoiceCalculator.Calculate(new InvoiceRequest(
+            [],
+            buffet,
+            services,
+            null,
+            null,
+            DiscountPolicy.Default,
+            snapshot.Rounding,
+            issuedAt));
+        return new BillAmounts(
+            calc.NetBeforeRoundingToman,
+            calc.RoundingToman,
+            calc.PayableToman,
+            0,
+            0,
+            calc.BuffetGrossToman,
+            calc.ServicesGrossToman,
+            issuedAt.UtcDateTime);
+    }
+
+    private async Task<BillAmounts> ComputeCoreAsync(
+        PlaySessionEntity session,
+        DateTime endUtc,
+        long surchargeToman,
+        IReadOnlyList<OpenSaleLineEntity> saleLines,
         CancellationToken ct)
     {
         var snapshot = session.RateCardSnapshotId != 0
@@ -28,13 +73,17 @@ public sealed class BillCalculator(SessionBilling billing, RateConfigService rat
             : await rates.LoadAsync(ct);
         var charge = billing.BuildCharge(session, endUtc, snapshot);
         var timeLines = TimeChargeLine.FromSession(charge);
-        IReadOnlyList<ServiceLine> services = surchargeToman > 0
-            ? [new ServiceLine("manual-surcharge", "سورشارژ", surchargeToman)]
-            : [];
+        var buffet = OpenSaleMapper.ToBuffetLines(saleLines);
+        var services = OpenSaleMapper.ToServiceLines(saleLines).ToList();
+        if (surchargeToman > 0)
+        {
+            services.Add(new ServiceLine("manual-surcharge", "سورشارژ", surchargeToman));
+        }
+
         var issuedAt = TimeMapping.ToTehran(endUtc);
         var calc = InvoiceCalculator.Calculate(new InvoiceRequest(
             timeLines,
-            [],
+            buffet,
             services,
             null,
             null,
@@ -46,6 +95,9 @@ public sealed class BillCalculator(SessionBilling billing, RateConfigService rat
             calc.RoundingToman,
             calc.PayableToman,
             surchargeToman,
+            calc.TimeGrossToman,
+            calc.BuffetGrossToman,
+            calc.ServicesGrossToman - (surchargeToman > 0 ? surchargeToman : 0),
             endUtc);
     }
 }
@@ -59,6 +111,60 @@ public sealed class OperatorBillService(
     SessionCloser closer,
     OperatorPolicies policies)
 {
+    public void ValidatePayments(long collectibleToman, IReadOnlyList<PaymentInput> payments)
+    {
+        if (collectibleToman == 0)
+        {
+            if (payments.Count > 0 && payments.Any(p => p.AmountToman > 0))
+            {
+                var positiveTenders = payments
+                    .Select(p => new Tender(OperatorPaymentMethods.Parse(p.Method), p.AmountToman))
+                    .ToList();
+                var positiveSplit = PaymentSplitter.Split(0, positiveTenders);
+                if (!positiveSplit.IsValid)
+                {
+                    throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", positiveSplit.Errors.FirstOrDefault()?.Message ?? "Invalid payment.");
+                }
+
+                throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", "At least one positive payment line is required.");
+            }
+
+            return;
+        }
+
+        if (payments.Count == 0 || payments.All(p => p.AmountToman <= 0))
+        {
+            throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", "At least one positive payment line is required.");
+        }
+
+        var tenders = payments.Select(p => new Tender(OperatorPaymentMethods.Parse(p.Method), p.AmountToman)).ToList();
+        var split = PaymentSplitter.Split(collectibleToman, tenders);
+        if (!split.IsValid)
+        {
+            throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", split.Errors.FirstOrDefault()?.Message ?? "Invalid payment.");
+        }
+    }
+
+    private async Task<IReadOnlyList<OpenSaleLineEntity>> LoadSaleLinesAsync(Guid sessionId, CancellationToken ct)
+    {
+        var sale = await db.OpenSales.AsNoTracking()
+            .Include(o => o.Lines).ThenInclude(l => l.CatalogItem)
+            .FirstOrDefaultAsync(o => o.SessionId == sessionId, ct);
+        return sale?.Lines ?? [];
+    }
+
+    private async Task ApplyAmountsToBillAsync(PlaySessionEntity session, PendingBillEntity bill, CancellationToken ct)
+    {
+        var saleLines = await LoadSaleLinesAsync(session.Id, ct);
+        var amounts = await calculator.ComputeAsync(session, bill.FrozenAtUtc, bill.SurchargeToman, saleLines, ct);
+        bill.UnroundedPayableToman = amounts.UnroundedPayableToman;
+        bill.RoundingToman = amounts.RoundingToman;
+        bill.CollectibleToman = amounts.CollectibleToman;
+        bill.TimeGrossToman = amounts.TimeGrossToman;
+        bill.BuffetGrossToman = amounts.BuffetGrossToman;
+        bill.ServicesGrossToman = amounts.ServicesGrossToman;
+    }
+
     public sealed record PaymentInput(string Method, long AmountToman, string? DestinationCardId, string? Reference);
 
     public async Task<PendingBillEntity> OpenConsoleBillAsync(Guid sessionId, CancellationToken ct)
@@ -83,7 +189,8 @@ public sealed class OperatorBillService(
             var frozenAt = clock.UtcNow.UtcDateTime;
             var revert = CaptureRevertState(session);
             ApplyPlayEnd(session, frozenAt);
-            var amounts = await calculator.ComputeAsync(session, frozenAt, 0, innerCt);
+            var saleLines = await LoadSaleLinesAsync(session.Id, innerCt);
+            var amounts = await calculator.ComputeAsync(session, frozenAt, 0, saleLines, innerCt);
             var bill = new PendingBillEntity
             {
                 Id = Guid.NewGuid(),
@@ -93,6 +200,9 @@ public sealed class OperatorBillService(
                 UnroundedPayableToman = amounts.UnroundedPayableToman,
                 RoundingToman = amounts.RoundingToman,
                 CollectibleToman = amounts.CollectibleToman,
+                TimeGrossToman = amounts.TimeGrossToman,
+                BuffetGrossToman = amounts.BuffetGrossToman,
+                ServicesGrossToman = amounts.ServicesGrossToman,
                 Source = "console_bill",
                 RevertStateJson = JsonSerializer.Serialize(revert),
             };
@@ -128,10 +238,7 @@ public sealed class OperatorBillService(
             var bill = session.PendingBill
                 ?? throw new ApiException(StatusCodes.Status409Conflict, "no_bill", "No open bill.");
             bill.SurchargeToman = MoneyMath.CheckedAdd(bill.SurchargeToman, 5_000);
-            var amounts = await calculator.ComputeAsync(session, bill.FrozenAtUtc, bill.SurchargeToman, innerCt);
-            bill.UnroundedPayableToman = amounts.UnroundedPayableToman;
-            bill.RoundingToman = amounts.RoundingToman;
-            bill.CollectibleToman = amounts.CollectibleToman;
+            await ApplyAmountsToBillAsync(session, bill, innerCt);
             await audit.AppendAsync("bill.surcharge", new { sessionId, reason, bill.SurchargeToman }, innerCt);
         }, ct);
     }
@@ -147,39 +254,7 @@ public sealed class OperatorBillService(
                 throw new ApiException(StatusCodes.Status409Conflict, "invalid_state", "Session is not awaiting payment.");
             }
 
-            if (bill.CollectibleToman == 0)
-            {
-                if (payments.Count > 0)
-                {
-                    if (payments.Any(p => p.AmountToman > 0))
-                    {
-                        var positiveTenders = payments
-                            .Select(p => new Tender(OperatorPaymentMethods.Parse(p.Method), p.AmountToman))
-                            .ToList();
-                        var positiveSplit = PaymentSplitter.Split(0, positiveTenders);
-                        if (!positiveSplit.IsValid)
-                        {
-                            throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", positiveSplit.Errors.FirstOrDefault()?.Message ?? "Invalid payment.");
-                        }
-                    }
-
-                    throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", "At least one positive payment line is required.");
-                }
-            }
-            else
-            {
-                if (payments.Count == 0 || payments.All(p => p.AmountToman <= 0))
-                {
-                    throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", "At least one positive payment line is required.");
-                }
-
-                var tenders = payments.Select(p => new Tender(OperatorPaymentMethods.Parse(p.Method), p.AmountToman)).ToList();
-                var split = PaymentSplitter.Split(bill.CollectibleToman, tenders);
-                if (!split.IsValid)
-                {
-                    throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", split.Errors.FirstOrDefault()?.Message ?? "Invalid payment.");
-                }
-            }
+            ValidatePayments(bill.CollectibleToman, payments);
 
             var invoice = await closer.FinalizeFromPendingAsync(session, bill, payments, innerCt);
             await audit.AppendAsync("bill.confirm", new { sessionId, invoiceNumber = invoice.Number, collectible = invoice.CollectibleToman }, innerCt);
@@ -195,7 +270,8 @@ public sealed class OperatorBillService(
         CancellationToken ct)
     {
         ApplyPlayEnd(session, endUtc);
-        var amounts = await calculator.ComputeAsync(session, endUtc, 0, ct);
+        var saleLines = await LoadSaleLinesAsync(session.Id, ct);
+        var amounts = await calculator.ComputeAsync(session, endUtc, 0, saleLines, ct);
         var bill = new PendingBillEntity
         {
             Id = Guid.NewGuid(),
@@ -205,6 +281,9 @@ public sealed class OperatorBillService(
             UnroundedPayableToman = amounts.UnroundedPayableToman,
             RoundingToman = amounts.RoundingToman,
             CollectibleToman = amounts.CollectibleToman,
+            TimeGrossToman = amounts.TimeGrossToman,
+            BuffetGrossToman = amounts.BuffetGrossToman,
+            ServicesGrossToman = amounts.ServicesGrossToman,
             Source = source,
             StopReason = stopReason,
         };
@@ -220,7 +299,8 @@ public sealed class OperatorBillService(
         CancellationToken ct)
     {
         ApplyPlayEnd(session, endUtc);
-        var amounts = await calculator.ComputeAsync(session, endUtc, 0, ct);
+        var saleLines = await LoadSaleLinesAsync(session.Id, ct);
+        var amounts = await calculator.ComputeAsync(session, endUtc, 0, saleLines, ct);
         var bill = new PendingBillEntity
         {
             Id = Guid.NewGuid(),
@@ -230,6 +310,9 @@ public sealed class OperatorBillService(
             UnroundedPayableToman = amounts.UnroundedPayableToman,
             RoundingToman = amounts.RoundingToman,
             CollectibleToman = amounts.CollectibleToman,
+            TimeGrossToman = amounts.TimeGrossToman,
+            BuffetGrossToman = amounts.BuffetGrossToman,
+            ServicesGrossToman = amounts.ServicesGrossToman,
             Source = "console_stop",
             StopReason = "stop",
         };
@@ -265,6 +348,9 @@ public sealed class OperatorBillService(
                 endUtc = s.EndUtc,
             })
             .ToList();
+        var sale = await db.OpenSales.AsNoTracking()
+            .Include(o => o.Lines).ThenInclude(l => l.CatalogItem)
+            .FirstOrDefaultAsync(o => o.SessionId == sessionId, ct);
         return new
         {
             bill.SessionId,
@@ -274,6 +360,10 @@ public sealed class OperatorBillService(
             roundingToman = bill.RoundingToman,
             collectibleToman = bill.CollectibleToman,
             surchargeToman = bill.SurchargeToman,
+            timeGrossToman = bill.TimeGrossToman,
+            buffetGrossToman = bill.BuffetGrossToman,
+            servicesGrossToman = bill.ServicesGrossToman,
+            saleLines = sale is null ? Array.Empty<SaleLineDto>() : OpenSaleMapper.ToDtos(sale.Lines),
             frozenAtUtc = bill.FrozenAtUtc,
             source = bill.Source,
             stopReason = bill.StopReason,
@@ -437,6 +527,15 @@ public sealed class OperatorGridService(AppDbContext db, SessionService sessions
                 amount = session.PendingBill.CollectibleToman;
             }
 
+            Guid? openSaleId = null;
+            if (status is "Playing" or "Paused")
+            {
+                openSaleId = await db.OpenSales.AsNoTracking()
+                    .Where(o => o.SessionId == session.Id)
+                    .Select(o => (Guid?)o.Id)
+                    .FirstOrDefaultAsync(ct);
+            }
+
             tiles.Add(new
             {
                 station.Id,
@@ -447,8 +546,22 @@ public sealed class OperatorGridService(AppDbContext db, SessionService sessions
                 status,
                 amountToman = amount,
                 sessionId = session.Id,
+                openSaleId,
             });
         }
+
+        tiles.Add(new
+        {
+            id = BuffetSaleConstants.VirtualStationId,
+            name = "بوفه",
+            groupId = BuffetSaleConstants.VirtualGroupId,
+            defaultPlayerCount = 0,
+            mode = "BuffetOnly",
+            status = "Buffet only",
+            amountToman = (long?)null,
+            sessionId = (Guid?)null,
+            openSaleId = (Guid?)null,
+        });
 
         return tiles;
     }
@@ -551,7 +664,7 @@ public sealed class OperatorInvoiceService(
         long AmountToman,
         string? DestinationCardId,
         string? Reference,
-        Guid SessionId);
+        Guid? SessionId);
 
     public async Task ConfirmCardToCardAsync(long paymentLineId, CancellationToken ct)
     {
