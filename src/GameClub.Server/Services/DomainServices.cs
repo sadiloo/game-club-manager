@@ -204,17 +204,20 @@ public sealed class SessionBilling(AppDbContext db, RateConfigService rates)
 
 public sealed class SessionCloser(
     AppDbContext db,
-    IClock clock)
+    IClock clock,
+    SessionBilling billing,
+    OperatorMemberBillingService memberBilling)
 {
     public async Task<InvoiceEntity> FinalizeFromPendingAsync(
         PlaySessionEntity session,
         PendingBillEntity bill,
         IReadOnlyList<OperatorBillService.PaymentInput> payments,
+        BillAmounts amounts,
         CancellationToken ct)
     {
         var openSale = await db.OpenSales.Include(o => o.Lines).ThenInclude(l => l.CatalogItem)
             .FirstOrDefaultAsync(o => o.SessionId == session.Id, ct);
-        var invoice = await CreateInvoiceAsync(bill, payments, session.Id, openSale?.Id, session.CustomerId, ct);
+        var invoice = await CreateInvoiceAsync(amounts, bill, payments, session.Id, openSale?.Id, session.CustomerId, ct);
         if (openSale is not null)
         {
             CopyCatalogLines(invoice, openSale.Lines);
@@ -227,6 +230,24 @@ public sealed class SessionCloser(
         db.Invoices.Add(invoice);
         db.PendingBills.Remove(bill);
         session.PendingBill = null;
+        if (session.CustomerId is Guid customerId && amounts.Detail is not null)
+        {
+            var member = await db.CustomerMembers.FirstOrDefaultAsync(m => m.CustomerId == customerId, ct);
+            if (member is null)
+            {
+                member = new CustomerMemberEntity { CustomerId = customerId };
+                db.CustomerMembers.Add(member);
+            }
+
+            if (amounts.Detail.Allocation is { } allocation)
+            {
+                await memberBilling.ApplyWalletPaymentsAsync(customerId, member, allocation, invoice.Id, ct);
+            }
+
+            var charge = await billing.BuildChargeAsync(session, bill.FrozenAtUtc, ct);
+            await memberBilling.PostConfirmEffectsAsync(customerId, member, amounts.Detail, invoice.Id, charge.TotalBilledMinutes, ct);
+        }
+
         await db.SaveChangesAsync(ct);
         return invoice;
     }
@@ -235,19 +256,38 @@ public sealed class SessionCloser(
         OpenSaleEntity sale,
         PendingBillEntity bill,
         IReadOnlyList<OperatorBillService.PaymentInput> payments,
+        BillAmounts amounts,
         CancellationToken ct)
     {
-        var invoice = await CreateInvoiceAsync(bill, payments, null, sale.Id, sale.CustomerId, ct);
+        var invoice = await CreateInvoiceAsync(amounts, bill, payments, null, sale.Id, sale.CustomerId, ct);
         CopyCatalogLines(invoice, sale.Lines);
         db.OpenSaleLines.RemoveRange(sale.Lines);
         db.OpenSales.Remove(sale);
         db.Invoices.Add(invoice);
         db.PendingBills.Remove(bill);
+        if (sale.CustomerId is Guid customerId && amounts.Detail is not null)
+        {
+            var member = await db.CustomerMembers.FirstOrDefaultAsync(m => m.CustomerId == customerId, ct)
+                ?? new CustomerMemberEntity { CustomerId = customerId };
+            if (!await db.CustomerMembers.AnyAsync(m => m.CustomerId == customerId, ct))
+            {
+                db.CustomerMembers.Add(member);
+            }
+
+            if (amounts.Detail.Allocation is { } allocation)
+            {
+                await memberBilling.ApplyWalletPaymentsAsync(customerId, member, allocation, invoice.Id, ct);
+            }
+
+            await memberBilling.PostConfirmEffectsAsync(customerId, member, amounts.Detail, invoice.Id, 0, ct);
+        }
+
         await db.SaveChangesAsync(ct);
         return invoice;
     }
 
     private async Task<InvoiceEntity> CreateInvoiceAsync(
+        BillAmounts amounts,
         PendingBillEntity bill,
         IReadOnlyList<OperatorBillService.PaymentInput> payments,
         Guid? sessionId,
@@ -262,13 +302,14 @@ public sealed class SessionCloser(
             Number = number,
             SessionId = sessionId,
             OpenSaleId = openSaleId,
-            TimeGrossToman = bill.TimeGrossToman,
-            BuffetGrossToman = bill.BuffetGrossToman,
-            ServicesGrossToman = bill.ServicesGrossToman,
-            UnroundedPayableToman = bill.UnroundedPayableToman,
-            RoundingToman = bill.RoundingToman,
-            CollectibleToman = bill.CollectibleToman,
-            SurchargeToman = bill.SurchargeToman,
+            TimeGrossToman = amounts.TimeGrossToman,
+            BuffetGrossToman = amounts.BuffetGrossToman,
+            ServicesGrossToman = amounts.ServicesGrossToman,
+            UnroundedPayableToman = amounts.UnroundedPayableToman,
+            RoundingToman = amounts.RoundingToman,
+            CollectibleToman = amounts.CollectibleToman,
+            SurchargeToman = amounts.SurchargeToman,
+            DiscountToman = amounts.DiscountToman,
             BilledToUtc = bill.FrozenAtUtc,
             IssuedAtUtc = clock.UtcNow.UtcDateTime,
             Status = "confirmed",
@@ -283,6 +324,8 @@ public sealed class SessionCloser(
                 throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", "Payment amounts must be positive.");
             }
 
+            var walletDraw = amounts.Detail?.Allocation?.Tenders
+                .FirstOrDefault(t => t.Method == method && t.AmountToman == pay.AmountToman);
             invoice.PaymentLines.Add(new PaymentLineEntity
             {
                 Method = method,
@@ -292,6 +335,9 @@ public sealed class SessionCloser(
                 ConfirmationStatus = method == PaymentMethod.CardToCard
                     ? PaymentConfirmationStatus.Pending
                     : PaymentConfirmationStatus.Settled,
+                WalletCustomerId = method == PaymentMethod.Wallet ? customerId : null,
+                WalletRealDrawnToman = method == PaymentMethod.Wallet ? walletDraw?.RealDrawnToman ?? 0 : 0,
+                WalletGiftDrawnToman = method == PaymentMethod.Wallet ? walletDraw?.GiftDrawnToman ?? 0 : 0,
             });
         }
 
@@ -935,6 +981,23 @@ public sealed class DatabaseSeed
             await db.SaveChangesAsync(ct);
         }
         catch (PostgresException ex) when (ex.SqlState is "42P01" or "42703")
+        {
+        }
+
+        try
+        {
+            if (!await db.BranchMemberSettings.AnyAsync(ct))
+            {
+                db.BranchMemberSettings.Add(new BranchMemberSettingsEntity
+                {
+                    LevelLadderJson = MemberSettingsMapper.SerializeLadder(LevelLadder.Default),
+                    BirthdayPercent = 10,
+                    BirthdayWindowKind = "birth_month",
+                });
+                await db.SaveChangesAsync(ct);
+            }
+        }
+        catch (PostgresException ex) when (ex.SqlState == "42P01")
         {
         }
 

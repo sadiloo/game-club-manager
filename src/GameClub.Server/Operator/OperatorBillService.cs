@@ -16,9 +16,14 @@ public sealed record BillAmounts(
     long TimeGrossToman,
     long BuffetGrossToman,
     long ServicesGrossToman,
-    DateTime BilledToUtc);
+    DateTime BilledToUtc,
+    long DiscountToman = 0,
+    MemberBillResult? Detail = null);
 
-public sealed class BillCalculator(SessionBilling billing, RateConfigService rates)
+public sealed class BillCalculator(
+    SessionBilling billing,
+    RateConfigService rates,
+    OperatorMemberContext memberContext)
 {
     public async Task<BillAmounts> ComputeAsync(
         PlaySessionEntity session,
@@ -35,71 +40,77 @@ public sealed class BillCalculator(SessionBilling billing, RateConfigService rat
         CancellationToken ct)
         => ComputeCoreAsync(session, endUtc, surchargeToman, [], ct);
 
-    public async Task<BillAmounts> ComputeBuffetOnlyAsync(IReadOnlyList<OpenSaleLineEntity> saleLines, CancellationToken ct)
+    public Task<BillAmounts> ComputeBuffetOnlyAsync(IReadOnlyList<OpenSaleLineEntity> saleLines, CancellationToken ct)
+        => ComputeBuffetOnlyAsync(saleLines, null, null, ct);
+
+    public async Task<BillAmounts> ComputeBuffetOnlyAsync(
+        IReadOnlyList<OpenSaleLineEntity> saleLines,
+        Guid? customerId,
+        IReadOnlyList<Tender>? previewTenders,
+        CancellationToken ct)
     {
         var snapshot = await rates.LoadAsync(ct);
-        var buffet = OpenSaleMapper.ToBuffetLines(saleLines);
-        var services = OpenSaleMapper.ToServiceLines(saleLines);
-        var issuedAt = TehranTime.Ensure(DateTimeOffset.UtcNow);
-        var calc = InvoiceCalculator.Calculate(new InvoiceRequest(
-            [],
-            buffet,
-            services,
-            null,
-            null,
-            DiscountPolicy.Default,
-            snapshot.Rounding,
-            issuedAt));
-        return new BillAmounts(
-            calc.NetBeforeRoundingToman,
-            calc.RoundingToman,
-            calc.PayableToman,
-            0,
-            0,
-            calc.BuffetGrossToman,
-            calc.ServicesGrossToman,
-            issuedAt.UtcDateTime);
+        var settings = await memberContext.LoadSettingsAsync(ct);
+        var (member, _) = await memberContext.LoadMemberStateAsync(customerId, ct);
+        return ToBillAmounts(MemberBillComposer.ComputeBuffetOnly(saleLines, snapshot, customerId, member, settings, previewTenders));
     }
 
-    private async Task<BillAmounts> ComputeCoreAsync(
+    public async Task<BillAmounts> ComputeWithTendersAsync(
         PlaySessionEntity session,
         DateTime endUtc,
         long surchargeToman,
         IReadOnlyList<OpenSaleLineEntity> saleLines,
+        IReadOnlyList<Tender> tenders,
+        CancellationToken ct)
+        => ToBillAmounts(await ComputeMemberAsync(session, endUtc, surchargeToman, saleLines, tenders, ct));
+
+    private Task<BillAmounts> ComputeCoreAsync(
+        PlaySessionEntity session,
+        DateTime endUtc,
+        long surchargeToman,
+        IReadOnlyList<OpenSaleLineEntity> saleLines,
+        CancellationToken ct)
+        => ComputeWithTendersAsync(session, endUtc, surchargeToman, saleLines, [], ct);
+
+    private async Task<MemberBillResult> ComputeMemberAsync(
+        PlaySessionEntity session,
+        DateTime endUtc,
+        long surchargeToman,
+        IReadOnlyList<OpenSaleLineEntity> saleLines,
+        IReadOnlyList<Tender> previewTenders,
         CancellationToken ct)
     {
         var snapshot = session.RateCardSnapshotId != 0
             ? await rates.LoadSnapshotAsync(session.RateCardSnapshotId, ct)
             : await rates.LoadAsync(ct);
         var charge = billing.BuildCharge(session, endUtc, snapshot);
-        var timeLines = TimeChargeLine.FromSession(charge);
-        var buffet = OpenSaleMapper.ToBuffetLines(saleLines);
-        var services = OpenSaleMapper.ToServiceLines(saleLines).ToList();
-        if (surchargeToman > 0)
-        {
-            services.Add(new ServiceLine("manual-surcharge", "سورشارژ", surchargeToman));
-        }
-
-        var issuedAt = TimeMapping.ToTehran(endUtc);
-        var calc = InvoiceCalculator.Calculate(new InvoiceRequest(
-            timeLines,
-            buffet,
-            services,
-            null,
-            null,
-            DiscountPolicy.Default,
-            snapshot.Rounding,
-            issuedAt));
-        return new BillAmounts(
-            calc.NetBeforeRoundingToman,
-            calc.RoundingToman,
-            calc.PayableToman,
+        var settings = await memberContext.LoadSettingsAsync(ct);
+        var (member, packages) = await memberContext.LoadMemberStateAsync(session.CustomerId, ct);
+        return MemberBillComposer.Compute(
+            charge,
+            snapshot,
+            saleLines,
             surchargeToman,
-            calc.TimeGrossToman,
-            calc.BuffetGrossToman,
-            calc.ServicesGrossToman - (surchargeToman > 0 ? surchargeToman : 0),
-            endUtc);
+            endUtc,
+            session.CustomerId,
+            member,
+            settings,
+            packages,
+            previewTenders.Count > 0 ? previewTenders : null);
     }
+
+    private static BillAmounts ToBillAmounts(MemberBillResult result)
+        => new(
+            result.UnroundedPayableToman,
+            result.RoundingToman,
+            result.CollectibleToman,
+            result.SurchargeToman,
+            result.TimeGrossToman,
+            result.BuffetGrossToman,
+            result.ServicesGrossToman,
+            result.BilledToUtc,
+            result.DiscountToman,
+            result);
 }
 
 public sealed class OperatorBillService(
@@ -111,7 +122,19 @@ public sealed class OperatorBillService(
     SessionCloser closer,
     OperatorPolicies policies)
 {
-    public void ValidatePayments(long collectibleToman, IReadOnlyList<PaymentInput> payments)
+    private static List<Tender> ToTenders(IReadOnlyList<PaymentInput> payments, Guid? customerId)
+        => payments.Select(p =>
+        {
+            var method = OperatorPaymentMethods.Parse(p.Method);
+            var memberId = method == PaymentMethod.Wallet ? customerId?.ToString() : null;
+            return new Tender(method, p.AmountToman, memberId);
+        }).ToList();
+
+    public void ValidatePayments(
+        long collectibleToman,
+        IReadOnlyList<PaymentInput> payments,
+        MemberBillResult? detail = null,
+        Guid? customerId = null)
     {
         if (collectibleToman == 0)
         {
@@ -137,7 +160,50 @@ public sealed class OperatorBillService(
             throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", "At least one positive payment line is required.");
         }
 
-        var tenders = payments.Select(p => new Tender(OperatorPaymentMethods.Parse(p.Method), p.AmountToman)).ToList();
+        var tenders = ToTenders(payments, customerId);
+        if (detail?.Allocation is { IsValid: false } allocation)
+        {
+            throw new ApiException(
+                StatusCodes.Status400BadRequest,
+                "payment_invalid",
+                allocation.Errors.FirstOrDefault()?.Message ?? "Invalid payment.");
+        }
+
+        if (payments.Any(p => OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet))
+        {
+            if (customerId is null)
+            {
+                throw new ApiException(StatusCodes.Status400BadRequest, "wallet_requires_member", "Wallet payment requires a linked member.");
+            }
+
+            if (detail?.Allocation is not { IsValid: true } alloc)
+            {
+                throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", "Wallet allocation failed.");
+            }
+
+            if (alloc.PayableToman != collectibleToman)
+            {
+                throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", "Payable total does not match allocation.");
+            }
+
+            var tendered = payments.Sum(p => p.AmountToman);
+            if (tendered != alloc.PayableToman)
+            {
+                throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", "Tender total does not match payable.");
+            }
+
+            return;
+        }
+
+        foreach (var payment in payments)
+        {
+            var method = OperatorPaymentMethods.Parse(payment.Method);
+            if (method is PaymentMethod.Wallet or PaymentMethod.PcBalance)
+            {
+                throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", $"Unsupported method '{payment.Method}'.");
+            }
+        }
+
         var split = PaymentSplitter.Split(collectibleToman, tenders);
         if (!split.IsValid)
         {
@@ -254,9 +320,18 @@ public sealed class OperatorBillService(
                 throw new ApiException(StatusCodes.Status409Conflict, "invalid_state", "Session is not awaiting payment.");
             }
 
-            ValidatePayments(bill.CollectibleToman, payments);
+            var saleLines = await LoadSaleLinesAsync(session.Id, innerCt);
+            var tenders = ToTenders(payments, session.CustomerId);
+            var amounts = await calculator.ComputeWithTendersAsync(
+                session,
+                bill.FrozenAtUtc,
+                bill.SurchargeToman,
+                saleLines,
+                tenders,
+                innerCt);
+            ValidatePayments(amounts.CollectibleToman, payments, amounts.Detail, session.CustomerId);
 
-            var invoice = await closer.FinalizeFromPendingAsync(session, bill, payments, innerCt);
+            var invoice = await closer.FinalizeFromPendingAsync(session, bill, payments, amounts, innerCt);
             await audit.AppendAsync("bill.confirm", new { sessionId, invoiceNumber = invoice.Number, collectible = invoice.CollectibleToman }, innerCt);
             return invoice;
         }, ct);
@@ -607,7 +682,8 @@ public sealed class OperatorInvoiceService(
     AppDbContext db,
     AuditService audit,
     OperatorContext context,
-    OperatorPolicies policies)
+    OperatorPolicies policies,
+    OperatorMemberBillingService memberBilling)
 {
     public async Task<InvoiceEntity> GetAsync(long number, CancellationToken ct)
     {
@@ -642,6 +718,7 @@ public sealed class OperatorInvoiceService(
         var before = new { invoice.Status, invoice.CollectibleToman };
         invoice.Status = "void";
         invoice.VoidReason = reason.Trim();
+        await memberBilling.ReverseInvoiceEffectsAsync(invoice, ct);
         await audit.AppendAsync("invoice.void", new { number, reason, before, after = new { invoice.Status } }, ct);
         await db.SaveChangesAsync(ct);
     }

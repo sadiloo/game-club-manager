@@ -435,9 +435,17 @@ public sealed class OperatorBuffetSaleService(
             var bill = sale.PendingBill
                 ?? await db.PendingBills.FirstOrDefaultAsync(b => b.OpenSaleId == sale.Id, innerCt)
                 ?? throw new ApiException(StatusCodes.Status409Conflict, "no_bill", "No bill awaiting confirmation.");
-            bills.ValidatePayments(bill.CollectibleToman, payments);
+            var tenders = payments.Select(p => new Tender(
+                OperatorPaymentMethods.Parse(p.Method),
+                p.AmountToman,
+                OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet ? sale.CustomerId?.ToString() : null)).ToList();
+            var amounts = await calculator.ComputeBuffetOnlyAsync(sale.Lines, sale.CustomerId, tenders, innerCt);
+            bill.UnroundedPayableToman = amounts.UnroundedPayableToman;
+            bill.RoundingToman = amounts.RoundingToman;
+            bill.CollectibleToman = amounts.CollectibleToman;
+            bills.ValidatePayments(amounts.CollectibleToman, payments, amounts.Detail, sale.CustomerId);
             await db.Entry(sale).Collection(o => o.Lines).Query().Include(l => l.CatalogItem).LoadAsync(innerCt);
-            var invoice = await closer.FinalizeBuffetOnlyAsync(sale, bill, payments, innerCt);
+            var invoice = await closer.FinalizeBuffetOnlyAsync(sale, bill, payments, amounts, innerCt);
             await audit.AppendAsync("buffet_only.confirm", new { openSaleId, invoice.Number, invoice.CollectibleToman }, innerCt);
             return invoice;
         }, ct);

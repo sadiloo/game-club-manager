@@ -10,6 +10,7 @@ internal static class OperatorPaymentMethods
         "Cash",
         "CardReader",
         "CardToCard",
+        "Wallet",
     };
 
     public static PaymentMethod Parse(string method)
@@ -27,6 +28,11 @@ internal static class OperatorPaymentMethods
         if (method.Equals("CardReader", StringComparison.OrdinalIgnoreCase))
         {
             return PaymentMethod.CardReader;
+        }
+
+        if (method.Equals("Wallet", StringComparison.OrdinalIgnoreCase))
+        {
+            return PaymentMethod.Wallet;
         }
 
         return PaymentMethod.CardToCard;

@@ -56,7 +56,7 @@ public sealed class Pr5ReviewRound1BlockingTests(GameClubWebApplicationFactory f
     }
 
     [Fact]
-    public async Task b4_rejects_pc_balance_numeric_and_wallet_payment_methods()
+    public async Task b4_rejects_pc_balance_and_numeric_payment_methods()
     {
         await S3TestHelpers.ResetAsync(factory);
         var op = await factory.CreateOperatorClientAsync();
@@ -70,7 +70,6 @@ public sealed class Pr5ReviewRound1BlockingTests(GameClubWebApplicationFactory f
                      [new { method = "PcBalance", amountToman = 110_000L }],
                      [new { method = "4", amountToman = 110_000L }],
                      [new { method = "1", amountToman = 110_000L }],
-                     [new { method = "Wallet", amountToman = 110_000L }],
                  })
         {
             var r = await op.PostAsJsonAsync($"/api/operator/sessions/{id}/bill/confirm", new { payments = pays });

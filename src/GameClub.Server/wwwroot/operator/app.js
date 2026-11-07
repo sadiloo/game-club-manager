@@ -232,15 +232,37 @@ function customerLinkContext() {
 function renderCustomerChip(linked) {
   displayedLinkedCustomer = linked || null;
   const chip = document.getElementById("customerChip");
+  const walletBox = document.getElementById("walletActions");
   if (!linked) {
     chip.classList.add("hidden");
     chip.textContent = "";
+    walletBox.classList.add("hidden");
     return;
   }
   const code = linked.membershipCode ? ` · کارت ${linked.membershipCode}` : "";
   chip.textContent = `پیوسته: ${linked.name} — ${linked.mobile}${code}`;
   chip.classList.remove("hidden");
+  walletBox.classList.remove("hidden");
 }
+
+document.getElementById("walletTopUpCash").onclick = async () => {
+  const linked = displayedLinkedCustomer;
+  if (!linked) {
+    showError("عضوی پیوسته نیست.");
+    return;
+  }
+  const raw = window.prompt("مبلغ شارژ (تومان)", "50000");
+  if (!raw) return;
+  const amountToman = Number(raw);
+  if (!Number.isFinite(amountToman) || amountToman <= 0) {
+    showError("مبلغ نامعتبر است.");
+    return;
+  }
+  await api(`/api/operator/members/customers/${linked.id}/wallet/top-up`, {
+    method: "POST",
+    body: JSON.stringify({ method: "Cash", amountToman }),
+  });
+};
 
 async function linkCustomer(customerId) {
   const ctx = customerLinkContext();
@@ -694,6 +716,17 @@ document.getElementById("addC2cLineBtn").onclick = () => {
   const destinationCardId = window.prompt("کارت مقصد", destinationCards[0]?.id || "") || undefined;
   const reference = window.prompt("ارجاع", "") || undefined;
   paymentDraft.push({ method: "CardToCard", amountToman, destinationCardId, reference });
+  renderPaymentLines();
+};
+
+document.getElementById("addWalletLineBtn").onclick = () => {
+  if (!displayedLinkedCustomer) {
+    showError("برای پرداخت کیف پول، عضو را پیوند دهید.");
+    return;
+  }
+  const amountToman = promptAmount("مبلغ کیف پول");
+  if (amountToman == null || Number.isNaN(amountToman)) return;
+  paymentDraft.push({ method: "Wallet", amountToman });
   renderPaymentLines();
 };
 

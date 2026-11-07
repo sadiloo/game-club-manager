@@ -98,6 +98,15 @@ public sealed class PlaySessionEntity
 
     public CustomerEntity? Customer { get; set; }
 
+    public PrepaidSessionKind PrepaidKind { get; set; }
+
+    /// <summary>Booked active seconds for prepaid duration/amount play (pause excluded).</summary>
+    public long? PrepaidBookedActiveSeconds { get; set; }
+
+    public long? PrepaidAmountBudgetToman { get; set; }
+
+    public bool PrepaidEndAlertSent { get; set; }
+
     public List<PlaySegmentEntity> Segments { get; set; } = [];
 
     public List<PauseIntervalEntity> Pauses { get; set; } = [];
@@ -206,6 +215,10 @@ public sealed class InvoiceEntity
     public List<PaymentLineEntity> PaymentLines { get; set; } = [];
 
     public List<InvoiceCatalogLineEntity> CatalogLines { get; set; } = [];
+
+    public InvoiceMemberEffectEntity? MemberEffect { get; set; }
+
+    public long DiscountToman { get; set; }
 }
 
 public sealed class PendingBillEntity
@@ -267,6 +280,12 @@ public sealed class PaymentLineEntity
     public string? Reference { get; set; }
 
     public PaymentConfirmationStatus ConfirmationStatus { get; set; } = PaymentConfirmationStatus.Settled;
+
+    public Guid? WalletCustomerId { get; set; }
+
+    public long WalletRealDrawnToman { get; set; }
+
+    public long WalletGiftDrawnToman { get; set; }
 }
 
 public sealed class DestinationCardEntity
