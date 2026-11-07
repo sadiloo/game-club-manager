@@ -19,12 +19,14 @@ public sealed class ScopeGapIntegrationTests(GameClubWebApplicationFactory facto
         using var scope = factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         await db.Database.ExecuteSqlRawAsync("""
-            TRUNCATE audit_log, checkpoints, pause_intervals, play_segments, invoices, sessions, rate_card_snapshot, stations RESTART IDENTITY CASCADE;
+            TRUNCATE audit_log, checkpoints, pause_intervals, play_segments, invoices, pending_bills, sessions, rate_card_snapshot, stations RESTART IDENTITY CASCADE;
+            TRUNCATE operator_users RESTART IDENTITY CASCADE;
             SELECT setval('invoice_number_seq', 1, false);
             UPDATE invoice_number_sequence SET "NextNumber" = 1;
             UPDATE rate_lines SET "HourlyToman" = 80000
               WHERE "GroupId" = 'pc-normal' AND "IsSpecialBand" = false AND "PlayMode" = 'Offline' AND "PlayerCount" = 1;
             """);
+        await GameClub.Server.Services.DatabaseSeed.EnsureAsync(db);
     }
 
     [Fact]
@@ -60,6 +62,7 @@ public sealed class ScopeGapIntegrationTests(GameClubWebApplicationFactory facto
         var stop = await _client.PostAsync($"/api/sessions/{sessionId}/stop", null);
         var invoice = await stop.Content.ReadFromJsonAsync<JsonElement>();
         Assert.Equal(90_000, invoice.GetProperty("collectibleToman").GetInt64());
+        await S3TestHelpers.FinishPcPaymentAsync(factory, sessionId, 90_000);
 
         using var scope = factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
@@ -91,6 +94,9 @@ public sealed class ScopeGapIntegrationTests(GameClubWebApplicationFactory facto
     [Fact]
     public async Task hosted_dead_pc_sweep_auto_closes_with_fake_clock()
     {
+        factory.DeadPcBackgroundSweepEnabled = true;
+        try
+        {
         await ResetAsync();
         await _client.PostAsJsonAsync("/api/stations", new { id = "PC-SWEEP", name = "PC", groupId = PilotSeed.PcNormalGroupId });
         factory.Clock.SetTehran(2026, 6, 3, 14, 0);
@@ -100,22 +106,27 @@ public sealed class ScopeGapIntegrationTests(GameClubWebApplicationFactory facto
         await _client.PostAsJsonAsync($"/api/sessions/{sessionId}/checkpoints", new { at = TestTimes.T(2026, 6, 3, 15, 0) });
         factory.Clock.SetTehran(2026, 6, 3, 15, 10);
 
-        InvoiceEntity? invoice = null;
-        for (var attempt = 0; attempt < 40 && invoice is null; attempt++)
+        PendingBillEntity? pending = null;
+        for (var attempt = 0; attempt < 40 && pending is null; attempt++)
         {
             await Task.Delay(250);
             using var scope = factory.Services.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            invoice = await db.Invoices.FirstOrDefaultAsync();
+            pending = await db.PendingBills.FirstOrDefaultAsync();
         }
 
-        Assert.NotNull(invoice);
-        Assert.Equal(80_000, invoice!.CollectibleToman);
+        Assert.NotNull(pending);
+        Assert.Equal(80_000, pending!.CollectibleToman);
         using (var scope = factory.Services.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
             var audit = await db.AuditLog.Where(a => a.Action == "session.stop").SingleAsync();
             Assert.Contains("auto-close", audit.DetailsJson);
+        }
+        }
+        finally
+        {
+            factory.DeadPcBackgroundSweepEnabled = false;
         }
     }
 }

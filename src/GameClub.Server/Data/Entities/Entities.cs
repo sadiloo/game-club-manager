@@ -8,6 +8,23 @@ public enum SessionStatus
     Paused = 1,
     Closed = 2,
     ManualSettle = 3,
+    BillOpen = 4,
+    AwaitingPayment = 5,
+}
+
+public enum UserRole
+{
+    Owner = 0,
+    Manager = 1,
+    Operator = 2,
+}
+
+public enum PaymentConfirmationStatus
+{
+    Settled = 0,
+    Pending = 1,
+    Confirmed = 2,
+    Rejected = 3,
 }
 
 public sealed class StationGroupEntity
@@ -28,6 +45,10 @@ public sealed class StationEntity
     public string GroupId { get; set; } = string.Empty;
 
     public bool IsActive { get; set; } = true;
+
+    public int DefaultPlayerCount { get; set; } = 1;
+
+    public PlayMode DefaultPlayMode { get; set; } = PlayMode.Offline;
 
     public StationGroupEntity? Group { get; set; }
 }
@@ -65,6 +86,8 @@ public sealed class PlaySessionEntity
     public List<CheckpointEntity> Checkpoints { get; set; } = [];
 
     public InvoiceEntity? Invoice { get; set; }
+
+    public PendingBillEntity? PendingBill { get; set; }
 }
 
 public sealed class PlaySegmentEntity
@@ -134,9 +157,106 @@ public sealed class InvoiceEntity
     /// <summary>Rounded amount to collect (step 5,000 up).</summary>
     public long CollectibleToman { get; set; }
 
+    public long SurchargeToman { get; set; }
+
+    public DateTime BilledToUtc { get; set; }
+
     public DateTime IssuedAtUtc { get; set; }
 
-    public string Status { get; set; } = "issued";
+    /// <summary>confirmed | void</summary>
+    public string Status { get; set; } = "confirmed";
+
+    public string? VoidReason { get; set; }
+
+    public string? StopReason { get; set; }
+
+    public List<PaymentLineEntity> PaymentLines { get; set; } = [];
+}
+
+public sealed class PendingBillEntity
+{
+    public Guid Id { get; set; }
+
+    public Guid SessionId { get; set; }
+
+    public PlaySessionEntity? Session { get; set; }
+
+    public DateTime FrozenAtUtc { get; set; }
+
+    public DateTime OpenedAtUtc { get; set; }
+
+    public long UnroundedPayableToman { get; set; }
+
+    public long RoundingToman { get; set; }
+
+    public long CollectibleToman { get; set; }
+
+    public long SurchargeToman { get; set; }
+
+    /// <summary>console_bill | pc_stop | manual_settle | auto_close</summary>
+    public string Source { get; set; } = string.Empty;
+
+    public string? StopReason { get; set; }
+
+    public string? RevertStateJson { get; set; }
+
+    public uint RowVersion { get; set; }
+}
+
+public sealed class PaymentLineEntity
+{
+    public long Id { get; set; }
+
+    public Guid InvoiceId { get; set; }
+
+    public InvoiceEntity? Invoice { get; set; }
+
+    public PaymentMethod Method { get; set; }
+
+    public long AmountToman { get; set; }
+
+    public string? DestinationCardId { get; set; }
+
+    public DestinationCardEntity? DestinationCard { get; set; }
+
+    public string? Reference { get; set; }
+
+    public PaymentConfirmationStatus ConfirmationStatus { get; set; } = PaymentConfirmationStatus.Settled;
+}
+
+public sealed class DestinationCardEntity
+{
+    public string Id { get; set; } = string.Empty;
+
+    public string Label { get; set; } = string.Empty;
+
+    public bool IsActive { get; set; } = true;
+}
+
+public sealed class OperatorUserEntity
+{
+    public Guid Id { get; set; }
+
+    public string Username { get; set; } = string.Empty;
+
+    public string PinHash { get; set; } = string.Empty;
+
+    public UserRole Role { get; set; }
+
+    public bool IsActive { get; set; } = true;
+}
+
+public sealed class RejectedCardToCardEntity
+{
+    public long Id { get; set; }
+
+    public long PaymentLineId { get; set; }
+
+    public PaymentLineEntity? PaymentLine { get; set; }
+
+    public long AmountToman { get; set; }
+
+    public DateTime RecordedAtUtc { get; set; }
 }
 
 public sealed class InvoiceNumberSequence
@@ -155,6 +275,8 @@ public sealed class AuditLogEntry
     public string Action { get; set; } = string.Empty;
 
     public string DetailsJson { get; set; } = "{}";
+
+    public Guid? ActorUserId { get; set; }
 }
 
 public sealed class RateCardSnapshotEntity

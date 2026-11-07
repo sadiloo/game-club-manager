@@ -4,6 +4,7 @@ using System.Text.Json;
 using GameClub.Billing;
 using GameClub.Server.Data;
 using GameClub.Server.Data.Entities;
+using GameClub.Server.Services;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
@@ -23,12 +24,14 @@ public sealed class AcceptanceScenarioTests(GameClubWebApplicationFactory factor
         using var scope = factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         await db.Database.ExecuteSqlRawAsync("""
-            TRUNCATE audit_log, checkpoints, pause_intervals, play_segments, invoices, sessions, rate_card_snapshot, stations RESTART IDENTITY CASCADE;
+            TRUNCATE rejected_card_to_card, payment_lines, pending_bills, audit_log, checkpoints, pause_intervals, play_segments, invoices, sessions, rate_card_snapshot, stations, destination_cards RESTART IDENTITY CASCADE;
+            TRUNCATE operator_users RESTART IDENTITY CASCADE;
             SELECT setval('invoice_number_seq', 1, false);
             UPDATE invoice_number_sequence SET "NextNumber" = 1;
             UPDATE rate_lines SET "HourlyToman" = 80000
               WHERE "GroupId" = 'pc-normal' AND "IsSpecialBand" = false AND "PlayMode" = 'Offline' AND "PlayerCount" = 1;
             """);
+        await DatabaseSeed.EnsureAsync(db);
     }
 
     [Fact]
@@ -61,6 +64,7 @@ public sealed class AcceptanceScenarioTests(GameClubWebApplicationFactory factor
         var stop = await _client.PostAsync($"/api/sessions/{sessionId}/stop", null);
         var invoice = await stop.Content.ReadFromJsonAsync<JsonElement>();
         AssertInvoice(invoice, 80_000, 80_000);
+        await S3TestHelpers.FinishPcPaymentAsync(factory, sessionId, 80_000);
     }
 
     [Fact]
@@ -76,6 +80,7 @@ public sealed class AcceptanceScenarioTests(GameClubWebApplicationFactory factor
         var stop = await _client.PostAsync($"/api/sessions/{sessionId}/stop", null);
         var invoice = await stop.Content.ReadFromJsonAsync<JsonElement>();
         AssertInvoice(invoice, 110_000, 110_000);
+        await S3TestHelpers.FinishPcPaymentAsync(factory, sessionId, 110_000);
     }
 
     [Fact]
@@ -90,6 +95,7 @@ public sealed class AcceptanceScenarioTests(GameClubWebApplicationFactory factor
         var stop = await _client.PostAsync($"/api/sessions/{sessionId}/stop", null);
         var invoice = await stop.Content.ReadFromJsonAsync<JsonElement>();
         AssertInvoice(invoice, 66_667, 70_000);
+        await S3TestHelpers.FinishPcPaymentAsync(factory, sessionId, 70_000);
     }
 
     [Fact]
@@ -104,6 +110,7 @@ public sealed class AcceptanceScenarioTests(GameClubWebApplicationFactory factor
         var stop = await _client.PostAsync($"/api/sessions/{sessionId}/stop", null);
         var invoice = await stop.Content.ReadFromJsonAsync<JsonElement>();
         AssertInvoice(invoice, 90_000, 90_000);
+        await S3TestHelpers.FinishPcPaymentAsync(factory, sessionId, 90_000);
     }
 
     [Fact]
@@ -118,6 +125,7 @@ public sealed class AcceptanceScenarioTests(GameClubWebApplicationFactory factor
         var stop = await _client.PostAsync($"/api/sessions/{sessionId}/stop", null);
         var invoice = await stop.Content.ReadFromJsonAsync<JsonElement>();
         AssertInvoice(invoice, 130_000, 130_000);
+        await S3TestHelpers.FinishPcPaymentAsync(factory, sessionId, 130_000);
     }
 
     [Fact]
@@ -129,8 +137,10 @@ public sealed class AcceptanceScenarioTests(GameClubWebApplicationFactory factor
         var sessionId = await StartSession("PS5-1", 2);
         factory.Clock.SetTehran(2026, 6, 3, 17, 36);
         var stop = await _client.PostAsync($"/api/sessions/{sessionId}/stop", null);
-        var invoice = await stop.Content.ReadFromJsonAsync<JsonElement>();
-        AssertInvoice(invoice, 450_000, 450_000);
+        var stopBody = await stop.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(stopBody.GetProperty("pending").GetBoolean());
+        AssertInvoice(stopBody, 450_000, 450_000);
+        await S3TestHelpers.FinishPcPaymentAsync(factory, sessionId, 450_000);
     }
 
     [Fact]
@@ -142,8 +152,10 @@ public sealed class AcceptanceScenarioTests(GameClubWebApplicationFactory factor
         var sessionId = await StartSession("PS5-2", 3);
         factory.Clock.SetTehran(2026, 6, 3, 15, 45);
         var stop = await _client.PostAsync($"/api/sessions/{sessionId}/stop", null);
-        var invoice = await stop.Content.ReadFromJsonAsync<JsonElement>();
-        AssertInvoice(invoice, 280_000, 280_000);
+        var stopBody = await stop.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(stopBody.GetProperty("pending").GetBoolean());
+        AssertInvoice(stopBody, 280_000, 280_000);
+        await S3TestHelpers.FinishPcPaymentAsync(factory, sessionId, 280_000);
     }
 
     [Fact]
@@ -159,8 +171,9 @@ public sealed class AcceptanceScenarioTests(GameClubWebApplicationFactory factor
         Assert.Equal(HttpStatusCode.NoContent, (await _client.PostAsync($"/api/sessions/{sessionId}/resume", null)).StatusCode);
         factory.Clock.SetTehran(2026, 6, 3, 15, 20);
         var stop = await _client.PostAsync($"/api/sessions/{sessionId}/stop", null);
-        var invoice = await stop.Content.ReadFromJsonAsync<JsonElement>();
-        AssertInvoice(invoice, 110_000, 110_000);
+        var stopBody = await stop.Content.ReadFromJsonAsync<JsonElement>();
+        AssertInvoice(stopBody, 110_000, 110_000);
+        await S3TestHelpers.FinishPcPaymentAsync(factory, sessionId, 110_000);
         using var scope = factory.Services.CreateScope();
         var actions = await scope.ServiceProvider.GetRequiredService<AppDbContext>().AuditLog.Select(a => a.Action).ToListAsync();
         Assert.Contains("session.pause", actions);
@@ -184,6 +197,7 @@ public sealed class AcceptanceScenarioTests(GameClubWebApplicationFactory factor
         var stop = await _client.PostAsync($"/api/sessions/{sessionId}/stop", null);
         var invoice = await stop.Content.ReadFromJsonAsync<JsonElement>();
         AssertInvoice(invoice, 80_000, 80_000);
+        await S3TestHelpers.FinishPcPaymentAsync(factory, sessionId, 80_000);
     }
 
     [Fact]
@@ -207,8 +221,9 @@ public sealed class AcceptanceScenarioTests(GameClubWebApplicationFactory factor
         var sessionId = await StartSession("PS5-5", 1);
         factory.Clock.SetTehran(2026, 6, 3, 14, 1, 5);
         var stop = await _client.PostAsync($"/api/sessions/{sessionId}/stop", null);
-        var invoice = await stop.Content.ReadFromJsonAsync<JsonElement>();
-        AssertInvoice(invoice, 3_667, 5_000);
+        var stopBody = await stop.Content.ReadFromJsonAsync<JsonElement>();
+        AssertInvoice(stopBody, 3_667, 5_000);
+        await S3TestHelpers.FinishPcPaymentAsync(factory, sessionId, 5_000);
     }
 
     [Fact]
@@ -225,7 +240,7 @@ public sealed class AcceptanceScenarioTests(GameClubWebApplicationFactory factor
         Assert.Equal(HttpStatusCode.OK, sweep.StatusCode);
         using var scope = factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        var invoice = await db.Invoices.SingleAsync();
+        var invoice = await db.PendingBills.SingleAsync();
         Assert.Equal(80_000, invoice.UnroundedPayableToman);
         Assert.Equal(80_000, invoice.CollectibleToman);
         var audit = await db.AuditLog.Where(a => a.Action == "session.stop").SingleAsync();
@@ -258,8 +273,16 @@ public sealed class AcceptanceScenarioTests(GameClubWebApplicationFactory factor
         await RegisterPc("PC-I", PilotSeed.PcNormalGroupId);
         factory.Clock.SetTehran(2026, 6, 3, 14, 0);
         var sessionId = await StartSession("PC-I", 1);
-        factory.Clock.SetTehran(2026, 6, 3, 14, 5);
-        await _client.PostAsync($"/api/sessions/{sessionId}/stop", null);
+        factory.Clock.SetTehran(2026, 6, 3, 14, 0, 40);
+        var stop = await _client.PostAsync($"/api/sessions/{sessionId}/stop", null);
+        stop.EnsureSuccessStatusCode();
+        var stopBody = await stop.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(0, stopBody.GetProperty("collectibleToman").GetInt64());
+        var op = await factory.CreateOperatorClientAsync();
+        var confirm = await op.PostAsJsonAsync(
+            $"/api/operator/sessions/{sessionId}/bill/confirm",
+            new { payments = Array.Empty<object>() });
+        confirm.EnsureSuccessStatusCode();
         using var scope = factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         Assert.True(await db.AuditLog.AnyAsync(a => a.Action == "session.start"));
@@ -291,8 +314,9 @@ public sealed class AcceptanceScenarioTests(GameClubWebApplicationFactory factor
         await _client.PatchAsJsonAsync($"/api/sessions/{sessionId}/player-count", new { playerCount = 1 });
         factory.Clock.SetTehran(2026, 6, 3, 16, 0);
         var stop = await _client.PostAsync($"/api/sessions/{sessionId}/stop", null);
-        var invoice = await stop.Content.ReadFromJsonAsync<JsonElement>();
-        AssertInvoice(invoice, 235_000, 235_000);
+        var stopBody = await stop.Content.ReadFromJsonAsync<JsonElement>();
+        AssertInvoice(stopBody, 235_000, 235_000);
+        await S3TestHelpers.FinishPcPaymentAsync(factory, sessionId, 235_000);
     }
 
     private static void AssertInvoice(JsonElement invoice, long unrounded, long collectible)

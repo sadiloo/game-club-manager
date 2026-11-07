@@ -42,6 +42,7 @@ public sealed class RobustnessTests(MainFactory f) : QaBase(f)
         Assert.Contains("session.manual_settle_resolve", await AuditActions());
         var again = await C.PostAsJsonAsync($"/api/sessions/{id}/manual-settle", new { });
         Assert.Equal(HttpStatusCode.Conflict, again.StatusCode);
+        await ConfirmPendingBill(id, 80_000);
         Assert.Equal(1, await F.Scalar("select count(*) from invoices"));
     }
     [Fact] public async Task QA_C5_manual_settle_operator_end_time_bounds()

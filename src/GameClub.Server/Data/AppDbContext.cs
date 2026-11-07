@@ -21,6 +21,16 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
 
     public DbSet<InvoiceEntity> Invoices => Set<InvoiceEntity>();
 
+    public DbSet<PendingBillEntity> PendingBills => Set<PendingBillEntity>();
+
+    public DbSet<PaymentLineEntity> PaymentLines => Set<PaymentLineEntity>();
+
+    public DbSet<DestinationCardEntity> DestinationCards => Set<DestinationCardEntity>();
+
+    public DbSet<OperatorUserEntity> OperatorUsers => Set<OperatorUserEntity>();
+
+    public DbSet<RejectedCardToCardEntity> RejectedCardToCard => Set<RejectedCardToCardEntity>();
+
     public DbSet<InvoiceNumberSequence> InvoiceNumbers => Set<InvoiceNumberSequence>();
 
     public DbSet<AuditLogEntry> AuditLog => Set<AuditLogEntry>();
@@ -46,6 +56,7 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             e.HasKey(x => x.Id);
             e.HasIndex(x => x.Id).IsUnique();
             e.HasOne(x => x.Group).WithMany().HasForeignKey(x => x.GroupId);
+            e.Property(x => x.DefaultPlayMode).HasConversion<string>();
         });
 
         modelBuilder.Entity<PlaySessionEntity>(e =>
@@ -56,6 +67,7 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             e.Property(x => x.Mode).HasConversion<string>();
             e.HasOne(x => x.Station).WithMany().HasForeignKey(x => x.StationId);
             e.HasOne(x => x.Invoice).WithOne(x => x.Session!).HasForeignKey<InvoiceEntity>(x => x.SessionId);
+            e.HasOne(x => x.PendingBill).WithOne(x => x.Session!).HasForeignKey<PendingBillEntity>(x => x.SessionId);
             e.HasOne(x => x.RateCardSnapshot).WithMany().HasForeignKey(x => x.RateCardSnapshotId)
                 .OnDelete(DeleteBehavior.Restrict);
         });
@@ -86,6 +98,44 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             e.ToTable("invoices");
             e.HasKey(x => x.Id);
             e.HasIndex(x => x.Number).IsUnique();
+        });
+
+        modelBuilder.Entity<PendingBillEntity>(e =>
+        {
+            e.ToTable("pending_bills");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => x.SessionId).IsUnique();
+            e.Property(x => x.RowVersion).IsRowVersion();
+        });
+
+        modelBuilder.Entity<PaymentLineEntity>(e =>
+        {
+            e.ToTable("payment_lines");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Method).HasConversion<string>();
+            e.Property(x => x.ConfirmationStatus).HasConversion<string>();
+            e.HasOne(x => x.DestinationCard).WithMany().HasForeignKey(x => x.DestinationCardId);
+        });
+
+        modelBuilder.Entity<DestinationCardEntity>(e =>
+        {
+            e.ToTable("destination_cards");
+            e.HasKey(x => x.Id);
+        });
+
+        modelBuilder.Entity<OperatorUserEntity>(e =>
+        {
+            e.ToTable("operator_users");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => x.Username).IsUnique();
+            e.Property(x => x.Role).HasConversion<string>();
+        });
+
+        modelBuilder.Entity<RejectedCardToCardEntity>(e =>
+        {
+            e.ToTable("rejected_card_to_card");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => x.PaymentLineId).IsUnique();
         });
 
         modelBuilder.Entity<InvoiceNumberSequence>(e =>

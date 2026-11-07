@@ -4,6 +4,7 @@ using System.Text.Json;
 using GameClub.Billing;
 using GameClub.Server.Data;
 using GameClub.Server.Data.Entities;
+using GameClub.Server.Services;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -19,12 +20,14 @@ public sealed class PoClarificationIntegrationTests(GameClubWebApplicationFactor
         using var scope = factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         await db.Database.ExecuteSqlRawAsync("""
-            TRUNCATE audit_log, checkpoints, pause_intervals, play_segments, invoices, sessions, rate_card_snapshot, stations RESTART IDENTITY CASCADE;
+            TRUNCATE rejected_card_to_card, payment_lines, pending_bills, audit_log, checkpoints, pause_intervals, play_segments, invoices, sessions, rate_card_snapshot, stations, destination_cards RESTART IDENTITY CASCADE;
+            TRUNCATE operator_users RESTART IDENTITY CASCADE;
             SELECT setval('invoice_number_seq', 1, false);
             UPDATE invoice_number_sequence SET "NextNumber" = 1;
             UPDATE rate_lines SET "HourlyToman" = 80000
               WHERE "GroupId" = 'pc-normal' AND "IsSpecialBand" = false AND "PlayMode" = 'Offline' AND "PlayerCount" = 1;
             """);
+        await DatabaseSeed.EnsureAsync(db);
     }
 
     [Fact]
@@ -40,6 +43,7 @@ public sealed class PoClarificationIntegrationTests(GameClubWebApplicationFactor
         var body = await stop.Content.ReadFromJsonAsync<JsonElement>();
         Assert.Equal(66_667, body.GetProperty("unroundedPayableToman").GetInt64());
         Assert.Equal(70_000, body.GetProperty("collectibleToman").GetInt64());
+        await S3TestHelpers.FinishPcPaymentAsync(factory, sessionId, 70_000);
 
         using var scope = factory.Services.CreateScope();
         var invoice = await scope.ServiceProvider.GetRequiredService<AppDbContext>().Invoices.SingleAsync();
@@ -62,7 +66,7 @@ public sealed class PoClarificationIntegrationTests(GameClubWebApplicationFactor
         early.EnsureSuccessStatusCode();
         using (var scope = factory.Services.CreateScope())
         {
-            Assert.Equal(0, await scope.ServiceProvider.GetRequiredService<AppDbContext>().Invoices.CountAsync());
+            Assert.Equal(0, await scope.ServiceProvider.GetRequiredService<AppDbContext>().PendingBills.CountAsync());
         }
 
         factory.Clock.SetTehran(2026, 6, 3, 15, 10, 0);
@@ -70,8 +74,8 @@ public sealed class PoClarificationIntegrationTests(GameClubWebApplicationFactor
         sweep.EnsureSuccessStatusCode();
         using var scope2 = factory.Services.CreateScope();
         var db = scope2.ServiceProvider.GetRequiredService<AppDbContext>();
-        var invoice = await db.Invoices.SingleAsync();
-        Assert.Equal(80_000, invoice.CollectibleToman);
+        var pending = await db.PendingBills.SingleAsync();
+        Assert.Equal(80_000, pending.CollectibleToman);
     }
 
     [Fact]

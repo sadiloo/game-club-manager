@@ -34,6 +34,9 @@ namespace GameClub.Server.Data.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<Guid?>("ActorUserId")
+                        .HasColumnType("uuid");
+
                     b.Property<DateTime>("AtUtc")
                         .HasColumnType("timestamp with time zone");
 
@@ -90,11 +93,31 @@ namespace GameClub.Server.Data.Migrations
                     b.ToTable("checkpoints", (string)null);
                 });
 
+            modelBuilder.Entity("GameClub.Server.Data.Entities.DestinationCardEntity", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasColumnType("text");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("Label")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("destination_cards", (string)null);
+                });
+
             modelBuilder.Entity("GameClub.Server.Data.Entities.InvoiceEntity", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
+
+                    b.Property<DateTime>("BilledToUtc")
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<long>("CollectibleToman")
                         .HasColumnType("bigint");
@@ -115,8 +138,17 @@ namespace GameClub.Server.Data.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<string>("StopReason")
+                        .HasColumnType("text");
+
+                    b.Property<long>("SurchargeToman")
+                        .HasColumnType("bigint");
+
                     b.Property<long>("UnroundedPayableToman")
                         .HasColumnType("bigint");
+
+                    b.Property<string>("VoidReason")
+                        .HasColumnType("text");
 
                     b.HasKey("Id");
 
@@ -145,6 +177,35 @@ namespace GameClub.Server.Data.Migrations
                     b.ToTable("invoice_number_sequence", (string)null);
                 });
 
+            modelBuilder.Entity("GameClub.Server.Data.Entities.OperatorUserEntity", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("PinHash")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Role")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Username")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Username")
+                        .IsUnique();
+
+                    b.ToTable("operator_users", (string)null);
+                });
+
             modelBuilder.Entity("GameClub.Server.Data.Entities.PauseIntervalEntity", b =>
                 {
                     b.Property<long>("Id")
@@ -167,6 +228,94 @@ namespace GameClub.Server.Data.Migrations
                     b.HasIndex("SessionId");
 
                     b.ToTable("pause_intervals", (string)null);
+                });
+
+            modelBuilder.Entity("GameClub.Server.Data.Entities.PaymentLineEntity", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
+                    b.Property<long>("AmountToman")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("ConfirmationStatus")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("DestinationCardId")
+                        .HasColumnType("text");
+
+                    b.Property<Guid>("InvoiceId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Method")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Reference")
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("DestinationCardId");
+
+                    b.HasIndex("InvoiceId");
+
+                    b.ToTable("payment_lines", (string)null);
+                });
+
+            modelBuilder.Entity("GameClub.Server.Data.Entities.PendingBillEntity", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<long>("CollectibleToman")
+                        .HasColumnType("bigint");
+
+                    b.Property<DateTime>("FrozenAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime>("OpenedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("RevertStateJson")
+                        .HasColumnType("text");
+
+                    b.Property<long>("RoundingToman")
+                        .HasColumnType("bigint");
+
+                    b.Property<uint>("RowVersion")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
+                    b.Property<Guid>("SessionId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Source")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("StopReason")
+                        .HasColumnType("text");
+
+                    b.Property<long>("SurchargeToman")
+                        .HasColumnType("bigint");
+
+                    b.Property<long>("UnroundedPayableToman")
+                        .HasColumnType("bigint");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("SessionId")
+                        .IsUnique();
+
+                    b.ToTable("pending_bills", (string)null);
                 });
 
             modelBuilder.Entity("GameClub.Server.Data.Entities.PlaySegmentEntity", b =>
@@ -312,10 +461,42 @@ namespace GameClub.Server.Data.Migrations
                     b.ToTable("rate_lines", (string)null);
                 });
 
+            modelBuilder.Entity("GameClub.Server.Data.Entities.RejectedCardToCardEntity", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
+                    b.Property<long>("AmountToman")
+                        .HasColumnType("bigint");
+
+                    b.Property<long>("PaymentLineId")
+                        .HasColumnType("bigint");
+
+                    b.Property<DateTime>("RecordedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("PaymentLineId")
+                        .IsUnique();
+
+                    b.ToTable("rejected_card_to_card", (string)null);
+                });
+
             modelBuilder.Entity("GameClub.Server.Data.Entities.StationEntity", b =>
                 {
                     b.Property<string>("Id")
                         .HasColumnType("text");
+
+                    b.Property<string>("DefaultPlayMode")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<int>("DefaultPlayerCount")
+                        .HasColumnType("integer");
 
                     b.Property<string>("GroupId")
                         .IsRequired()
@@ -389,6 +570,34 @@ namespace GameClub.Server.Data.Migrations
                     b.Navigation("Session");
                 });
 
+            modelBuilder.Entity("GameClub.Server.Data.Entities.PaymentLineEntity", b =>
+                {
+                    b.HasOne("GameClub.Server.Data.Entities.DestinationCardEntity", "DestinationCard")
+                        .WithMany()
+                        .HasForeignKey("DestinationCardId");
+
+                    b.HasOne("GameClub.Server.Data.Entities.InvoiceEntity", "Invoice")
+                        .WithMany("PaymentLines")
+                        .HasForeignKey("InvoiceId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("DestinationCard");
+
+                    b.Navigation("Invoice");
+                });
+
+            modelBuilder.Entity("GameClub.Server.Data.Entities.PendingBillEntity", b =>
+                {
+                    b.HasOne("GameClub.Server.Data.Entities.PlaySessionEntity", "Session")
+                        .WithOne("PendingBill")
+                        .HasForeignKey("GameClub.Server.Data.Entities.PendingBillEntity", "SessionId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Session");
+                });
+
             modelBuilder.Entity("GameClub.Server.Data.Entities.PlaySegmentEntity", b =>
                 {
                     b.HasOne("GameClub.Server.Data.Entities.PlaySessionEntity", "Session")
@@ -419,6 +628,17 @@ namespace GameClub.Server.Data.Migrations
                     b.Navigation("Station");
                 });
 
+            modelBuilder.Entity("GameClub.Server.Data.Entities.RejectedCardToCardEntity", b =>
+                {
+                    b.HasOne("GameClub.Server.Data.Entities.PaymentLineEntity", "PaymentLine")
+                        .WithMany()
+                        .HasForeignKey("PaymentLineId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("PaymentLine");
+                });
+
             modelBuilder.Entity("GameClub.Server.Data.Entities.StationEntity", b =>
                 {
                     b.HasOne("GameClub.Server.Data.Entities.StationGroupEntity", "Group")
@@ -430,6 +650,11 @@ namespace GameClub.Server.Data.Migrations
                     b.Navigation("Group");
                 });
 
+            modelBuilder.Entity("GameClub.Server.Data.Entities.InvoiceEntity", b =>
+                {
+                    b.Navigation("PaymentLines");
+                });
+
             modelBuilder.Entity("GameClub.Server.Data.Entities.PlaySessionEntity", b =>
                 {
                     b.Navigation("Checkpoints");
@@ -437,6 +662,8 @@ namespace GameClub.Server.Data.Migrations
                     b.Navigation("Invoice");
 
                     b.Navigation("Pauses");
+
+                    b.Navigation("PendingBill");
 
                     b.Navigation("Segments");
                 });

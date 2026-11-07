@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="fa">
+<head>
+  <meta charset="utf-8" />
+  <title>GameClub Operator</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 1rem; max-width: 960px; }
+    #grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 0.5rem; }
+    .tile { border: 1px solid #ccc; padding: 0.75rem; border-radius: 8px; cursor: pointer; }
+    .tile[data-status="Free"] { background: #f4f4f4; }
+    .tile[data-status="Playing"] { background: #e8f5e9; }
+    .tile[data-status="Paused"] { background: #fff3e0; }
+    .tile[data-status="Waiting for payment"] { background: #e3f2fd; }
+    .tile[data-status="Manual settle"] { background: #fce4ec; }
+    .hidden { display: none; }
+    #error { color: #b00020; white-space: pre-wrap; }
+    #billDetail { font-size: 0.9rem; }
+    .pay-line { display: flex; gap: 0.5rem; flex-wrap: wrap; margin: 0.25rem 0; }
+    label { display: block; margin: 0.25rem 0; }
+    section.panel { border: 1px solid #ddd; padding: 0.75rem; margin: 0.75rem 0; border-radius: 8px; }
+  </style>
+</head>
+<body>
+  <section id="login">
+    <h1>Operator login</h1>
+    <label>Username <input id="username" autocomplete="username" /></label>
+    <label>PIN <input id="pin" type="password" autocomplete="current-password" /></label>
+    <button id="loginBtn" type="button">Login</button>
+    <p id="loginError" class="hidden"></p>
+  </section>
+  <section id="app" class="hidden">
+    <h1>Station grid</h1>
+    <p id="error" role="alert"></p>
+    <div id="grid"></div>
+
+    <section id="sessionActions" class="panel hidden">
+      <h2>Session</h2>
+      <p id="sessionLabel"></p>
+      <button id="pauseBtn" type="button">Pause</button>
+      <button id="resumeBtn" type="button">Resume</button>
+      <label>Players
+        <select id="playerCountSelect">
+          <option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option>
+        </select>
+      </label>
+      <button id="playerCountBtn" type="button">Change players</button>
+      <button id="openBillBtn" type="button">Open bill (console)</button>
+    </section>
+
+    <section id="manualSettlePanel" class="panel">
+      <h2>Manual settle queue</h2>
+      <ul id="manualSettleList"></ul>
+    </section>
+
+    <section id="pendingC2cPanel" class="panel">
+      <h2>Pending card-to-card</h2>
+      <ul id="pendingC2cList"></ul>
+    </section>
+
+    <section id="bill" class="panel hidden">
+      <h2>Bill</h2>
+      <div id="billDetail"></div>
+      <p id="cashChange"></p>
+      <div id="paymentLines"></div>
+      <button id="addCashLineBtn" type="button">Add cash line</button>
+      <button id="addCardLineBtn" type="button">Add card reader line</button>
+      <button id="addC2cLineBtn" type="button">Add card-to-card line</button>
+      <button id="surchargeBtn" type="button">+5,000</button>
+      <button id="confirmBtn" type="button">Confirm payment</button>
+      <button id="cancelBillBtn" type="button">Cancel bill</button>
+    </section>
+
+    <section id="invoicePanel" class="panel">
+      <h2>Invoice lookup</h2>
+      <label>Number <input id="invoiceNumber" type="number" /></label>
+      <button id="loadInvoiceBtn" type="button">Load</button>
+      <button id="voidInvoiceBtn" type="button">Void (manager)</button>
+      <pre id="invoiceDetail"></pre>
+    </section>
+  </section>
+  <script src="/operator/app.js"></script>
+</body>
+</html>

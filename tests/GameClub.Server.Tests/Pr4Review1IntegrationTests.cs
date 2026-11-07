@@ -84,8 +84,8 @@ public sealed class Pr4Review1IntegrationTests(GameClubWebApplicationFactory fac
         await _client.PostAsync("/api/internal/dead-pc-sweep", null);
         using var scope = factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        Assert.Equal(SessionStatus.Closed, await db.Sessions.Where(s => s.StationId == "PC-J1").Select(s => s.Status).SingleAsync());
-        Assert.Equal(SessionStatus.Closed, await db.Sessions.Where(s => s.StationId == "PC-J2").Select(s => s.Status).SingleAsync());
+        Assert.Equal(SessionStatus.AwaitingPayment, await db.Sessions.Where(s => s.StationId == "PC-J1").Select(s => s.Status).SingleAsync());
+        Assert.Equal(SessionStatus.AwaitingPayment, await db.Sessions.Where(s => s.StationId == "PC-J2").Select(s => s.Status).SingleAsync());
         var poisoned = await db.Sessions.SingleAsync(s => s.StationId == "PC-J0");
         Assert.Equal(SessionStatus.Open, poisoned.Status);
         Assert.Equal(0, await db.Invoices.CountAsync(i => i.SessionId == poisoned.Id));
@@ -128,6 +128,7 @@ public sealed class Pr4Review1IntegrationTests(GameClubWebApplicationFactory fac
         var stop = await _client.PostAsync($"/api/sessions/{id}/stop", null);
         var inv = await stop.Content.ReadFromJsonAsync<JsonElement>();
         Assert.Equal(80_000, inv.GetProperty("unroundedPayableToman").GetInt64());
+        await S3TestHelpers.FinishPcPaymentAsync(factory, id, inv.GetProperty("collectibleToman").GetInt64());
 
         factory.Clock.SetTehran(2026, 6, 3, 16, 0);
         var start2 = await _client.PostAsJsonAsync("/api/sessions", new { stationId = "PC-R", playerCount = 1 });
@@ -137,6 +138,7 @@ public sealed class Pr4Review1IntegrationTests(GameClubWebApplicationFactory fac
         var stop2 = await _client.PostAsync($"/api/sessions/{id2}/stop", null);
         var inv2 = await stop2.Content.ReadFromJsonAsync<JsonElement>();
         Assert.Equal(120_000, inv2.GetProperty("unroundedPayableToman").GetInt64());
+        await S3TestHelpers.FinishPcPaymentAsync(factory, id2, inv2.GetProperty("collectibleToman").GetInt64());
     }
 
     [Fact]
@@ -183,8 +185,8 @@ public sealed class Pr4Review1IntegrationTests(GameClubWebApplicationFactory fac
         using (var scope = factory.Services.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            Assert.Equal(SessionStatus.Closed, await db.Sessions.Where(s => s.Id == id).Select(s => s.Status).SingleAsync());
-            Assert.Equal(1, await db.Invoices.CountAsync());
+            Assert.Equal(SessionStatus.AwaitingPayment, await db.Sessions.Where(s => s.Id == id).Select(s => s.Status).SingleAsync());
+            Assert.Equal(1, await db.PendingBills.CountAsync());
         }
     }
 
@@ -312,7 +314,9 @@ public sealed class Pr4Review1IntegrationTests(GameClubWebApplicationFactory fac
         Assert.Equal(1, codes.Count(c => c == 200));
         Assert.True(codes.All(c => c is 200 or 409));
         using var scope = factory.Services.CreateScope();
-        Assert.Equal(1, await scope.ServiceProvider.GetRequiredService<AppDbContext>().Invoices.CountAsync());
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        Assert.Equal(1, await db.PendingBills.CountAsync());
+        Assert.Equal(0, await db.Invoices.CountAsync());
     }
 
     [Fact]

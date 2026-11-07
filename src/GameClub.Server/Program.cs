@@ -1,4 +1,5 @@
 using GameClub.Server.Data;
+using GameClub.Server.Operator;
 using GameClub.Server.Services;
 using GameClub.Server.Time;
 using Microsoft.EntityFrameworkCore;
@@ -14,6 +15,8 @@ public partial class Program
         builder.Services.AddEndpointsApiExplorer();
         builder.Services.AddSwaggerGen();
         builder.Services.AddSingleton<IClock, SystemClock>();
+        builder.Services.AddScoped<OperatorContext>();
+        builder.Services.AddSingleton<OperatorPolicies>();
         builder.Services.Configure<DeadPcSweepOptions>(builder.Configuration.GetSection(DeadPcSweepOptions.SectionName));
         builder.Services.AddScoped<RateConfigService>();
         builder.Services.AddScoped<AuditService>();
@@ -21,6 +24,14 @@ public partial class Program
         builder.Services.AddScoped<SessionBilling>();
         builder.Services.AddScoped<SessionCloser>();
         builder.Services.AddScoped<SessionService>();
+        builder.Services.AddScoped<BillCalculator>();
+        builder.Services.AddScoped<OperatorBillService>();
+        builder.Services.AddScoped<OperatorGridService>();
+        builder.Services.AddScoped<OperatorInvoiceService>();
+        builder.Services.AddScoped<ManualSettleQueueService>();
+        builder.Services.AddScoped<OperatorAuthService>();
+        builder.Services.AddScoped<OperatorUserService>();
+        builder.Services.AddScoped<DestinationCardService>();
         builder.Services.AddScoped<IDeadPcMonitor, DeadPcMonitor>();
         builder.Services.AddHostedService<DeadPcSweepBackgroundService>();
 
@@ -28,11 +39,25 @@ public partial class Program
             ?? Environment.GetEnvironmentVariable("GAMECLUB_DATABASE")
             ?? "Host=localhost;Database=gameclub;Username=postgres;Password=postgres";
 
+        if (!builder.Environment.IsDevelopment())
+        {
+            var operatorSecret = builder.Configuration["OperatorSessionSecret"];
+            if (string.IsNullOrWhiteSpace(operatorSecret) || operatorSecret == "dev-operator-secret")
+            {
+                throw new InvalidOperationException(
+                    "OperatorSessionSecret must be set to a non-default value when not running in Development.");
+            }
+        }
+
         builder.Services.AddDbContext<AppDbContext>(options => options.UseNpgsql(connectionString));
 
         var app = builder.Build();
         app.UseMiddleware<ApiExceptionMiddleware>();
+        app.UseMiddleware<OperatorSessionMiddleware>();
+        app.UseMiddleware<OperatorAuthorizationMiddleware>();
         app.UseMiddleware<ApiKeyMiddleware>();
+        app.UseDefaultFiles();
+        app.UseStaticFiles();
         app.UseSwagger();
         app.MapControllers();
 
