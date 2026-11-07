@@ -49,6 +49,25 @@ namespace GameClub.Server.Data.Migrations
                     b.ToTable("audit_log", (string)null);
                 });
 
+            modelBuilder.Entity("GameClub.Server.Data.Entities.BranchCafeSettingsEntity", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<bool>("MultiOperatorEnabled")
+                        .HasColumnType("boolean");
+
+                    b.Property<bool>("ShiftsEnabled")
+                        .HasColumnType("boolean");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("branch_cafe_settings", (string)null);
+                });
+
             modelBuilder.Entity("GameClub.Server.Data.Entities.BranchMemberSettingsEntity", b =>
                 {
                     b.Property<int>("Id")
@@ -75,12 +94,12 @@ namespace GameClub.Server.Data.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<int>("MaxCombinedDiscountPercent")
+                        .HasColumnType("integer");
+
                     b.Property<string>("PackageConsumptionOrder")
                         .IsRequired()
                         .HasColumnType("text");
-
-                    b.Property<int>("MaxCombinedDiscountPercent")
-                        .HasColumnType("integer");
 
                     b.Property<long?>("WalletDebtFloorToman")
                         .HasColumnType("bigint");
@@ -185,6 +204,53 @@ namespace GameClub.Server.Data.Migrations
                     b.HasIndex("SessionId");
 
                     b.ToTable("checkpoints", (string)null);
+                });
+
+            modelBuilder.Entity("GameClub.Server.Data.Entities.CloseRecordEntity", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<long>("ActualCardReaderToman")
+                        .HasColumnType("bigint");
+
+                    b.Property<long>("ActualCashToman")
+                        .HasColumnType("bigint");
+
+                    b.Property<DateTime>("ClosedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("ClosedByUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("DiscrepancyExplanation")
+                        .HasColumnType("text");
+
+                    b.Property<Guid?>("NextRecipientUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("PeriodOpenedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("ShiftId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("WorkingDayDay")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("WorkingDayMonth")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("WorkingDayYear")
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ShiftId")
+                        .IsUnique();
+
+                    b.ToTable("close_records", (string)null);
                 });
 
             modelBuilder.Entity("GameClub.Server.Data.Entities.CustomerEntity", b =>
@@ -373,8 +439,14 @@ namespace GameClub.Server.Data.Migrations
                     b.Property<DateTime>("BilledToUtc")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<long>("BirthdayDiscountToman")
+                        .HasColumnType("bigint");
+
                     b.Property<long>("BuffetGrossToman")
                         .HasColumnType("bigint");
+
+                    b.Property<Guid?>("CloseRecordId")
+                        .HasColumnType("uuid");
 
                     b.Property<long>("CollectibleToman")
                         .HasColumnType("bigint");
@@ -385,20 +457,20 @@ namespace GameClub.Server.Data.Migrations
                     b.Property<long>("DiscountToman")
                         .HasColumnType("bigint");
 
-                    b.Property<long>("BirthdayDiscountToman")
-                        .HasColumnType("bigint");
+                    b.Property<DateTime>("IssuedAtUtc")
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<long>("LevelDiscountToman")
                         .HasColumnType("bigint");
-
-                    b.Property<DateTime>("IssuedAtUtc")
-                        .HasColumnType("timestamp with time zone");
 
                     b.Property<long>("Number")
                         .HasColumnType("bigint");
 
                     b.Property<Guid?>("OpenSaleId")
                         .HasColumnType("uuid");
+
+                    b.Property<string>("OperatorNote")
+                        .HasColumnType("text");
 
                     b.Property<long>("RoundingToman")
                         .HasColumnType("bigint");
@@ -407,6 +479,12 @@ namespace GameClub.Server.Data.Migrations
                         .HasColumnType("bigint");
 
                     b.Property<Guid?>("SessionId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("SettledByUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("ShiftId")
                         .HasColumnType("uuid");
 
                     b.Property<string>("Status")
@@ -428,7 +506,18 @@ namespace GameClub.Server.Data.Migrations
                     b.Property<string>("VoidReason")
                         .HasColumnType("text");
 
+                    b.Property<int?>("WorkingDayDay")
+                        .HasColumnType("integer");
+
+                    b.Property<int?>("WorkingDayMonth")
+                        .HasColumnType("integer");
+
+                    b.Property<int?>("WorkingDayYear")
+                        .HasColumnType("integer");
+
                     b.HasKey("Id");
+
+                    b.HasIndex("CloseRecordId");
 
                     b.HasIndex("CustomerId");
 
@@ -439,6 +528,8 @@ namespace GameClub.Server.Data.Migrations
 
                     b.HasIndex("SessionId")
                         .IsUnique();
+
+                    b.HasIndex("ShiftId");
 
                     b.ToTable("invoices", (string)null);
                 });
@@ -815,6 +906,9 @@ namespace GameClub.Server.Data.Migrations
                     b.Property<string>("Reference")
                         .HasColumnType("text");
 
+                    b.Property<Guid?>("ShiftId")
+                        .HasColumnType("uuid");
+
                     b.Property<string>("Status")
                         .IsRequired()
                         .HasColumnType("text");
@@ -880,6 +974,9 @@ namespace GameClub.Server.Data.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
+                    b.Property<Guid?>("CarriedAtCloseRecordId")
+                        .HasColumnType("uuid");
+
                     b.Property<Guid?>("CustomerId")
                         .HasColumnType("uuid");
 
@@ -895,6 +992,9 @@ namespace GameClub.Server.Data.Migrations
                     b.Property<string>("Mode")
                         .IsRequired()
                         .HasColumnType("text");
+
+                    b.Property<Guid?>("OpenShiftId")
+                        .HasColumnType("uuid");
 
                     b.Property<int>("PlayerCount")
                         .HasColumnType("integer");
@@ -929,6 +1029,8 @@ namespace GameClub.Server.Data.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("CustomerId");
+
+                    b.HasIndex("OpenShiftId");
 
                     b.HasIndex("RateCardSnapshotId");
 
@@ -1010,6 +1112,33 @@ namespace GameClub.Server.Data.Migrations
                         .IsUnique();
 
                     b.ToTable("rejected_card_to_card", (string)null);
+                });
+
+            modelBuilder.Entity("GameClub.Server.Data.Entities.ShiftEntity", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("ClosedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime>("OpenedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("OpenedByUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<long>("OpeningFloatToman")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("shifts", (string)null);
                 });
 
             modelBuilder.Entity("GameClub.Server.Data.Entities.StationEntity", b =>
@@ -1105,6 +1234,18 @@ namespace GameClub.Server.Data.Migrations
                     b.Property<string>("Reference")
                         .HasColumnType("text");
 
+                    b.Property<Guid?>("ShiftId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int?>("WorkingDayDay")
+                        .HasColumnType("integer");
+
+                    b.Property<int?>("WorkingDayMonth")
+                        .HasColumnType("integer");
+
+                    b.Property<int?>("WorkingDayYear")
+                        .HasColumnType("integer");
+
                     b.HasKey("Id");
 
                     b.HasIndex("CustomerId");
@@ -1132,6 +1273,15 @@ namespace GameClub.Server.Data.Migrations
                         .IsRequired();
 
                     b.Navigation("Session");
+                });
+
+            modelBuilder.Entity("GameClub.Server.Data.Entities.CloseRecordEntity", b =>
+                {
+                    b.HasOne("GameClub.Server.Data.Entities.ShiftEntity", "Shift")
+                        .WithOne("CloseRecord")
+                        .HasForeignKey("GameClub.Server.Data.Entities.CloseRecordEntity", "ShiftId");
+
+                    b.Navigation("Shift");
                 });
 
             modelBuilder.Entity("GameClub.Server.Data.Entities.CustomerMemberEntity", b =>
@@ -1169,6 +1319,10 @@ namespace GameClub.Server.Data.Migrations
 
             modelBuilder.Entity("GameClub.Server.Data.Entities.InvoiceEntity", b =>
                 {
+                    b.HasOne("GameClub.Server.Data.Entities.CloseRecordEntity", "CloseRecord")
+                        .WithMany()
+                        .HasForeignKey("CloseRecordId");
+
                     b.HasOne("GameClub.Server.Data.Entities.CustomerEntity", "Customer")
                         .WithMany()
                         .HasForeignKey("CustomerId");
@@ -1181,11 +1335,19 @@ namespace GameClub.Server.Data.Migrations
                         .WithOne("Invoice")
                         .HasForeignKey("GameClub.Server.Data.Entities.InvoiceEntity", "SessionId");
 
+                    b.HasOne("GameClub.Server.Data.Entities.ShiftEntity", "Shift")
+                        .WithMany()
+                        .HasForeignKey("ShiftId");
+
+                    b.Navigation("CloseRecord");
+
                     b.Navigation("Customer");
 
                     b.Navigation("OpenSale");
 
                     b.Navigation("Session");
+
+                    b.Navigation("Shift");
                 });
 
             modelBuilder.Entity("GameClub.Server.Data.Entities.InvoiceMemberEffectEntity", b =>
@@ -1304,6 +1466,10 @@ namespace GameClub.Server.Data.Migrations
                         .WithMany()
                         .HasForeignKey("CustomerId");
 
+                    b.HasOne("GameClub.Server.Data.Entities.ShiftEntity", "OpenShift")
+                        .WithMany()
+                        .HasForeignKey("OpenShiftId");
+
                     b.HasOne("GameClub.Server.Data.Entities.RateCardSnapshotEntity", "RateCardSnapshot")
                         .WithMany()
                         .HasForeignKey("RateCardSnapshotId")
@@ -1317,6 +1483,8 @@ namespace GameClub.Server.Data.Migrations
                         .IsRequired();
 
                     b.Navigation("Customer");
+
+                    b.Navigation("OpenShift");
 
                     b.Navigation("RateCardSnapshot");
 
@@ -1388,6 +1556,11 @@ namespace GameClub.Server.Data.Migrations
                     b.Navigation("PendingBill");
 
                     b.Navigation("Segments");
+                });
+
+            modelBuilder.Entity("GameClub.Server.Data.Entities.ShiftEntity", b =>
+                {
+                    b.Navigation("CloseRecord");
                 });
 #pragma warning restore 612, 618
         }

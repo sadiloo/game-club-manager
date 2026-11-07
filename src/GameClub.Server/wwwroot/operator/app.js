@@ -447,6 +447,7 @@ document.getElementById("loginBtn").onclick = async () => {
     await refreshPendingC2c();
     await refreshPendingWalletTopups();
     await refreshShiftState();
+    await refreshCafeSettingsUi();
     setInterval(async () => {
       await refreshGrid();
       await refreshLowStock();
@@ -1121,27 +1122,147 @@ bindClick("openShiftBtn", async () => {
   await refreshShiftState();
 });
 
+function renderCloseSessions(openSessions) {
+  const host = document.getElementById("closeSessionList");
+  if (!host) return;
+  if (!openSessions?.length) {
+    host.innerHTML = "<p>جلسهٔ بازی باز نیست.</p>";
+    return;
+  }
+  host.innerHTML = openSessions
+    .map(
+      (s) => `<div data-session="${s.sessionId}">
+        <strong>${s.stationId}</strong> — ${s.status}
+        <button type="button" data-action="settle" data-session="${s.sessionId}">تسویه در همین بستن</button>
+        <button type="button" data-action="carry" data-session="${s.sessionId}">انتقال به دوره بعد</button>
+      </div>`
+    )
+    .join("");
+  host.querySelectorAll("button[data-action]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const sid = btn.getAttribute("data-session");
+      const row = host.querySelector(`div[data-session="${sid}"]`);
+      if (!row) return;
+      row.dataset.choice = btn.getAttribute("data-action");
+      row.style.outline = "2px solid #1565c0";
+    });
+  });
+}
+
+function collectSessionActions() {
+  const host = document.getElementById("closeSessionList");
+  if (!host) return [];
+  return [...host.querySelectorAll("div[data-session]")].map((row) => ({
+    sessionId: row.getAttribute("data-session"),
+    action: row.dataset.choice || "carry",
+  }));
+}
+
 bindClick("closePreviewBtn", async () => {
   const preview = await api("/api/operator/shift/close/preview");
-  document.getElementById("closePreview").textContent = JSON.stringify(preview, null, 2);
+  renderCloseSessions(preview.openSessions);
+  const e = preview.expected || {};
+  document.getElementById("closePreviewSummary").textContent =
+    `مورد انتظار: نقد ${e.cashExpected ?? 0} | کارتخوان ${e.cardReaderExpected ?? 0} | کارت‌به‌کارت ${e.cardToCardConfirmedExpected ?? 0} | معلق ${e.cardToCardPending ?? 0}`;
+  document.getElementById("closeCash").value = e.cashExpected ?? 0;
+  document.getElementById("closeReader").value = e.cardReaderExpected ?? 0;
 });
 
 bindClick("closeShiftBtn", async () => {
-  const y = Number(window.prompt("سال میلادی روزکاری", "2026"));
-  const m = Number(window.prompt("ماه", "6"));
-  const d = Number(window.prompt("روز", "3"));
-  const actualCashToman = Number(String(window.prompt("نقد شمارش‌شده", "0")).replace(/,/g, ""));
-  const actualCardReaderToman = Number(String(window.prompt("جمع کارتخوان", "0")).replace(/,/g, ""));
-  const discrepancyExplanation = window.prompt("توضیح مغایرت (در صورت نیاز)", "") || null;
+  const jy = Number(document.getElementById("closeJy").value);
+  const jm = Number(document.getElementById("closeJm").value);
+  const jd = Number(document.getElementById("closeJd").value);
+  const g = jalaliToGregorian(jy, jm, jd);
+  const actualCashToman = Number(String(document.getElementById("closeCash").value || "0").replace(/,/g, ""));
+  const actualCardReaderToman = Number(String(document.getElementById("closeReader").value || "0").replace(/,/g, ""));
+  const discrepancyExplanation = document.getElementById("closeExpl").value.trim() || null;
   await api("/api/operator/shift/close", {
     method: "POST",
     body: JSON.stringify({
-      workingDay: { year: y, month: m, day: d },
+      workingDay: g,
       actualCashToman,
       actualCardReaderToman,
       discrepancyExplanation,
+      sessionActions: collectSessionActions(),
     }),
   });
   await refreshShiftState();
-  document.getElementById("closePreview").textContent = "";
+  document.getElementById("closePreviewSummary").textContent = "";
+  renderCloseSessions([]);
 });
+
+function jalaliToGregorian(jy, jm, jd) {
+  const pc = new Intl.DateTimeFormat("en-u-ca-persian", { timeZone: "Asia/Tehran" });
+  const start = Date.UTC(622, 2, 21);
+  let best = { year: jy, month: 6, day: 1 };
+  for (let t = start; t < start + 400 * 86400000; t += 86400000) {
+    const d = new Date(t);
+    const parts = pc.formatToParts(d);
+    const y = Number(parts.find((p) => p.type === "year").value);
+    const m = Number(parts.find((p) => p.type === "month").value);
+    const day = Number(parts.find((p) => p.type === "day").value);
+    if (y === jy && m === jm && day === jd) {
+      const tehran = new Date(d.toLocaleString("en-US", { timeZone: "Asia/Tehran" }));
+      best = { year: tehran.getFullYear(), month: tehran.getMonth() + 1, day: tehran.getDate() };
+      break;
+    }
+  }
+  return best;
+}
+
+bindClick("saveCafeSettingsBtn", async () => {
+  await api("/api/operator/shift/settings", {
+    method: "PUT",
+    body: JSON.stringify({
+      shiftsEnabled: document.getElementById("shiftsEnabledToggle").checked,
+      multiOperatorEnabled: document.getElementById("multiOperatorToggle").checked,
+    }),
+  });
+});
+
+bindClick("dailyIncomeBtn", async () => {
+  const y = Number(document.getElementById("repY").value);
+  const m = Number(document.getElementById("repM").value);
+  const d = Number(document.getElementById("repD").value);
+  const body = await api(`/api/operator/reports/income/daily?year=${y}&month=${m}&day=${d}`);
+  document.getElementById("reportsOut").textContent = JSON.stringify(body, null, 2);
+});
+bindClick("monthlyIncomeBtn", async () => {
+  const jy = Number(document.getElementById("closeJy").value || document.getElementById("repY").value);
+  const jm = Number(document.getElementById("closeJm").value || document.getElementById("repM").value);
+  const body = await api(`/api/operator/reports/income/monthly?year=${jy}&month=${jm}`);
+  document.getElementById("reportsOut").textContent = JSON.stringify(body, null, 2);
+});
+bindClick("yearlyIncomeBtn", async () => {
+  const jy = Number(document.getElementById("closeJy").value || document.getElementById("repY").value);
+  const body = await api(`/api/operator/reports/income/yearly?year=${jy}`);
+  document.getElementById("reportsOut").textContent = JSON.stringify(body, null, 2);
+});
+bindClick("usageBtn", async () => {
+  const from = new Date("2026-06-01T00:00:00+03:30").toISOString();
+  const to = new Date("2026-06-07T23:59:59+03:30").toISOString();
+  const body = await api(`/api/operator/reports/usage?fromUtc=${from}&toUtc=${to}`);
+  document.getElementById("reportsOut").textContent = JSON.stringify(body, null, 2);
+});
+bindClick("cu8Btn", async () => {
+  document.getElementById("reportsOut").textContent = JSON.stringify(await api("/api/operator/reports/wallet/cu8"), null, 2);
+});
+bindClick("historyBtn", async () => {
+  document.getElementById("reportsOut").textContent = JSON.stringify(await api("/api/operator/reports/history"), null, 2);
+});
+bindClick("exportHistoryBtn", async () => {
+  const res = await fetch("/api/operator/reports/history/export", { credentials: "include" });
+  const text = await res.text();
+  document.getElementById("reportsOut").textContent = text;
+});
+
+async function refreshCafeSettingsUi() {
+  const state = await api("/api/operator/shift/state");
+  const isMgr = currentRole === "Manager" || currentRole === "Owner";
+  document.getElementById("cafeSettings").classList.toggle("hidden", !isMgr);
+  document.getElementById("reportsPanel").classList.toggle("hidden", !isMgr);
+  if (isMgr) {
+    document.getElementById("shiftsEnabledToggle").checked = !!state.shiftsEnabled;
+    document.getElementById("multiOperatorToggle").checked = !!state.multiOperatorEnabled;
+  }
+}

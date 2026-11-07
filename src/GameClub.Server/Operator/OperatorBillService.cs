@@ -342,6 +342,100 @@ public sealed class OperatorBillService(
         }, ct);
     }
 
+    public async Task<InvoiceEntity> SettleSessionDuringCloseAsync(Guid sessionId, CancellationToken ct)
+    {
+        await db.Database.ExecuteSqlRawAsync(
+            """SELECT "Id" FROM sessions WHERE "Id" = {0} FOR UPDATE""",
+            sessionId);
+        var session = await db.Sessions
+            .Include(s => s.Station)!.ThenInclude(st => st!.Group)
+            .Include(s => s.Segments)
+            .Include(s => s.Pauses)
+            .Include(s => s.PendingBill)
+            .FirstOrDefaultAsync(s => s.Id == sessionId, ct)
+            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Session not found.");
+        if (session.Status is SessionStatus.Open or SessionStatus.Paused)
+        {
+            await OpenBillForCloseSettleAsync(session, ct);
+        }
+
+        var bill = session.PendingBill
+            ?? throw new ApiException(StatusCodes.Status409Conflict, "no_bill", "No bill for this session.");
+        if (session.Status is not SessionStatus.BillOpen and not SessionStatus.AwaitingPayment)
+        {
+            throw new ApiException(StatusCodes.Status409Conflict, "invalid_state", "Session is not awaiting settlement.");
+        }
+
+        var saleLines = await LoadSaleLinesAsync(session.Id, ct);
+        var amounts = await calculator.ComputeAsync(session, bill.FrozenAtUtc, bill.SurchargeToman, saleLines, ct);
+        var payments = new List<PaymentInput> { new("Cash", amounts.CollectibleToman, null, null) };
+        var invoice = await ConfirmBillCoreAsync(session, bill, payments, amounts, saleLines, ct);
+        await audit.AppendAsync("bill.confirm", new { sessionId, invoiceNumber = invoice.Number, collectible = invoice.CollectibleToman, atClose = true }, ct);
+        return invoice;
+    }
+
+    private async Task OpenBillForCloseSettleAsync(PlaySessionEntity session, CancellationToken ct)
+    {
+        if (session.PendingBill is not null)
+        {
+            return;
+        }
+
+        var endUtc = session.EndedAtUtc ?? clock.UtcNow.UtcDateTime;
+        if (session.EndedAtUtc is null)
+        {
+            session.EndedAtUtc = endUtc;
+            foreach (var seg in session.Segments.Where(s => s.EndUtc is null))
+            {
+                seg.EndUtc = endUtc;
+            }
+        }
+
+        if (session.Station!.Group!.Kind == StationKind.Console)
+        {
+            var frozenAt = endUtc;
+            var revert = CaptureRevertState(session);
+            ApplyPlayEnd(session, frozenAt);
+            var saleLines = await LoadSaleLinesAsync(session.Id, ct);
+            var amounts = await calculator.ComputeAsync(session, frozenAt, 0, saleLines, ct);
+            var bill = new PendingBillEntity
+            {
+                Id = Guid.NewGuid(),
+                SessionId = session.Id,
+                FrozenAtUtc = frozenAt,
+                OpenedAtUtc = frozenAt,
+                UnroundedPayableToman = amounts.UnroundedPayableToman,
+                RoundingToman = amounts.RoundingToman,
+                CollectibleToman = amounts.CollectibleToman,
+                TimeGrossToman = amounts.TimeGrossToman,
+                BuffetGrossToman = amounts.BuffetGrossToman,
+                ServicesGrossToman = amounts.ServicesGrossToman,
+                Source = "close_settle",
+                RevertStateJson = JsonSerializer.Serialize(revert),
+            };
+            session.Status = SessionStatus.BillOpen;
+            session.PendingBill = bill;
+            db.PendingBills.Add(bill);
+        }
+        else
+        {
+            _ = await CreatePcPendingBillAsync(session, endUtc, "close_settle", "close", ct);
+            session.Status = SessionStatus.BillOpen;
+        }
+    }
+
+    private async Task<InvoiceEntity> ConfirmBillCoreAsync(
+        PlaySessionEntity session,
+        PendingBillEntity bill,
+        IReadOnlyList<PaymentInput> payments,
+        BillAmounts amounts,
+        IReadOnlyList<OpenSaleLineEntity> saleLines,
+        CancellationToken ct)
+    {
+        ValidatePayments(amounts.CollectibleToman, payments, amounts.Detail, session.CustomerId);
+        return await closer.FinalizeFromPendingAsync(session, bill, payments, amounts, ct);
+    }
+
     public async Task<InvoiceEntity> ConfirmBillAsync(Guid sessionId, IReadOnlyList<PaymentInput> payments, CancellationToken ct)
     {
         return await WithSessionBillLockAsync(sessionId, async (session, innerCt) =>

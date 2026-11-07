@@ -146,10 +146,37 @@
     <section id="shiftPanel" class="panel">
       <h2>شیفت / اتمام روزکاری</h2>
       <p id="shiftState"></p>
+      <div id="cafeSettings" class="hidden">
+        <label><input type="checkbox" id="shiftsEnabledToggle" /> شیفت فعال</label>
+        <label><input type="checkbox" id="multiOperatorToggle" /> چند اپراتور / کشوی مشترک</label>
+        <button id="saveCafeSettingsBtn" type="button">ذخیره تنظیمات</button>
+      </div>
       <button id="openShiftBtn" type="button">باز کردن شیفت</button>
       <button id="closePreviewBtn" type="button">پیش‌نمایش بستن</button>
+      <div id="closeSessionList"></div>
+      <label>روزکاری (شمسی) سال <input id="closeJy" type="number" /></label>
+      <label>ماه <input id="closeJm" type="number" /></label>
+      <label>روز <input id="closeJd" type="number" /></label>
+      <label>نقد شمارش‌شده <input id="closeCash" type="number" /></label>
+      <label>جمع کارتخوان <input id="closeReader" type="number" /></label>
+      <label>توضیح مغایرت <input id="closeExpl" /></label>
       <button id="closeShiftBtn" type="button">بستن شیفت / روزکاری</button>
-      <pre id="closePreview"></pre>
+      <div id="closePreviewSummary"></div>
+    </section>
+
+    <section id="reportsPanel" class="panel hidden">
+      <h2>گزارش‌های مدیریتی</h2>
+      <label>روز (میلادی API) سال <input id="repY" type="number" value="2026" /></label>
+      <label>ماه <input id="repM" type="number" value="6" /></label>
+      <label>روز <input id="repD" type="number" value="3" /></label>
+      <button id="dailyIncomeBtn" type="button">درآمد روزانه</button>
+      <button id="monthlyIncomeBtn" type="button">درآمد ماهانه (شمسی)</button>
+      <button id="yearlyIncomeBtn" type="button">درآمد سالانه (شمسی)</button>
+      <button id="usageBtn" type="button">مصرف ایستگاه</button>
+      <button id="cu8Btn" type="button">CU-8 کیف پول</button>
+      <button id="historyBtn" type="button">تاریخچه</button>
+      <button id="exportHistoryBtn" type="button">خروجی CSV تاریخچه</button>
+      <pre id="reportsOut"></pre>
     </section>
 
     <section id="invoicePanel" class="panel">

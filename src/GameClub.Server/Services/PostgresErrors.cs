@@ -54,6 +54,9 @@ public static class PostgresErrors
         return false;
     }
 
+    public static bool IsCloseRecordShiftUniqueViolation(DbUpdateException ex)
+        => IsUniqueViolation(ex, "IX_close_records_ShiftId");
+
     public static bool IsLockNotAvailable(Exception ex)
     {
         for (Exception? current = ex; current is not null; current = current.InnerException)

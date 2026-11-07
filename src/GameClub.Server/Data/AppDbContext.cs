@@ -7,11 +7,6 @@ public sealed class AuditLogAppendOnlyException() : InvalidOperationException("a
 
 public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(options)
 {
-    protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
-    {
-        optionsBuilder.ConfigureWarnings(w => w.Ignore(Microsoft.EntityFrameworkCore.Diagnostics.RelationalEventId.PendingModelChangesWarning));
-    }
-
     public DbSet<StationGroupEntity> StationGroups => Set<StationGroupEntity>();
 
     public DbSet<StationEntity> Stations => Set<StationEntity>();

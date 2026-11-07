@@ -62,6 +62,14 @@ public sealed class OperatorReportsController(OperatorReportingService reports) 
         CancellationToken ct)
         => OkTask(reports.DailyIncomeAsync(year, month, day, ct));
 
+    [HttpGet("income/monthly")]
+    public Task<IActionResult> Monthly([FromQuery] int year, [FromQuery] int month, CancellationToken ct)
+        => OkTask(reports.MonthlyIncomeAsync(year, month, ct));
+
+    [HttpGet("income/yearly")]
+    public Task<IActionResult> Yearly([FromQuery] int year, CancellationToken ct)
+        => OkTask(reports.YearlyIncomeAsync(year, ct));
+
     [HttpGet("history")]
     public Task<IActionResult> History(
         [FromQuery] DateTime? fromUtc,

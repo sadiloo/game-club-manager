@@ -217,7 +217,7 @@ public sealed class SessionCloser(
         BillAmounts amounts,
         CancellationToken ct)
     {
-        await shiftGate.EnsureMoneyRecordingAllowedAsync(ct);
+        await shiftGate.EnsureOpenShiftForMoneyAsync(ct);
         var shiftId = await shiftGate.RequireOpenShiftIdAsync(ct);
         var openSale = await db.OpenSales.Include(o => o.Lines).ThenInclude(l => l.CatalogItem)
             .FirstOrDefaultAsync(o => o.SessionId == session.Id, ct);
@@ -263,7 +263,7 @@ public sealed class SessionCloser(
         BillAmounts amounts,
         CancellationToken ct)
     {
-        await shiftGate.EnsureMoneyRecordingAllowedAsync(ct);
+        await shiftGate.EnsureOpenShiftForMoneyAsync(ct);
         var shiftId = await shiftGate.RequireOpenShiftIdAsync(ct);
         var invoice = await CreateInvoiceAsync(amounts, bill, payments, null, sale.Id, sale.CustomerId, shiftId, ct);
         CopyCatalogLines(invoice, sale.Lines);

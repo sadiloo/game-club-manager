@@ -218,7 +218,7 @@ public sealed class OperatorMemberWalletService(
             var pocket = MemberWalletMapper.ToPocket(member);
             pocket = MemberWalletMapper.ApplyRealTopUp(pocket, pending.AmountToman);
             MemberWalletMapper.ApplyPocket(member, pocket);
-            db.WalletLedger.Add(new WalletLedgerEntryEntity
+            var ledger = new WalletLedgerEntryEntity
             {
                 CustomerId = pending.CustomerId,
                 AtUtc = clock.UtcNow.UtcDateTime,
@@ -230,7 +230,9 @@ public sealed class OperatorMemberWalletService(
                 Label = "card_to_card_confirmed",
                 ActorUserId = op.UserId,
                 ShiftId = pending.ShiftId,
-            });
+            };
+            await ApplyWalletTopUpOriginatingWorkingDayAsync(ledger, pending.ShiftId, pending.CreatedAtUtc, innerCt);
+            db.WalletLedger.Add(ledger);
             await audit.AppendAsync("wallet.topup.confirmed", new { pendingId, before, after = new { member.RealToman, member.GiftToman } }, innerCt);
         }, ct, tx);
         await tx.CommitAsync(ct);
@@ -558,6 +560,37 @@ public sealed class OperatorMemberWalletService(
             windowDays = settings.BirthdayWindowDays,
             anchor = settings.BirthdayWindowAnchor,
         };
+    }
+
+    private async Task ApplyWalletTopUpOriginatingWorkingDayAsync(
+        WalletLedgerEntryEntity row,
+        Guid? shiftId,
+        DateTime originatingAtUtc,
+        CancellationToken ct)
+    {
+        CloseRecordEntity? close;
+        if (shiftId is Guid sid)
+        {
+            close = await db.CloseRecords.AsNoTracking().FirstOrDefaultAsync(c => c.ShiftId == sid, ct);
+        }
+        else
+        {
+            close = await db.CloseRecords.AsNoTracking()
+                .Where(c => c.ShiftId == null
+                            && c.PeriodOpenedAtUtc <= originatingAtUtc
+                            && c.ClosedAtUtc >= originatingAtUtc)
+                .OrderByDescending(c => c.ClosedAtUtc)
+                .FirstOrDefaultAsync(ct);
+        }
+
+        if (close is null)
+        {
+            return;
+        }
+
+        row.WorkingDayYear = close.WorkingDayYear;
+        row.WorkingDayMonth = close.WorkingDayMonth;
+        row.WorkingDayDay = close.WorkingDayDay;
     }
 
     private void EnsureManager()

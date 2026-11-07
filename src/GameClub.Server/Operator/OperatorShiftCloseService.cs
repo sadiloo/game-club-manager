@@ -18,8 +18,11 @@ public sealed class OperatorShiftCloseService(
     IClock clock,
     AuditService audit,
     OperatorContext op,
-    OperatorShiftGate shiftGate)
+    OperatorShiftGate shiftGate,
+    OperatorBillService bills)
 {
+    private const int OpenShiftAdvisoryLock = 884_2001;
+    private const int WorkingDayCloseAdvisoryLock = 884_2002;
     public async Task<object> GetLiveStateAsync(CancellationToken ct)
     {
         var settings = await shiftGate.LoadSettingsAsync(ct);
@@ -95,6 +98,7 @@ public sealed class OperatorShiftCloseService(
         }
 
         await using var tx = await db.Database.BeginTransactionAsync(ct);
+        await db.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock({0})", OpenShiftAdvisoryLock);
         if (await db.Shifts.AnyAsync(s => s.Status == ShiftStatus.Open, ct))
         {
             throw new ApiException(StatusCodes.Status409Conflict, "shift_open", "A shift is already open.");
@@ -129,11 +133,7 @@ public sealed class OperatorShiftCloseService(
             : null;
 
         var periodStart = shift?.OpenedAtUtc
-            ?? await db.CloseRecords.AsNoTracking()
-                .Where(c => c.ShiftId == null)
-                .OrderByDescending(c => c.ClosedAtUtc)
-                .Select(c => (DateTime?)c.PeriodOpenedAtUtc)
-                .FirstOrDefaultAsync(ct)
+            ?? await GetLastWorkingDayCloseUtcAsync(ct)
             ?? DateTime.UnixEpoch;
 
         var expected = await BuildExpectedAsync(shift?.Id, periodStart, settings.ShiftsEnabled, ct);
@@ -173,124 +173,153 @@ public sealed class OperatorShiftCloseService(
     {
         _ = new LocalDate(workingDay.Year, workingDay.Month, workingDay.Day);
         var settings = await shiftGate.LoadSettingsAsync(ct);
-        var strategy = db.Database.CreateExecutionStrategy();
-        return await strategy.ExecuteAsync(async () =>
+        var openSessionIds = await db.Sessions.AsNoTracking()
+            .Where(s => s.Status != SessionStatus.Closed)
+            .Select(s => s.Id)
+            .ToListAsync(ct);
+        var actionBySession = sessionActions
+            .GroupBy(a => a.SessionId)
+            .ToDictionary(g => g.Key, g => g.Last().Action);
+        foreach (var sessionId in openSessionIds)
         {
-            await using var tx = await db.Database.BeginTransactionAsync(ct);
-            ShiftEntity? shift = null;
-            DateTime periodStart;
-            if (settings.ShiftsEnabled)
+            if (!actionBySession.TryGetValue(sessionId, out var action)
+                || (action != "carry" && action != "settle"))
             {
-                shift = await db.Shifts.FirstOrDefaultAsync(s => s.Status == ShiftStatus.Open, ct)
-                    ?? throw new ApiException(StatusCodes.Status409Conflict, "no_open_shift", "No shift is open.");
-                await db.Entry(shift).ReloadAsync(ct);
-                if (shift.Status != ShiftStatus.Open)
+                throw new ApiException(
+                    StatusCodes.Status400BadRequest,
+                    "session_disposition_required",
+                    "Every open session must be settled or carried forward before close.");
+            }
+        }
+
+        var strategy = db.Database.CreateExecutionStrategy();
+        try
+        {
+            return await strategy.ExecuteAsync(async () =>
+            {
+                await using var tx = await db.Database.BeginTransactionAsync(ct);
+                ShiftEntity? shift = null;
+                DateTime periodStart;
+                if (settings.ShiftsEnabled)
                 {
-                    throw new ApiException(StatusCodes.Status409Conflict, "already_closed", "Shift is already closed.");
+                    shift = await shiftGate.GetOpenShiftForUpdateAsync(ct)
+                        ?? throw new ApiException(StatusCodes.Status409Conflict, "no_open_shift", "No shift is open.");
+                    if (shift.Status != ShiftStatus.Open)
+                    {
+                        throw new ApiException(StatusCodes.Status409Conflict, "already_closed", "Shift is already closed.");
+                    }
+
+                    periodStart = shift.OpenedAtUtc;
+                }
+                else
+                {
+                    await db.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock({0})", WorkingDayCloseAdvisoryLock);
+                    periodStart = await GetLastWorkingDayCloseUtcAsync(ct) ?? DateTime.UnixEpoch;
+                    if (await db.CloseRecords.AnyAsync(
+                            c => c.ShiftId == null && c.PeriodOpenedAtUtc == periodStart,
+                            ct))
+                    {
+                        throw new ApiException(StatusCodes.Status409Conflict, "already_closed", "This working period is already closed.");
+                    }
                 }
 
-                periodStart = shift.OpenedAtUtc;
-            }
-            else
-            {
-                periodStart = await db.CloseRecords.AsNoTracking()
-                    .Where(c => c.ShiftId == null)
-                    .OrderByDescending(c => c.ClosedAtUtc)
-                    .Select(c => (DateTime?)c.PeriodOpenedAtUtc)
-                    .FirstOrDefaultAsync(ct)
-                    ?? DateTime.UnixEpoch;
-            }
+                foreach (var action in sessionActions.Where(a => a.Action == "settle"))
+                {
+                    await bills.SettleSessionDuringCloseAsync(action.SessionId, ct);
+                }
 
-            var expected = await BuildExpectedAsync(shift?.Id, periodStart, settings.ShiftsEnabled, ct);
-            var discrepancies = new[]
-            {
-                actualCashToman - expected.CashExpected,
-                actualCardReaderToman - expected.CardReaderExpected,
-            };
-            if (discrepancies.Any(d => d != 0) && string.IsNullOrWhiteSpace(discrepancyExplanation))
-            {
-                throw new ApiException(StatusCodes.Status400BadRequest, "explanation_required", "Discrepancy explanation is required.");
-            }
+                var expected = await BuildExpectedAsync(shift?.Id, periodStart, settings.ShiftsEnabled, ct);
+                var discrepancies = new[]
+                {
+                    actualCashToman - expected.CashExpected,
+                    actualCardReaderToman - expected.CardReaderExpected,
+                };
+                if (discrepancies.Any(d => d != 0) && string.IsNullOrWhiteSpace(discrepancyExplanation))
+                {
+                    throw new ApiException(StatusCodes.Status400BadRequest, "explanation_required", "Discrepancy explanation is required.");
+                }
 
-            var closeId = Guid.NewGuid();
-            var closeRecord = new CloseRecordEntity
-            {
-                Id = closeId,
-                ShiftId = shift?.Id,
-                PeriodOpenedAtUtc = periodStart,
-                ClosedAtUtc = clock.UtcNow.UtcDateTime,
-                WorkingDayYear = workingDay.Year,
-                WorkingDayMonth = workingDay.Month,
-                WorkingDayDay = workingDay.Day,
-                ActualCashToman = actualCashToman,
-                ActualCardReaderToman = actualCardReaderToman,
-                DiscrepancyExplanation = discrepancyExplanation?.Trim(),
-                NextRecipientUserId = nextRecipientUserId,
-                ClosedByUserId = op.UserId ?? throw new ApiException(StatusCodes.Status401Unauthorized, "unauthorized", "Operator login required."),
-            };
-            db.CloseRecords.Add(closeRecord);
+                var closeId = Guid.NewGuid();
+                var closeRecord = new CloseRecordEntity
+                {
+                    Id = closeId,
+                    ShiftId = shift?.Id,
+                    PeriodOpenedAtUtc = periodStart,
+                    ClosedAtUtc = clock.UtcNow.UtcDateTime,
+                    WorkingDayYear = workingDay.Year,
+                    WorkingDayMonth = workingDay.Month,
+                    WorkingDayDay = workingDay.Day,
+                    ActualCashToman = actualCashToman,
+                    ActualCardReaderToman = actualCardReaderToman,
+                    DiscrepancyExplanation = discrepancyExplanation?.Trim(),
+                    NextRecipientUserId = nextRecipientUserId,
+                    ClosedByUserId = op.UserId ?? throw new ApiException(StatusCodes.Status401Unauthorized, "unauthorized", "Operator login required."),
+                };
+                db.CloseRecords.Add(closeRecord);
 
-            foreach (var action in sessionActions)
-            {
-                if (action.Action == "carry")
+                foreach (var action in sessionActions.Where(a => a.Action == "carry"))
                 {
                     var session = await db.Sessions.FirstOrDefaultAsync(s => s.Id == action.SessionId, ct)
                         ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Session not found.");
                     session.CarriedAtCloseRecordId = closeId;
                 }
-                else if (action.Action == "settle")
+
+                if (shift is not null)
                 {
-                    throw new ApiException(
-                        StatusCodes.Status400BadRequest,
-                        "settle_via_confirm",
-                        "Settle open sessions via bill confirm before close.");
+                    shift.Status = ShiftStatus.Closed;
+                    shift.ClosedAtUtc = closeRecord.ClosedAtUtc;
                 }
-            }
 
-            if (shift is not null)
-            {
-                shift.Status = ShiftStatus.Closed;
-                shift.ClosedAtUtc = closeRecord.ClosedAtUtc;
-            }
-
-            await StampPeriodInvoicesAsync(shift?.Id, periodStart, closeRecord, ct);
-            await audit.AppendAsync(
-                settings.ShiftsEnabled ? "shift.close" : "working_day.close",
-                new
+                await StampPeriodInvoicesAsync(shift?.Id, periodStart, closeRecord, ct);
+                await audit.AppendAsync(
+                    settings.ShiftsEnabled ? "shift.close" : "working_day.close",
+                    new
+                    {
+                        closeRecord.Id,
+                        shiftId = shift?.Id,
+                        workingDay,
+                        actualCashToman,
+                        actualCardReaderToman,
+                        expected,
+                        discrepancies,
+                    },
+                    ct);
+                await db.SaveChangesAsync(ct);
+                await tx.CommitAsync(ct);
+                return new
                 {
-                    closeRecord.Id,
+                    closeRecordId = closeRecord.Id,
                     shiftId = shift?.Id,
                     workingDay,
+                    expected,
                     actualCashToman,
                     actualCardReaderToman,
-                    expected,
-                    discrepancies,
-                },
-                ct);
-            await db.SaveChangesAsync(ct);
-            await tx.CommitAsync(ct);
-            return new
-            {
-                closeRecordId = closeRecord.Id,
-                shiftId = shift?.Id,
-                workingDay,
-                expected,
-                actualCashToman,
-                actualCardReaderToman,
-            };
-        });
+                };
+            });
+        }
+        catch (DbUpdateException ex) when (PostgresErrors.IsCloseRecordShiftUniqueViolation(ex))
+        {
+            throw new ApiException(StatusCodes.Status409Conflict, "already_closed", "Shift is already closed.");
+        }
     }
+
+    private async Task<DateTime?> GetLastWorkingDayCloseUtcAsync(CancellationToken ct)
+        => await db.CloseRecords.AsNoTracking()
+            .Where(c => c.ShiftId == null)
+            .OrderByDescending(c => c.ClosedAtUtc)
+            .Select(c => (DateTime?)c.ClosedAtUtc)
+            .FirstOrDefaultAsync(ct);
 
     private async Task StampPeriodInvoicesAsync(Guid? shiftId, DateTime periodStart, CloseRecordEntity close, CancellationToken ct)
     {
         IQueryable<InvoiceEntity> query = db.Invoices.Where(i => i.CloseRecordId == null && i.Status != "void");
         if (shiftId is Guid sid)
         {
-            query = query.Where(i => i.ShiftId == sid);
+            query = query.Where(i => i.ShiftId == sid && i.WorkingDayYear == null);
         }
         else
         {
-            query = query.Where(i => i.IssuedAtUtc >= periodStart);
+            query = query.Where(i => i.IssuedAtUtc >= periodStart && i.WorkingDayYear == null);
         }
 
         var invoices = await query.ToListAsync(ct);
@@ -303,14 +332,14 @@ public sealed class OperatorShiftCloseService(
         }
 
         IQueryable<WalletLedgerEntryEntity> walletQuery = db.WalletLedger
-            .Where(w => w.Kind == WalletLedgerKind.TopUpReal);
+            .Where(w => w.Kind == WalletLedgerKind.TopUpReal && w.WorkingDayYear == null);
         if (shiftId is Guid sid2)
         {
             walletQuery = walletQuery.Where(w => w.ShiftId == sid2);
         }
         else
         {
-            walletQuery = walletQuery.Where(w => w.AtUtc >= periodStart);
+            walletQuery = walletQuery.Where(w => w.AtUtc >= periodStart && w.ShiftId == null);
         }
 
         foreach (var row in await walletQuery.ToListAsync(ct))
@@ -383,7 +412,7 @@ public sealed class OperatorShiftCloseService(
         }
         else
         {
-            topUpQ = topUpQ.Where(w => w.AtUtc >= periodStart && w.ShiftId == null);
+            topUpQ = topUpQ.Where(w => w.AtUtc >= periodStart && w.ShiftId == null && w.WorkingDayYear == null);
         }
 
         foreach (var row in await topUpQ.ToListAsync(ct))
@@ -482,12 +511,57 @@ public sealed class OperatorShiftCloseService(
 
     private async Task<object> ShiftAuditFactsAsync(DateTime periodStart, CancellationToken ct)
     {
-        var cancellations = await db.AuditLog.AsNoTracking()
-            .Where(a => a.AtUtc >= periodStart && (a.Action == "bill.cancel" || a.Action.Contains("discount")))
+        var cancellationEntries = await db.AuditLog.AsNoTracking()
+            .Where(a => a.AtUtc >= periodStart && a.Action == "bill.cancel")
+            .Select(a => a.DetailsJson)
+            .ToListAsync(ct);
+        var cancellations = cancellationEntries.Count;
+        var stationCounts = new Dictionary<string, int>();
+        foreach (var detailsJson in cancellationEntries)
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(detailsJson);
+                if (!doc.RootElement.TryGetProperty("sessionId", out var sidProp))
+                {
+                    continue;
+                }
+
+                if (!Guid.TryParse(sidProp.GetString(), out var sessionId))
+                {
+                    continue;
+                }
+
+                var stationId = await db.Sessions.AsNoTracking()
+                    .Where(s => s.Id == sessionId)
+                    .Select(s => s.StationId)
+                    .FirstOrDefaultAsync(ct);
+                if (stationId is null)
+                {
+                    continue;
+                }
+
+                stationCounts[stationId] = stationCounts.GetValueOrDefault(stationId) + 1;
+            }
+            catch (JsonException)
+            {
+                // ignore malformed audit rows
+            }
+        }
+
+        var discounts = await db.AuditLog.AsNoTracking()
+            .Where(a => a.AtUtc >= periodStart && a.Action.Contains("discount"))
             .CountAsync(ct);
-        var stationCancelCounts = await db.AuditLog.AsNoTracking()
-            .Where(a => a.AtUtc >= periodStart && a.Action == "session.stop" && a.DetailsJson.Contains("cancel"))
-            .CountAsync(ct);
-        return new { cancellations, stationCancelCounts, ss17PerStation = Array.Empty<object>() };
+        var ss17PerStation = stationCounts
+            .OrderBy(kv => kv.Key, StringComparer.Ordinal)
+            .Select(kv => new { stationId = kv.Key, cancellationCount = kv.Value })
+            .ToList();
+        return new
+        {
+            cancellations,
+            discounts,
+            stationCancelCounts = stationCounts.Values.Sum(),
+            ss17PerStation,
+        };
     }
 }

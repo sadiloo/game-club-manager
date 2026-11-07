@@ -56,4 +56,54 @@ public sealed class OperatorShiftGate(AppDbContext db)
 
     public async Task<ShiftEntity?> GetOpenShiftTrackedAsync(CancellationToken ct)
         => await db.Shifts.FirstOrDefaultAsync(s => s.Status == ShiftStatus.Open, ct);
+
+    public async Task<ShiftEntity?> GetOpenShiftForUpdateAsync(CancellationToken ct)
+    {
+        var settings = await LoadSettingsAsync(ct);
+        if (!settings.ShiftsEnabled)
+        {
+            return null;
+        }
+
+        try
+        {
+            await db.Database.ExecuteSqlRawAsync(
+                """SELECT "Id" FROM shifts WHERE "Status" = 'Open' FOR UPDATE""");
+        }
+        catch (Exception ex) when (PostgresErrors.IsLockNotAvailable(ex))
+        {
+            throw new ApiException(
+                StatusCodes.Status409Conflict,
+                "shift_busy",
+                "Shift is being updated.");
+        }
+
+        return await db.Shifts.FirstOrDefaultAsync(s => s.Status == ShiftStatus.Open, ct);
+    }
+
+    public async Task EnsureOpenShiftForMoneyAsync(CancellationToken ct)
+    {
+        var settings = await LoadSettingsAsync(ct);
+        if (!settings.ShiftsEnabled)
+        {
+            return;
+        }
+
+        var shift = await GetOpenShiftForUpdateAsync(ct);
+        if (shift is null)
+        {
+            throw new ApiException(
+                StatusCodes.Status409Conflict,
+                "no_open_shift",
+                "No shift is open.");
+        }
+
+        if (shift.Status != ShiftStatus.Open)
+        {
+            throw new ApiException(
+                StatusCodes.Status409Conflict,
+                "shift_closed",
+                "Shift is already closed.");
+        }
+    }
 }

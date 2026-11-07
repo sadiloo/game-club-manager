@@ -60,9 +60,7 @@ public partial class Program
             }
         }
 
-        builder.Services.AddDbContext<AppDbContext>(options => options
-            .UseNpgsql(connectionString)
-            .ConfigureWarnings(w => w.Ignore(Microsoft.EntityFrameworkCore.Diagnostics.RelationalEventId.PendingModelChangesWarning)));
+        builder.Services.AddDbContext<AppDbContext>(options => options.UseNpgsql(connectionString));
 
         var app = builder.Build();
         app.UseMiddleware<ApiExceptionMiddleware>();
