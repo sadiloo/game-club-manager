@@ -41,6 +41,16 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
 
     public DbSet<RateLineEntity> RateLines => Set<RateLineEntity>();
 
+    public DbSet<CatalogCategoryEntity> CatalogCategories => Set<CatalogCategoryEntity>();
+
+    public DbSet<CatalogItemEntity> CatalogItems => Set<CatalogItemEntity>();
+
+    public DbSet<OpenSaleEntity> OpenSales => Set<OpenSaleEntity>();
+
+    public DbSet<OpenSaleLineEntity> OpenSaleLines => Set<OpenSaleLineEntity>();
+
+    public DbSet<InvoiceCatalogLineEntity> InvoiceCatalogLines => Set<InvoiceCatalogLineEntity>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<StationGroupEntity>(e =>
@@ -66,8 +76,10 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             e.Property(x => x.Status).HasConversion<string>();
             e.Property(x => x.Mode).HasConversion<string>();
             e.HasOne(x => x.Station).WithMany().HasForeignKey(x => x.StationId);
-            e.HasOne(x => x.Invoice).WithOne(x => x.Session!).HasForeignKey<InvoiceEntity>(x => x.SessionId);
-            e.HasOne(x => x.PendingBill).WithOne(x => x.Session!).HasForeignKey<PendingBillEntity>(x => x.SessionId);
+            e.HasOne(x => x.Invoice).WithOne(x => x.Session).HasForeignKey<InvoiceEntity>(x => x.SessionId)
+                .IsRequired(false);
+            e.HasOne(x => x.PendingBill).WithOne(x => x.Session).HasForeignKey<PendingBillEntity>(x => x.SessionId)
+                .IsRequired(false);
             e.HasOne(x => x.RateCardSnapshot).WithMany().HasForeignKey(x => x.RateCardSnapshotId)
                 .OnDelete(DeleteBehavior.Restrict);
         });
@@ -98,6 +110,7 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             e.ToTable("invoices");
             e.HasKey(x => x.Id);
             e.HasIndex(x => x.Number).IsUnique();
+            e.HasOne(x => x.OpenSale).WithMany().HasForeignKey(x => x.OpenSaleId);
         });
 
         modelBuilder.Entity<PendingBillEntity>(e =>
@@ -105,7 +118,48 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             e.ToTable("pending_bills");
             e.HasKey(x => x.Id);
             e.HasIndex(x => x.SessionId).IsUnique();
+            e.HasIndex(x => x.OpenSaleId).IsUnique();
             e.Property(x => x.RowVersion).IsRowVersion();
+            e.HasOne(x => x.OpenSale).WithOne(x => x.PendingBill).HasForeignKey<PendingBillEntity>(x => x.OpenSaleId);
+        });
+
+        modelBuilder.Entity<CatalogCategoryEntity>(e =>
+        {
+            e.ToTable("catalog_categories");
+            e.HasKey(x => x.Id);
+        });
+
+        modelBuilder.Entity<CatalogItemEntity>(e =>
+        {
+            e.ToTable("catalog_items");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Kind).HasConversion<string>();
+            e.HasOne(x => x.Category).WithMany(x => x.Items).HasForeignKey(x => x.CategoryId);
+        });
+
+        modelBuilder.Entity<OpenSaleEntity>(e =>
+        {
+            e.ToTable("open_sales");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => x.SessionId).IsUnique();
+            e.HasOne(x => x.Session).WithMany().HasForeignKey(x => x.SessionId);
+        });
+
+        modelBuilder.Entity<OpenSaleLineEntity>(e =>
+        {
+            e.ToTable("open_sale_lines");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Kind).HasConversion<string>();
+            e.HasOne(x => x.OpenSale).WithMany(x => x.Lines).HasForeignKey(x => x.OpenSaleId);
+            e.HasOne(x => x.CatalogItem).WithMany().HasForeignKey(x => x.CatalogItemId);
+        });
+
+        modelBuilder.Entity<InvoiceCatalogLineEntity>(e =>
+        {
+            e.ToTable("invoice_catalog_lines");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Kind).HasConversion<string>();
+            e.HasOne(x => x.Invoice).WithMany(x => x.CatalogLines).HasForeignKey(x => x.InvoiceId);
         });
 
         modelBuilder.Entity<PaymentLineEntity>(e =>

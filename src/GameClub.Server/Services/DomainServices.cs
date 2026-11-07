@@ -212,17 +212,58 @@ public sealed class SessionCloser(
         IReadOnlyList<OperatorBillService.PaymentInput> payments,
         CancellationToken ct)
     {
-        if (payments.Count == 0 && bill.CollectibleToman != 0)
+        var openSale = await db.OpenSales.Include(o => o.Lines).ThenInclude(l => l.CatalogItem)
+            .FirstOrDefaultAsync(o => o.SessionId == session.Id, ct);
+        var invoice = await CreateInvoiceAsync(bill, payments, session.Id, openSale?.Id, ct);
+        if (openSale is not null)
         {
-            throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", "At least one payment line is required.");
+            CopyCatalogLines(invoice, openSale.Lines);
+            db.OpenSaleLines.RemoveRange(openSale.Lines);
+            db.OpenSales.Remove(openSale);
         }
 
+        session.Status = SessionStatus.Closed;
+        session.Invoice = invoice;
+        db.Invoices.Add(invoice);
+        db.PendingBills.Remove(bill);
+        session.PendingBill = null;
+        await db.SaveChangesAsync(ct);
+        return invoice;
+    }
+
+    public async Task<InvoiceEntity> FinalizeBuffetOnlyAsync(
+        OpenSaleEntity sale,
+        PendingBillEntity bill,
+        IReadOnlyList<OperatorBillService.PaymentInput> payments,
+        CancellationToken ct)
+    {
+        var invoice = await CreateInvoiceAsync(bill, payments, null, sale.Id, ct);
+        CopyCatalogLines(invoice, sale.Lines);
+        db.OpenSaleLines.RemoveRange(sale.Lines);
+        db.OpenSales.Remove(sale);
+        db.Invoices.Add(invoice);
+        db.PendingBills.Remove(bill);
+        await db.SaveChangesAsync(ct);
+        return invoice;
+    }
+
+    private async Task<InvoiceEntity> CreateInvoiceAsync(
+        PendingBillEntity bill,
+        IReadOnlyList<OperatorBillService.PaymentInput> payments,
+        Guid? sessionId,
+        Guid? openSaleId,
+        CancellationToken ct)
+    {
         var number = await NextInvoiceNumberAsync(ct);
         var invoice = new InvoiceEntity
         {
             Id = Guid.NewGuid(),
             Number = number,
-            SessionId = session.Id,
+            SessionId = sessionId,
+            OpenSaleId = openSaleId,
+            TimeGrossToman = bill.TimeGrossToman,
+            BuffetGrossToman = bill.BuffetGrossToman,
+            ServicesGrossToman = bill.ServicesGrossToman,
             UnroundedPayableToman = bill.UnroundedPayableToman,
             RoundingToman = bill.RoundingToman,
             CollectibleToman = bill.CollectibleToman,
@@ -252,13 +293,23 @@ public sealed class SessionCloser(
             });
         }
 
-        session.Status = SessionStatus.Closed;
-        session.Invoice = invoice;
-        db.Invoices.Add(invoice);
-        db.PendingBills.Remove(bill);
-        session.PendingBill = null;
-        await db.SaveChangesAsync(ct);
         return invoice;
+    }
+
+    private static void CopyCatalogLines(InvoiceEntity invoice, IEnumerable<OpenSaleLineEntity> lines)
+    {
+        foreach (var line in lines)
+        {
+            invoice.CatalogLines.Add(new InvoiceCatalogLineEntity
+            {
+                CatalogItemId = line.CatalogItemId,
+                Name = line.CatalogItem?.Name ?? line.CatalogItemId,
+                Kind = line.Kind,
+                Quantity = line.Quantity,
+                UnitPriceToman = line.UnitPriceToman,
+                LineTotalToman = line.LineTotalToman,
+            });
+        }
     }
 
     public Task<InvoiceEntity> CloseAsync(PlaySessionEntity session, DateTime endUtc, string auditReason, CancellationToken ct)
@@ -852,6 +903,38 @@ public sealed class DatabaseSeed
         }
 
         await db.SaveChangesAsync(ct);
+
+        try
+        {
+            if (!await db.Stations.AnyAsync(s => s.Id == BuffetSaleConstants.VirtualStationId, ct))
+            {
+                if (!await db.StationGroups.AnyAsync(g => g.Id == BuffetSaleConstants.VirtualGroupId, ct))
+                {
+                    db.StationGroups.Add(new StationGroupEntity
+                    {
+                        Id = BuffetSaleConstants.VirtualGroupId,
+                        Name = "Buffet only",
+                        Kind = StationKind.TimedTable,
+                    });
+                }
+
+                db.Stations.Add(new StationEntity
+                {
+                    Id = BuffetSaleConstants.VirtualStationId,
+                    Name = "بوفه",
+                    GroupId = BuffetSaleConstants.VirtualGroupId,
+                    DefaultPlayerCount = 1,
+                    DefaultPlayMode = PlayMode.Offline,
+                    IsActive = true,
+                });
+            }
+
+            CatalogSeed.Ensure(db);
+            await db.SaveChangesAsync(ct);
+        }
+        catch (PostgresException ex) when (ex.SqlState is "42P01" or "42703")
+        {
+        }
 
         try
         {

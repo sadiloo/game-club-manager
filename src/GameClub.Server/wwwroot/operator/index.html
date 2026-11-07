@@ -1,81 +1,102 @@
 <!DOCTYPE html>
-<html lang="fa">
+<html lang="fa" dir="rtl">
 <head>
   <meta charset="utf-8" />
-  <title>GameClub Operator</title>
+  <title>چک‌پوینت — اپراتور</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
-    body { font-family: system-ui, sans-serif; margin: 1rem; max-width: 960px; }
+    body { font-family: system-ui, Tahoma, sans-serif; margin: 1rem; max-width: 1040px; }
     #grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 0.5rem; }
-    .tile { border: 1px solid #ccc; padding: 0.75rem; border-radius: 8px; cursor: pointer; }
+    .tile { border: 1px solid #ccc; padding: 0.75rem; border-radius: 8px; cursor: pointer; position: relative; }
     .tile[data-status="Free"] { background: #f4f4f4; }
     .tile[data-status="Playing"] { background: #e8f5e9; }
     .tile[data-status="Paused"] { background: #fff3e0; }
     .tile[data-status="Waiting for payment"] { background: #e3f2fd; }
     .tile[data-status="Manual settle"] { background: #fce4ec; }
+    .tile[data-status="Buffet only"] { background: #f3e5f5; }
+    .buffet-icon { position: absolute; left: 6px; top: 6px; font-size: 1.1rem; border: none; background: #fff; border-radius: 6px; cursor: pointer; padding: 0.15rem 0.35rem; }
     .hidden { display: none; }
     #error { color: #b00020; white-space: pre-wrap; }
-    #billDetail { font-size: 0.9rem; }
+    #billDetail { font-size: 0.9rem; white-space: pre-wrap; }
     .pay-line { display: flex; gap: 0.5rem; flex-wrap: wrap; margin: 0.25rem 0; }
     label { display: block; margin: 0.25rem 0; }
     section.panel { border: 1px solid #ddd; padding: 0.75rem; margin: 0.75rem 0; border-radius: 8px; }
+    #buffetPanel .categories { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+    .cat { border: 1px solid #bbb; border-radius: 8px; padding: 0.5rem; min-width: 120px; }
+    .cat:hover .cat-items, .cat.cat-open .cat-items { display: block; }
+    .cat-items { display: none; margin-top: 0.5rem; }
+    .cat-item { display: block; width: 100%; margin: 0.25rem 0; text-align: right; }
+    .sale-line { display: flex; justify-content: space-between; gap: 0.5rem; margin: 0.2rem 0; font-size: 0.9rem; }
+    #lowStockList { color: #c62828; font-size: 0.9rem; }
   </style>
 </head>
 <body>
   <section id="login">
-    <h1>Operator login</h1>
-    <label>Username <input id="username" autocomplete="username" /></label>
-    <label>PIN <input id="pin" type="password" autocomplete="current-password" /></label>
-    <button id="loginBtn" type="button">Login</button>
+    <h1>ورود اپراتور</h1>
+    <label>نام کاربری <input id="username" autocomplete="username" /></label>
+    <label>رمز <input id="pin" type="password" autocomplete="current-password" /></label>
+    <button id="loginBtn" type="button">ورود</button>
     <p id="loginError" class="hidden"></p>
   </section>
   <section id="app" class="hidden">
-    <h1>Station grid</h1>
+    <h1>سالن</h1>
     <p id="error" role="alert"></p>
+    <p id="lowStockList"></p>
     <div id="grid"></div>
 
+    <section id="buffetPanel" class="panel hidden">
+      <h2>بوفه / خدمات</h2>
+      <p id="buffetContext"></p>
+      <div id="buffetCategories" class="categories"></div>
+      <div id="buffetSaleLines"></div>
+      <button id="buffetCheckoutBtn" type="button" class="hidden">تسویه بوفه</button>
+      <button id="buffetCloseBtn" type="button">بستن</button>
+    </section>
+
     <section id="sessionActions" class="panel hidden">
-      <h2>Session</h2>
+      <h2>جلسه</h2>
       <p id="sessionLabel"></p>
-      <button id="pauseBtn" type="button">Pause</button>
-      <button id="resumeBtn" type="button">Resume</button>
-      <label>Players
+      <button id="pauseBtn" type="button">توقف</button>
+      <button id="resumeBtn" type="button">ادامه</button>
+      <label>بازیکن
         <select id="playerCountSelect">
           <option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option>
         </select>
       </label>
-      <button id="playerCountBtn" type="button">Change players</button>
-      <button id="openBillBtn" type="button">Open bill (console)</button>
+      <button id="playerCountBtn" type="button">تغییر تعداد</button>
+      <button id="openBillBtn" type="button">باز کردن صورتحساب</button>
     </section>
 
     <section id="manualSettlePanel" class="panel">
-      <h2>Manual settle queue</h2>
+      <h2>صف تسویه دستی</h2>
       <ul id="manualSettleList"></ul>
     </section>
 
     <section id="pendingC2cPanel" class="panel">
-      <h2>Pending card-to-card</h2>
+      <h2>کارت‌به‌کارت در انتظار</h2>
       <ul id="pendingC2cList"></ul>
     </section>
 
     <section id="bill" class="panel hidden">
-      <h2>Bill</h2>
+      <h2>صورتحساب</h2>
       <div id="billDetail"></div>
+      <div id="billSaleLines"></div>
       <p id="cashChange"></p>
       <div id="paymentLines"></div>
-      <button id="addCashLineBtn" type="button">Add cash line</button>
-      <button id="addCardLineBtn" type="button">Add card reader line</button>
-      <button id="addC2cLineBtn" type="button">Add card-to-card line</button>
-      <button id="surchargeBtn" type="button">+5,000</button>
-      <button id="confirmBtn" type="button">Confirm payment</button>
-      <button id="cancelBillBtn" type="button">Cancel bill</button>
+      <button id="addCashLineBtn" type="button">نقد</button>
+      <button id="addCardLineBtn" type="button">کارتخوان</button>
+      <button id="addC2cLineBtn" type="button">کارت‌به‌کارت</button>
+      <button id="openBuffetFromBillBtn" type="button">بوفه</button>
+      <button id="surchargeBtn" type="button">+۵٬۰۰۰</button>
+      <button id="confirmBtn" type="button">تأیید پرداخت</button>
+      <button id="cancelBillBtn" type="button">لغو صورتحساب</button>
     </section>
 
     <section id="invoicePanel" class="panel">
-      <h2>Invoice lookup</h2>
-      <label>Number <input id="invoiceNumber" type="number" /></label>
-      <button id="loadInvoiceBtn" type="button">Load</button>
-      <button id="voidInvoiceBtn" type="button">Void (manager)</button>
+      <h2>جستجوی فاکتور</h2>
+      <label>شماره <input id="invoiceNumber" type="number" /></label>
+      <button id="loadInvoiceBtn" type="button">بارگذاری</button>
+      <button id="voidInvoiceBtn" type="button">باطل (مدیر)</button>
       <pre id="invoiceDetail"></pre>
     </section>
   </section>

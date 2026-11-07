@@ -345,8 +345,9 @@ public sealed class S3OperatorPanelUiTests(GameClubWebApplicationFactory factory
         await S3TestHelpers.ResetAsync(factory);
         var client = await factory.CreateOperatorClientAsync();
         var html = await client.GetStringAsync("/operator/index.html");
-        Assert.Contains("Station grid", html);
-        Assert.Contains("Manual settle queue", html);
+        Assert.Contains("سالن", html);
+        Assert.Contains("صف تسویه دستی", html);
+        Assert.Contains("بوفه", html);
         var grid = await client.GetFromJsonAsync<JsonElement>("/api/operator/grid");
         Assert.Equal(JsonValueKind.Array, grid.ValueKind);
     }
