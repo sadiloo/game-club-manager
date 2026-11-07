@@ -146,6 +146,40 @@ namespace GameClub.Server.Data.Migrations
                     b.ToTable("checkpoints", (string)null);
                 });
 
+            modelBuilder.Entity("GameClub.Server.Data.Entities.CustomerEntity", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("MembershipCode")
+                        .HasColumnType("text");
+
+                    b.Property<string>("MembershipCodeKey")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Mobile")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("MembershipCodeKey")
+                        .IsUnique();
+
+                    b.HasIndex("Mobile")
+                        .IsUnique();
+
+                    b.ToTable("customers", (string)null);
+                });
+
             modelBuilder.Entity("GameClub.Server.Data.Entities.DestinationCardEntity", b =>
                 {
                     b.Property<string>("Id")
@@ -217,6 +251,9 @@ namespace GameClub.Server.Data.Migrations
                     b.Property<long>("CollectibleToman")
                         .HasColumnType("bigint");
 
+                    b.Property<Guid?>("CustomerId")
+                        .HasColumnType("uuid");
+
                     b.Property<DateTime>("IssuedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
@@ -256,6 +293,8 @@ namespace GameClub.Server.Data.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("CustomerId");
+
                     b.HasIndex("Number")
                         .IsUnique();
 
@@ -289,6 +328,9 @@ namespace GameClub.Server.Data.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
+                    b.Property<Guid?>("CustomerId")
+                        .HasColumnType("uuid");
+
                     b.Property<bool>("IsBuffetOnly")
                         .HasColumnType("boolean");
 
@@ -300,6 +342,8 @@ namespace GameClub.Server.Data.Migrations
                         .HasColumnType("text");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("CustomerId");
 
                     b.HasIndex("SessionId")
                         .IsUnique();
@@ -554,6 +598,9 @@ namespace GameClub.Server.Data.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
+                    b.Property<Guid?>("CustomerId")
+                        .HasColumnType("uuid");
+
                     b.Property<DateTime?>("EndedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
@@ -585,6 +632,8 @@ namespace GameClub.Server.Data.Migrations
                         .HasColumnType("text");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("CustomerId");
 
                     b.HasIndex("RateCardSnapshotId");
 
@@ -754,6 +803,10 @@ namespace GameClub.Server.Data.Migrations
 
             modelBuilder.Entity("GameClub.Server.Data.Entities.InvoiceEntity", b =>
                 {
+                    b.HasOne("GameClub.Server.Data.Entities.CustomerEntity", "Customer")
+                        .WithMany()
+                        .HasForeignKey("CustomerId");
+
                     b.HasOne("GameClub.Server.Data.Entities.OpenSaleEntity", "OpenSale")
                         .WithMany()
                         .HasForeignKey("OpenSaleId");
@@ -762,6 +815,8 @@ namespace GameClub.Server.Data.Migrations
                         .WithOne("Invoice")
                         .HasForeignKey("GameClub.Server.Data.Entities.InvoiceEntity", "SessionId");
 
+                    b.Navigation("Customer");
+
                     b.Navigation("OpenSale");
 
                     b.Navigation("Session");
@@ -769,9 +824,15 @@ namespace GameClub.Server.Data.Migrations
 
             modelBuilder.Entity("GameClub.Server.Data.Entities.OpenSaleEntity", b =>
                 {
+                    b.HasOne("GameClub.Server.Data.Entities.CustomerEntity", "Customer")
+                        .WithMany()
+                        .HasForeignKey("CustomerId");
+
                     b.HasOne("GameClub.Server.Data.Entities.PlaySessionEntity", "Session")
                         .WithMany()
                         .HasForeignKey("SessionId");
+
+                    b.Navigation("Customer");
 
                     b.Navigation("Session");
                 });
@@ -851,6 +912,10 @@ namespace GameClub.Server.Data.Migrations
 
             modelBuilder.Entity("GameClub.Server.Data.Entities.PlaySessionEntity", b =>
                 {
+                    b.HasOne("GameClub.Server.Data.Entities.CustomerEntity", "Customer")
+                        .WithMany()
+                        .HasForeignKey("CustomerId");
+
                     b.HasOne("GameClub.Server.Data.Entities.RateCardSnapshotEntity", "RateCardSnapshot")
                         .WithMany()
                         .HasForeignKey("RateCardSnapshotId")
@@ -862,6 +927,8 @@ namespace GameClub.Server.Data.Migrations
                         .HasForeignKey("StationId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
+
+                    b.Navigation("Customer");
 
                     b.Navigation("RateCardSnapshot");
 

@@ -325,6 +325,7 @@ public sealed class OperatorBillService(
     public async Task<object> GetBillDetailAsync(Guid sessionId, CancellationToken ct)
     {
         var session = await db.Sessions.AsNoTracking()
+            .Include(s => s.Customer)
             .Include(s => s.Segments)
             .Include(s => s.PendingBill)
             .Include(s => s.Station)!.ThenInclude(st => st!.Group)
@@ -368,6 +369,7 @@ public sealed class OperatorBillService(
             source = bill.Source,
             stopReason = bill.StopReason,
             segments,
+            linkedCustomer = CustomerMapper.ToLinkedChip(session.Customer),
         };
     }
 
@@ -486,6 +488,7 @@ public sealed class OperatorGridService(AppDbContext db, SessionService sessions
             .ToListAsync(ct);
         var openSessions = await db.Sessions.AsNoTracking()
             .Include(s => s.PendingBill)
+            .Include(s => s.Customer)
             .Where(s => s.Status != SessionStatus.Closed)
             .ToListAsync(ct);
         var byStation = openSessions
@@ -547,6 +550,7 @@ public sealed class OperatorGridService(AppDbContext db, SessionService sessions
                 amountToman = amount,
                 sessionId = session.Id,
                 openSaleId,
+                linkedCustomer = CustomerMapper.ToLinkedChip(session.Customer),
             });
         }
 
@@ -609,6 +613,7 @@ public sealed class OperatorInvoiceService(
     {
         var invoice = await db.Invoices.AsNoTracking()
             .Include(i => i.PaymentLines)
+            .Include(i => i.Customer)
             .Include(i => i.Session)!.ThenInclude(s => s!.Station)
             .FirstOrDefaultAsync(i => i.Number == number, ct)
             ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Invoice not found.");

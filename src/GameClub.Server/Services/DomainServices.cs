@@ -214,7 +214,7 @@ public sealed class SessionCloser(
     {
         var openSale = await db.OpenSales.Include(o => o.Lines).ThenInclude(l => l.CatalogItem)
             .FirstOrDefaultAsync(o => o.SessionId == session.Id, ct);
-        var invoice = await CreateInvoiceAsync(bill, payments, session.Id, openSale?.Id, ct);
+        var invoice = await CreateInvoiceAsync(bill, payments, session.Id, openSale?.Id, session.CustomerId, ct);
         if (openSale is not null)
         {
             CopyCatalogLines(invoice, openSale.Lines);
@@ -237,7 +237,7 @@ public sealed class SessionCloser(
         IReadOnlyList<OperatorBillService.PaymentInput> payments,
         CancellationToken ct)
     {
-        var invoice = await CreateInvoiceAsync(bill, payments, null, sale.Id, ct);
+        var invoice = await CreateInvoiceAsync(bill, payments, null, sale.Id, sale.CustomerId, ct);
         CopyCatalogLines(invoice, sale.Lines);
         db.OpenSaleLines.RemoveRange(sale.Lines);
         db.OpenSales.Remove(sale);
@@ -252,6 +252,7 @@ public sealed class SessionCloser(
         IReadOnlyList<OperatorBillService.PaymentInput> payments,
         Guid? sessionId,
         Guid? openSaleId,
+        Guid? customerId,
         CancellationToken ct)
     {
         var number = await NextInvoiceNumberAsync(ct);
@@ -272,6 +273,7 @@ public sealed class SessionCloser(
             IssuedAtUtc = clock.UtcNow.UtcDateTime,
             Status = "confirmed",
             StopReason = bill.StopReason,
+            CustomerId = customerId,
         };
         foreach (var pay in payments)
         {

@@ -28,6 +28,9 @@
     .cat-item { display: block; width: 100%; margin: 0.25rem 0; text-align: right; }
     .sale-line { display: flex; justify-content: space-between; gap: 0.5rem; margin: 0.2rem 0; font-size: 0.9rem; }
     #lowStockList { color: #c62828; font-size: 0.9rem; }
+    #customerChip { background: #e8eaf6; padding: 0.35rem 0.5rem; border-radius: 6px; margin: 0.35rem 0; font-size: 0.9rem; }
+    .customer-hit { display: block; width: 100%; text-align: right; margin: 0.2rem 0; }
+    #customerSearchResults { max-height: 10rem; overflow: auto; border: 1px solid #ddd; padding: 0.35rem; margin: 0.25rem 0; border-radius: 6px; }
   </style>
 </head>
 <body>
@@ -51,6 +54,23 @@
       <div id="buffetSaleLines"></div>
       <button id="buffetCheckoutBtn" type="button" class="hidden">تسویه بوفه</button>
       <button id="buffetCloseBtn" type="button">بستن</button>
+    </section>
+
+    <section id="customerPanel" class="panel">
+      <h2>مشتری</h2>
+      <div id="customerChip" class="hidden"></div>
+      <label>جستجو (موبایل، نام، کارت)
+        <input id="customerSearch" type="search" autocomplete="off" placeholder="0912… یا نام یا کد عضویت" />
+      </label>
+      <div id="customerSearchResults"></div>
+      <details>
+        <summary>ایجاد مشتری جدید</summary>
+        <label>نام <input id="customerName" /></label>
+        <label>موبایل <input id="customerMobile" type="tel" /></label>
+        <label>کد عضویت (اختیاری) <input id="customerCode" /></label>
+        <button id="customerCreateBtn" type="button">ایجاد و پیوند</button>
+      </details>
+      <button id="customerClearBtn" type="button">حذف پیوند</button>
     </section>
 
     <section id="sessionActions" class="panel hidden">

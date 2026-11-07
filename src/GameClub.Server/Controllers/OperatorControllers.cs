@@ -40,10 +40,65 @@ public sealed class OperatorPanelController(
     OperatorUserService users,
     OperatorCatalogService catalog,
     OperatorBuffetSaleService buffetSales,
+    OperatorCustomerService customers,
     OperatorContext context) : ControllerBase
 {
     [HttpGet("grid")]
     public async Task<IActionResult> Grid(CancellationToken ct) => Ok(await grid.GetGridAsync(ct));
+
+    [HttpGet("customers/search")]
+    public async Task<IActionResult> SearchCustomers([FromQuery] string? q, CancellationToken ct)
+        => Ok(await customers.SearchAsync(q, ct));
+
+    public sealed record CreateCustomerRequest(
+        string Name,
+        string Mobile,
+        string? MembershipCode,
+        Guid? LinkSessionId,
+        Guid? LinkOpenSaleId);
+
+    [HttpPost("customers")]
+    public async Task<IActionResult> CreateCustomer(CreateCustomerRequest body, CancellationToken ct)
+    {
+        var created = await customers.CreateAsync(
+            body.Name,
+            body.Mobile,
+            body.MembershipCode,
+            body.LinkSessionId,
+            body.LinkOpenSaleId,
+            ct);
+        return Created($"/api/operator/customers/{created.Id}", created);
+    }
+
+    public sealed record LinkCustomerRequest(Guid? CustomerId);
+
+    [HttpPut("sessions/{sessionId:guid}/customer")]
+    public async Task<IActionResult> LinkSessionCustomer(Guid sessionId, LinkCustomerRequest body, CancellationToken ct)
+    {
+        if (body.CustomerId is Guid customerId)
+        {
+            return Ok(await customers.LinkSessionAsync(sessionId, customerId, ct));
+        }
+
+        await customers.ClearSessionLinkAsync(sessionId, ct);
+        return NoContent();
+    }
+
+    [HttpPut("buffet-only/{openSaleId:guid}/customer")]
+    public async Task<IActionResult> LinkBuffetCustomer(Guid openSaleId, LinkCustomerRequest body, CancellationToken ct)
+    {
+        if (body.CustomerId is Guid customerId)
+        {
+            return Ok(await customers.LinkOpenSaleAsync(openSaleId, customerId, ct));
+        }
+
+        await customers.ClearOpenSaleLinkAsync(openSaleId, ct);
+        return NoContent();
+    }
+
+    [HttpPut("customers/{customerId:guid}")]
+    public IActionResult UpdateCustomer(Guid customerId)
+        => StatusCode(StatusCodes.Status403Forbidden, new { code = "forbidden", message = "Customer profile edit is not available." });
 
     [HttpPost("stations/{stationId}/start")]
     public async Task<IActionResult> StartStation(string stationId, CancellationToken ct)
@@ -166,6 +221,16 @@ public sealed class OperatorPanelController(
         return Ok(new
         {
             invoice.Number,
+            customerId = invoice.CustomerId,
+            linkedCustomer = invoice.Customer is null
+                ? null
+                : new
+                {
+                    invoice.Customer.Id,
+                    invoice.Customer.Name,
+                    invoice.Customer.Mobile,
+                    membershipCode = invoice.Customer.MembershipCode,
+                },
             invoice.TimeGrossToman,
             invoice.BuffetGrossToman,
             invoice.ServicesGrossToman,

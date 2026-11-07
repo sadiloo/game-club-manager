@@ -53,6 +53,21 @@ public sealed class StationEntity
     public StationGroupEntity? Group { get; set; }
 }
 
+public sealed class CustomerEntity
+{
+    public Guid Id { get; set; }
+
+    public string Name { get; set; } = string.Empty;
+
+    public string Mobile { get; set; } = string.Empty;
+
+    public string? MembershipCode { get; set; }
+
+    public string? MembershipCodeKey { get; set; }
+
+    public DateTime CreatedAtUtc { get; set; }
+}
+
 public sealed class PlaySessionEntity
 {
     public Guid Id { get; set; }
@@ -78,6 +93,10 @@ public sealed class PlaySessionEntity
     public int RateCardSnapshotId { get; set; }
 
     public RateCardSnapshotEntity? RateCardSnapshot { get; set; }
+
+    public Guid? CustomerId { get; set; }
+
+    public CustomerEntity? Customer { get; set; }
 
     public List<PlaySegmentEntity> Segments { get; set; } = [];
 
@@ -179,6 +198,10 @@ public sealed class InvoiceEntity
     public string? VoidReason { get; set; }
 
     public string? StopReason { get; set; }
+
+    public Guid? CustomerId { get; set; }
+
+    public CustomerEntity? Customer { get; set; }
 
     public List<PaymentLineEntity> PaymentLines { get; set; } = [];
 
@@ -401,6 +424,10 @@ public sealed class OpenSaleEntity
     public string StationId { get; set; } = string.Empty;
 
     public bool IsBuffetOnly { get; set; }
+
+    public Guid? CustomerId { get; set; }
+
+    public CustomerEntity? Customer { get; set; }
 
     public List<OpenSaleLineEntity> Lines { get; set; } = [];
 
