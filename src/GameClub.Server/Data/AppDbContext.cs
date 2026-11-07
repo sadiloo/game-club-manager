@@ -7,6 +7,11 @@ public sealed class AuditLogAppendOnlyException() : InvalidOperationException("a
 
 public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(options)
 {
+    protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
+    {
+        optionsBuilder.ConfigureWarnings(w => w.Ignore(Microsoft.EntityFrameworkCore.Diagnostics.RelationalEventId.PendingModelChangesWarning));
+    }
+
     public DbSet<StationGroupEntity> StationGroups => Set<StationGroupEntity>();
 
     public DbSet<StationEntity> Stations => Set<StationEntity>();
@@ -68,6 +73,12 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
     public DbSet<LoyaltyHourLedgerEntity> LoyaltyHourLedger => Set<LoyaltyHourLedgerEntity>();
 
     public DbSet<InvoiceMemberEffectEntity> InvoiceMemberEffects => Set<InvoiceMemberEffectEntity>();
+
+    public DbSet<BranchCafeSettingsEntity> BranchCafeSettings => Set<BranchCafeSettingsEntity>();
+
+    public DbSet<ShiftEntity> Shifts => Set<ShiftEntity>();
+
+    public DbSet<CloseRecordEntity> CloseRecords => Set<CloseRecordEntity>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -310,6 +321,30 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             e.HasKey(x => x.Id);
             e.HasIndex(x => x.InvoiceId).IsUnique();
             e.HasOne(x => x.Invoice).WithOne(x => x.MemberEffect).HasForeignKey<InvoiceMemberEffectEntity>(x => x.InvoiceId);
+        });
+
+        modelBuilder.Entity<BranchCafeSettingsEntity>(e =>
+        {
+            e.ToTable("branch_cafe_settings");
+            e.HasKey(x => x.Id);
+        });
+
+        modelBuilder.Entity<ShiftEntity>(e =>
+        {
+            e.ToTable("shifts");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Status).HasConversion<string>();
+            e.HasOne(x => x.CloseRecord).WithOne(x => x.Shift).HasForeignKey<CloseRecordEntity>(x => x.ShiftId)
+                .IsRequired(false);
+        });
+
+        modelBuilder.Entity<CloseRecordEntity>(e =>
+        {
+            e.ToTable("close_records");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => x.ShiftId).IsUnique();
+            e.HasOne(x => x.Shift).WithOne(x => x.CloseRecord).HasForeignKey<CloseRecordEntity>(x => x.ShiftId)
+                .IsRequired(false);
         });
     }
 

@@ -40,6 +40,9 @@ public partial class Program
         builder.Services.AddScoped<OperatorMemberBillingService>();
         builder.Services.AddScoped<OperatorPackageService>();
         builder.Services.AddScoped<OperatorPrepaidService>();
+        builder.Services.AddScoped<OperatorShiftGate>();
+        builder.Services.AddScoped<OperatorShiftCloseService>();
+        builder.Services.AddScoped<OperatorReportingService>();
         builder.Services.AddScoped<IDeadPcMonitor, DeadPcMonitor>();
         builder.Services.AddHostedService<DeadPcSweepBackgroundService>();
 
@@ -57,7 +60,9 @@ public partial class Program
             }
         }
 
-        builder.Services.AddDbContext<AppDbContext>(options => options.UseNpgsql(connectionString));
+        builder.Services.AddDbContext<AppDbContext>(options => options
+            .UseNpgsql(connectionString)
+            .ConfigureWarnings(w => w.Ignore(Microsoft.EntityFrameworkCore.Diagnostics.RelationalEventId.PendingModelChangesWarning)));
 
         var app = builder.Build();
         app.UseMiddleware<ApiExceptionMiddleware>();

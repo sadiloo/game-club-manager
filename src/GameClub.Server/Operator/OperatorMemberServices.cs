@@ -112,7 +112,8 @@ public sealed class OperatorMemberWalletService(
     IClock clock,
     AuditService audit,
     OperatorContext op,
-    OperatorMemberContext members)
+    OperatorMemberContext members,
+    OperatorShiftGate shiftGate)
 {
     public async Task<object> GetWalletAsync(Guid customerId, CancellationToken ct)
     {
@@ -152,6 +153,8 @@ public sealed class OperatorMemberWalletService(
             throw new ApiException(StatusCodes.Status400BadRequest, "invalid_method", "Invalid top-up method.");
         }
 
+        await shiftGate.EnsureMoneyRecordingAllowedAsync(ct);
+        var shiftId = await shiftGate.RequireOpenShiftIdAsync(ct);
         await members.EnsureMemberAsync(customerId, ct);
         if (method == PaymentMethod.CardToCard)
         {
@@ -165,6 +168,7 @@ public sealed class OperatorMemberWalletService(
                 Status = PendingWalletTopUpStatus.Pending,
                 CreatedAtUtc = clock.UtcNow.UtcDateTime,
                 ActorUserId = op.UserId,
+                ShiftId = shiftId,
             });
             await audit.AppendAsync("wallet.topup.pending", new { customerId, amountToman, method = method.ToString() }, ct);
             await db.SaveChangesAsync(ct);
@@ -186,6 +190,7 @@ public sealed class OperatorMemberWalletService(
                 Reference = reference,
                 Label = method.ToString(),
                 ActorUserId = op.UserId,
+                ShiftId = shiftId,
             });
             await audit.AppendAsync("wallet.topup", new { customerId, amountToman, method = method.ToString() }, innerCt);
         }, ct);
@@ -224,6 +229,7 @@ public sealed class OperatorMemberWalletService(
                 Reference = pending.Reference,
                 Label = "card_to_card_confirmed",
                 ActorUserId = op.UserId,
+                ShiftId = pending.ShiftId,
             });
             await audit.AppendAsync("wallet.topup.confirmed", new { pendingId, before, after = new { member.RealToman, member.GiftToman } }, innerCt);
         }, ct, tx);
@@ -845,13 +851,16 @@ public sealed class OperatorPackageService(
     AuditService audit,
     OperatorMemberContext members,
     OperatorContext op,
-    IClock clock)
+    IClock clock,
+    OperatorShiftGate shiftGate)
 {
     public async Task SellPackageAsync(Guid customerId, string productId, IReadOnlyList<OperatorBillService.PaymentInput> payments, CancellationToken ct)
     {
         var product = await db.PackageProducts.AsNoTracking().FirstOrDefaultAsync(p => p.Id == productId && p.IsActive, ct)
             ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Package not found.");
 
+        await shiftGate.EnsureMoneyRecordingAllowedAsync(ct);
+        var shiftId = await shiftGate.RequireOpenShiftIdAsync(ct);
         await members.EnsureMemberAsync(customerId, ct);
         await using var tx = await db.Database.BeginTransactionAsync(ct);
         await db.Database.ExecuteSqlRawAsync(
@@ -885,6 +894,8 @@ public sealed class OperatorPackageService(
             IssuedAtUtc = clock.UtcNow.UtcDateTime,
             BilledToUtc = clock.UtcNow.UtcDateTime,
             Status = "confirmed",
+            ShiftId = shiftId,
+            SettledByUserId = op.UserId,
         };
         invoice.CatalogLines.Add(new InvoiceCatalogLineEntity
         {
@@ -903,7 +914,9 @@ public sealed class OperatorPackageService(
             {
                 Method = method,
                 AmountToman = pay.AmountToman,
-                ConfirmationStatus = PaymentConfirmationStatus.Settled,
+                ConfirmationStatus = method == PaymentMethod.CardToCard
+                    ? PaymentConfirmationStatus.Pending
+                    : PaymentConfirmationStatus.Settled,
                 WalletCustomerId = method == PaymentMethod.Wallet ? customerId : null,
                 WalletRealDrawnToman = splitLine?.RealDrawnToman ?? 0,
                 WalletGiftDrawnToman = splitLine?.GiftDrawnToman ?? 0,

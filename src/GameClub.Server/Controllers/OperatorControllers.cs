@@ -292,6 +292,15 @@ public sealed class OperatorPanelController(
         return NoContent();
     }
 
+    public sealed record InvoiceNoteRequest(string? Note);
+
+    [HttpPut("invoices/{number:long}/note")]
+    public async Task<IActionResult> InvoiceNote(long number, InvoiceNoteRequest body, CancellationToken ct)
+    {
+        await invoices.SetOperatorNoteAsync(number, body.Note, ct);
+        return NoContent();
+    }
+
     public sealed record VoidRequest(string? Reason);
 
     [HttpPost("payments/{paymentLineId:long}/confirm")]

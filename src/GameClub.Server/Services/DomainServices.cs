@@ -206,7 +206,9 @@ public sealed class SessionCloser(
     AppDbContext db,
     IClock clock,
     SessionBilling billing,
-    OperatorMemberBillingService memberBilling)
+    OperatorMemberBillingService memberBilling,
+    Operator.OperatorShiftGate shiftGate,
+    Operator.OperatorContext operatorContext)
 {
     public async Task<InvoiceEntity> FinalizeFromPendingAsync(
         PlaySessionEntity session,
@@ -215,9 +217,11 @@ public sealed class SessionCloser(
         BillAmounts amounts,
         CancellationToken ct)
     {
+        await shiftGate.EnsureMoneyRecordingAllowedAsync(ct);
+        var shiftId = await shiftGate.RequireOpenShiftIdAsync(ct);
         var openSale = await db.OpenSales.Include(o => o.Lines).ThenInclude(l => l.CatalogItem)
             .FirstOrDefaultAsync(o => o.SessionId == session.Id, ct);
-        var invoice = await CreateInvoiceAsync(amounts, bill, payments, session.Id, openSale?.Id, session.CustomerId, ct);
+        var invoice = await CreateInvoiceAsync(amounts, bill, payments, session.Id, openSale?.Id, session.CustomerId, shiftId, ct);
         if (openSale is not null)
         {
             CopyCatalogLines(invoice, openSale.Lines);
@@ -259,7 +263,9 @@ public sealed class SessionCloser(
         BillAmounts amounts,
         CancellationToken ct)
     {
-        var invoice = await CreateInvoiceAsync(amounts, bill, payments, null, sale.Id, sale.CustomerId, ct);
+        await shiftGate.EnsureMoneyRecordingAllowedAsync(ct);
+        var shiftId = await shiftGate.RequireOpenShiftIdAsync(ct);
+        var invoice = await CreateInvoiceAsync(amounts, bill, payments, null, sale.Id, sale.CustomerId, shiftId, ct);
         CopyCatalogLines(invoice, sale.Lines);
         db.OpenSaleLines.RemoveRange(sale.Lines);
         db.OpenSales.Remove(sale);
@@ -293,6 +299,7 @@ public sealed class SessionCloser(
         Guid? sessionId,
         Guid? openSaleId,
         Guid? customerId,
+        Guid? shiftId,
         CancellationToken ct)
     {
         var number = await NextInvoiceNumberAsync(ct);
@@ -302,6 +309,8 @@ public sealed class SessionCloser(
             Number = number,
             SessionId = sessionId,
             OpenSaleId = openSaleId,
+            ShiftId = shiftId,
+            SettledByUserId = operatorContext.UserId,
             TimeGrossToman = amounts.TimeGrossToman,
             BuffetGrossToman = amounts.BuffetGrossToman,
             ServicesGrossToman = amounts.ServicesGrossToman,
@@ -413,7 +422,8 @@ public sealed class SessionService(
     AuditService audit,
     SessionBilling billing,
     RateConfigService rates,
-    OperatorBillService operatorBills)
+    OperatorBillService operatorBills,
+    Operator.OperatorShiftGate shiftGate)
 {
     public async Task<PlaySessionEntity> StartAsync(string stationId, int playerCount, PlayMode mode, DateTimeOffset? startedAt, CancellationToken ct)
     {
@@ -424,6 +434,9 @@ public sealed class SessionService(
                 "client_start_time",
                 "Session start time is set by the server; do not send startedAt.");
         }
+
+        await shiftGate.EnsureMoneyRecordingAllowedAsync(ct);
+        var openShiftId = await shiftGate.RequireOpenShiftIdAsync(ct);
 
         var strategy = db.Database.CreateExecutionStrategy();
         return await strategy.ExecuteAsync(async () =>
@@ -474,6 +487,7 @@ public sealed class SessionService(
                 PlayerCount = playerCount,
                 LastCheckpointUtc = station.Group.Kind == StationKind.Pc ? startUtc : null,
                 RateCardSnapshot = rateSnapshot,
+                OpenShiftId = openShiftId,
             };
 
             session.Segments.Add(new PlaySegmentEntity
@@ -1021,6 +1035,18 @@ public sealed class DatabaseSeed
                     BirthdayPercent = 10,
                     BirthdayWindowKind = "birth_month",
                 });
+                await db.SaveChangesAsync(ct);
+            }
+        }
+        catch (PostgresException ex) when (ex.SqlState == "42P01")
+        {
+        }
+
+        try
+        {
+            if (!await db.BranchCafeSettings.AnyAsync(ct))
+            {
+                db.BranchCafeSettings.Add(new BranchCafeSettingsEntity());
                 await db.SaveChangesAsync(ct);
             }
         }

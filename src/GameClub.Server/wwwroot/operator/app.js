@@ -446,6 +446,7 @@ document.getElementById("loginBtn").onclick = async () => {
     await refreshManualSettle();
     await refreshPendingC2c();
     await refreshPendingWalletTopups();
+    await refreshShiftState();
     setInterval(async () => {
       await refreshGrid();
       await refreshLowStock();
@@ -1102,3 +1103,45 @@ async function sellPackageFlow() {
 }
 
 bindClick("opSellPackageBtn", () => sellPackageFlow().catch(showError));
+
+async function refreshShiftState() {
+  const state = await api("/api/operator/shift/state");
+  const el = document.getElementById("shiftState");
+  if (!el) return;
+  const open = state.openShift;
+  el.textContent = state.shiftsEnabled
+    ? open ? `شیفت باز — تنخواه ${open.openingFloatToman}` : "شیفت بسته است"
+    : "حالت روزکاری (بدون شیفت)";
+}
+
+bindClick("openShiftBtn", async () => {
+  const raw = window.prompt("تنخواه (تومان)", "0");
+  const openingFloatToman = Number(String(raw || "0").replace(/,/g, ""));
+  await api("/api/operator/shift/open", { method: "POST", body: JSON.stringify({ openingFloatToman }) });
+  await refreshShiftState();
+});
+
+bindClick("closePreviewBtn", async () => {
+  const preview = await api("/api/operator/shift/close/preview");
+  document.getElementById("closePreview").textContent = JSON.stringify(preview, null, 2);
+});
+
+bindClick("closeShiftBtn", async () => {
+  const y = Number(window.prompt("سال میلادی روزکاری", "2026"));
+  const m = Number(window.prompt("ماه", "6"));
+  const d = Number(window.prompt("روز", "3"));
+  const actualCashToman = Number(String(window.prompt("نقد شمارش‌شده", "0")).replace(/,/g, ""));
+  const actualCardReaderToman = Number(String(window.prompt("جمع کارتخوان", "0")).replace(/,/g, ""));
+  const discrepancyExplanation = window.prompt("توضیح مغایرت (در صورت نیاز)", "") || null;
+  await api("/api/operator/shift/close", {
+    method: "POST",
+    body: JSON.stringify({
+      workingDay: { year: y, month: m, day: d },
+      actualCashToman,
+      actualCardReaderToman,
+      discrepancyExplanation,
+    }),
+  });
+  await refreshShiftState();
+  document.getElementById("closePreview").textContent = "";
+});

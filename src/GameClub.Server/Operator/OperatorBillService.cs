@@ -830,6 +830,21 @@ public sealed class OperatorInvoiceService(
         return invoice;
     }
 
+    public async Task SetOperatorNoteAsync(long number, string? note, CancellationToken ct)
+    {
+        if (context.Role == UserRole.Operator || context.Role is UserRole.Manager or UserRole.Owner)
+        {
+            var invoice = await db.Invoices.FirstOrDefaultAsync(i => i.Number == number, ct)
+                ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Invoice not found.");
+            invoice.OperatorNote = string.IsNullOrWhiteSpace(note) ? null : note.Trim();
+            await audit.AppendAsync("invoice.operator_note", new { number, note = invoice.OperatorNote }, ct);
+            await db.SaveChangesAsync(ct);
+            return;
+        }
+
+        throw new ApiException(StatusCodes.Status403Forbidden, "forbidden", "Not allowed.");
+    }
+
     public async Task VoidAsync(long number, string? reason, CancellationToken ct)
     {
         if (context.Role is not UserRole.Manager and not UserRole.Owner)
