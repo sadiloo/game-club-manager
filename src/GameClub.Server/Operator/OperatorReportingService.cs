@@ -317,6 +317,8 @@ public sealed class OperatorReportingService(AppDbContext db, OperatorContext op
             return total;
         }
 
+        var breakdown = AggregateBreakdowns(rows);
+
         return new
         {
             period,
@@ -331,8 +333,104 @@ public sealed class OperatorReportingService(AppDbContext db, OperatorContext op
             receivedCardReaderToman = SumLong(r => r.receivedCardReaderToman),
             receivedCardToCardToman = SumLong(r => r.receivedCardToCardToman),
             receivedMoneyToman = SumLong(r => r.receivedMoneyToman),
+            byStation = breakdown.ByStation,
+            byOperator = breakdown.ByOperator,
+            destinationCards = breakdown.DestinationCards,
             days = rows,
         };
+    }
+
+    private static (List<object> ByStation, List<object> ByOperator, List<object> DestinationCards) AggregateBreakdowns(
+        IReadOnlyList<object> rows)
+    {
+        var byStation = new Dictionary<string, long>();
+        var byOperator = new Dictionary<Guid, long>();
+        var destCards = new Dictionary<string, long>();
+
+        foreach (var leaf in EnumerateLeafIncomeRows(rows))
+        {
+            foreach (var s in ReadChildRows(leaf, "byStation"))
+            {
+                var stationId = ReadString(s, "stationId") ?? "(unknown)";
+                byStation[stationId] = byStation.GetValueOrDefault(stationId) + ReadLong(s, "receivedMoneyToman");
+            }
+
+            foreach (var o in ReadChildRows(leaf, "byOperator"))
+            {
+                var operatorId = ReadGuid(o, "operatorId");
+                if (operatorId is Guid uid)
+                {
+                    byOperator[uid] = byOperator.GetValueOrDefault(uid) + ReadLong(o, "receivedMoneyToman");
+                }
+            }
+
+            foreach (var c in ReadChildRows(leaf, "destinationCards"))
+            {
+                var cardId = ReadString(c, "destinationCardId") ?? "(unknown)";
+                destCards[cardId] = destCards.GetValueOrDefault(cardId) + ReadLong(c, "totalToman");
+            }
+        }
+
+        return (
+            byStation.Select(kv => (object)new { stationId = kv.Key, receivedMoneyToman = kv.Value }).ToList(),
+            byOperator.Select(kv => (object)new { operatorId = kv.Key, receivedMoneyToman = kv.Value }).ToList(),
+            destCards.Select(kv => (object)new { destinationCardId = kv.Key, totalToman = kv.Value }).ToList());
+    }
+
+    private static IEnumerable<object> EnumerateLeafIncomeRows(IReadOnlyList<object> rows)
+    {
+        foreach (var row in rows)
+        {
+            var nestedDays = ReadChildRows(row, "days").ToList();
+            if (nestedDays.Count > 0)
+            {
+                foreach (var leaf in EnumerateLeafIncomeRows(nestedDays))
+                {
+                    yield return leaf;
+                }
+
+                continue;
+            }
+
+            yield return row;
+        }
+    }
+
+    private static IEnumerable<object> ReadChildRows(object row, string propertyName)
+    {
+        var prop = row.GetType().GetProperty(propertyName);
+        if (prop?.GetValue(row) is not System.Collections.IEnumerable sequence)
+        {
+            yield break;
+        }
+
+        foreach (var item in sequence)
+        {
+            if (item is not null)
+            {
+                yield return item;
+            }
+        }
+    }
+
+    private static long ReadLong(object row, string propertyName)
+    {
+        var prop = row.GetType().GetProperty(propertyName);
+        return prop?.GetValue(row) switch
+        {
+            long l => l,
+            int i => i,
+            _ => 0,
+        };
+    }
+
+    private static string? ReadString(object row, string propertyName)
+        => row.GetType().GetProperty(propertyName)?.GetValue(row) as string;
+
+    private static Guid? ReadGuid(object row, string propertyName)
+    {
+        var value = row.GetType().GetProperty(propertyName)?.GetValue(row);
+        return value is Guid g ? g : null;
     }
 
     private async Task<List<LocalDate>> ListWorkingDaysInJalaliMonthAsync(int jalaliYear, int jalaliMonth, CancellationToken ct)
@@ -426,10 +524,24 @@ public sealed class OperatorReportingService(AppDbContext db, OperatorContext op
         }
         else
         {
-            walletQuery = walletQuery.Where(w => w.ShiftId == null
-                                                 && w.WorkingDayYear == close.WorkingDayYear
-                                                 && w.WorkingDayMonth == close.WorkingDayMonth
-                                                 && w.WorkingDayDay == close.WorkingDayDay);
+            var offTopUps = await LoadOffWalletTopUpsForCloseAsync(close, ct);
+            foreach (var row in offTopUps)
+            {
+                switch (row.Method)
+                {
+                    case PaymentMethod.Cash:
+                        cash = MoneyMath.CheckedAdd(cash, row.RealDeltaToman);
+                        break;
+                    case PaymentMethod.CardReader:
+                        card = MoneyMath.CheckedAdd(card, row.RealDeltaToman);
+                        break;
+                    case PaymentMethod.CardToCard:
+                        c2c = MoneyMath.CheckedAdd(c2c, row.RealDeltaToman);
+                        break;
+                }
+            }
+
+            return new MethodTotals(cash, card, c2c);
         }
 
         var topUps = await walletQuery.ToListAsync(ct);
@@ -451,6 +563,76 @@ public sealed class OperatorReportingService(AppDbContext db, OperatorContext op
 
         return new MethodTotals(cash, card, c2c);
     }
+
+    private async Task<List<WalletLedgerEntryEntity>> LoadOffWalletTopUpsForCloseAsync(
+        CloseRecordEntity close,
+        CancellationToken ct)
+    {
+        var periodStart = close.PeriodOpenedAtUtc;
+        var periodEnd = close.ClosedAtUtc;
+
+        var inPeriodRaw = await db.WalletLedger.AsNoTracking()
+            .Where(w => w.Kind == WalletLedgerKind.TopUpReal
+                        && w.ShiftId == null
+                        && w.AtUtc >= periodStart
+                        && w.AtUtc < periodEnd)
+            .ToListAsync(ct);
+
+        var inPeriod = new List<WalletLedgerEntryEntity>();
+        foreach (var row in inPeriodRaw)
+        {
+            if (row.Method != PaymentMethod.CardToCard)
+            {
+                inPeriod.Add(row);
+                continue;
+            }
+
+            var origin = await FindConfirmedWalletPendingOriginAsync(row, ct);
+            if (origin is not null && origin.CreatedAtUtc >= periodStart && origin.CreatedAtUtc <= periodEnd)
+            {
+                inPeriod.Add(row);
+            }
+        }
+
+        var lateConfirmed = new List<WalletLedgerEntryEntity>();
+        var originatingPendings = await db.PendingWalletTopUps.AsNoTracking()
+            .Where(p => p.Status == PendingWalletTopUpStatus.Confirmed
+                        && p.Method == PaymentMethod.CardToCard
+                        && p.CreatedAtUtc >= periodStart
+                        && p.CreatedAtUtc <= periodEnd)
+            .ToListAsync(ct);
+        foreach (var pending in originatingPendings)
+        {
+            var ledger = await db.WalletLedger.AsNoTracking()
+                .Where(w => w.Kind == WalletLedgerKind.TopUpReal
+                            && w.ShiftId == null
+                            && w.Method == PaymentMethod.CardToCard
+                            && w.CustomerId == pending.CustomerId
+                            && w.RealDeltaToman == pending.AmountToman
+                            && w.WorkingDayYear == close.WorkingDayYear
+                            && w.WorkingDayMonth == close.WorkingDayMonth
+                            && w.WorkingDayDay == close.WorkingDayDay
+                            && w.AtUtc >= periodEnd)
+                .FirstOrDefaultAsync(ct);
+            if (ledger is not null)
+            {
+                lateConfirmed.Add(ledger);
+            }
+        }
+
+        return inPeriod.Concat(lateConfirmed).DistinctBy(w => w.Id).ToList();
+    }
+
+    private async Task<PendingWalletTopUpEntity?> FindConfirmedWalletPendingOriginAsync(
+        WalletLedgerEntryEntity row,
+        CancellationToken ct)
+        => await db.PendingWalletTopUps.AsNoTracking()
+            .Where(p => p.CustomerId == row.CustomerId
+                        && p.AmountToman == row.RealDeltaToman
+                        && p.Method == PaymentMethod.CardToCard
+                        && p.Status == PendingWalletTopUpStatus.Confirmed)
+            .OrderByDescending(p => p.CreatedAtUtc)
+            .FirstOrDefaultAsync(ct);
 
     private async Task<List<object>> BuildDestinationCardsForDayAsync(int year, int month, int day, CancellationToken ct)
     {

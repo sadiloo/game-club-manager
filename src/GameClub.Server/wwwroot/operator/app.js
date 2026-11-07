@@ -1157,6 +1157,53 @@ async function jalaliToGregorian(jy, jm, jd) {
   return api(`/api/operator/shift/jalali/${jy}/${jm}/${jd}`);
 }
 
+async function gregorianToJalali(gy, gm, gd) {
+  return api(`/api/operator/shift/gregorian/${gy}/${gm}/${gd}`);
+}
+
+function aggregateIncomeBreakdowns(body) {
+  function collectDayRows(node) {
+    if (!node) return [];
+    if (Array.isArray(node.days) && node.days.length > 0) {
+      return node.days.flatMap(collectDayRows);
+    }
+    return [node];
+  }
+
+  const dayRows = body?.days ? collectDayRows(body) : body ? [body] : [];
+  const byStation = {};
+  const byOperator = {};
+  const destinationCards = {};
+
+  for (const row of dayRows) {
+    for (const s of row.byStation || []) {
+      byStation[s.stationId] = (byStation[s.stationId] || 0) + Number(s.receivedMoneyToman || 0);
+    }
+    for (const o of row.byOperator || []) {
+      byOperator[o.operatorId] = (byOperator[o.operatorId] || 0) + Number(o.receivedMoneyToman || 0);
+    }
+    for (const c of row.destinationCards || []) {
+      destinationCards[c.destinationCardId] =
+        (destinationCards[c.destinationCardId] || 0) + Number(c.totalToman || 0);
+    }
+  }
+
+  return {
+    byStation: Object.entries(byStation).map(([stationId, receivedMoneyToman]) => ({
+      stationId,
+      receivedMoneyToman,
+    })),
+    byOperator: Object.entries(byOperator).map(([operatorId, receivedMoneyToman]) => ({
+      operatorId,
+      receivedMoneyToman,
+    })),
+    destinationCards: Object.entries(destinationCards).map(([destinationCardId, totalToman]) => ({
+      destinationCardId,
+      totalToman,
+    })),
+  };
+}
+
 function gregorianDayRangeUtc(g) {
   const from = new Date(Date.UTC(g.year, g.month - 1, g.day, -3, -30, 0));
   const to = new Date(Date.UTC(g.year, g.month - 1, g.day, 20, 29, 59));
@@ -1170,28 +1217,35 @@ function renderReportsTable(title, headers, rows) {
 }
 
 function renderIncomeSummary(body) {
+  const rollup = aggregateIncomeBreakdowns(body);
+  const merged = {
+    ...body,
+    byStation: body.byStation?.length ? body.byStation : rollup.byStation,
+    byOperator: body.byOperator?.length ? body.byOperator : rollup.byOperator,
+    destinationCards: body.destinationCards?.length ? body.destinationCards : rollup.destinationCards,
+  };
   const categories = renderReportsTable(
     "ستون‌های درآمد",
     ["بازی", "بوفه", "خدمات", "گرد کردن", "خدمت ویژه", "بسته", "شارژ کیف", "دریافتی", "نقد", "کارتخوان", "کارت‌به‌کارت"],
     [
       [
-        body.playToman ?? 0,
-        body.buffetToman ?? 0,
-        body.servicesToman ?? 0,
-        body.roundingToman ?? 0,
-        body.surchargeToman ?? 0,
-        body.packageSalesToman ?? 0,
-        body.walletTopUpToman ?? 0,
-        body.receivedMoneyToman ?? 0,
-        body.receivedCashToman ?? 0,
-        body.receivedCardReaderToman ?? 0,
-        body.receivedCardToCardToman ?? 0,
+        merged.playToman ?? 0,
+        merged.buffetToman ?? 0,
+        merged.servicesToman ?? 0,
+        merged.roundingToman ?? 0,
+        merged.surchargeToman ?? 0,
+        merged.packageSalesToman ?? 0,
+        merged.walletTopUpToman ?? 0,
+        merged.receivedMoneyToman ?? 0,
+        merged.receivedCashToman ?? 0,
+        merged.receivedCardReaderToman ?? 0,
+        merged.receivedCardToCardToman ?? 0,
       ],
     ]
   );
-  const byStation = (body.byStation || []).map((s) => [s.stationId, s.receivedMoneyToman]);
-  const byOperator = (body.byOperator || []).map((o) => [o.operatorId, o.receivedMoneyToman]);
-  const dest = (body.destinationCards || []).map((d) => [d.destinationCardId, d.totalToman]);
+  const byStation = (merged.byStation || []).map((s) => [s.stationId, s.receivedMoneyToman]);
+  const byOperator = (merged.byOperator || []).map((o) => [o.operatorId, o.receivedMoneyToman]);
+  const dest = (merged.destinationCards || []).map((d) => [d.destinationCardId, d.totalToman]);
   return (
     categories +
     renderReportsTable("بر اساس ایستگاه", ["ایستگاه", "دریافتی"], byStation.length ? byStation : [["—", 0]]) +
@@ -1214,26 +1268,40 @@ const historyTableHeaders = [
   "علت باطل",
 ];
 
-function historyRowsFromApi(rows) {
-  return (rows || []).map((r) => {
+async function historyRowsFromApi(rows) {
+  const out = [];
+  for (const r of rows || []) {
     const wd = r.workingDay;
+    let year = "—";
+    let month = "—";
+    let day = "—";
+    const gy = wd?.workingDayYear ?? wd?.year;
+    const gm = wd?.workingDayMonth ?? wd?.month;
+    const gd = wd?.workingDayDay ?? wd?.day;
+    if (gy != null && gm != null && gd != null) {
+      const jalali = await gregorianToJalali(gy, gm, gd);
+      year = jalali.year;
+      month = jalali.month;
+      day = jalali.day;
+    }
     const payments = (r.payments || [])
       .map((p) => `${p.method}:${p.amountToman}:${p.status ?? ""}`)
       .join("|");
-    return [
+    out.push([
       r.number,
       r.status,
       r.collectibleToman,
       r.stationId ?? "—",
       r.settledByUserId ?? "—",
-      wd?.workingDayYear ?? wd?.year ?? "—",
-      wd?.workingDayMonth ?? wd?.month ?? "—",
-      wd?.workingDayDay ?? wd?.day ?? "—",
+      year,
+      month,
+      day,
       payments,
       r.operatorNote ?? "",
       r.voidReason ?? "",
-    ];
-  });
+    ]);
+  }
+  return out;
 }
 
 async function historyQuery() {
@@ -1430,7 +1498,7 @@ bindClick("cu8Btn", async () => {
 });
 bindClick("historyBtn", async () => {
   const rows = await api(`/api/operator/reports/history${await historyQuery()}`);
-  const table = historyRowsFromApi(rows);
+  const table = await historyRowsFromApi(rows);
   document.getElementById("reportsOut").innerHTML = renderReportsTable(
     "تاریخچه",
     historyTableHeaders,

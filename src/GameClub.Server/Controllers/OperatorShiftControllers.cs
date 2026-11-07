@@ -33,6 +33,13 @@ public sealed class OperatorShiftController(OperatorShiftCloseService shifts) : 
         return Ok(new { year = gregorian.Year, month = gregorian.Month, day = gregorian.Day });
     }
 
+    [HttpGet("gregorian/{year:int}/{month:int}/{day:int}")]
+    public IActionResult GregorianToJalali(int year, int month, int day)
+    {
+        var jalali = JalaliDate.FromGregorian(new LocalDate(year, month, day));
+        return Ok(new { year = jalali.Year, month = jalali.Month, day = jalali.Day });
+    }
+
     public sealed record CloseRequest(
         WorkingDayInput WorkingDay,
         long ActualCashToman,
