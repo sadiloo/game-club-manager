@@ -199,7 +199,8 @@ namespace GameClub.Server.Data.Migrations
                     AllowedGroupIdsJson = table.Column<string>(type: "text", nullable: true),
                     ValidFromUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: true),
                     ValidToUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: true),
-                    HourWindowJson = table.Column<string>(type: "text", nullable: true)
+                    HourWindowJson = table.Column<string>(type: "text", nullable: true),
+                    PurchaseInvoiceId = table.Column<Guid>(type: "uuid", nullable: true)
                 },
                 constraints: table =>
                 {

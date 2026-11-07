@@ -289,6 +289,9 @@ namespace GameClub.Server.Data.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<Guid?>("PurchaseInvoiceId")
+                        .HasColumnType("uuid");
+
                     b.Property<long>("RemainingMinutes")
                         .HasColumnType("bigint");
 

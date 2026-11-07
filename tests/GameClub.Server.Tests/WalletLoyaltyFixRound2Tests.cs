@@ -136,6 +136,20 @@ public sealed class WalletLoyaltyFixRound2Tests(GameClubWebApplicationFactory fa
                 },
             });
         Assert.Equal(HttpStatusCode.OK, mixed.StatusCode);
+        var walletInv = await op.GetFromJsonAsync<System.Text.Json.JsonElement>("/api/operator/invoices/1");
+        Assert.Equal(0, walletInv.GetProperty("servicesGrossToman").GetInt64());
+        Assert.Equal(5_000, walletInv.GetProperty("surchargeToman").GetInt64());
+        var mixedInv = await op.GetFromJsonAsync<System.Text.Json.JsonElement>("/api/operator/invoices/2");
+        Assert.Equal(0, mixedInv.GetProperty("servicesGrossToman").GetInt64());
+        Assert.Equal(5_000, mixedInv.GetProperty("surchargeToman").GetInt64());
+        Assert.Equal(
+            mixedInv.GetProperty("collectibleToman").GetInt64(),
+            mixedInv.GetProperty("timeGrossToman").GetInt64()
+                + mixedInv.GetProperty("buffetGrossToman").GetInt64()
+                + mixedInv.GetProperty("servicesGrossToman").GetInt64()
+                - mixedInv.GetProperty("discountToman").GetInt64()
+                + mixedInv.GetProperty("roundingToman").GetInt64()
+                + mixedInv.GetProperty("surchargeToman").GetInt64());
     }
 
     [Fact]
@@ -151,6 +165,38 @@ public sealed class WalletLoyaltyFixRound2Tests(GameClubWebApplicationFactory fa
             new { realToman = 10_000L });
         var (spendable, ledger) = await WalletTotalsAsync(factory, customerId);
         Assert.Equal(20_000, spendable);
+        Assert.Equal(ledger, spendable);
+    }
+
+    [Fact]
+    public async Task round2_a6_fresh_debt_and_gift_opening_matches_ledger()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var mgr = await MgrAsync();
+        var customerId = await CreateCustomerAsync(mgr, "09122110041");
+        await mgr.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/opening-balance",
+            new { debtToman = 10_000L, giftToman = 5_000L, lifetimeHours = 49L });
+        var (spendable, ledger) = await WalletTotalsAsync(factory, customerId);
+        var wallet = await mgr.GetFromJsonAsync<System.Text.Json.JsonElement>($"/api/operator/members/customers/{customerId}/wallet");
+        Assert.Equal(-10_000, wallet.GetProperty("realToman").GetInt64());
+        Assert.Equal(5_000, wallet.GetProperty("giftToman").GetInt64());
+        Assert.Equal(ledger, spendable);
+    }
+
+    [Fact]
+    public async Task round2_a6_prior_cash_then_debt_opening_matches_ledger()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var mgr = await MgrAsync();
+        var op = await OpAsync();
+        var customerId = await CreateCustomerAsync(op, "09122110042");
+        await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up",
+            new { method = "Cash", amountToman = 50_000L });
+        await mgr.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/opening-balance",
+            new { debtToman = 10_000L });
+        var (spendable, ledger) = await WalletTotalsAsync(factory, customerId);
+        var wallet = await mgr.GetFromJsonAsync<System.Text.Json.JsonElement>($"/api/operator/members/customers/{customerId}/wallet");
+        Assert.Equal(40_000, wallet.GetProperty("realToman").GetInt64());
         Assert.Equal(ledger, spendable);
     }
 
@@ -179,7 +225,10 @@ public sealed class WalletLoyaltyFixRound2Tests(GameClubWebApplicationFactory fa
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         var invoice = await db.Invoices.Include(i => i.PaymentLines).SingleAsync(i => i.CustomerId == customerId);
         Assert.Equal(50_000, invoice.CollectibleToman);
+        Assert.Equal(0, invoice.BuffetGrossToman);
         Assert.Contains(invoice.PaymentLines, p => p.Method == PaymentMethod.Cash && p.AmountToman == 50_000);
+        Assert.True(await db.WalletLedger.AnyAsync(e =>
+            e.CustomerId == customerId && e.Kind == WalletLedgerKind.PackagePurchase && e.InvoiceId == invoice.Id));
     }
 
     [Fact]

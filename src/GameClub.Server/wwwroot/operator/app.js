@@ -504,8 +504,34 @@ document.getElementById("openBuffetFromBillBtn").onclick = async () => {
   await openBuffetPanel({ id: selectedTile?.id || "", sessionId: selectedSessionId, openSaleId: selectedTile?.openSaleId });
 };
 
+let lastGridTiles = [];
+
+async function refreshPrepaidGlobalAlerts() {
+  const banner = document.getElementById("prepaidGlobalAlert");
+  if (!banner) return;
+  const alertStations = [];
+  for (const t of lastGridTiles) {
+    if (!t.sessionId) continue;
+    try {
+      const st = await api(`/api/operator/sessions/${t.sessionId}/prepaid`);
+      if (st.prepaidEndAlert) alertStations.push(t.id);
+    } catch (_) {}
+  }
+  if (alertStations.length > 0) {
+    banner.textContent = `پایان زمان: ${alertStations.join("، ")}`;
+    banner.classList.remove("hidden");
+    banner.classList.add("alert");
+  } else {
+    banner.textContent = "";
+    banner.classList.add("hidden");
+    banner.classList.remove("alert");
+  }
+}
+
 async function refreshGrid() {
   const tiles = await api("/api/operator/grid");
+  lastGridTiles = tiles;
+  await refreshPrepaidGlobalAlerts();
   const grid = document.getElementById("grid");
   grid.replaceChildren();
   for (const t of tiles) {
@@ -656,9 +682,16 @@ function renderBill(bill) {
         `${fmtTehran(s.startUtc)}–${fmtTehran(s.endUtc)}`,
     )
     .join("\n");
+  const levelDisc = bill.levelDiscountToman ?? 0;
+  const bdayDisc = bill.birthdayDiscountToman ?? 0;
+  const discLine =
+    levelDisc || bdayDisc
+      ? `\nتخفیف سطح ${levelDisc} · تولد ${bdayDisc}`
+      : "";
   d.textContent =
     `زمان ${bill.timeGrossToman ?? 0} · بوفه ${bill.buffetGrossToman ?? 0} · خدمات ${bill.servicesGrossToman ?? 0}\n` +
     `جمع ${bill.unroundedPayableToman} + رند ${bill.roundingToman} = ${bill.collectibleToman}` +
+    discLine +
     (segText ? `\nبخش‌ها:\n${segText}` : "");
   renderBillSaleLines(bill.saleLines);
   renderCustomerChip(bill.linkedCustomer);
@@ -937,6 +970,7 @@ async function refreshPrepaidStatus() {
 
 setInterval(() => {
   refreshPrepaidStatus().catch(() => {});
+  refreshPrepaidGlobalAlerts().catch(() => {});
 }, 5000);
 
 bindClick("prepaidDurationBtn", async () => {
@@ -1037,6 +1071,7 @@ bindClick("mgrPackageBtn", async () => {
   const priceToman = Number(String(window.prompt("قیمت", "220000")).replace(/,/g, ""));
   const minutes = Number(window.prompt("دقیقه", "120"));
   const expRaw = window.prompt("انقضا (روز، خالی = بدون انقضا)", "");
+  const restrictRaw = window.prompt('محدودیت گروه (JSON آرایه، خالی = بدون محدودیت)', "");
   await api(`/api/operator/members/packages/${id}`, {
     method: "PUT",
     body: JSON.stringify({
@@ -1044,7 +1079,7 @@ bindClick("mgrPackageBtn", async () => {
       priceToman,
       minutes,
       expiresAfterDays: expRaw && expRaw.trim() ? Number(expRaw) : null,
-      allowedGroupIdsJson: null,
+      allowedGroupIdsJson: restrictRaw && restrictRaw.trim() ? restrictRaw.trim() : null,
     }),
   });
 });

@@ -362,25 +362,22 @@ public sealed class OperatorMemberWalletService(
             long ledgerGift = body.GiftToman ?? 0;
             if (body.DebtToman is long debt && debt > 0)
             {
-                member.RealToman = -debt;
+                member.RealToman = MoneyMath.CheckedAdd(realBefore, -debt);
                 ledgerReal = -debt;
+            }
+            else if (body.RealToman is long real)
+            {
+                member.RealToman = MoneyMath.CheckedAdd(realBefore, real);
+                ledgerReal = real;
             }
             else
             {
-                if (body.RealToman is long real)
-                {
-                    member.RealToman = MoneyMath.CheckedAdd(realBefore, real);
-                    ledgerReal = real;
-                }
-                else
-                {
-                    ledgerReal = 0;
-                }
+                ledgerReal = 0;
+            }
 
-                if (body.GiftToman is long gift)
-                {
-                    member.GiftToman = MoneyMath.CheckedAdd(giftBefore, gift);
-                }
+            if (body.GiftToman is long gift)
+            {
+                member.GiftToman = MoneyMath.CheckedAdd(giftBefore, gift);
             }
 
             var pocket = MemberWalletMapper.RefreshSpendBasis(MemberWalletMapper.ToPocket(member));
@@ -566,7 +563,7 @@ public sealed class OperatorMemberWalletService(
     }
 }
 
-public sealed class OperatorMemberBillingService(AppDbContext db)
+public sealed class OperatorMemberBillingService(AppDbContext db, OperatorMemberContext members)
 {
     public async Task ApplyWalletPaymentsAsync(
         Guid customerId,
@@ -586,31 +583,39 @@ public sealed class OperatorMemberBillingService(AppDbContext db)
             customerId);
         await db.Entry(member).ReloadAsync(ct);
 
-        long realDrawn = 0;
-        long giftDrawn = 0;
-        foreach (var t in allocation.Tenders.Where(t => t.Method == PaymentMethod.Wallet && t.Accepted))
+        var walletTenders = allocation.Tenders.Where(t => t.Method == PaymentMethod.Wallet && t.Accepted).ToList();
+        if (walletTenders.Count == 0)
         {
-            realDrawn = MoneyMath.CheckedAdd(realDrawn, t.RealDrawnToman);
-            giftDrawn = MoneyMath.CheckedAdd(giftDrawn, t.GiftDrawnToman);
+            return;
         }
 
-        if (realDrawn != 0 || giftDrawn != 0)
+        var settings = await members.LoadSettingsAsync(ct);
+        var debt = MemberSettingsMapper.LoadDebtPolicy(settings);
+        var pocket = MemberWalletMapper.ToPocket(member);
+        long realDrawn = 0;
+        long giftDrawn = 0;
+        foreach (var t in walletTenders)
         {
-            var pocket = MemberWalletMapper.ToPocket(member);
-            pocket = WalletPocketMath.Add(pocket, -realDrawn, -giftDrawn);
-            pocket = MemberWalletMapper.RefreshSpendBasis(pocket);
-            MemberWalletMapper.ApplyPocket(member, pocket);
-            db.WalletLedger.Add(new WalletLedgerEntryEntity
+            if (!pocket.TrySpend(t.AmountToman, debt, out pocket, out var gift, out var real))
             {
-                CustomerId = customerId,
-                AtUtc = DateTime.UtcNow,
-                Kind = WalletLedgerKind.InvoiceSpend,
-                RealDeltaToman = -realDrawn,
-                GiftDeltaToman = -giftDrawn,
-                InvoiceId = invoiceId,
-                Label = "invoice",
-            });
+                throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", "Wallet spend failed.");
+            }
+
+            realDrawn = MoneyMath.CheckedAdd(realDrawn, real);
+            giftDrawn = MoneyMath.CheckedAdd(giftDrawn, gift);
         }
+
+        MemberWalletMapper.ApplyPocket(member, pocket);
+        db.WalletLedger.Add(new WalletLedgerEntryEntity
+        {
+            CustomerId = customerId,
+            AtUtc = DateTime.UtcNow,
+            Kind = WalletLedgerKind.InvoiceSpend,
+            RealDeltaToman = -realDrawn,
+            GiftDeltaToman = -giftDrawn,
+            InvoiceId = invoiceId,
+            Label = "invoice",
+        });
     }
 
     public async Task PostConfirmEffectsAsync(
@@ -673,6 +678,7 @@ public sealed class OperatorMemberBillingService(AppDbContext db)
         var effect = await db.InvoiceMemberEffects.FirstOrDefaultAsync(e => e.InvoiceId == invoice.Id, ct);
         if (effect is null)
         {
+            await ReversePackagePurchaseAsync(invoice, ct);
             return;
         }
 
@@ -724,6 +730,77 @@ public sealed class OperatorMemberBillingService(AppDbContext db)
                 }
             }
         }
+
+        await ReversePackagePurchaseAsync(invoice, ct);
+    }
+
+    private async Task ReversePackagePurchaseAsync(InvoiceEntity invoice, CancellationToken ct)
+    {
+        if (invoice.CustomerId is not Guid customerId)
+        {
+            return;
+        }
+
+        var pkg = await db.CustomerPackages.FirstOrDefaultAsync(
+            p => p.PurchaseInvoiceId == invoice.Id,
+            ct);
+        if (pkg is null)
+        {
+            return;
+        }
+
+        db.CustomerPackages.Remove(pkg);
+
+        var purchaseLedger = await db.WalletLedger
+            .Where(e => e.InvoiceId == invoice.Id && e.Kind == WalletLedgerKind.PackagePurchase)
+            .ToListAsync(ct);
+        if (purchaseLedger.Count == 0 && invoice.PaymentLines.All(p => p.Method != PaymentMethod.Wallet))
+        {
+            db.WalletLedger.Add(new WalletLedgerEntryEntity
+            {
+                CustomerId = customerId,
+                AtUtc = DateTime.UtcNow,
+                Kind = WalletLedgerKind.InvoiceVoidReversal,
+                InvoiceId = invoice.Id,
+                Label = "package_sale_void",
+            });
+            return;
+        }
+
+        var member = await db.CustomerMembers.FirstOrDefaultAsync(m => m.CustomerId == customerId, ct);
+        if (member is null)
+        {
+            return;
+        }
+
+        long realRestore = 0;
+        long giftRestore = 0;
+        foreach (var entry in purchaseLedger)
+        {
+            realRestore = MoneyMath.CheckedAdd(realRestore, -entry.RealDeltaToman);
+            giftRestore = MoneyMath.CheckedAdd(giftRestore, -entry.GiftDeltaToman);
+        }
+
+        if (realRestore != 0 || giftRestore != 0)
+        {
+            var pocket = MemberWalletMapper.ToPocket(member);
+            pocket = WalletPocketMath.Add(pocket, realRestore, giftRestore);
+            MemberWalletMapper.ApplyPocket(member, pocket);
+        }
+
+        foreach (var entry in purchaseLedger)
+        {
+            db.WalletLedger.Add(new WalletLedgerEntryEntity
+            {
+                CustomerId = customerId,
+                AtUtc = DateTime.UtcNow,
+                Kind = WalletLedgerKind.InvoiceVoidReversal,
+                RealDeltaToman = -entry.RealDeltaToman,
+                GiftDeltaToman = -entry.GiftDeltaToman,
+                InvoiceId = invoice.Id,
+                Label = "package_sale_void",
+            });
+        }
     }
 }
 
@@ -740,12 +817,13 @@ public sealed class OperatorPackageService(
             ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Package not found.");
 
         await members.EnsureMemberAsync(customerId, ct);
-        if (payments.Any(p => OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet))
-        {
-            await members.ReloadMemberForUpdateAsync(customerId, ct);
-        }
-
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        await db.Database.ExecuteSqlRawAsync(
+            """SELECT "CustomerId" FROM customer_members WHERE "CustomerId" = {0} FOR UPDATE""",
+            customerId);
         var member = await db.CustomerMembers.FirstAsync(m => m.CustomerId == customerId, ct);
+        await db.Entry(member).ReloadAsync(ct);
+
         var tenders = payments.Select(p => new Tender(OperatorPaymentMethods.Parse(p.Method), p.AmountToman, customerId.ToString())).ToList();
         var split = PaymentSplitter.Split(product.PriceToman, tenders, [
             MemberWalletMapper.ToMemberWallet(customerId, member),
@@ -763,7 +841,7 @@ public sealed class OperatorPackageService(
             Number = number,
             CustomerId = customerId,
             TimeGrossToman = 0,
-            BuffetGrossToman = product.PriceToman,
+            BuffetGrossToman = 0,
             ServicesGrossToman = 0,
             UnroundedPayableToman = product.PriceToman,
             RoundingToman = 0,
@@ -772,6 +850,15 @@ public sealed class OperatorPackageService(
             BilledToUtc = clock.UtcNow.UtcDateTime,
             Status = "confirmed",
         };
+        invoice.CatalogLines.Add(new InvoiceCatalogLineEntity
+        {
+            CatalogItemId = productId,
+            Name = product.Name,
+            Kind = SaleLineKind.Service,
+            Quantity = 1,
+            UnitPriceToman = product.PriceToman,
+            LineTotalToman = product.PriceToman,
+        });
         foreach (var pay in payments)
         {
             var method = OperatorPaymentMethods.Parse(pay.Method);
@@ -792,10 +879,8 @@ public sealed class OperatorPackageService(
         var walletTender = split.Tenders.FirstOrDefault(t => t.Method == PaymentMethod.Wallet && t.Accepted);
         if (walletTender is not null)
         {
-            member = await members.ReloadMemberForUpdateAsync(customerId, ct);
             var pocket = MemberWalletMapper.ToPocket(member);
             pocket = WalletPocketMath.Add(pocket, -walletTender.RealDrawnToman, -walletTender.GiftDrawnToman);
-            pocket = MemberWalletMapper.RefreshSpendBasis(pocket);
             MemberWalletMapper.ApplyPocket(member, pocket);
             db.WalletLedger.Add(new WalletLedgerEntryEntity
             {
@@ -805,6 +890,19 @@ public sealed class OperatorPackageService(
                 RealDeltaToman = -walletTender.RealDrawnToman,
                 GiftDeltaToman = -walletTender.GiftDrawnToman,
                 Method = PaymentMethod.Wallet,
+                Label = "package",
+                InvoiceId = invoiceId,
+                ActorUserId = op.UserId,
+            });
+        }
+        else
+        {
+            db.WalletLedger.Add(new WalletLedgerEntryEntity
+            {
+                CustomerId = customerId,
+                AtUtc = clock.UtcNow.UtcDateTime,
+                Kind = WalletLedgerKind.PackagePurchase,
+                Method = payments.Select(p => OperatorPaymentMethods.Parse(p.Method)).First(),
                 Label = "package",
                 InvoiceId = invoiceId,
                 ActorUserId = op.UserId,
@@ -823,10 +921,12 @@ public sealed class OperatorPackageService(
             ExpiresAtUtc = product.ExpiresAfterDays is int days
                 ? clock.UtcNow.UtcDateTime.AddDays(days)
                 : null,
+            PurchaseInvoiceId = invoiceId,
         });
 
         await audit.AppendAsync("package.sold", new { customerId, productId, product.Minutes, pkgId, invoiceId, payments }, ct);
         await db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
     }
 
     private async Task<long> NextInvoiceNumberAsync(CancellationToken ct)

@@ -158,6 +158,8 @@ public sealed class CustomerPackageEntity
     public DateTime? ValidToUtc { get; set; }
 
     public string? HourWindowJson { get; set; }
+
+    public Guid? PurchaseInvoiceId { get; set; }
 }
 
 public sealed class PackageProductEntity

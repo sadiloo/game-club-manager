@@ -58,7 +58,8 @@ public sealed class MemberBillComposer
         var buffet = OpenSaleMapper.ToBuffetLines(saleLines);
         var services = OpenSaleMapper.ToServiceLines(saleLines).ToList();
         var usingCollect = previewTenders is { Count: > 0 } && customerId is not null && member is not null;
-        if (usingCollect && surchargeToman > 0)
+        var surchargeInCollect = usingCollect && surchargeToman > 0;
+        if (surchargeInCollect)
         {
             services.Add(new ServiceLine("pa10", "۵٬۰۰۰+", surchargeToman));
         }
@@ -89,8 +90,13 @@ public sealed class MemberBillComposer
             invoice = InvoiceCalculator.Calculate(request);
         }
 
-        var postSurcharge = usingCollect && surchargeToman > 0 ? 0 : surchargeToman;
+        var postSurcharge = surchargeInCollect ? 0 : surchargeToman;
         var (unrounded, rounding, collectible) = ApplyPostRoundSurcharge(invoice, postSurcharge, usingCollect, allocation);
+        var servicesGross = invoice.ServicesGrossToman;
+        if (surchargeInCollect)
+        {
+            servicesGross = MoneyMath.CheckedAdd(servicesGross, -surchargeToman);
+        }
 
         return new MemberBillResult(
             unrounded,
@@ -99,7 +105,7 @@ public sealed class MemberBillComposer
             surchargeToman,
             invoice.TimeGrossToman,
             invoice.BuffetGrossToman,
-            invoice.ServicesGrossToman,
+            servicesGross,
             invoice.DiscountToman,
             billedToUtc,
             invoice,

@@ -31,6 +31,8 @@
     #customerChip { background: #e8eaf6; padding: 0.35rem 0.5rem; border-radius: 6px; margin: 0.35rem 0; font-size: 0.9rem; }
     .customer-hit { display: block; width: 100%; text-align: right; margin: 0.2rem 0; }
     #customerSearchResults { max-height: 10rem; overflow: auto; border: 1px solid #ddd; padding: 0.35rem; margin: 0.25rem 0; border-radius: 6px; }
+    .alert { background: #fff3e0; border: 1px solid #e65100; color: #bf360c; padding: 0.5rem 0.75rem; border-radius: 8px; font-weight: 600; }
+    #prepaidGlobalAlert { margin: 0.5rem 0; }
   </style>
 </head>
 <body>
@@ -43,6 +45,7 @@
   </section>
   <section id="app" class="hidden">
     <h1>سالن</h1>
+    <p id="prepaidGlobalAlert" class="hidden" role="alert"></p>
     <p id="error" role="alert"></p>
     <p id="lowStockList"></p>
     <div id="grid"></div>
