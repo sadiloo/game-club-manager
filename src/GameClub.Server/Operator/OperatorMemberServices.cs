@@ -153,11 +153,11 @@ public sealed class OperatorMemberWalletService(
             throw new ApiException(StatusCodes.Status400BadRequest, "invalid_method", "Invalid top-up method.");
         }
 
-        await shiftGate.EnsureMoneyRecordingAllowedAsync(ct);
-        var shiftId = await shiftGate.RequireOpenShiftIdAsync(ct);
         await members.EnsureMemberAsync(customerId, ct);
         if (method == PaymentMethod.CardToCard)
         {
+            await shiftGate.EnsureMoneyRecordingAllowedAsync(ct);
+            var c2cShiftId = await shiftGate.RequireOpenShiftIdAsync(ct);
             db.PendingWalletTopUps.Add(new PendingWalletTopUpEntity
             {
                 CustomerId = customerId,
@@ -168,11 +168,36 @@ public sealed class OperatorMemberWalletService(
                 Status = PendingWalletTopUpStatus.Pending,
                 CreatedAtUtc = clock.UtcNow.UtcDateTime,
                 ActorUserId = op.UserId,
-                ShiftId = shiftId,
+                ShiftId = c2cShiftId,
             });
             await audit.AppendAsync("wallet.topup.pending", new { customerId, amountToman, method = method.ToString() }, ct);
             await db.SaveChangesAsync(ct);
             return;
+        }
+
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        var settings = await shiftGate.LoadSettingsAsync(ct);
+        Guid? shiftId = null;
+        if (settings.ShiftsEnabled)
+        {
+            var shift = await shiftGate.GetOpenShiftForUpdateAsync(ct)
+                ?? throw new ApiException(
+                    StatusCodes.Status409Conflict,
+                    "no_open_shift",
+                    "No shift is open.");
+            if (shift.Status != ShiftStatus.Open)
+            {
+                throw new ApiException(
+                    StatusCodes.Status409Conflict,
+                    "shift_closed",
+                    "Shift is already closed.");
+            }
+
+            shiftId = shift.Id;
+        }
+        else
+        {
+            await db.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock({0})", 884_2002);
         }
 
         await WithMemberWriteLockAsync(customerId, async (_, member, innerCt) =>
@@ -193,7 +218,17 @@ public sealed class OperatorMemberWalletService(
                 ShiftId = shiftId,
             });
             await audit.AppendAsync("wallet.topup", new { customerId, amountToman, method = method.ToString() }, innerCt);
-        }, ct);
+        }, ct, tx);
+        if (settings.ShiftsEnabled && shiftId is Guid sid)
+        {
+            var shift = await db.Shifts.AsNoTracking().FirstOrDefaultAsync(s => s.Id == sid, ct);
+            if (shift is null || shift.Status != ShiftStatus.Open)
+            {
+                throw new ApiException(StatusCodes.Status409Conflict, "shift_closed", "Shift is already closed.");
+            }
+        }
+
+        await tx.CommitAsync(ct);
     }
 
     public async Task ConfirmPendingTopUpAsync(long pendingId, CancellationToken ct)

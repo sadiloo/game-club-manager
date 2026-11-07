@@ -213,8 +213,19 @@ public sealed class OperatorShiftCloseService(
                 }
                 else
                 {
+                    var periodStartBeforeLock = await GetLastWorkingDayCloseUtcAsync(ct) ?? DateTime.UnixEpoch;
                     await db.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock({0})", WorkingDayCloseAdvisoryLock);
-                    periodStart = await GetLastWorkingDayCloseUtcAsync(ct) ?? DateTime.UnixEpoch;
+                    var periodStartAfterLock = await GetLastWorkingDayCloseUtcAsync(ct) ?? DateTime.UnixEpoch;
+                    if (periodStartAfterLock != periodStartBeforeLock
+                        && !await HasUnstampedMoneySinceAsync(periodStartBeforeLock, ct))
+                    {
+                        throw new ApiException(
+                            StatusCodes.Status409Conflict,
+                            "already_closed",
+                            "This working period is already closed.");
+                    }
+
+                    periodStart = periodStartBeforeLock;
                     if (await db.CloseRecords.AnyAsync(
                             c => c.ShiftId == null && c.PeriodOpenedAtUtc == periodStart,
                             ct))
@@ -259,6 +270,9 @@ public sealed class OperatorShiftCloseService(
 
                 foreach (var action in sessionActions.Where(a => a.Action == "carry"))
                 {
+                    await db.Database.ExecuteSqlRawAsync(
+                        """SELECT "Id" FROM sessions WHERE "Id" = {0} FOR UPDATE""",
+                        action.SessionId);
                     var session = await db.Sessions.FirstOrDefaultAsync(s => s.Id == action.SessionId, ct)
                         ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Session not found.");
                     session.CarriedAtCloseRecordId = closeId;
@@ -271,6 +285,7 @@ public sealed class OperatorShiftCloseService(
                 }
 
                 await StampPeriodInvoicesAsync(shift?.Id, periodStart, closeRecord, ct);
+                await FinalizeUnstampedWalletTopUpsAsync(shift?.Id, periodStart, closeRecord, ct);
                 await audit.AppendAsync(
                     settings.ShiftsEnabled ? "shift.close" : "working_day.close",
                     new
@@ -301,6 +316,10 @@ public sealed class OperatorShiftCloseService(
         {
             throw new ApiException(StatusCodes.Status409Conflict, "already_closed", "Shift is already closed.");
         }
+        catch (Exception ex) when (PostgresErrors.IsDeadlock(ex))
+        {
+            throw new ApiException(StatusCodes.Status409Conflict, "shift_busy", "Shift is being updated.");
+        }
     }
 
     private async Task<DateTime?> GetLastWorkingDayCloseUtcAsync(CancellationToken ct)
@@ -309,6 +328,49 @@ public sealed class OperatorShiftCloseService(
             .OrderByDescending(c => c.ClosedAtUtc)
             .Select(c => (DateTime?)c.ClosedAtUtc)
             .FirstOrDefaultAsync(ct);
+
+    private async Task FinalizeUnstampedWalletTopUpsAsync(
+        Guid? shiftId,
+        DateTime periodStart,
+        CloseRecordEntity close,
+        CancellationToken ct)
+    {
+        IQueryable<WalletLedgerEntryEntity> query = db.WalletLedger
+            .Where(w => w.Kind == WalletLedgerKind.TopUpReal && w.WorkingDayYear == null);
+        if (shiftId is Guid sid)
+        {
+            query = query.Where(w => w.ShiftId == sid || (w.ShiftId == null && w.AtUtc >= periodStart));
+        }
+        else
+        {
+            query = query.Where(w => w.ShiftId == null && w.AtUtc >= periodStart);
+        }
+
+        await query.ExecuteUpdateAsync(
+            s => s.SetProperty(w => w.WorkingDayYear, close.WorkingDayYear)
+                .SetProperty(w => w.WorkingDayMonth, close.WorkingDayMonth)
+                .SetProperty(w => w.WorkingDayDay, close.WorkingDayDay),
+            ct);
+    }
+
+    private async Task<bool> HasUnstampedMoneySinceAsync(DateTime periodStartUtc, CancellationToken ct)
+    {
+        var hasInvoices = await db.Invoices.AsNoTracking().AnyAsync(
+            i => i.CloseRecordId == null
+                 && i.Status != "void"
+                 && i.IssuedAtUtc >= periodStartUtc,
+            ct);
+        if (hasInvoices)
+        {
+            return true;
+        }
+
+        return await db.WalletLedger.AsNoTracking().AnyAsync(
+            w => w.WorkingDayYear == null
+                 && w.Kind == WalletLedgerKind.TopUpReal
+                 && w.AtUtc >= periodStartUtc,
+            ct);
+    }
 
     private async Task StampPeriodInvoicesAsync(Guid? shiftId, DateTime periodStart, CloseRecordEntity close, CancellationToken ct)
     {

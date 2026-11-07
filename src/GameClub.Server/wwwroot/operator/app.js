@@ -1122,9 +1122,60 @@ bindClick("openShiftBtn", async () => {
   await refreshShiftState();
 });
 
+let closeBaseExpectedCash = 0;
+let closeSettleExtraToman = 0;
+
+function recalcCloseExpectedCash() {
+  const cashEl = document.getElementById("closeCash");
+  if (cashEl) cashEl.value = closeBaseExpectedCash + closeSettleExtraToman;
+}
+
+async function jalaliToGregorian(jy, jm, jd) {
+  return api(`/api/operator/shift/jalali/${jy}/${jm}/${jd}`);
+}
+
+function gregorianDayRangeUtc(g) {
+  const from = new Date(Date.UTC(g.year, g.month - 1, g.day, -3, -30, 0));
+  const to = new Date(Date.UTC(g.year, g.month - 1, g.day, 20, 29, 59));
+  return { fromUtc: from.toISOString(), toUtc: to.toISOString() };
+}
+
+function renderReportsTable(title, headers, rows) {
+  const head = headers.map((h) => `<th>${h}</th>`).join("");
+  const body = rows.map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join("")}</tr>`).join("");
+  return `<h3>${title}</h3><table dir="rtl" border="1" cellpadding="4"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+}
+
+function renderIncomeSummary(body) {
+  return renderReportsTable("درآمد", ["دریافتی", "نقد", "کارتخوان", "کارت‌به‌کارت", "شارژ کیف"], [
+    [
+      body.receivedMoneyToman ?? 0,
+      body.receivedCashToman ?? 0,
+      body.receivedCardReaderToman ?? 0,
+      body.receivedCardToCardToman ?? 0,
+      body.walletTopUpToman ?? 0,
+    ],
+  ]);
+}
+
+function historyQuery() {
+  const q = new URLSearchParams();
+  const st = document.getElementById("histStation")?.value?.trim();
+  const cust = document.getElementById("histCustomer")?.value?.trim();
+  const oper = document.getElementById("histOperator")?.value?.trim();
+  const meth = document.getElementById("histMethod")?.value?.trim();
+  if (st) q.set("stationId", st);
+  if (cust) q.set("customerId", cust);
+  if (oper) q.set("operatorId", oper);
+  if (meth) q.set("method", meth);
+  const s = q.toString();
+  return s ? `?${s}` : "";
+}
+
 function renderCloseSessions(openSessions) {
   const host = document.getElementById("closeSessionList");
   if (!host) return;
+  closeSettleExtraToman = 0;
   if (!openSessions?.length) {
     host.innerHTML = "<p>جلسهٔ بازی باز نیست.</p>";
     return;
@@ -1139,12 +1190,34 @@ function renderCloseSessions(openSessions) {
     )
     .join("");
   host.querySelectorAll("button[data-action]").forEach((btn) => {
-    btn.addEventListener("click", () => {
+    btn.addEventListener("click", async () => {
       const sid = btn.getAttribute("data-session");
       const row = host.querySelector(`div[data-session="${sid}"]`);
       if (!row) return;
-      row.dataset.choice = btn.getAttribute("data-action");
-      row.style.outline = "2px solid #1565c0";
+      const action = btn.getAttribute("data-action");
+      if (action === "settle") {
+        try {
+          const bill = await api(`/api/operator/sessions/${sid}/bill`);
+          const prev = Number(row.dataset.settleAmount || 0);
+          const next = Number(bill.collectibleToman || 0);
+          closeSettleExtraToman += next - prev;
+          row.dataset.settleAmount = String(next);
+          row.dataset.choice = "settle";
+          row.style.outline = "2px solid #1565c0";
+          recalcCloseExpectedCash();
+        } catch (e) {
+          showError(String(e.message || e));
+        }
+      } else {
+        const prev = Number(row.dataset.settleAmount || 0);
+        if (row.dataset.choice === "settle") {
+          closeSettleExtraToman -= prev;
+          delete row.dataset.settleAmount;
+          recalcCloseExpectedCash();
+        }
+        row.dataset.choice = "carry";
+        row.style.outline = "2px solid #1565c0";
+      }
     });
   });
 }
@@ -1152,9 +1225,14 @@ function renderCloseSessions(openSessions) {
 function collectSessionActions() {
   const host = document.getElementById("closeSessionList");
   if (!host) return [];
-  return [...host.querySelectorAll("div[data-session]")].map((row) => ({
+  const rows = [...host.querySelectorAll("div[data-session]")];
+  if (rows.length === 0) return [];
+  if (rows.some((row) => !row.dataset.choice)) {
+    return null;
+  }
+  return rows.map((row) => ({
     sessionId: row.getAttribute("data-session"),
-    action: row.dataset.choice || "carry",
+    action: row.dataset.choice,
   }));
 }
 
@@ -1162,17 +1240,33 @@ bindClick("closePreviewBtn", async () => {
   const preview = await api("/api/operator/shift/close/preview");
   renderCloseSessions(preview.openSessions);
   const e = preview.expected || {};
+  closeBaseExpectedCash = Number(e.cashExpected ?? 0);
+  closeSettleExtraToman = 0;
+  recalcCloseExpectedCash();
+  const dest = (preview.destinationCards || [])
+    .map((d) => `${d.destinationCardId}: ${d.totalToman}`)
+    .join("؛ ");
+  const pendInv = (preview.pendingCardToCard || [])
+    .map((p) => `فاکتور ${p.invoiceNumber ?? "—"} ${p.amountToman}`)
+    .join("؛ ");
+  const pendWal = (preview.pendingWalletTopUps || [])
+    .map((p) => `کیف ${p.amountToman}`)
+    .join("؛ ");
   document.getElementById("closePreviewSummary").textContent =
-    `مورد انتظار: نقد ${e.cashExpected ?? 0} | کارتخوان ${e.cardReaderExpected ?? 0} | کارت‌به‌کارت ${e.cardToCardConfirmedExpected ?? 0} | معلق ${e.cardToCardPending ?? 0}`;
-  document.getElementById("closeCash").value = e.cashExpected ?? 0;
+    `مورد انتظار: نقد ${e.cashExpected ?? 0} | کارتخوان ${e.cardReaderExpected ?? 0} | کارت‌به‌کارت تأییدشده ${e.cardToCardConfirmedExpected ?? 0} | معلق ${e.cardToCardPending ?? 0} | مقصد: ${dest || "—"} | C2C معلق: ${pendInv || pendWal || "—"}`;
   document.getElementById("closeReader").value = e.cardReaderExpected ?? 0;
 });
 
 bindClick("closeShiftBtn", async () => {
+  const sessionActions = collectSessionActions();
+  if (sessionActions === null) {
+    showError("برای هر جلسهٔ باز باید «تسویه» یا «انتقال» را انتخاب کنید.");
+    return;
+  }
   const jy = Number(document.getElementById("closeJy").value);
   const jm = Number(document.getElementById("closeJm").value);
   const jd = Number(document.getElementById("closeJd").value);
-  const g = jalaliToGregorian(jy, jm, jd);
+  const g = await jalaliToGregorian(jy, jm, jd);
   const actualCashToman = Number(String(document.getElementById("closeCash").value || "0").replace(/,/g, ""));
   const actualCardReaderToman = Number(String(document.getElementById("closeReader").value || "0").replace(/,/g, ""));
   const discrepancyExplanation = document.getElementById("closeExpl").value.trim() || null;
@@ -1183,32 +1277,13 @@ bindClick("closeShiftBtn", async () => {
       actualCashToman,
       actualCardReaderToman,
       discrepancyExplanation,
-      sessionActions: collectSessionActions(),
+      sessionActions,
     }),
   });
   await refreshShiftState();
   document.getElementById("closePreviewSummary").textContent = "";
   renderCloseSessions([]);
 });
-
-function jalaliToGregorian(jy, jm, jd) {
-  const pc = new Intl.DateTimeFormat("en-u-ca-persian", { timeZone: "Asia/Tehran" });
-  const start = Date.UTC(622, 2, 21);
-  let best = { year: jy, month: 6, day: 1 };
-  for (let t = start; t < start + 400 * 86400000; t += 86400000) {
-    const d = new Date(t);
-    const parts = pc.formatToParts(d);
-    const y = Number(parts.find((p) => p.type === "year").value);
-    const m = Number(parts.find((p) => p.type === "month").value);
-    const day = Number(parts.find((p) => p.type === "day").value);
-    if (y === jy && m === jm && day === jd) {
-      const tehran = new Date(d.toLocaleString("en-US", { timeZone: "Asia/Tehran" }));
-      best = { year: tehran.getFullYear(), month: tehran.getMonth() + 1, day: tehran.getDate() };
-      break;
-    }
-  }
-  return best;
-}
 
 bindClick("saveCafeSettingsBtn", async () => {
   await api("/api/operator/shift/settings", {
@@ -1221,39 +1296,72 @@ bindClick("saveCafeSettingsBtn", async () => {
 });
 
 bindClick("dailyIncomeBtn", async () => {
-  const y = Number(document.getElementById("repY").value);
-  const m = Number(document.getElementById("repM").value);
-  const d = Number(document.getElementById("repD").value);
-  const body = await api(`/api/operator/reports/income/daily?year=${y}&month=${m}&day=${d}`);
-  document.getElementById("reportsOut").textContent = JSON.stringify(body, null, 2);
+  const jy = Number(document.getElementById("repJy").value);
+  const jm = Number(document.getElementById("repJm").value);
+  const jd = Number(document.getElementById("repJd").value);
+  const g = await jalaliToGregorian(jy, jm, jd);
+  const body = await api(`/api/operator/reports/income/daily?year=${g.year}&month=${g.month}&day=${g.day}`);
+  document.getElementById("reportsOut").innerHTML = renderIncomeSummary(body);
 });
 bindClick("monthlyIncomeBtn", async () => {
-  const jy = Number(document.getElementById("closeJy").value || document.getElementById("repY").value);
-  const jm = Number(document.getElementById("closeJm").value || document.getElementById("repM").value);
+  const jy = Number(document.getElementById("repJy").value);
+  const jm = Number(document.getElementById("repJm").value);
   const body = await api(`/api/operator/reports/income/monthly?year=${jy}&month=${jm}`);
-  document.getElementById("reportsOut").textContent = JSON.stringify(body, null, 2);
+  document.getElementById("reportsOut").innerHTML = renderIncomeSummary(body);
 });
 bindClick("yearlyIncomeBtn", async () => {
-  const jy = Number(document.getElementById("closeJy").value || document.getElementById("repY").value);
+  const jy = Number(document.getElementById("repJy").value);
   const body = await api(`/api/operator/reports/income/yearly?year=${jy}`);
-  document.getElementById("reportsOut").textContent = JSON.stringify(body, null, 2);
+  document.getElementById("reportsOut").innerHTML = renderIncomeSummary(body);
 });
 bindClick("usageBtn", async () => {
-  const from = new Date("2026-06-01T00:00:00+03:30").toISOString();
-  const to = new Date("2026-06-07T23:59:59+03:30").toISOString();
-  const body = await api(`/api/operator/reports/usage?fromUtc=${from}&toUtc=${to}`);
-  document.getElementById("reportsOut").textContent = JSON.stringify(body, null, 2);
+  const from = await jalaliToGregorian(
+    Number(document.getElementById("usageFromJy").value),
+    Number(document.getElementById("usageFromJm").value),
+    Number(document.getElementById("usageFromJd").value)
+  );
+  const to = await jalaliToGregorian(
+    Number(document.getElementById("usageToJy").value),
+    Number(document.getElementById("usageToJm").value),
+    Number(document.getElementById("usageToJd").value)
+  );
+  const range = gregorianDayRangeUtc(from);
+  const rangeTo = gregorianDayRangeUtc(to);
+  const body = await api(
+    `/api/operator/reports/usage?fromUtc=${encodeURIComponent(range.fromUtc)}&toUtc=${encodeURIComponent(rangeTo.toUtc)}`
+  );
+  const stations = (body.byStation || []).map((s) => [s.stationId, s.durationSeconds]);
+  document.getElementById("reportsOut").innerHTML = renderReportsTable(
+    "مصرف ایستگاه (ثانیه)",
+    ["ایستگاه", "مدت"],
+    stations.length ? stations : [["—", 0]]
+  );
 });
 bindClick("cu8Btn", async () => {
-  document.getElementById("reportsOut").textContent = JSON.stringify(await api("/api/operator/reports/wallet/cu8"), null, 2);
+  const body = await api("/api/operator/reports/wallet/cu8");
+  document.getElementById("reportsOut").innerHTML = renderReportsTable("CU-8", ["نقد", "هدیه", "هدایای صادرشده"], [
+    [body.realMoneyLiabilityToman, body.giftCreditLiabilityToman, body.giftsIssuedToman],
+  ]);
 });
 bindClick("historyBtn", async () => {
-  document.getElementById("reportsOut").textContent = JSON.stringify(await api("/api/operator/reports/history"), null, 2);
+  const rows = await api(`/api/operator/reports/history${historyQuery()}`);
+  const table = (rows || []).map((r) => [
+    r.number,
+    r.status,
+    r.collectibleToman,
+    r.stationId ?? "—",
+    (r.payments || []).map((p) => `${p.method}:${p.amountToman}`).join("|"),
+  ]);
+  document.getElementById("reportsOut").innerHTML = renderReportsTable(
+    "تاریخچه",
+    ["شماره", "وضعیت", "مبلغ", "ایستگاه", "پرداخت‌ها"],
+    table.length ? table : [["—", "—", 0, "—", "—"]]
+  );
 });
 bindClick("exportHistoryBtn", async () => {
-  const res = await fetch("/api/operator/reports/history/export", { credentials: "include" });
+  const res = await fetch(`/api/operator/reports/history/export${historyQuery()}`, { credentials: "include" });
   const text = await res.text();
-  document.getElementById("reportsOut").textContent = text;
+  document.getElementById("reportsOut").innerHTML = `<h3>خروجی CSV</h3><pre>${text.replace(/</g, "&lt;")}</pre>`;
 });
 
 async function refreshCafeSettingsUi() {

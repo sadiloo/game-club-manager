@@ -53,6 +53,7 @@ public sealed class OperatorReportingService(AppDbContext db, OperatorContext op
         string? method,
         CancellationToken ct)
     {
+        EnsureReportRole();
         var q = db.Invoices.AsNoTracking()
             .Include(i => i.PaymentLines)
             .Include(i => i.Session)!.ThenInclude(s => s!.Station)
@@ -121,6 +122,7 @@ public sealed class OperatorReportingService(AppDbContext db, OperatorContext op
         string? method,
         CancellationToken ct)
     {
+        EnsureReportRole();
         var history = await HistoryAsync(fromUtc, toUtc, stationId, customerId, operatorId, method, ct);
         var rows = (IEnumerable<object>)history;
         var sb = new StringBuilder();
@@ -131,7 +133,7 @@ public sealed class OperatorReportingService(AppDbContext db, OperatorContext op
             var payments = string.Join("|", ((IEnumerable<object>)row.payments).Select(p =>
             {
                 dynamic d = p;
-                return $"{d.method}:{d.amountToman}:{d.status}";
+                return $"{d.method}:{d.AmountToman}:{d.status}";
             }));
             sb.AppendLine(string.Join(',',
                 row.Number,
@@ -139,9 +141,9 @@ public sealed class OperatorReportingService(AppDbContext db, OperatorContext op
                 row.CollectibleToman,
                 row.stationId,
                 row.SettledByUserId,
-                wd?.year,
-                wd?.month,
-                wd?.day,
+                wd?.WorkingDayYear,
+                wd?.WorkingDayMonth,
+                wd?.WorkingDayDay,
                 $"\"{payments}\"",
                 $"\"{row.OperatorNote}\"",
                 $"\"{row.VoidReason}\""));
@@ -181,6 +183,7 @@ public sealed class OperatorReportingService(AppDbContext db, OperatorContext op
 
     public async Task<object> CloseDayIncomeAsync(Guid closeRecordId, CancellationToken ct)
     {
+        EnsureReportRole();
         var close = await db.CloseRecords.AsNoTracking().FirstOrDefaultAsync(c => c.Id == closeRecordId, ct)
             ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Close record not found.");
         var daily = await BuildIncomeForWorkingDayAsync(close.WorkingDayYear, close.WorkingDayMonth, close.WorkingDayDay, ct);
@@ -267,18 +270,19 @@ public sealed class OperatorReportingService(AppDbContext db, OperatorContext op
             MoneyMath.CheckedAdd(received.CardReader, walletMethods.CardReader),
             MoneyMath.CheckedAdd(received.CardToCardConfirmed, walletMethods.CardToCardConfirmed));
 
-        var destinationCards = await (
-            from p in db.PaymentLines.AsNoTracking()
-            join i in db.Invoices.AsNoTracking() on p.InvoiceId equals i.Id
-            where p.Method == PaymentMethod.CardToCard
-                  && p.DestinationCardId != null
-                  && i.WorkingDayYear == year
-                  && i.WorkingDayMonth == month
-                  && i.WorkingDayDay == day
-                  && (p.ConfirmationStatus == PaymentConfirmationStatus.Confirmed
-                      || p.ConfirmationStatus == PaymentConfirmationStatus.Settled)
-            group p by p.DestinationCardId into g
-            select new { destinationCardId = g.Key, totalToman = g.Sum(x => x.AmountToman) }).ToListAsync(ct);
+        foreach (var row in topUps)
+        {
+            if (row.ActorUserId is not Guid actorId)
+            {
+                continue;
+            }
+
+            var rowMethods = ShiftIncomeMath.SumWalletTopUpReceived(new[] { row });
+            byOperator[actorId] = byOperator.GetValueOrDefault(actorId)
+                + ShiftIncomeMath.ReceivedMoneyTotal(rowMethods, new MethodTotals(0, 0, 0));
+        }
+
+        var destinationCards = await BuildDestinationCardsForDayAsync(year, month, day, ct);
 
         return new
         {
@@ -414,12 +418,20 @@ public sealed class OperatorReportingService(AppDbContext db, OperatorContext op
             }
         }
 
-        var topUps = await db.WalletLedger.AsNoTracking()
-            .Where(w => w.Kind == WalletLedgerKind.TopUpReal
-                        && w.WorkingDayYear == close.WorkingDayYear
-                        && w.WorkingDayMonth == close.WorkingDayMonth
-                        && w.WorkingDayDay == close.WorkingDayDay)
-            .ToListAsync(ct);
+        IQueryable<WalletLedgerEntryEntity> walletQuery = db.WalletLedger.AsNoTracking()
+            .Where(w => w.Kind == WalletLedgerKind.TopUpReal);
+        if (close.ShiftId is Guid closeShiftId)
+        {
+            walletQuery = walletQuery.Where(w => w.ShiftId == closeShiftId);
+        }
+        else
+        {
+            walletQuery = walletQuery.Where(w => w.ShiftId == null
+                                                 && w.AtUtc >= close.PeriodOpenedAtUtc
+                                                 && w.AtUtc <= close.ClosedAtUtc);
+        }
+
+        var topUps = await walletQuery.ToListAsync(ct);
         foreach (var row in topUps)
         {
             switch (row.Method)
@@ -437,6 +449,37 @@ public sealed class OperatorReportingService(AppDbContext db, OperatorContext op
         }
 
         return new MethodTotals(cash, card, c2c);
+    }
+
+    private async Task<List<object>> BuildDestinationCardsForDayAsync(int year, int month, int day, CancellationToken ct)
+    {
+        var invoiceRows = await (
+            from p in db.PaymentLines.AsNoTracking()
+            join i in db.Invoices.AsNoTracking() on p.InvoiceId equals i.Id
+            where p.Method == PaymentMethod.CardToCard
+                  && p.DestinationCardId != null
+                  && i.Status != "void"
+                  && i.WorkingDayYear == year
+                  && i.WorkingDayMonth == month
+                  && i.WorkingDayDay == day
+                  && (p.ConfirmationStatus == PaymentConfirmationStatus.Confirmed
+                      || p.ConfirmationStatus == PaymentConfirmationStatus.Settled)
+            select new { CardId = p.DestinationCardId!, Amount = p.AmountToman }).ToListAsync(ct);
+
+        var walletRows = await db.WalletLedger.AsNoTracking()
+            .Where(w => w.Kind == WalletLedgerKind.TopUpReal
+                        && w.Method == PaymentMethod.CardToCard
+                        && w.DestinationCardId != null
+                        && w.WorkingDayYear == year
+                        && w.WorkingDayMonth == month
+                        && w.WorkingDayDay == day)
+            .Select(w => new { CardId = w.DestinationCardId!, Amount = w.RealDeltaToman })
+            .ToListAsync(ct);
+
+        return invoiceRows.Concat(walletRows)
+            .GroupBy(x => x.CardId)
+            .Select(g => (object)new { destinationCardId = g.Key, totalToman = g.Sum(x => x.Amount) })
+            .ToList();
     }
 
     private void EnsureReportRole()

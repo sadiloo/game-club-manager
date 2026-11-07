@@ -135,7 +135,8 @@ public sealed class OperatorBillService(
     SessionBilling billing,
     SessionCloser closer,
     OperatorPolicies policies,
-    OperatorMemberContext memberContext)
+    OperatorMemberContext memberContext,
+    OperatorShiftGate shiftGate)
 {
     private static bool UsesWallet(IReadOnlyList<PaymentInput> payments)
         => payments.Any(p => OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet);
@@ -714,11 +715,12 @@ public sealed class OperatorBillService(
             await using var tx = await db.Database.BeginTransactionAsync(ct);
             try
             {
+                await shiftGate.EnsureOpenShiftForMoneyAsync(ct);
                 await db.Database.ExecuteSqlRawAsync(
                     """SELECT "Id" FROM sessions WHERE "Id" = {0} FOR UPDATE NOWAIT""",
                     sessionId);
             }
-            catch (Exception ex) when (PostgresErrors.IsLockNotAvailable(ex))
+            catch (Exception ex) when (PostgresErrors.IsLockNotAvailable(ex) || PostgresErrors.IsDeadlock(ex))
             {
                 throw new ApiException(StatusCodes.Status409Conflict, "session_busy", "Session is being updated.");
             }
@@ -740,6 +742,10 @@ public sealed class OperatorBillService(
             catch (DbUpdateConcurrencyException) when (policies.ConcurrentBillActionReturns409)
             {
                 throw new ApiException(StatusCodes.Status409Conflict, "stale_bill", "Bill was updated elsewhere; refresh and retry.");
+            }
+            catch (Exception ex) when (PostgresErrors.IsDeadlock(ex))
+            {
+                throw new ApiException(StatusCodes.Status409Conflict, "session_busy", "Session is being updated.");
             }
         });
     }

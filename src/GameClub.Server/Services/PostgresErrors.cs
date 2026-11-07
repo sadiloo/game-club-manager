@@ -69,4 +69,17 @@ public static class PostgresErrors
 
         return false;
     }
+
+    public static bool IsDeadlock(Exception ex)
+    {
+        for (Exception? current = ex; current is not null; current = current.InnerException)
+        {
+            if (current is PostgresException pg && pg.SqlState == PostgresErrorCodes.DeadlockDetected)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 }

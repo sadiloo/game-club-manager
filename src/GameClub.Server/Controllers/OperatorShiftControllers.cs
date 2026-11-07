@@ -1,3 +1,4 @@
+using GameClub.Billing;
 using GameClub.Server.Operator;
 using Microsoft.AspNetCore.Mvc;
 
@@ -24,6 +25,13 @@ public sealed class OperatorShiftController(OperatorShiftCloseService shifts) : 
 
     [HttpGet("close/preview")]
     public Task<IActionResult> Preview(CancellationToken ct) => OkTask(shifts.PreviewCloseAsync(ct));
+
+    [HttpGet("jalali/{jalaliYear:int}/{jalaliMonth:int}/{jalaliDay:int}")]
+    public IActionResult JalaliToGregorian(int jalaliYear, int jalaliMonth, int jalaliDay)
+    {
+        var gregorian = JalaliCalendar.ToGregorian(jalaliYear, jalaliMonth, jalaliDay);
+        return Ok(new { year = gregorian.Year, month = gregorian.Month, day = gregorian.Day });
+    }
 
     public sealed record CloseRequest(
         WorkingDayInput WorkingDay,

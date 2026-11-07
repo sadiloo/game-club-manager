@@ -304,7 +304,7 @@ public sealed class ShiftReportsAcceptanceTests(GameClubWebApplicationFactory fa
         factory.Clock.SetTehran(2026, 6, 3, 14, 0);
         var sessionId = await S3TestHelpers.StartSession(_api, "PS5-S12", 1);
         await BillConsole110kAsync(factory, _api, op, sessionId);
-        var history = await op.GetFromJsonAsync<JsonElement>("/api/operator/reports/history?method=Cash");
+        var history = await manager.GetFromJsonAsync<JsonElement>("/api/operator/reports/history?method=Cash");
         Assert.True(history.GetArrayLength() >= 1);
     }
 
