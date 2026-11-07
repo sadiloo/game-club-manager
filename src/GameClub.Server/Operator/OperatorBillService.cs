@@ -375,6 +375,41 @@ public sealed class OperatorBillService(
         return invoice;
     }
 
+    public async Task<object> PreviewCloseSettleCollectibleAsync(Guid sessionId, CancellationToken ct)
+    {
+        var session = await db.Sessions.AsNoTracking()
+            .Include(s => s.Station)!.ThenInclude(st => st!.Group)
+            .Include(s => s.Segments)
+            .Include(s => s.Pauses)
+            .Include(s => s.PendingBill)
+            .FirstOrDefaultAsync(s => s.Id == sessionId, ct)
+            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Session not found.");
+        if (session.Status == SessionStatus.Closed)
+        {
+            throw new ApiException(StatusCodes.Status409Conflict, "invalid_state", "Session is already closed.");
+        }
+
+        if (session.PendingBill is PendingBillEntity existing)
+        {
+            return new { collectibleToman = existing.CollectibleToman };
+        }
+
+        if (session.Status is not SessionStatus.Open and not SessionStatus.Paused)
+        {
+            throw new ApiException(StatusCodes.Status409Conflict, "no_bill", "No bill for this session.");
+        }
+
+        var endUtc = session.EndedAtUtc ?? clock.UtcNow.UtcDateTime;
+        foreach (var seg in session.Segments.Where(s => s.EndUtc is null))
+        {
+            seg.EndUtc = endUtc;
+        }
+
+        var saleLines = await LoadSaleLinesAsync(sessionId, ct);
+        var amounts = await calculator.ComputeAsync(session, endUtc, 0, saleLines, ct);
+        return new { collectibleToman = amounts.CollectibleToman };
+    }
+
     private async Task OpenBillForCloseSettleAsync(PlaySessionEntity session, CancellationToken ct)
     {
         if (session.PendingBill is not null)

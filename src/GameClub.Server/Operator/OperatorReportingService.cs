@@ -427,8 +427,9 @@ public sealed class OperatorReportingService(AppDbContext db, OperatorContext op
         else
         {
             walletQuery = walletQuery.Where(w => w.ShiftId == null
-                                                 && w.AtUtc >= close.PeriodOpenedAtUtc
-                                                 && w.AtUtc <= close.ClosedAtUtc);
+                                                 && w.WorkingDayYear == close.WorkingDayYear
+                                                 && w.WorkingDayMonth == close.WorkingDayMonth
+                                                 && w.WorkingDayDay == close.WorkingDayDay);
         }
 
         var topUps = await walletQuery.ToListAsync(ct);

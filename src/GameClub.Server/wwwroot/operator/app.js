@@ -1124,10 +1124,33 @@ bindClick("openShiftBtn", async () => {
 
 let closeBaseExpectedCash = 0;
 let closeSettleExtraToman = 0;
+let closePreviewMeta = null;
+
+function closeDisplayExpectedCash() {
+  return closeBaseExpectedCash + closeSettleExtraToman;
+}
+
+function refreshClosePreviewSummary() {
+  const el = document.getElementById("closePreviewSummary");
+  if (!el || !closePreviewMeta) return;
+  const e = closePreviewMeta.expected || {};
+  const cashExpected = closeDisplayExpectedCash();
+  const dest = (closePreviewMeta.destinationCards || [])
+    .map((d) => `${d.destinationCardId}: ${d.totalToman}`)
+    .join("؛ ");
+  const pendInv = (closePreviewMeta.pendingCardToCard || [])
+    .map((p) => `فاکتور ${p.invoiceNumber ?? "—"} → ${p.destinationCardId ?? "—"} ${p.amountToman}`)
+    .join("؛ ");
+  const pendWal = (closePreviewMeta.pendingWalletTopUps || [])
+    .map((p) => `کیف → ${p.destinationCardId ?? "—"} ${p.amountToman}`)
+    .join("؛ ");
+  const pendParts = [pendInv, pendWal].filter(Boolean).join(" | ");
+  el.textContent =
+    `مورد انتظار: نقد ${cashExpected} | کارتخوان ${e.cardReaderExpected ?? 0} | کارت‌به‌کارت تأییدشده ${e.cardToCardConfirmedExpected ?? 0} | معلق ${e.cardToCardPending ?? 0} | مقصد: ${dest || "—"} | C2C معلق: ${pendParts || "—"}`;
+}
 
 function recalcCloseExpectedCash() {
-  const cashEl = document.getElementById("closeCash");
-  if (cashEl) cashEl.value = closeBaseExpectedCash + closeSettleExtraToman;
+  refreshClosePreviewSummary();
 }
 
 async function jalaliToGregorian(jy, jm, jd) {
@@ -1147,19 +1170,88 @@ function renderReportsTable(title, headers, rows) {
 }
 
 function renderIncomeSummary(body) {
-  return renderReportsTable("درآمد", ["دریافتی", "نقد", "کارتخوان", "کارت‌به‌کارت", "شارژ کیف"], [
+  const categories = renderReportsTable(
+    "ستون‌های درآمد",
+    ["بازی", "بوفه", "خدمات", "گرد کردن", "خدمت ویژه", "بسته", "شارژ کیف", "دریافتی", "نقد", "کارتخوان", "کارت‌به‌کارت"],
     [
-      body.receivedMoneyToman ?? 0,
-      body.receivedCashToman ?? 0,
-      body.receivedCardReaderToman ?? 0,
-      body.receivedCardToCardToman ?? 0,
-      body.walletTopUpToman ?? 0,
-    ],
-  ]);
+      [
+        body.playToman ?? 0,
+        body.buffetToman ?? 0,
+        body.servicesToman ?? 0,
+        body.roundingToman ?? 0,
+        body.surchargeToman ?? 0,
+        body.packageSalesToman ?? 0,
+        body.walletTopUpToman ?? 0,
+        body.receivedMoneyToman ?? 0,
+        body.receivedCashToman ?? 0,
+        body.receivedCardReaderToman ?? 0,
+        body.receivedCardToCardToman ?? 0,
+      ],
+    ]
+  );
+  const byStation = (body.byStation || []).map((s) => [s.stationId, s.receivedMoneyToman]);
+  const byOperator = (body.byOperator || []).map((o) => [o.operatorId, o.receivedMoneyToman]);
+  const dest = (body.destinationCards || []).map((d) => [d.destinationCardId, d.totalToman]);
+  return (
+    categories +
+    renderReportsTable("بر اساس ایستگاه", ["ایستگاه", "دریافتی"], byStation.length ? byStation : [["—", 0]]) +
+    renderReportsTable("بر اساس اپراتور", ["اپراتور", "دریافتی"], byOperator.length ? byOperator : [["—", 0]]) +
+    renderReportsTable("کارت مقصد", ["کارت", "جمع"], dest.length ? dest : [["—", 0]])
+  );
 }
 
-function historyQuery() {
+const historyTableHeaders = [
+  "شماره",
+  "وضعیت",
+  "مبلغ",
+  "ایستگاه",
+  "تسویه‌کننده",
+  "سال",
+  "ماه",
+  "روز",
+  "پرداخت‌ها",
+  "یادداشت",
+  "علت باطل",
+];
+
+function historyRowsFromApi(rows) {
+  return (rows || []).map((r) => {
+    const wd = r.workingDay;
+    const payments = (r.payments || [])
+      .map((p) => `${p.method}:${p.amountToman}:${p.status ?? ""}`)
+      .join("|");
+    return [
+      r.number,
+      r.status,
+      r.collectibleToman,
+      r.stationId ?? "—",
+      r.settledByUserId ?? "—",
+      wd?.workingDayYear ?? wd?.year ?? "—",
+      wd?.workingDayMonth ?? wd?.month ?? "—",
+      wd?.workingDayDay ?? wd?.day ?? "—",
+      payments,
+      r.operatorNote ?? "",
+      r.voidReason ?? "",
+    ];
+  });
+}
+
+async function historyQuery() {
   const q = new URLSearchParams();
+  const fromJy = Number(document.getElementById("histFromJy")?.value);
+  const fromJm = Number(document.getElementById("histFromJm")?.value);
+  const fromJd = Number(document.getElementById("histFromJd")?.value);
+  const toJy = Number(document.getElementById("histToJy")?.value);
+  const toJm = Number(document.getElementById("histToJm")?.value);
+  const toJd = Number(document.getElementById("histToJd")?.value);
+  if (fromJy && fromJm && fromJd) {
+    const g = await jalaliToGregorian(fromJy, fromJm, fromJd);
+    q.set("fromUtc", gregorianDayRangeUtc(g).fromUtc);
+  }
+  if (toJy && toJm && toJd) {
+    const g = await jalaliToGregorian(toJy, toJm, toJd);
+    q.set("toUtc", gregorianDayRangeUtc(g).toUtc);
+  }
   const st = document.getElementById("histStation")?.value?.trim();
   const cust = document.getElementById("histCustomer")?.value?.trim();
   const oper = document.getElementById("histOperator")?.value?.trim();
@@ -1197,7 +1289,7 @@ function renderCloseSessions(openSessions) {
       const action = btn.getAttribute("data-action");
       if (action === "settle") {
         try {
-          const bill = await api(`/api/operator/sessions/${sid}/bill`);
+          const bill = await api(`/api/operator/sessions/${sid}/close-settle-preview`);
           const prev = Number(row.dataset.settleAmount || 0);
           const next = Number(bill.collectibleToman || 0);
           closeSettleExtraToman += next - prev;
@@ -1242,18 +1334,8 @@ bindClick("closePreviewBtn", async () => {
   const e = preview.expected || {};
   closeBaseExpectedCash = Number(e.cashExpected ?? 0);
   closeSettleExtraToman = 0;
-  recalcCloseExpectedCash();
-  const dest = (preview.destinationCards || [])
-    .map((d) => `${d.destinationCardId}: ${d.totalToman}`)
-    .join("؛ ");
-  const pendInv = (preview.pendingCardToCard || [])
-    .map((p) => `فاکتور ${p.invoiceNumber ?? "—"} ${p.amountToman}`)
-    .join("؛ ");
-  const pendWal = (preview.pendingWalletTopUps || [])
-    .map((p) => `کیف ${p.amountToman}`)
-    .join("؛ ");
-  document.getElementById("closePreviewSummary").textContent =
-    `مورد انتظار: نقد ${e.cashExpected ?? 0} | کارتخوان ${e.cardReaderExpected ?? 0} | کارت‌به‌کارت تأییدشده ${e.cardToCardConfirmedExpected ?? 0} | معلق ${e.cardToCardPending ?? 0} | مقصد: ${dest || "—"} | C2C معلق: ${pendInv || pendWal || "—"}`;
+  closePreviewMeta = preview;
+  refreshClosePreviewSummary();
   document.getElementById("closeReader").value = e.cardReaderExpected ?? 0;
 });
 
@@ -1331,11 +1413,14 @@ bindClick("usageBtn", async () => {
     `/api/operator/reports/usage?fromUtc=${encodeURIComponent(range.fromUtc)}&toUtc=${encodeURIComponent(rangeTo.toUtc)}`
   );
   const stations = (body.byStation || []).map((s) => [s.stationId, s.durationSeconds]);
-  document.getElementById("reportsOut").innerHTML = renderReportsTable(
-    "مصرف ایستگاه (ثانیه)",
-    ["ایستگاه", "مدت"],
-    stations.length ? stations : [["—", 0]]
-  );
+  const peaks = (body.peakHours || []).map((h) => [h.hour, h.durationSeconds]);
+  document.getElementById("reportsOut").innerHTML =
+    renderReportsTable("مصرف ایستگاه (ثانیه)", ["ایستگاه", "مدت"], stations.length ? stations : [["—", 0]]) +
+    renderReportsTable(
+      "ساعات اوج تهران",
+      ["ساعت", "مدت (ثانیه)"],
+      peaks.length ? peaks : [["—", 0]]
+    );
 });
 bindClick("cu8Btn", async () => {
   const body = await api("/api/operator/reports/wallet/cu8");
@@ -1344,22 +1429,16 @@ bindClick("cu8Btn", async () => {
   ]);
 });
 bindClick("historyBtn", async () => {
-  const rows = await api(`/api/operator/reports/history${historyQuery()}`);
-  const table = (rows || []).map((r) => [
-    r.number,
-    r.status,
-    r.collectibleToman,
-    r.stationId ?? "—",
-    (r.payments || []).map((p) => `${p.method}:${p.amountToman}`).join("|"),
-  ]);
+  const rows = await api(`/api/operator/reports/history${await historyQuery()}`);
+  const table = historyRowsFromApi(rows);
   document.getElementById("reportsOut").innerHTML = renderReportsTable(
     "تاریخچه",
-    ["شماره", "وضعیت", "مبلغ", "ایستگاه", "پرداخت‌ها"],
-    table.length ? table : [["—", "—", 0, "—", "—"]]
+    historyTableHeaders,
+    table.length ? table : [historyTableHeaders.map(() => "—")]
   );
 });
 bindClick("exportHistoryBtn", async () => {
-  const res = await fetch(`/api/operator/reports/history/export${historyQuery()}`, { credentials: "include" });
+  const res = await fetch(`/api/operator/reports/history/export${await historyQuery()}`, { credentials: "include" });
   const text = await res.text();
   document.getElementById("reportsOut").innerHTML = `<h3>خروجی CSV</h3><pre>${text.replace(/</g, "&lt;")}</pre>`;
 });

@@ -143,6 +143,10 @@ public sealed class OperatorPanelController(
     public async Task<IActionResult> GetBill(Guid sessionId, CancellationToken ct)
         => Ok(await bills.GetBillDetailAsync(sessionId, ct));
 
+    [HttpGet("sessions/{sessionId:guid}/close-settle-preview")]
+    public async Task<IActionResult> CloseSettlePreview(Guid sessionId, CancellationToken ct)
+        => Ok(await bills.PreviewCloseSettleCollectibleAsync(sessionId, ct));
+
     [HttpPost("sessions/{sessionId:guid}/bill/preview")]
     public async Task<IActionResult> PreviewBill(Guid sessionId, ConfirmRequest body, CancellationToken ct)
         => Ok(await bills.PreviewBillAsync(sessionId, body.Payments, ct));
