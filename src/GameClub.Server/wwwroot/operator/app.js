@@ -15,6 +15,18 @@ function resetBuffetOnlyContext() {
   buffetOpenSaleId = null;
 }
 
+function isBuffetBillVisible() {
+  return (
+    billTarget === "buffet-only"
+    && buffetOpenSaleId
+    && !document.getElementById("bill").classList.contains("hidden")
+  );
+}
+
+function isBuffetOnlyPanelActive() {
+  return buffetMode === "buffet-only" && buffetOpenSaleId;
+}
+
 function showError(msg) {
   const el = document.getElementById("error");
   el.textContent = msg || "";
@@ -192,6 +204,8 @@ async function openBuffetPanel(tile) {
   buffetMode = tile?.id === "buffet-only" || tile?.status === "Buffet only" ? "buffet-only" : "session";
   document.getElementById("buffetPanel").classList.remove("hidden");
   if (buffetMode === "buffet-only") {
+    selectedSessionId = null;
+    document.getElementById("sessionActions").classList.add("hidden");
     const start = await api("/api/operator/buffet-only/start", { method: "POST" });
     buffetOpenSaleId = start.openSaleId;
     document.getElementById("buffetContext").textContent = "فروش بوفه (بدون بازی)";
@@ -206,7 +220,7 @@ async function openBuffetPanel(tile) {
 }
 
 function customerLinkContext() {
-  if (billTarget === "buffet-only" && buffetOpenSaleId) {
+  if (isBuffetBillVisible() || isBuffetOnlyPanelActive()) {
     return { openSaleId: buffetOpenSaleId };
   }
   if (selectedSessionId) {
@@ -608,7 +622,12 @@ async function onTileClick(t) {
   }
   document.getElementById("sessionActions").classList.remove("hidden");
   document.getElementById("sessionLabel").textContent = `${t.id} — ${t.status}`;
-  renderCustomerChip(t.linkedCustomer);
+  if (isBuffetBillVisible()) {
+    const detail = await api(`/api/operator/buffet-only/${buffetOpenSaleId}`);
+    renderCustomerChip(detail.linkedCustomer);
+  } else {
+    renderCustomerChip(t.linkedCustomer);
+  }
   document.getElementById("pauseBtn").classList.toggle("hidden", t.status !== "Playing");
   document.getElementById("resumeBtn").classList.toggle("hidden", t.status !== "Paused");
   document.getElementById("openBillBtn").classList.toggle("hidden", (t.groupId || "").startsWith("pc"));
