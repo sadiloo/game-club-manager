@@ -694,6 +694,90 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
     }
 
     [Fact]
+    public async Task cu15_ui_buffet_panel_open_no_checkout_station_click_links_session_not_sale()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var op = await LoginOperatorClientAsync();
+        await S3TestHelpers.RegisterConsole(_api, op, "PS5-CU15C", 1);
+        factory.Clock.SetTehran(2026, 6, 3, 14, 0);
+        var sessionId = await S3TestHelpers.StartSession(_api, "PS5-CU15C", 1);
+        var tag = Guid.NewGuid().ToString("N")[..7];
+        var priorMobile = "0912" + tag;
+        var replaceMobile = "0913" + tag;
+        var priorCustomer = await op.PostAsJsonAsync("/api/operator/customers", new
+        {
+            name = "station-y3",
+            mobile = priorMobile,
+            linkSessionId = sessionId,
+        });
+        priorCustomer.EnsureSuccessStatusCode();
+        var priorCustomerId = (await priorCustomer.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetGuid();
+
+        var page = await LoginAsync(op);
+        await page.EvaluateAsync("() => refreshGrid()");
+        await page.ClickAsync(".tile[data-station-id='buffet-only']");
+        await page.WaitForSelectorAsync("#buffetPanel:not(.hidden)");
+        await page.Locator("#buffetCategories .cat", new() { HasText = "خوراکی" }).ClickAsync();
+        await page.Locator("#buffetCategories .cat", new() { HasText = "خوراکی" })
+            .Locator(".cat-item", new() { HasText = "چیپس" }).ClickAsync();
+        await page.Locator("#buffetSaleLines .sale-line").First.WaitForAsync();
+
+        await page.ClickAsync(".tile[data-station-id='PS5-CU15C']");
+        await page.WaitForSelectorAsync("#sessionActions:not(.hidden)");
+        await page.WaitForFunctionAsync("() => document.getElementById('buffetPanel').classList.contains('hidden')");
+        var chip = await page.TextContentAsync("#customerChip");
+        Assert.Contains("station-y3", chip!);
+
+        var pickResp = await op.PostAsJsonAsync("/api/operator/customers", new
+        {
+            name = "pick-me",
+            mobile = replaceMobile,
+        });
+        pickResp.EnsureSuccessStatusCode();
+
+        await page.EvaluateAsync("() => { document.querySelector('#customerPanel details').open = true; }");
+        var linkRequest = page.WaitForRequestAsync(r =>
+            r.Method == "PUT" && r.Url.Contains("/api/operator/sessions/", StringComparison.Ordinal) && r.Url.Contains("/customer", StringComparison.Ordinal));
+        var linkResponse = page.WaitForResponseAsync(r =>
+            r.Request.Method == "PUT" && r.Request.Url.Contains("/api/operator/sessions/", StringComparison.Ordinal) && r.Request.Url.Contains("/customer", StringComparison.Ordinal) && r.Ok);
+        await page.FillAsync("#customerSearch", replaceMobile);
+        await page.Locator("#customerSearchResults .customer-hit", new() { HasText = "pick-me" }).ClickAsync();
+        var posted = await linkRequest;
+        await linkResponse;
+        Assert.Contains(sessionId.ToString(), posted.Url, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("/buffet-only/", posted.Url, StringComparison.Ordinal);
+
+        var createMobile = "0914" + tag;
+        await page.FillAsync("#customerName", "session-z");
+        await page.FillAsync("#customerMobile", createMobile);
+        var createRequest = page.WaitForRequestAsync(r =>
+            r.Method == "POST" && r.Url.Contains("/api/operator/customers", StringComparison.Ordinal));
+        var createResponse = page.WaitForResponseAsync(r =>
+            r.Request.Method == "POST" && r.Url.Contains("/api/operator/customers", StringComparison.Ordinal) && r.Ok);
+        await page.ClickAsync("#customerCreateBtn");
+        var createPosted = await createRequest;
+        await createResponse;
+        var body = JsonDocument.Parse(createPosted.PostData ?? "{}").RootElement;
+        Assert.True(body.TryGetProperty("linkSessionId", out var lsEl) && lsEl.ValueKind == JsonValueKind.String);
+        Assert.Equal(sessionId, lsEl.GetGuid());
+        Assert.True(body.TryGetProperty("linkOpenSaleId", out var saleEl));
+        Assert.Equal(JsonValueKind.Null, saleEl.ValueKind);
+
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var session = await db.Sessions.AsNoTracking().SingleAsync(s => s.Id == sessionId);
+            Assert.Equal("session-z", (await db.Customers.AsNoTracking().SingleAsync(c => c.Id == session.CustomerId!.Value)).Name);
+            Assert.NotEqual(priorCustomerId, session.CustomerId);
+            var buffetOnlyOpen = await db.OpenSales.AsNoTracking()
+                .Where(o => o.IsBuffetOnly && o.SessionId == null)
+                .ToListAsync();
+            Assert.NotEmpty(buffetOnlyOpen);
+            Assert.All(buffetOnlyOpen, o => Assert.Null(o.CustomerId));
+        }
+    }
+
+    [Fact]
     public async Task s3b_panel_buffet_icon_adds_line_without_stopping_session()
     {
         await S3TestHelpers.ResetAsync(factory);

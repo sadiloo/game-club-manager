@@ -620,6 +620,12 @@ async function onTileClick(t) {
     await refreshManualSettle();
     return;
   }
+  if (!isBuffetBillVisible()) {
+    document.getElementById("buffetPanel").classList.add("hidden");
+    if (billTarget !== "buffet-only") {
+      resetBuffetOnlyContext();
+    }
+  }
   document.getElementById("sessionActions").classList.remove("hidden");
   document.getElementById("sessionLabel").textContent = `${t.id} — ${t.status}`;
   if (isBuffetBillVisible()) {
