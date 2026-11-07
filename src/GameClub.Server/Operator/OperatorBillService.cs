@@ -560,14 +560,22 @@ public sealed class OperatorInvoiceService(
             throw new ApiException(StatusCodes.Status403Forbidden, "forbidden", "Card-to-card confirmation is disabled.");
         }
 
-        var line = await db.PaymentLines.FirstOrDefaultAsync(p => p.Id == paymentLineId, ct)
-            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Payment line not found.");
-        if (line.ConfirmationStatus != PaymentConfirmationStatus.Pending)
+        var updated = await db.PaymentLines
+            .Where(p => p.Id == paymentLineId && p.ConfirmationStatus == PaymentConfirmationStatus.Pending)
+            .ExecuteUpdateAsync(
+                s => s.SetProperty(p => p.ConfirmationStatus, PaymentConfirmationStatus.Confirmed),
+                ct);
+        if (updated == 0)
         {
+            var exists = await db.PaymentLines.AsNoTracking().AnyAsync(p => p.Id == paymentLineId, ct);
+            if (!exists)
+            {
+                throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Payment line not found.");
+            }
+
             throw new ApiException(StatusCodes.Status409Conflict, "not_pending", "Payment is not pending.");
         }
 
-        line.ConfirmationStatus = PaymentConfirmationStatus.Confirmed;
         await audit.AppendAsync("payment.card_to_card_confirmed", new { paymentLineId }, ct);
         await db.SaveChangesAsync(ct);
     }
@@ -579,14 +587,23 @@ public sealed class OperatorInvoiceService(
             throw new ApiException(StatusCodes.Status403Forbidden, "forbidden", "Card-to-card confirmation is disabled.");
         }
 
-        var line = await db.PaymentLines.Include(p => p.Invoice).FirstOrDefaultAsync(p => p.Id == paymentLineId, ct)
-            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Payment line not found.");
-        if (line.ConfirmationStatus != PaymentConfirmationStatus.Pending)
+        var updated = await db.PaymentLines
+            .Where(p => p.Id == paymentLineId && p.ConfirmationStatus == PaymentConfirmationStatus.Pending)
+            .ExecuteUpdateAsync(
+                s => s.SetProperty(p => p.ConfirmationStatus, PaymentConfirmationStatus.Rejected),
+                ct);
+        if (updated == 0)
         {
+            var exists = await db.PaymentLines.AsNoTracking().AnyAsync(p => p.Id == paymentLineId, ct);
+            if (!exists)
+            {
+                throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Payment line not found.");
+            }
+
             throw new ApiException(StatusCodes.Status409Conflict, "not_pending", "Payment is not pending.");
         }
 
-        line.ConfirmationStatus = PaymentConfirmationStatus.Rejected;
+        var line = await db.PaymentLines.AsNoTracking().FirstAsync(p => p.Id == paymentLineId, ct);
         if (policies.RejectedCardToCardGoesToManagerUnpaidList)
         {
             db.RejectedCardToCard.Add(new RejectedCardToCardEntity

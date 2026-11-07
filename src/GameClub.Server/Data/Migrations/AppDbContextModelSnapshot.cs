@@ -282,11 +282,11 @@ namespace GameClub.Server.Data.Migrations
                     b.Property<DateTime>("OpenedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
-                    b.Property<long>("RoundingToman")
-                        .HasColumnType("bigint");
-
                     b.Property<string>("RevertStateJson")
                         .HasColumnType("text");
+
+                    b.Property<long>("RoundingToman")
+                        .HasColumnType("bigint");
 
                     b.Property<uint>("RowVersion")
                         .IsConcurrencyToken()
@@ -480,7 +480,8 @@ namespace GameClub.Server.Data.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("PaymentLineId");
+                    b.HasIndex("PaymentLineId")
+                        .IsUnique();
 
                     b.ToTable("rejected_card_to_card", (string)null);
                 });

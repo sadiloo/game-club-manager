@@ -104,16 +104,32 @@ async function refreshPendingC2c() {
     const confirmBtn = document.createElement("button");
     confirmBtn.type = "button";
     confirmBtn.textContent = "Confirm transfer";
-    confirmBtn.onclick = async () => {
-      await api(`/api/operator/payments/${row.id}/confirm`, { method: "POST" });
-      await refreshPendingC2c();
-    };
     const rejectBtn = document.createElement("button");
     rejectBtn.type = "button";
     rejectBtn.textContent = "Reject";
+    confirmBtn.onclick = async () => {
+      if (confirmBtn.disabled) return;
+      confirmBtn.disabled = true;
+      rejectBtn.disabled = true;
+      try {
+        await api(`/api/operator/payments/${row.id}/confirm`, { method: "POST" });
+        await refreshPendingC2c();
+      } catch (_) {
+        confirmBtn.disabled = false;
+        rejectBtn.disabled = false;
+      }
+    };
     rejectBtn.onclick = async () => {
-      await api(`/api/operator/payments/${row.id}/reject`, { method: "POST" });
-      await refreshPendingC2c();
+      if (rejectBtn.disabled) return;
+      confirmBtn.disabled = true;
+      rejectBtn.disabled = true;
+      try {
+        await api(`/api/operator/payments/${row.id}/reject`, { method: "POST" });
+        await refreshPendingC2c();
+      } catch (_) {
+        confirmBtn.disabled = false;
+        rejectBtn.disabled = false;
+      }
     };
     li.appendChild(confirmBtn);
     li.appendChild(rejectBtn);

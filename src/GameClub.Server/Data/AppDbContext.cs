@@ -135,6 +135,7 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
         {
             e.ToTable("rejected_card_to_card");
             e.HasKey(x => x.Id);
+            e.HasIndex(x => x.PaymentLineId).IsUnique();
         });
 
         modelBuilder.Entity<InvoiceNumberSequence>(e =>
