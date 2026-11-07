@@ -682,36 +682,64 @@ public sealed class OperatorMemberBillingService(AppDbContext db, OperatorMember
             return;
         }
 
-        var member = await db.CustomerMembers.FirstOrDefaultAsync(m => m.CustomerId == effect.CustomerId, ct);
-        if (member is null)
-        {
-            return;
-        }
+        var customerId = effect.CustomerId;
+        var hasWallet = effect.WalletRealDrawnToman != 0 || effect.WalletGiftDrawnToman != 0;
 
-        member.LifetimePlayMinutes -= effect.LoyaltyMinutesPosted;
-        db.LoyaltyHourLedger.Add(new LoyaltyHourLedgerEntity
+        if (hasWallet)
         {
-            CustomerId = effect.CustomerId,
-            AtUtc = DateTime.UtcNow,
-            DeltaMinutes = -effect.LoyaltyMinutesPosted,
-            InvoiceId = invoice.Id,
-            Reason = "invoice_void",
-        });
-
-        if (effect.WalletRealDrawnToman != 0 || effect.WalletGiftDrawnToman != 0)
-        {
-            var pocket = MemberWalletMapper.ToPocket(member);
-            pocket = WalletPocketMath.Add(pocket, effect.WalletRealDrawnToman, effect.WalletGiftDrawnToman);
-            MemberWalletMapper.ApplyPocket(member, pocket);
-            db.WalletLedger.Add(new WalletLedgerEntryEntity
+            await using var tx = await db.Database.BeginTransactionAsync(ct);
+            try
             {
-                CustomerId = effect.CustomerId,
+                var member = await members.ReloadMemberForUpdateAsync(customerId, ct);
+                member.LifetimePlayMinutes -= effect.LoyaltyMinutesPosted;
+                db.LoyaltyHourLedger.Add(new LoyaltyHourLedgerEntity
+                {
+                    CustomerId = customerId,
+                    AtUtc = DateTime.UtcNow,
+                    DeltaMinutes = -effect.LoyaltyMinutesPosted,
+                    InvoiceId = invoice.Id,
+                    Reason = "invoice_void",
+                });
+
+                var pocket = MemberWalletMapper.ToPocket(member);
+                pocket = WalletPocketMath.Add(pocket, effect.WalletRealDrawnToman, effect.WalletGiftDrawnToman);
+                MemberWalletMapper.ApplyPocket(member, pocket);
+                db.WalletLedger.Add(new WalletLedgerEntryEntity
+                {
+                    CustomerId = customerId,
+                    AtUtc = DateTime.UtcNow,
+                    Kind = WalletLedgerKind.InvoiceVoidReversal,
+                    RealDeltaToman = effect.WalletRealDrawnToman,
+                    GiftDeltaToman = effect.WalletGiftDrawnToman,
+                    InvoiceId = invoice.Id,
+                    Label = "void_reversal",
+                });
+
+                await db.SaveChangesAsync(ct);
+                await tx.CommitAsync(ct);
+            }
+            catch
+            {
+                await tx.RollbackAsync(ct);
+                throw;
+            }
+        }
+        else
+        {
+            var member = await db.CustomerMembers.FirstOrDefaultAsync(m => m.CustomerId == customerId, ct);
+            if (member is null)
+            {
+                return;
+            }
+
+            member.LifetimePlayMinutes -= effect.LoyaltyMinutesPosted;
+            db.LoyaltyHourLedger.Add(new LoyaltyHourLedgerEntity
+            {
+                CustomerId = customerId,
                 AtUtc = DateTime.UtcNow,
-                Kind = WalletLedgerKind.InvoiceVoidReversal,
-                RealDeltaToman = effect.WalletRealDrawnToman,
-                GiftDeltaToman = effect.WalletGiftDrawnToman,
+                DeltaMinutes = -effect.LoyaltyMinutesPosted,
                 InvoiceId = invoice.Id,
-                Label = "void_reversal",
+                Reason = "invoice_void",
             });
         }
 
