@@ -6,6 +6,12 @@ let destinationCards = [];
 let catalog = [];
 let buffetOpenSaleId = null;
 let buffetMode = "session";
+let billTarget = null;
+
+function resetBuffetOnlyContext() {
+  buffetMode = "session";
+  buffetOpenSaleId = null;
+}
 
 function showError(msg) {
   const el = document.getElementById("error");
@@ -141,6 +147,10 @@ async function renderBuffetSale() {
       }
       await renderBuffetSale();
       await refreshLowStock();
+      if (selectedSessionId && !document.getElementById("bill").classList.contains("hidden")) {
+        const bill = await api(`/api/operator/sessions/${selectedSessionId}/bill`);
+        renderBill(bill);
+      }
     };
     row.appendChild(del);
     linesBox.appendChild(row);
@@ -196,10 +206,14 @@ document.getElementById("loginBtn").onclick = async () => {
 
 document.getElementById("buffetCloseBtn").onclick = () => {
   document.getElementById("buffetPanel").classList.add("hidden");
+  if (billTarget !== "buffet-only") {
+    resetBuffetOnlyContext();
+  }
 };
 
 document.getElementById("buffetCheckoutBtn").onclick = async () => {
   const bill = await api(`/api/operator/buffet-only/${buffetOpenSaleId}/checkout`, { method: "POST" });
+  billTarget = "buffet-only";
   document.getElementById("bill").classList.remove("hidden");
   renderBill({
     collectibleToman: bill.collectibleToman,
@@ -344,6 +358,9 @@ function renderBillSaleLines(lines) {
 }
 
 function renderBill(bill) {
+  if (billTarget !== "buffet-only") {
+    billTarget = "session";
+  }
   document.getElementById("bill").classList.remove("hidden");
   const d = document.getElementById("billDetail");
   const segText = (bill.segments || [])
@@ -388,7 +405,8 @@ function renderPaymentLines() {
 
 async function openBillScreen(sessionId) {
   selectedSessionId = sessionId;
-  buffetMode = "session";
+  resetBuffetOnlyContext();
+  billTarget = "session";
   paymentDraft = [];
   const bill = await api(`/api/operator/sessions/${sessionId}/bill`);
   renderBill(bill);
@@ -448,6 +466,8 @@ document.getElementById("playerCountBtn").onclick = async () => {
 };
 
 document.getElementById("openBillBtn").onclick = async () => {
+  resetBuffetOnlyContext();
+  billTarget = "session";
   const bill = await api(`/api/operator/sessions/${selectedSessionId}/bill/open`, { method: "POST" });
   renderBill(bill);
   paymentDraft = [];
@@ -495,7 +515,7 @@ document.getElementById("surchargeBtn").onclick = async () => {
 document.getElementById("confirmBtn").onclick = async () => {
   let collectible;
   let payments = paymentDraft;
-  if (buffetMode === "buffet-only" && buffetOpenSaleId) {
+  if (billTarget === "buffet-only" && buffetOpenSaleId) {
     const detail = await api(`/api/operator/buffet-only/${buffetOpenSaleId}`);
     collectible = detail.bill?.collectibleToman ?? 0;
     if (collectible === 0 && !payments.length) payments = [];
@@ -505,6 +525,7 @@ document.getElementById("confirmBtn").onclick = async () => {
       body: JSON.stringify({ payments }),
     });
     buffetOpenSaleId = null;
+    billTarget = null;
     document.getElementById("buffetPanel").classList.add("hidden");
   } else {
     const bill = await api(`/api/operator/sessions/${selectedSessionId}/bill`);
@@ -517,6 +538,7 @@ document.getElementById("confirmBtn").onclick = async () => {
     });
   }
   selectedSessionId = null;
+  billTarget = null;
   document.getElementById("bill").classList.add("hidden");
   await refreshGrid();
   await refreshLowStock();
