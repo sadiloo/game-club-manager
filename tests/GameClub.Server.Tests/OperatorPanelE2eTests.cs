@@ -382,6 +382,160 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
     }
 
     [Fact]
+    public async Task pr29_r2_buffet_only_checkout_remove_refreshes_visible_total()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var op = await LoginOperatorClientAsync();
+
+        var page = await LoginAsync(op);
+        await page.EvaluateAsync("() => refreshGrid()");
+        await page.ClickAsync(".tile[data-station-id='buffet-only']");
+        await page.WaitForSelectorAsync("#buffetPanel:not(.hidden)");
+        var chipsCat = page.Locator("#buffetCategories .cat", new() { HasText = "خوراکی" });
+        await chipsCat.ClickAsync();
+        await page.Locator("#buffetCategories .cat", new() { HasText = "خوراکی" }).Locator(".cat-item", new() { HasText = "چیپس" }).ClickAsync();
+        await page.Locator("#buffetSaleLines .sale-line").WaitForAsync();
+        var drinksCat = page.Locator("#buffetCategories .cat", new() { HasText = "نوشیدنی" });
+        await drinksCat.ClickAsync();
+        await page.Locator("#buffetCategories .cat", new() { HasText = "نوشیدنی" }).Locator(".cat-item", new() { HasText = "نوشابه" }).ClickAsync();
+        await page.Locator("#buffetSaleLines .sale-line").Nth(1).WaitForAsync();
+        var checkoutDone = page.WaitForResponseAsync(r =>
+            r.Request.Method == "POST" && r.Url.Contains("/checkout", StringComparison.Ordinal) && r.Ok);
+        await page.ClickAsync("#buffetCheckoutBtn");
+        await checkoutDone;
+        await page.WaitForSelectorAsync("#bill:not(.hidden)");
+        var before = (await page.TextContentAsync("#billDetail"))!.Replace(" ", "");
+        Assert.Contains("=35000", before);
+        Assert.Contains("بوفه35000", before);
+
+        var deleteDone = page.WaitForResponseAsync(r =>
+            r.Request.Method == "DELETE" && r.Url.Contains("/buffet-only/", StringComparison.Ordinal));
+        var billRefresh = page.WaitForResponseAsync(r =>
+            r.Request.Method == "GET"
+            && r.Url.Contains("/buffet-only/", StringComparison.Ordinal)
+            && !r.Url.Contains("/lines/", StringComparison.Ordinal)
+            && r.Ok);
+        await page.Locator("#buffetSaleLines button", new() { HasText = "حذف" }).Last.ClickAsync();
+        await deleteDone;
+        var billResponse = await billRefresh;
+        var billBody = await billResponse.JsonAsync<JsonElement>();
+        Assert.Equal(20_000, billBody.GetProperty("bill").GetProperty("collectibleToman").GetInt64());
+
+        var after = (await page.TextContentAsync("#billDetail"))!.Replace(" ", "");
+        Assert.Contains("=20000", after);
+        Assert.Contains("بوفه20000", after);
+        Assert.DoesNotContain("35000", after);
+        Assert.Equal("", (await page.TextContentAsync("#error")) ?? "");
+    }
+
+    [Fact]
+    public async Task pr29_r2_cross_context_remove_keeps_buffet_only_bill_then_confirm()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var op = await LoginOperatorClientAsync();
+        await S3TestHelpers.RegisterConsole(_api, op, "PS5-R29C", 1);
+        factory.Clock.SetTehran(2026, 6, 3, 14, 0);
+        var sessionId = await S3TestHelpers.StartSession(_api, "PS5-R29C", 1);
+        factory.Clock.SetTehran(2026, 6, 3, 15, 0);
+
+        var page = await LoginAsync(op);
+        await page.EvaluateAsync("() => refreshGrid()");
+        await page.ClickAsync(".tile[data-station-id='PS5-R29C']");
+        await page.WaitForSelectorAsync("#sessionActions:not(.hidden)");
+        await page.ClickAsync("#openBillBtn");
+        await page.WaitForSelectorAsync("#bill:not(.hidden)");
+        var sessionBillBefore = (await page.TextContentAsync("#billDetail"))!.Replace(" ", "");
+        Assert.Contains("=110000", sessionBillBefore);
+
+        await page.ClickAsync(".tile[data-station-id='buffet-only']");
+        await page.WaitForSelectorAsync("#buffetPanel:not(.hidden)");
+        await page.Locator("#buffetCategories .cat", new() { HasText = "خوراکی" }).ClickAsync();
+        await page.Locator("#buffetCategories .cat", new() { HasText = "خوراکی" }).Locator(".cat-item", new() { HasText = "چیپس" }).ClickAsync();
+        await page.Locator("#buffetSaleLines .sale-line").WaitForAsync();
+        await page.Locator("#buffetCategories .cat", new() { HasText = "نوشیدنی" }).ClickAsync();
+        await page.Locator("#buffetCategories .cat", new() { HasText = "نوشیدنی" }).Locator(".cat-item", new() { HasText = "چای" }).ClickAsync();
+        await page.Locator("#buffetSaleLines .sale-line").Nth(1).WaitForAsync();
+        var checkoutDone = page.WaitForResponseAsync(r =>
+            r.Request.Method == "POST" && r.Url.Contains("/checkout", StringComparison.Ordinal) && r.Ok);
+        await page.ClickAsync("#buffetCheckoutBtn");
+        await checkoutDone;
+        await page.WaitForSelectorAsync("#bill:not(.hidden)");
+        var buffetBeforeRemove = (await page.TextContentAsync("#billDetail"))!.Replace(" ", "");
+        Assert.Contains("=30000", buffetBeforeRemove);
+
+        await page.Locator("#buffetSaleLines button", new() { HasText = "حذف" }).First.ClickAsync();
+        await page.WaitForResponseAsync(r =>
+            r.Request.Method == "GET"
+            && r.Url.Contains("/buffet-only/", StringComparison.Ordinal)
+            && r.Ok);
+        var buffetAfterRemove = (await page.TextContentAsync("#billDetail"))!.Replace(" ", "");
+        Assert.Contains("=10000", buffetAfterRemove);
+        Assert.Contains("بوفه10000", buffetAfterRemove);
+        Assert.DoesNotContain("=110000", buffetAfterRemove);
+        Assert.Equal("", (await page.TextContentAsync("#error")) ?? "");
+
+        await page.ClickAsync("#confirmBtn");
+        for (var i = 0; i < 40; i++)
+        {
+            using var scope = factory.Services.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            if (await db.Invoices.AnyAsync(x => x.SessionId == null && x.BuffetGrossToman == 10_000))
+            {
+                break;
+            }
+
+            await Task.Delay(250);
+        }
+
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var buffetInvoice = await db.Invoices.SingleAsync(x => x.SessionId == null && x.BuffetGrossToman == 10_000);
+            Assert.Equal(10_000, buffetInvoice.CollectibleToman);
+            Assert.False(await db.Invoices.AnyAsync(x => x.SessionId == sessionId));
+        }
+    }
+
+    [Fact]
+    public async Task pr29_r2_playing_session_selected_buffet_only_remove_no_session_bill_error()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var op = await LoginOperatorClientAsync();
+        await S3TestHelpers.RegisterConsole(_api, op, "PS5-R29D", 1);
+        factory.Clock.SetTehran(2026, 6, 3, 14, 0);
+        await S3TestHelpers.StartSession(_api, "PS5-R29D", 1);
+
+        var page = await LoginAsync(op);
+        await page.EvaluateAsync("() => refreshGrid()");
+        await page.ClickAsync(".tile[data-station-id='PS5-R29D']");
+        await page.WaitForSelectorAsync("#sessionActions:not(.hidden)");
+        await page.ClickAsync(".tile[data-station-id='buffet-only']");
+        await page.WaitForSelectorAsync("#buffetPanel:not(.hidden)");
+        await page.Locator("#buffetCategories .cat", new() { HasText = "خوراکی" }).ClickAsync();
+        await page.Locator("#buffetCategories .cat", new() { HasText = "خوراکی" }).Locator(".cat-item", new() { HasText = "چیپس" }).ClickAsync();
+        await page.Locator("#buffetSaleLines .sale-line").WaitForAsync();
+        await page.Locator("#buffetCategories .cat", new() { HasText = "نوشیدنی" }).ClickAsync();
+        await page.Locator("#buffetCategories .cat", new() { HasText = "نوشیدنی" }).Locator(".cat-item", new() { HasText = "نوشابه" }).ClickAsync();
+        await page.Locator("#buffetSaleLines .sale-line").Nth(1).WaitForAsync();
+        var checkoutDone = page.WaitForResponseAsync(r =>
+            r.Request.Method == "POST" && r.Url.Contains("/checkout", StringComparison.Ordinal) && r.Ok);
+        await page.ClickAsync("#buffetCheckoutBtn");
+        await checkoutDone;
+        await page.WaitForSelectorAsync("#bill:not(.hidden)");
+
+        await page.Locator("#buffetSaleLines button", new() { HasText = "حذف" }).Last.ClickAsync();
+        await page.WaitForResponseAsync(r =>
+            r.Request.Method == "GET"
+            && r.Url.Contains("/buffet-only/", StringComparison.Ordinal)
+            && r.Ok);
+
+        Assert.Equal("", (await page.TextContentAsync("#error")) ?? "");
+        var detail = (await page.TextContentAsync("#billDetail"))!.Replace(" ", "");
+        Assert.Contains("=20000", detail);
+        Assert.DoesNotContain("No bill", detail);
+    }
+
+    [Fact]
     public async Task s3b_panel_buffet_icon_adds_line_without_stopping_session()
     {
         await S3TestHelpers.ResetAsync(factory);

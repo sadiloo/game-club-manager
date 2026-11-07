@@ -120,6 +120,24 @@ async function addCatalogLine(item) {
   }
 }
 
+function renderBuffetOnlyCheckoutBill(sale) {
+  const b = sale?.bill;
+  if (!b) {
+    return;
+  }
+  billTarget = "buffet-only";
+  renderBill({
+    collectibleToman: b.collectibleToman ?? 0,
+    unroundedPayableToman: b.unroundedPayableToman ?? 0,
+    roundingToman: b.roundingToman ?? 0,
+    timeGrossToman: b.timeGrossToman ?? 0,
+    buffetGrossToman: b.buffetGrossToman ?? 0,
+    servicesGrossToman: b.servicesGrossToman ?? 0,
+    saleLines: sale.lines ?? [],
+    segments: [],
+  });
+}
+
 async function renderBuffetSale() {
   const linesBox = document.getElementById("buffetSaleLines");
   linesBox.replaceChildren();
@@ -147,16 +165,23 @@ async function renderBuffetSale() {
       }
       await renderBuffetSale();
       await refreshLowStock();
-      if (selectedSessionId && !document.getElementById("bill").classList.contains("hidden")) {
-        const bill = await api(`/api/operator/sessions/${selectedSessionId}/bill`);
-        renderBill(bill);
-      }
+      await refreshVisibleBillAfterSaleLineChange();
     };
     row.appendChild(del);
     linesBox.appendChild(row);
   }
   const checkoutBtn = document.getElementById("buffetCheckoutBtn");
   checkoutBtn.classList.toggle("hidden", buffetMode !== "buffet-only" || !lines.length);
+  const billEl = document.getElementById("bill");
+  if (
+    buffetMode === "buffet-only"
+    && billTarget === "buffet-only"
+    && buffetOpenSaleId
+    && sale?.bill
+    && !billEl.classList.contains("hidden")
+  ) {
+    renderBuffetOnlyCheckoutBill(sale);
+  }
 }
 
 async function openBuffetPanel(tile) {
@@ -342,6 +367,22 @@ async function refreshManualSettle() {
     li.appendChild(endInput);
     li.appendChild(btnB);
     ul.appendChild(li);
+  }
+}
+
+async function refreshVisibleBillAfterSaleLineChange() {
+  const billEl = document.getElementById("bill");
+  if (billEl.classList.contains("hidden")) {
+    return;
+  }
+  if ((billTarget === "buffet-only" || buffetMode === "buffet-only") && buffetOpenSaleId) {
+    const detail = await api(`/api/operator/buffet-only/${buffetOpenSaleId}`);
+    renderBuffetOnlyCheckoutBill(detail);
+    return;
+  }
+  if (selectedSessionId) {
+    const bill = await api(`/api/operator/sessions/${selectedSessionId}/bill`);
+    renderBill(bill);
   }
 }
 
