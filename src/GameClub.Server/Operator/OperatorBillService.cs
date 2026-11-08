@@ -136,8 +136,36 @@ public sealed class OperatorBillService(
     SessionCloser closer,
     OperatorPolicies policies,
     OperatorMemberContext memberContext,
-    OperatorShiftGate shiftGate)
+    OperatorShiftGate shiftGate,
+    RateConfigService rates)
 {
+    private static long DisplayHourlyToman(
+        PlaySegmentEntity segment,
+        SessionCharge charge,
+        BranchRatesSnapshot snapshot)
+    {
+        var direct = charge.Lines.FirstOrDefault(l => l.SegmentId == segment.SegmentKey);
+        if (direct is not null)
+        {
+            return direct.HourlyRateToman;
+        }
+
+        var sameGroup = charge.Lines.FirstOrDefault(l => l.GroupId == segment.GroupId);
+        if (sameGroup is not null)
+        {
+            return sameGroup.HourlyRateToman;
+        }
+
+        var wall = TimeMapping.ToTehran(segment.StartUtc);
+        return RateResolver.Resolve(
+            snapshot.Card,
+            SpecialDayCalendar.Empty,
+            wall,
+            segment.GroupId,
+            segment.Mode,
+            segment.PlayerCount).HourlyRateToman;
+    }
+
     private static bool UsesWallet(IReadOnlyList<PaymentInput> payments)
         => payments.Any(p => OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet);
 
@@ -589,9 +617,9 @@ public sealed class OperatorBillService(
             tenders,
             ct);
         var charge = await billing.BuildChargeAsync(session, bill.FrozenAtUtc, ct);
-        var hourlyBySegment = charge.Lines
-            .GroupBy(l => l.SegmentId)
-            .ToDictionary(g => g.Key, g => g.First().HourlyRateToman);
+        var snapshot = session.RateCardSnapshotId != 0
+            ? await rates.LoadSnapshotAsync(session.RateCardSnapshotId, ct)
+            : await rates.LoadAsync(ct);
         var segments = session.Segments
             .OrderBy(s => s.StartUtc)
             .Select(s => new
@@ -599,7 +627,7 @@ public sealed class OperatorBillService(
                 s.SegmentKey,
                 s.PlayerCount,
                 mode = s.Mode.ToString(),
-                hourlyToman = hourlyBySegment.GetValueOrDefault(s.SegmentKey),
+                hourlyToman = DisplayHourlyToman(s, charge, snapshot),
                 startUtc = s.StartUtc,
                 endUtc = s.EndUtc,
             })
@@ -643,9 +671,9 @@ public sealed class OperatorBillService(
         var bill = session.PendingBill
             ?? throw new ApiException(StatusCodes.Status409Conflict, "no_bill", "No bill for this session.");
         var charge = await billing.BuildChargeAsync(session, bill.FrozenAtUtc, ct);
-        var hourlyBySegment = charge.Lines
-            .GroupBy(l => l.SegmentId)
-            .ToDictionary(g => g.Key, g => g.First().HourlyRateToman);
+        var snapshot = session.RateCardSnapshotId != 0
+            ? await rates.LoadSnapshotAsync(session.RateCardSnapshotId, ct)
+            : await rates.LoadAsync(ct);
         var segments = session.Segments
             .OrderBy(s => s.StartUtc)
             .Select(s => new
@@ -653,7 +681,7 @@ public sealed class OperatorBillService(
                 s.SegmentKey,
                 s.PlayerCount,
                 mode = s.Mode.ToString(),
-                hourlyToman = hourlyBySegment.GetValueOrDefault(s.SegmentKey),
+                hourlyToman = DisplayHourlyToman(s, charge, snapshot),
                 startUtc = s.StartUtc,
                 endUtc = s.EndUtc,
             })

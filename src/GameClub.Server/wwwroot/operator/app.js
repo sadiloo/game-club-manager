@@ -455,7 +455,10 @@ document.getElementById("loginBtn").onclick = async () => {
       await refreshPendingWalletTopups();
     }, 10000);
     if (typeof signalR !== "undefined") {
-      const hub = new signalR.HubConnectionBuilder().withUrl("/hubs/operator").withAutomaticReconnect().build();
+      const hub = new signalR.HubConnectionBuilder()
+        .withUrl("/hubs/operator", { withCredentials: true })
+        .withAutomaticReconnect()
+        .build();
       hub.on("gridRefresh", () => refreshGrid().catch(() => {}));
       hub.start().catch(() => {});
     }
@@ -807,17 +810,20 @@ document.getElementById("transferBtn").onclick = async () => {
     const part = () => Math.floor((1 + Math.random()) * 0x10000).toString(16).slice(1);
     return `${part()}${part()}-${part()}-4${part().slice(0, 3)}-a${part().slice(0, 3)}-${part()}${part()}${part()}`;
   })();
-  await api(`/api/operator/sessions/${selectedSessionId}/transfer`, {
-    method: "POST",
-    body: JSON.stringify({
-      targetStationId: String(target).trim(),
-      markSourceBroken,
-      expectedVersion: tile?.rowVersion ?? null,
-      commandId,
-    }),
-  });
-  document.getElementById("sessionActions").classList.add("hidden");
-  await refreshGrid();
+  try {
+    await api(`/api/operator/sessions/${selectedSessionId}/transfer`, {
+      method: "POST",
+      body: JSON.stringify({
+        targetStationId: String(target).trim(),
+        markSourceBroken,
+        expectedVersion: tile?.rowVersion ?? null,
+        commandId,
+      }),
+    });
+    document.getElementById("sessionActions").classList.add("hidden");
+  } finally {
+    await refreshGrid();
+  }
 };
 
 document.getElementById("pauseBtn").onclick = async () => {

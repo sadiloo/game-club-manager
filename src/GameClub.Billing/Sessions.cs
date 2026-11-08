@@ -66,15 +66,15 @@ public static class SessionPricer
 
         var pauses = NormalizePauses(session.Pauses);
         var fragments = new List<Fragment>();
-        long clock = 0;
+        long clockTicks = 0;
         foreach (var segment in session.Segments.OrderBy(s => s.Start).ThenBy(s => s.Id, StringComparer.Ordinal))
         {
             var start = TehranTime.Ensure(segment.Start);
             var end = TehranTime.Ensure(segment.End);
             foreach (var piece in SubtractPauses(start, end, pauses))
             {
-                var seconds = TehranTime.WholeSeconds(piece.Start, piece.End);
-                if (seconds <= 0)
+                var durationTicks = TehranTime.DurationTicks(piece.Start, piece.End);
+                if (durationTicks <= 0)
                 {
                     continue;
                 }
@@ -87,13 +87,14 @@ public static class SessionPricer
                     segment.PlayerCount,
                     piece.Start,
                     piece.End,
-                    clock,
-                    seconds));
-                clock += seconds;
+                    clockTicks,
+                    durationTicks));
+                clockTicks += durationTicks;
             }
         }
 
-        var totalMinutes = MoneyMath.BilledMinutes(clock, policy);
+        var clockSeconds = clockTicks / TimeSpan.TicksPerSecond;
+        var totalMinutes = MoneyMath.BilledMinutes(clockSeconds, policy);
         var blockMinutes = policy.GranularityMinutes;
         var blockCount = totalMinutes / blockMinutes;
         var drafts = new List<SliceDraft>();
@@ -389,42 +390,45 @@ public static class SessionPricer
         SpecialDayCalendar specialDays)
     {
         var blockSeconds = (long)blockMinutes * 60L;
-        var offset = fragment.Offset;
-        var endOffset = offset + fragment.Seconds;
-        var first = CeilDiv(offset, blockSeconds);
-        var last = endOffset <= 0 ? 0 : ((endOffset - 1) / blockSeconds) + 1;
+        var blockTicks = blockSeconds * TimeSpan.TicksPerSecond;
+        var offset = fragment.OffsetTicks;
+        var endOffset = offset + fragment.DurationTicks;
+        var activeSeconds = fragment.DurationTicks / TimeSpan.TicksPerSecond;
+        var first = CeilDiv(offset, blockTicks);
+        var last = endOffset <= 0 ? 0 : ((endOffset - 1) / blockTicks) + 1;
         if (last > blockCount)
         {
             last = blockCount;
         }
         if (first >= last)
         {
-            FoldSeconds(drafts, fragment.End, fragment.Seconds);
+            FoldSeconds(drafts, fragment.End, activeSeconds);
             return;
         }
 
-        var lead = (first * blockSeconds) - offset;
-        if (lead > 0)
+        var leadTicks = (first * blockTicks) - offset;
+        if (leadTicks > 0)
         {
-            FoldSeconds(drafts, TehranTime.AddSeconds(fragment.Start, lead), lead);
+            var leadSeconds = leadTicks / TimeSpan.TicksPerSecond;
+            FoldSeconds(drafts, fragment.Start.AddTicks(leadTicks), leadSeconds);
         }
 
         var cursor = first;
         while (cursor < last)
         {
-            var startDelta = (cursor * blockSeconds) - offset;
-            var wall = TehranTime.AddSeconds(fragment.Start, startDelta);
+            var startDeltaTicks = (cursor * blockTicks) - offset;
+            var wall = fragment.Start.AddTicks(startDeltaTicks);
             var quote = RateResolver.Resolve(rates, specialDays, wall, fragment.GroupId, fragment.Mode, fragment.PlayerCount);
             var boundary = RateBoundaries.Next(wall, rates, fragment.GroupId);
-            var secsToBoundary = TehranTime.WholeSeconds(wall, boundary);
+            var boundaryTicks = TehranTime.DurationTicks(wall, boundary);
             long next;
-            if (secsToBoundary <= 0)
+            if (boundaryTicks <= 0)
             {
                 next = cursor + 1;
             }
             else
             {
-                next = CeilDiv(offset + startDelta + secsToBoundary, blockSeconds);
+                next = CeilDiv(offset + startDeltaTicks + boundaryTicks, blockTicks);
                 if (next <= cursor)
                 {
                     next = cursor + 1;
@@ -442,13 +446,13 @@ public static class SessionPricer
             if (next >= last)
             {
                 lineEnd = fragment.End;
-                seconds = endOffset - (cursor * blockSeconds);
+                seconds = (endOffset - (cursor * blockTicks)) / TimeSpan.TicksPerSecond;
             }
             else
             {
-                var endDelta = (next * blockSeconds) - offset;
-                lineEnd = TehranTime.AddSeconds(fragment.Start, endDelta);
-                seconds = endDelta - startDelta;
+                var endDeltaTicks = (next * blockTicks) - offset;
+                lineEnd = fragment.Start.AddTicks(endDeltaTicks);
+                seconds = (endDeltaTicks - startDeltaTicks) / TimeSpan.TicksPerSecond;
             }
 
             if (minutes > 0 && seconds > 0)
@@ -525,8 +529,8 @@ public static class SessionPricer
             int playerCount,
             DateTimeOffset start,
             DateTimeOffset end,
-            long offset,
-            long seconds)
+            long offsetTicks,
+            long durationTicks)
         {
             SegmentId = segmentId;
             StationId = stationId;
@@ -535,8 +539,8 @@ public static class SessionPricer
             PlayerCount = playerCount;
             Start = start;
             End = end;
-            Offset = offset;
-            Seconds = seconds;
+            OffsetTicks = offsetTicks;
+            DurationTicks = durationTicks;
         }
 
         public string SegmentId { get; }
@@ -553,9 +557,9 @@ public static class SessionPricer
 
         public DateTimeOffset End { get; }
 
-        public long Offset { get; }
+        public long OffsetTicks { get; }
 
-        public long Seconds { get; }
+        public long DurationTicks { get; }
     }
 
     private sealed record SliceDraft(
