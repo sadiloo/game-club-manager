@@ -564,12 +564,57 @@ public sealed class OperatorReportingService(AppDbContext db, OperatorContext op
         return new MethodTotals(cash, card, c2c);
     }
 
+    private sealed record ConfirmedWalletC2CBijection(
+        IReadOnlyDictionary<long, WalletLedgerEntryEntity> PendingIdToLedger,
+        IReadOnlyDictionary<long, PendingWalletTopUpEntity> LedgerIdToPending);
+
+    private async Task<ConfirmedWalletC2CBijection> BuildConfirmedWalletC2CBijectionAsync(CancellationToken ct)
+    {
+        var pendings = await db.PendingWalletTopUps.AsNoTracking()
+            .Where(p => p.Status == PendingWalletTopUpStatus.Confirmed
+                        && p.Method == PaymentMethod.CardToCard)
+            .ToListAsync(ct);
+
+        var ledgers = await db.WalletLedger.AsNoTracking()
+            .Where(w => w.Kind == WalletLedgerKind.TopUpReal
+                        && w.ShiftId == null
+                        && w.Method == PaymentMethod.CardToCard)
+            .ToListAsync(ct);
+
+        static string GroupKey(Guid customerId, long amountToman, string? destinationCardId)
+            => $"{customerId:N}:{amountToman}:{destinationCardId ?? "\0"}";
+
+        var pendingToLedger = new Dictionary<long, WalletLedgerEntryEntity>();
+        var ledgerToPending = new Dictionary<long, PendingWalletTopUpEntity>();
+
+        foreach (var group in pendings.GroupBy(p => GroupKey(p.CustomerId, p.AmountToman, p.DestinationCardId)))
+        {
+            var groupPendings = group.OrderBy(p => p.CreatedAtUtc).ThenBy(p => p.Id).ToList();
+            var groupLedgers = ledgers
+                .Where(w => GroupKey(w.CustomerId, w.RealDeltaToman, w.DestinationCardId) == group.Key)
+                .OrderBy(w => w.AtUtc).ThenBy(w => w.Id)
+                .ToList();
+
+            var pairCount = Math.Min(groupPendings.Count, groupLedgers.Count);
+            for (var i = 0; i < pairCount; i++)
+            {
+                var pending = groupPendings[i];
+                var ledger = groupLedgers[i];
+                pendingToLedger[pending.Id] = ledger;
+                ledgerToPending[ledger.Id] = pending;
+            }
+        }
+
+        return new ConfirmedWalletC2CBijection(pendingToLedger, ledgerToPending);
+    }
+
     private async Task<List<WalletLedgerEntryEntity>> LoadOffWalletTopUpsForCloseAsync(
         CloseRecordEntity close,
         CancellationToken ct)
     {
         var periodStart = close.PeriodOpenedAtUtc;
         var periodEnd = close.ClosedAtUtc;
+        var bijection = await BuildConfirmedWalletC2CBijectionAsync(ct);
 
         var inPeriodRaw = await db.WalletLedger.AsNoTracking()
             .Where(w => w.Kind == WalletLedgerKind.TopUpReal
@@ -587,8 +632,12 @@ public sealed class OperatorReportingService(AppDbContext db, OperatorContext op
                 continue;
             }
 
-            var origin = await FindConfirmedWalletPendingOriginAsync(row, ct);
-            if (origin is not null && origin.CreatedAtUtc >= periodStart && origin.CreatedAtUtc <= periodEnd)
+            if (!bijection.LedgerIdToPending.TryGetValue(row.Id, out var origin))
+            {
+                continue;
+            }
+
+            if (origin.CreatedAtUtc >= periodStart && origin.CreatedAtUtc <= periodEnd)
             {
                 inPeriod.Add(row);
             }
@@ -603,18 +652,15 @@ public sealed class OperatorReportingService(AppDbContext db, OperatorContext op
             .ToListAsync(ct);
         foreach (var pending in originatingPendings)
         {
-            var ledger = await db.WalletLedger.AsNoTracking()
-                .Where(w => w.Kind == WalletLedgerKind.TopUpReal
-                            && w.ShiftId == null
-                            && w.Method == PaymentMethod.CardToCard
-                            && w.CustomerId == pending.CustomerId
-                            && w.RealDeltaToman == pending.AmountToman
-                            && w.WorkingDayYear == close.WorkingDayYear
-                            && w.WorkingDayMonth == close.WorkingDayMonth
-                            && w.WorkingDayDay == close.WorkingDayDay
-                            && w.AtUtc >= periodEnd)
-                .FirstOrDefaultAsync(ct);
-            if (ledger is not null)
+            if (!bijection.PendingIdToLedger.TryGetValue(pending.Id, out var ledger))
+            {
+                continue;
+            }
+
+            if (ledger.AtUtc >= periodEnd
+                && ledger.WorkingDayYear == close.WorkingDayYear
+                && ledger.WorkingDayMonth == close.WorkingDayMonth
+                && ledger.WorkingDayDay == close.WorkingDayDay)
             {
                 lateConfirmed.Add(ledger);
             }
@@ -622,17 +668,6 @@ public sealed class OperatorReportingService(AppDbContext db, OperatorContext op
 
         return inPeriod.Concat(lateConfirmed).DistinctBy(w => w.Id).ToList();
     }
-
-    private async Task<PendingWalletTopUpEntity?> FindConfirmedWalletPendingOriginAsync(
-        WalletLedgerEntryEntity row,
-        CancellationToken ct)
-        => await db.PendingWalletTopUps.AsNoTracking()
-            .Where(p => p.CustomerId == row.CustomerId
-                        && p.AmountToman == row.RealDeltaToman
-                        && p.Method == PaymentMethod.CardToCard
-                        && p.Status == PendingWalletTopUpStatus.Confirmed)
-            .OrderByDescending(p => p.CreatedAtUtc)
-            .FirstOrDefaultAsync(ct);
 
     private async Task<List<object>> BuildDestinationCardsForDayAsync(int year, int month, int day, CancellationToken ct)
     {
