@@ -572,7 +572,8 @@ public sealed class OperatorReportingService(AppDbContext db, OperatorContext op
     {
         var pendings = await db.PendingWalletTopUps.AsNoTracking()
             .Where(p => p.Status == PendingWalletTopUpStatus.Confirmed
-                        && p.Method == PaymentMethod.CardToCard)
+                        && p.Method == PaymentMethod.CardToCard
+                        && p.ShiftId == null)
             .ToListAsync(ct);
 
         var ledgers = await db.WalletLedger.AsNoTracking()
