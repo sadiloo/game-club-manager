@@ -75,6 +75,8 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
 
     public DbSet<CloseRecordEntity> CloseRecords => Set<CloseRecordEntity>();
 
+    public DbSet<SessionCommandEntity> SessionCommands => Set<SessionCommandEntity>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<StationGroupEntity>(e =>
@@ -91,6 +93,7 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             e.HasIndex(x => x.Id).IsUnique();
             e.HasOne(x => x.Group).WithMany().HasForeignKey(x => x.GroupId);
             e.Property(x => x.DefaultPlayMode).HasConversion<string>();
+            e.Property(x => x.OperationalState).HasConversion<string>();
         });
 
         modelBuilder.Entity<CustomerEntity>(e =>
@@ -116,6 +119,7 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
                 .IsRequired(false);
             e.HasOne(x => x.RateCardSnapshot).WithMany().HasForeignKey(x => x.RateCardSnapshotId)
                 .OnDelete(DeleteBehavior.Restrict);
+            e.Property(x => x.RowVersion).IsRowVersion();
         });
 
         modelBuilder.Entity<PlaySegmentEntity>(e =>
@@ -125,6 +129,14 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             e.Property(x => x.Mode).HasConversion<string>();
             e.Property(x => x.Kind).HasConversion<string>();
             e.HasIndex(x => new { x.SessionId, x.SegmentKey }).IsUnique();
+        });
+
+        modelBuilder.Entity<SessionCommandEntity>(e =>
+        {
+            e.ToTable("session_commands");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.SessionId, x.CommandId }).IsUnique();
+            e.HasOne(x => x.Session).WithMany().HasForeignKey(x => x.SessionId);
         });
 
         modelBuilder.Entity<PauseIntervalEntity>(e =>

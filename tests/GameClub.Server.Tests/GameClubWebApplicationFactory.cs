@@ -90,7 +90,7 @@ internal static class S3TestHelpers
 {
     public const string TruncateSql = """
         TRUNCATE invoice_member_effects, loyalty_hour_ledger, wallet_ledger, pending_wallet_topups, customer_packages, package_products, customer_members, branch_member_settings, branch_cafe_settings, close_records, shifts, invoice_catalog_lines, open_sale_lines, open_sales, catalog_items, catalog_categories RESTART IDENTITY CASCADE;
-        TRUNCATE rejected_card_to_card, payment_lines, pending_bills, audit_log, checkpoints, pause_intervals, play_segments, invoices, sessions, customers, rate_card_snapshot, stations, destination_cards RESTART IDENTITY CASCADE;
+        TRUNCATE session_commands, rejected_card_to_card, payment_lines, pending_bills, audit_log, checkpoints, pause_intervals, play_segments, invoices, sessions, customers, rate_card_snapshot, stations, destination_cards RESTART IDENTITY CASCADE;
         TRUNCATE operator_users RESTART IDENTITY CASCADE;
         SELECT setval('invoice_number_seq', 1, false);
         UPDATE invoice_number_sequence SET "NextNumber" = 1;
@@ -165,6 +165,23 @@ internal static class S3TestHelpers
 
     public static Task CheckpointAsync(HttpClient client, Guid sessionId, DateTimeOffset at)
         => client.PostAsJsonAsync($"/api/sessions/{sessionId}/checkpoints", new { at });
+
+    public static Task<HttpResponseMessage> TransferAsync(
+        HttpClient op,
+        Guid sessionId,
+        string targetStationId,
+        bool markSourceBroken = false,
+        uint? expectedVersion = null,
+        Guid? commandId = null)
+        => op.PostAsJsonAsync(
+            $"/api/operator/sessions/{sessionId}/transfer",
+            new
+            {
+                targetStationId,
+                markSourceBroken,
+                expectedVersion,
+                commandId = commandId ?? Guid.NewGuid(),
+            });
 }
 
 internal static class TestTimes

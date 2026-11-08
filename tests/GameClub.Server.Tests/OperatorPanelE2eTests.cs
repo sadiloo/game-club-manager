@@ -798,4 +798,77 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
         Assert.Equal(SessionStatus.Open, (await db.Sessions.SingleAsync(s => s.Id == sessionId)).Status);
         Assert.True(await db.OpenSaleLines.AnyAsync());
     }
+
+    [Fact]
+    public async Task e2e_ss4_fix_r1_stale_version_transfer_refreshes_grid_immediately()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var op = await factory.CreateOperatorClientAsync();
+        await S3TestHelpers.RegisterConsole(_api, op, "STALE-A", 1);
+        await S3TestHelpers.RegisterConsole(_api, op, "STALE-B", 1);
+        await S3TestHelpers.RegisterConsole(_api, op, "STALE-C", 1);
+        factory.Clock.SetTehran(2026, 6, 3, 14, 0);
+        var sessionId = await S3TestHelpers.StartSession(_api, "STALE-A", 1);
+        var page = await LoginAsync(op);
+        await page.ClickAsync(".tile[data-station-id='STALE-A']");
+        await page.WaitForSelectorAsync("#transferBtn:not(.hidden)");
+        (await S3TestHelpers.TransferAsync(op, sessionId, "STALE-B")).EnsureSuccessStatusCode();
+        var gridGets = new List<DateTimeOffset>();
+        page.Request += (_, r) =>
+        {
+            if (r.Method == "GET" && r.Url.Contains("/api/operator/grid", StringComparison.Ordinal))
+            {
+                gridGets.Add(DateTimeOffset.UtcNow);
+            }
+        };
+        var t0 = DateTimeOffset.UtcNow;
+        page.Dialog += (_, d) => d.AcceptAsync("STALE-C");
+        await page.ClickAsync("#transferBtn");
+        var deadline = t0 + TimeSpan.FromSeconds(3);
+        while (DateTimeOffset.UtcNow < deadline && !gridGets.Any(g => g >= t0))
+        {
+            await Task.Delay(50);
+        }
+
+        Assert.Contains(gridGets, g => g >= t0 && g - t0 < TimeSpan.FromSeconds(3));
+    }
+
+    [Fact]
+    public async Task e2e_ss4_fix_r1_operator_pwa_loads_signalr_client()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var op = await factory.CreateOperatorClientAsync();
+        var page = await LoginAsync(op);
+        var signalRLoaded = await page.EvaluateAsync<bool>("() => typeof signalR !== 'undefined'");
+        Assert.True(signalRLoaded);
+    }
+
+    [Fact]
+    public async Task e2e_ss4_console_transfer_source_free_target_playing()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var op = await factory.CreateOperatorClientAsync();
+        await S3TestHelpers.RegisterConsole(_api, op, "PS5-FROM", 1);
+        await S3TestHelpers.RegisterConsole(_api, op, "PS5-TO", 1);
+        factory.Clock.SetTehran(2026, 6, 3, 14, 0);
+        await S3TestHelpers.StartSession(_api, "PS5-FROM", 1);
+        var page = await LoginAsync(op);
+        page.Dialog += (_, d) => d.AcceptAsync("PS5-TO");
+        await page.ClickAsync(".tile[data-station-id='PS5-FROM']");
+        await page.WaitForSelectorAsync("#transferBtn:not(.hidden)");
+        var transferTask = page.WaitForResponseAsync(r =>
+            r.Url.Contains("/transfer", StringComparison.Ordinal) && r.Request.Method == "POST");
+        await page.ClickAsync("#transferBtn");
+        var transferResponse = await transferTask;
+        Assert.True(transferResponse.Ok, await transferResponse.TextAsync());
+        await page.EvaluateAsync("() => refreshGrid()");
+        await page.WaitForFunctionAsync(
+            "() => [...document.querySelectorAll('.tile')].some(t => t.dataset.stationId === 'PS5-TO' && t.dataset.status === 'Playing')",
+            null,
+            new() { Timeout = 5000 });
+        await page.WaitForFunctionAsync(
+            "() => [...document.querySelectorAll('.tile')].some(t => t.dataset.stationId === 'PS5-FROM' && t.dataset.status === 'Free')",
+            null,
+            new() { Timeout = 5000 });
+    }
 }

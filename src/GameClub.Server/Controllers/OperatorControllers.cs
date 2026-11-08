@@ -174,6 +174,37 @@ public sealed class OperatorPanelController(
         return NoContent();
     }
 
+    public sealed record TransferBody(string TargetStationId, bool MarkSourceBroken, uint? ExpectedVersion, Guid CommandId);
+
+    [HttpPost("sessions/{sessionId:guid}/transfer")]
+    public async Task<IActionResult> TransferSession(Guid sessionId, TransferBody body, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(body.TargetStationId))
+        {
+            throw new ApiException(StatusCodes.Status400BadRequest, "target_required", "Target station is required.");
+        }
+
+        if (body.CommandId == Guid.Empty)
+        {
+            throw new ApiException(StatusCodes.Status400BadRequest, "command_required", "Command id is required.");
+        }
+
+        var result = await sessions.TransferAsync(
+            sessionId,
+            body.TargetStationId,
+            body.MarkSourceBroken,
+            body.ExpectedVersion,
+            body.CommandId,
+            ct);
+        return Ok(new
+        {
+            sessionId = result.SessionId,
+            stationId = result.StationId,
+            status = result.Status.ToString(),
+            rowVersion = result.RowVersion,
+        });
+    }
+
     [HttpPost("sessions/{sessionId:guid}/bill/cancel")]
     public async Task<IActionResult> CancelBill(Guid sessionId, CancellationToken ct)
     {

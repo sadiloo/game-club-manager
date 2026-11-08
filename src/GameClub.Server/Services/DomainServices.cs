@@ -2,6 +2,7 @@ using System.Text.Json;
 using GameClub.Billing;
 using GameClub.Server.Data;
 using GameClub.Server.Data.Entities;
+using GameClub.Server.Hubs;
 using GameClub.Server.Operator;
 using GameClub.Server.Time;
 using Microsoft.AspNetCore.Http;
@@ -423,8 +424,30 @@ public sealed class SessionService(
     SessionBilling billing,
     RateConfigService rates,
     OperatorBillService operatorBills,
-    Operator.OperatorShiftGate shiftGate)
+    Operator.OperatorShiftGate shiftGate,
+    IOperatorPanelNotifier panelNotifier)
 {
+    public Task<SessionTransferResult> TransferAsync(
+        Guid sessionId,
+        string targetStationId,
+        bool markSourceBroken,
+        uint? expectedVersion,
+        Guid commandId,
+        CancellationToken ct)
+        => SessionTransferSupport.TransferAsync(
+            db,
+            clock,
+            audit,
+            billing,
+            rates,
+            panelNotifier,
+            sessionId,
+            targetStationId,
+            markSourceBroken,
+            expectedVersion,
+            commandId,
+            ct);
+
     public async Task<PlaySessionEntity> StartAsync(string stationId, int playerCount, PlayMode mode, DateTimeOffset? startedAt, CancellationToken ct)
     {
         if (startedAt.HasValue)
@@ -456,6 +479,11 @@ public sealed class SessionService(
             if (!station.IsActive)
             {
                 throw new ApiException(StatusCodes.Status409Conflict, "inactive", "Station is deactivated.");
+            }
+
+            if (station.OperationalState != StationOperationalState.Available)
+            {
+                throw new ApiException(StatusCodes.Status409Conflict, "target_unavailable", "Station cannot accept a new session.");
             }
 
             if (await db.Sessions.AnyAsync(

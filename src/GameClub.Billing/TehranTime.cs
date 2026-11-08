@@ -86,13 +86,21 @@ public static class TehranTime
     {
         start = Ensure(start);
         end = Ensure(end);
+        var ticks = DurationTicks(start, end);
+        return ticks / TimeSpan.TicksPerSecond;
+    }
+
+    public static long DurationTicks(DateTimeOffset start, DateTimeOffset end)
+    {
+        start = Ensure(start);
+        end = Ensure(end);
         var ticks = (end - start).Ticks;
         if (ticks < 0)
         {
             throw new BillingException(BillingErrors.InvalidTime, "End is before start.");
         }
 
-        return ticks / TimeSpan.TicksPerSecond;
+        return ticks;
     }
 
     public static DateTimeOffset AddSeconds(DateTimeOffset value, long seconds)

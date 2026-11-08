@@ -4,6 +4,7 @@
   <meta charset="utf-8" />
   <title>چک‌پوینت — اپراتور</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <script src="/operator/lib/signalr.min.js"></script>
   <style>
     body { font-family: system-ui, Tahoma, sans-serif; margin: 1rem; max-width: 1040px; }
     #grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 0.5rem; }
@@ -14,6 +15,8 @@
     .tile[data-status="Waiting for payment"] { background: #e3f2fd; }
     .tile[data-status="Manual settle"] { background: #fce4ec; }
     .tile[data-status="Buffet only"] { background: #f3e5f5; }
+    .tile[data-status="Broken"] { background: #ffcdd2; }
+    .tile[data-status="Reserved"] { background: #e1bee7; }
     .buffet-icon { position: absolute; left: 6px; top: 6px; font-size: 1.1rem; border: none; background: #fff; border-radius: 6px; cursor: pointer; padding: 0.15rem 0.35rem; }
     .hidden { display: none; }
     #error { color: #b00020; white-space: pre-wrap; }
@@ -97,6 +100,8 @@
       </label>
       <button id="playerCountBtn" type="button">تغییر تعداد</button>
       <button id="openBillBtn" type="button">باز کردن صورتحساب</button>
+      <button id="transferBtn" type="button" class="hidden">پرش ایستگاه</button>
+      <label id="transferFaultWrap" class="hidden"><input type="checkbox" id="transferFaultChk" /> ایستگاه مبدأ خراب</label>
       <button id="opSellPackageBtn" type="button">فروش بسته</button>
     </section>
 
