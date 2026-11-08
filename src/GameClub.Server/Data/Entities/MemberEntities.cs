@@ -110,6 +110,14 @@ public sealed class WalletLedgerEntryEntity
     public Guid? InvoiceId { get; set; }
 
     public Guid? ActorUserId { get; set; }
+
+    public Guid? ShiftId { get; set; }
+
+    public int? WorkingDayYear { get; set; }
+
+    public int? WorkingDayMonth { get; set; }
+
+    public int? WorkingDayDay { get; set; }
 }
 
 public sealed class PendingWalletTopUpEntity
@@ -133,6 +141,8 @@ public sealed class PendingWalletTopUpEntity
     public DateTime CreatedAtUtc { get; set; }
 
     public Guid? ActorUserId { get; set; }
+
+    public Guid? ShiftId { get; set; }
 }
 
 public sealed class CustomerPackageEntity

@@ -446,6 +446,8 @@ document.getElementById("loginBtn").onclick = async () => {
     await refreshManualSettle();
     await refreshPendingC2c();
     await refreshPendingWalletTopups();
+    await refreshShiftState();
+    await refreshCafeSettingsUi();
     setInterval(async () => {
       await refreshGrid();
       await refreshLowStock();
@@ -1102,3 +1104,420 @@ async function sellPackageFlow() {
 }
 
 bindClick("opSellPackageBtn", () => sellPackageFlow().catch(showError));
+
+async function refreshShiftState() {
+  const state = await api("/api/operator/shift/state");
+  const el = document.getElementById("shiftState");
+  if (!el) return;
+  const open = state.openShift;
+  el.textContent = state.shiftsEnabled
+    ? open ? `شیفت باز — تنخواه ${open.openingFloatToman}` : "شیفت بسته است"
+    : "حالت روزکاری (بدون شیفت)";
+}
+
+bindClick("openShiftBtn", async () => {
+  const raw = window.prompt("تنخواه (تومان)", "0");
+  const openingFloatToman = Number(String(raw || "0").replace(/,/g, ""));
+  await api("/api/operator/shift/open", { method: "POST", body: JSON.stringify({ openingFloatToman }) });
+  await refreshShiftState();
+});
+
+let closeBaseExpectedCash = 0;
+let closeSettleExtraToman = 0;
+let closePreviewMeta = null;
+
+function closeDisplayExpectedCash() {
+  return closeBaseExpectedCash + closeSettleExtraToman;
+}
+
+function refreshClosePreviewSummary() {
+  const el = document.getElementById("closePreviewSummary");
+  if (!el || !closePreviewMeta) return;
+  const e = closePreviewMeta.expected || {};
+  const cashExpected = closeDisplayExpectedCash();
+  const dest = (closePreviewMeta.destinationCards || [])
+    .map((d) => `${d.destinationCardId}: ${d.totalToman}`)
+    .join("؛ ");
+  const pendInv = (closePreviewMeta.pendingCardToCard || [])
+    .map((p) => `فاکتور ${p.invoiceNumber ?? "—"} → ${p.destinationCardId ?? "—"} ${p.amountToman}`)
+    .join("؛ ");
+  const pendWal = (closePreviewMeta.pendingWalletTopUps || [])
+    .map((p) => `کیف → ${p.destinationCardId ?? "—"} ${p.amountToman}`)
+    .join("؛ ");
+  const pendParts = [pendInv, pendWal].filter(Boolean).join(" | ");
+  el.textContent =
+    `مورد انتظار: نقد ${cashExpected} | کارتخوان ${e.cardReaderExpected ?? 0} | کارت‌به‌کارت تأییدشده ${e.cardToCardConfirmedExpected ?? 0} | معلق ${e.cardToCardPending ?? 0} | مقصد: ${dest || "—"} | C2C معلق: ${pendParts || "—"}`;
+}
+
+function recalcCloseExpectedCash() {
+  refreshClosePreviewSummary();
+}
+
+async function jalaliToGregorian(jy, jm, jd) {
+  return api(`/api/operator/shift/jalali/${jy}/${jm}/${jd}`);
+}
+
+async function gregorianToJalali(gy, gm, gd) {
+  return api(`/api/operator/shift/gregorian/${gy}/${gm}/${gd}`);
+}
+
+function aggregateIncomeBreakdowns(body) {
+  function collectDayRows(node) {
+    if (!node) return [];
+    if (Array.isArray(node.days) && node.days.length > 0) {
+      return node.days.flatMap(collectDayRows);
+    }
+    return [node];
+  }
+
+  const dayRows = body?.days ? collectDayRows(body) : body ? [body] : [];
+  const byStation = {};
+  const byOperator = {};
+  const destinationCards = {};
+
+  for (const row of dayRows) {
+    for (const s of row.byStation || []) {
+      byStation[s.stationId] = (byStation[s.stationId] || 0) + Number(s.receivedMoneyToman || 0);
+    }
+    for (const o of row.byOperator || []) {
+      byOperator[o.operatorId] = (byOperator[o.operatorId] || 0) + Number(o.receivedMoneyToman || 0);
+    }
+    for (const c of row.destinationCards || []) {
+      destinationCards[c.destinationCardId] =
+        (destinationCards[c.destinationCardId] || 0) + Number(c.totalToman || 0);
+    }
+  }
+
+  return {
+    byStation: Object.entries(byStation).map(([stationId, receivedMoneyToman]) => ({
+      stationId,
+      receivedMoneyToman,
+    })),
+    byOperator: Object.entries(byOperator).map(([operatorId, receivedMoneyToman]) => ({
+      operatorId,
+      receivedMoneyToman,
+    })),
+    destinationCards: Object.entries(destinationCards).map(([destinationCardId, totalToman]) => ({
+      destinationCardId,
+      totalToman,
+    })),
+  };
+}
+
+function gregorianDayRangeUtc(g) {
+  const from = new Date(Date.UTC(g.year, g.month - 1, g.day, -3, -30, 0));
+  const to = new Date(Date.UTC(g.year, g.month - 1, g.day, 20, 29, 59));
+  return { fromUtc: from.toISOString(), toUtc: to.toISOString() };
+}
+
+function renderReportsTable(title, headers, rows) {
+  const head = headers.map((h) => `<th>${h}</th>`).join("");
+  const body = rows.map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join("")}</tr>`).join("");
+  return `<h3>${title}</h3><table dir="rtl" border="1" cellpadding="4"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+}
+
+function renderIncomeSummary(body) {
+  const rollup = aggregateIncomeBreakdowns(body);
+  const merged = {
+    ...body,
+    byStation: body.byStation?.length ? body.byStation : rollup.byStation,
+    byOperator: body.byOperator?.length ? body.byOperator : rollup.byOperator,
+    destinationCards: body.destinationCards?.length ? body.destinationCards : rollup.destinationCards,
+  };
+  const categories = renderReportsTable(
+    "ستون‌های درآمد",
+    ["بازی", "بوفه", "خدمات", "گرد کردن", "خدمت ویژه", "بسته", "شارژ کیف", "دریافتی", "نقد", "کارتخوان", "کارت‌به‌کارت"],
+    [
+      [
+        merged.playToman ?? 0,
+        merged.buffetToman ?? 0,
+        merged.servicesToman ?? 0,
+        merged.roundingToman ?? 0,
+        merged.surchargeToman ?? 0,
+        merged.packageSalesToman ?? 0,
+        merged.walletTopUpToman ?? 0,
+        merged.receivedMoneyToman ?? 0,
+        merged.receivedCashToman ?? 0,
+        merged.receivedCardReaderToman ?? 0,
+        merged.receivedCardToCardToman ?? 0,
+      ],
+    ]
+  );
+  const byStation = (merged.byStation || []).map((s) => [s.stationId, s.receivedMoneyToman]);
+  const byOperator = (merged.byOperator || []).map((o) => [o.operatorId, o.receivedMoneyToman]);
+  const dest = (merged.destinationCards || []).map((d) => [d.destinationCardId, d.totalToman]);
+  return (
+    categories +
+    renderReportsTable("بر اساس ایستگاه", ["ایستگاه", "دریافتی"], byStation.length ? byStation : [["—", 0]]) +
+    renderReportsTable("بر اساس اپراتور", ["اپراتور", "دریافتی"], byOperator.length ? byOperator : [["—", 0]]) +
+    renderReportsTable("کارت مقصد", ["کارت", "جمع"], dest.length ? dest : [["—", 0]])
+  );
+}
+
+const historyTableHeaders = [
+  "شماره",
+  "وضعیت",
+  "مبلغ",
+  "ایستگاه",
+  "تسویه‌کننده",
+  "سال",
+  "ماه",
+  "روز",
+  "پرداخت‌ها",
+  "یادداشت",
+  "علت باطل",
+];
+
+async function historyRowsFromApi(rows) {
+  const out = [];
+  for (const r of rows || []) {
+    const wd = r.workingDay;
+    let year = "—";
+    let month = "—";
+    let day = "—";
+    const gy = wd?.workingDayYear ?? wd?.year;
+    const gm = wd?.workingDayMonth ?? wd?.month;
+    const gd = wd?.workingDayDay ?? wd?.day;
+    if (gy != null && gm != null && gd != null) {
+      const jalali = await gregorianToJalali(gy, gm, gd);
+      year = jalali.year;
+      month = jalali.month;
+      day = jalali.day;
+    }
+    const payments = (r.payments || [])
+      .map((p) => `${p.method}:${p.amountToman}:${p.status ?? ""}`)
+      .join("|");
+    out.push([
+      r.number,
+      r.status,
+      r.collectibleToman,
+      r.stationId ?? "—",
+      r.settledByUserId ?? "—",
+      year,
+      month,
+      day,
+      payments,
+      r.operatorNote ?? "",
+      r.voidReason ?? "",
+    ]);
+  }
+  return out;
+}
+
+async function historyQuery() {
+  const q = new URLSearchParams();
+  const fromJy = Number(document.getElementById("histFromJy")?.value);
+  const fromJm = Number(document.getElementById("histFromJm")?.value);
+  const fromJd = Number(document.getElementById("histFromJd")?.value);
+  const toJy = Number(document.getElementById("histToJy")?.value);
+  const toJm = Number(document.getElementById("histToJm")?.value);
+  const toJd = Number(document.getElementById("histToJd")?.value);
+  if (fromJy && fromJm && fromJd) {
+    const g = await jalaliToGregorian(fromJy, fromJm, fromJd);
+    q.set("fromUtc", gregorianDayRangeUtc(g).fromUtc);
+  }
+  if (toJy && toJm && toJd) {
+    const g = await jalaliToGregorian(toJy, toJm, toJd);
+    q.set("toUtc", gregorianDayRangeUtc(g).toUtc);
+  }
+  const st = document.getElementById("histStation")?.value?.trim();
+  const cust = document.getElementById("histCustomer")?.value?.trim();
+  const oper = document.getElementById("histOperator")?.value?.trim();
+  const meth = document.getElementById("histMethod")?.value?.trim();
+  if (st) q.set("stationId", st);
+  if (cust) q.set("customerId", cust);
+  if (oper) q.set("operatorId", oper);
+  if (meth) q.set("method", meth);
+  const s = q.toString();
+  return s ? `?${s}` : "";
+}
+
+function renderCloseSessions(openSessions) {
+  const host = document.getElementById("closeSessionList");
+  if (!host) return;
+  closeSettleExtraToman = 0;
+  if (!openSessions?.length) {
+    host.innerHTML = "<p>جلسهٔ بازی باز نیست.</p>";
+    return;
+  }
+  host.innerHTML = openSessions
+    .map(
+      (s) => `<div data-session="${s.sessionId}">
+        <strong>${s.stationId}</strong> — ${s.status}
+        <button type="button" data-action="settle" data-session="${s.sessionId}">تسویه در همین بستن</button>
+        <button type="button" data-action="carry" data-session="${s.sessionId}">انتقال به دوره بعد</button>
+      </div>`
+    )
+    .join("");
+  host.querySelectorAll("button[data-action]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const sid = btn.getAttribute("data-session");
+      const row = host.querySelector(`div[data-session="${sid}"]`);
+      if (!row) return;
+      const action = btn.getAttribute("data-action");
+      if (action === "settle") {
+        try {
+          const bill = await api(`/api/operator/sessions/${sid}/close-settle-preview`);
+          const prev = Number(row.dataset.settleAmount || 0);
+          const next = Number(bill.collectibleToman || 0);
+          closeSettleExtraToman += next - prev;
+          row.dataset.settleAmount = String(next);
+          row.dataset.choice = "settle";
+          row.style.outline = "2px solid #1565c0";
+          recalcCloseExpectedCash();
+        } catch (e) {
+          showError(String(e.message || e));
+        }
+      } else {
+        const prev = Number(row.dataset.settleAmount || 0);
+        if (row.dataset.choice === "settle") {
+          closeSettleExtraToman -= prev;
+          delete row.dataset.settleAmount;
+          recalcCloseExpectedCash();
+        }
+        row.dataset.choice = "carry";
+        row.style.outline = "2px solid #1565c0";
+      }
+    });
+  });
+}
+
+function collectSessionActions() {
+  const host = document.getElementById("closeSessionList");
+  if (!host) return [];
+  const rows = [...host.querySelectorAll("div[data-session]")];
+  if (rows.length === 0) return [];
+  if (rows.some((row) => !row.dataset.choice)) {
+    return null;
+  }
+  return rows.map((row) => ({
+    sessionId: row.getAttribute("data-session"),
+    action: row.dataset.choice,
+  }));
+}
+
+bindClick("closePreviewBtn", async () => {
+  const preview = await api("/api/operator/shift/close/preview");
+  renderCloseSessions(preview.openSessions);
+  const e = preview.expected || {};
+  closeBaseExpectedCash = Number(e.cashExpected ?? 0);
+  closeSettleExtraToman = 0;
+  closePreviewMeta = preview;
+  refreshClosePreviewSummary();
+  document.getElementById("closeReader").value = e.cardReaderExpected ?? 0;
+});
+
+bindClick("closeShiftBtn", async () => {
+  const sessionActions = collectSessionActions();
+  if (sessionActions === null) {
+    showError("برای هر جلسهٔ باز باید «تسویه» یا «انتقال» را انتخاب کنید.");
+    return;
+  }
+  const jy = Number(document.getElementById("closeJy").value);
+  const jm = Number(document.getElementById("closeJm").value);
+  const jd = Number(document.getElementById("closeJd").value);
+  const g = await jalaliToGregorian(jy, jm, jd);
+  const actualCashToman = Number(String(document.getElementById("closeCash").value || "0").replace(/,/g, ""));
+  const actualCardReaderToman = Number(String(document.getElementById("closeReader").value || "0").replace(/,/g, ""));
+  const discrepancyExplanation = document.getElementById("closeExpl").value.trim() || null;
+  await api("/api/operator/shift/close", {
+    method: "POST",
+    body: JSON.stringify({
+      workingDay: g,
+      actualCashToman,
+      actualCardReaderToman,
+      discrepancyExplanation,
+      sessionActions,
+    }),
+  });
+  await refreshShiftState();
+  document.getElementById("closePreviewSummary").textContent = "";
+  renderCloseSessions([]);
+});
+
+bindClick("saveCafeSettingsBtn", async () => {
+  await api("/api/operator/shift/settings", {
+    method: "PUT",
+    body: JSON.stringify({
+      shiftsEnabled: document.getElementById("shiftsEnabledToggle").checked,
+      multiOperatorEnabled: document.getElementById("multiOperatorToggle").checked,
+    }),
+  });
+});
+
+bindClick("dailyIncomeBtn", async () => {
+  const jy = Number(document.getElementById("repJy").value);
+  const jm = Number(document.getElementById("repJm").value);
+  const jd = Number(document.getElementById("repJd").value);
+  const g = await jalaliToGregorian(jy, jm, jd);
+  const body = await api(`/api/operator/reports/income/daily?year=${g.year}&month=${g.month}&day=${g.day}`);
+  document.getElementById("reportsOut").innerHTML = renderIncomeSummary(body);
+});
+bindClick("monthlyIncomeBtn", async () => {
+  const jy = Number(document.getElementById("repJy").value);
+  const jm = Number(document.getElementById("repJm").value);
+  const body = await api(`/api/operator/reports/income/monthly?year=${jy}&month=${jm}`);
+  document.getElementById("reportsOut").innerHTML = renderIncomeSummary(body);
+});
+bindClick("yearlyIncomeBtn", async () => {
+  const jy = Number(document.getElementById("repJy").value);
+  const body = await api(`/api/operator/reports/income/yearly?year=${jy}`);
+  document.getElementById("reportsOut").innerHTML = renderIncomeSummary(body);
+});
+bindClick("usageBtn", async () => {
+  const from = await jalaliToGregorian(
+    Number(document.getElementById("usageFromJy").value),
+    Number(document.getElementById("usageFromJm").value),
+    Number(document.getElementById("usageFromJd").value)
+  );
+  const to = await jalaliToGregorian(
+    Number(document.getElementById("usageToJy").value),
+    Number(document.getElementById("usageToJm").value),
+    Number(document.getElementById("usageToJd").value)
+  );
+  const range = gregorianDayRangeUtc(from);
+  const rangeTo = gregorianDayRangeUtc(to);
+  const body = await api(
+    `/api/operator/reports/usage?fromUtc=${encodeURIComponent(range.fromUtc)}&toUtc=${encodeURIComponent(rangeTo.toUtc)}`
+  );
+  const stations = (body.byStation || []).map((s) => [s.stationId, s.durationSeconds]);
+  const peaks = (body.peakHours || []).map((h) => [h.hour, h.durationSeconds]);
+  document.getElementById("reportsOut").innerHTML =
+    renderReportsTable("مصرف ایستگاه (ثانیه)", ["ایستگاه", "مدت"], stations.length ? stations : [["—", 0]]) +
+    renderReportsTable(
+      "ساعات اوج تهران",
+      ["ساعت", "مدت (ثانیه)"],
+      peaks.length ? peaks : [["—", 0]]
+    );
+});
+bindClick("cu8Btn", async () => {
+  const body = await api("/api/operator/reports/wallet/cu8");
+  document.getElementById("reportsOut").innerHTML = renderReportsTable("CU-8", ["نقد", "هدیه", "هدایای صادرشده"], [
+    [body.realMoneyLiabilityToman, body.giftCreditLiabilityToman, body.giftsIssuedToman],
+  ]);
+});
+bindClick("historyBtn", async () => {
+  const rows = await api(`/api/operator/reports/history${await historyQuery()}`);
+  const table = await historyRowsFromApi(rows);
+  document.getElementById("reportsOut").innerHTML = renderReportsTable(
+    "تاریخچه",
+    historyTableHeaders,
+    table.length ? table : [historyTableHeaders.map(() => "—")]
+  );
+});
+bindClick("exportHistoryBtn", async () => {
+  const res = await fetch(`/api/operator/reports/history/export${await historyQuery()}`, { credentials: "include" });
+  const text = await res.text();
+  document.getElementById("reportsOut").innerHTML = `<h3>خروجی CSV</h3><pre>${text.replace(/</g, "&lt;")}</pre>`;
+});
+
+async function refreshCafeSettingsUi() {
+  const state = await api("/api/operator/shift/state");
+  const isMgr = currentRole === "Manager" || currentRole === "Owner";
+  document.getElementById("cafeSettings").classList.toggle("hidden", !isMgr);
+  document.getElementById("reportsPanel").classList.toggle("hidden", !isMgr);
+  if (isMgr) {
+    document.getElementById("shiftsEnabledToggle").checked = !!state.shiftsEnabled;
+    document.getElementById("multiOperatorToggle").checked = !!state.multiOperatorEnabled;
+  }
+}

@@ -135,7 +135,8 @@ public sealed class OperatorBillService(
     SessionBilling billing,
     SessionCloser closer,
     OperatorPolicies policies,
-    OperatorMemberContext memberContext)
+    OperatorMemberContext memberContext,
+    OperatorShiftGate shiftGate)
 {
     private static bool UsesWallet(IReadOnlyList<PaymentInput> payments)
         => payments.Any(p => OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet);
@@ -340,6 +341,135 @@ public sealed class OperatorBillService(
             await ApplyAmountsToBillAsync(session, bill, innerCt);
             await audit.AppendAsync("bill.surcharge", new { sessionId, reason, bill.SurchargeToman }, innerCt);
         }, ct);
+    }
+
+    public async Task<InvoiceEntity> SettleSessionDuringCloseAsync(Guid sessionId, CancellationToken ct)
+    {
+        await db.Database.ExecuteSqlRawAsync(
+            """SELECT "Id" FROM sessions WHERE "Id" = {0} FOR UPDATE""",
+            sessionId);
+        var session = await db.Sessions
+            .Include(s => s.Station)!.ThenInclude(st => st!.Group)
+            .Include(s => s.Segments)
+            .Include(s => s.Pauses)
+            .Include(s => s.PendingBill)
+            .FirstOrDefaultAsync(s => s.Id == sessionId, ct)
+            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Session not found.");
+        if (session.Status is SessionStatus.Open or SessionStatus.Paused)
+        {
+            await OpenBillForCloseSettleAsync(session, ct);
+        }
+
+        var bill = session.PendingBill
+            ?? throw new ApiException(StatusCodes.Status409Conflict, "no_bill", "No bill for this session.");
+        if (session.Status is not SessionStatus.BillOpen and not SessionStatus.AwaitingPayment)
+        {
+            throw new ApiException(StatusCodes.Status409Conflict, "invalid_state", "Session is not awaiting settlement.");
+        }
+
+        var saleLines = await LoadSaleLinesAsync(session.Id, ct);
+        var amounts = await calculator.ComputeAsync(session, bill.FrozenAtUtc, bill.SurchargeToman, saleLines, ct);
+        var payments = new List<PaymentInput> { new("Cash", amounts.CollectibleToman, null, null) };
+        var invoice = await ConfirmBillCoreAsync(session, bill, payments, amounts, saleLines, ct);
+        await audit.AppendAsync("bill.confirm", new { sessionId, invoiceNumber = invoice.Number, collectible = invoice.CollectibleToman, atClose = true }, ct);
+        return invoice;
+    }
+
+    public async Task<object> PreviewCloseSettleCollectibleAsync(Guid sessionId, CancellationToken ct)
+    {
+        var session = await db.Sessions.AsNoTracking()
+            .Include(s => s.Station)!.ThenInclude(st => st!.Group)
+            .Include(s => s.Segments)
+            .Include(s => s.Pauses)
+            .Include(s => s.PendingBill)
+            .FirstOrDefaultAsync(s => s.Id == sessionId, ct)
+            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Session not found.");
+        if (session.Status == SessionStatus.Closed)
+        {
+            throw new ApiException(StatusCodes.Status409Conflict, "invalid_state", "Session is already closed.");
+        }
+
+        if (session.PendingBill is PendingBillEntity existing)
+        {
+            return new { collectibleToman = existing.CollectibleToman };
+        }
+
+        if (session.Status is not SessionStatus.Open and not SessionStatus.Paused)
+        {
+            throw new ApiException(StatusCodes.Status409Conflict, "no_bill", "No bill for this session.");
+        }
+
+        var endUtc = session.EndedAtUtc ?? clock.UtcNow.UtcDateTime;
+        foreach (var seg in session.Segments.Where(s => s.EndUtc is null))
+        {
+            seg.EndUtc = endUtc;
+        }
+
+        var saleLines = await LoadSaleLinesAsync(sessionId, ct);
+        var amounts = await calculator.ComputeAsync(session, endUtc, 0, saleLines, ct);
+        return new { collectibleToman = amounts.CollectibleToman };
+    }
+
+    private async Task OpenBillForCloseSettleAsync(PlaySessionEntity session, CancellationToken ct)
+    {
+        if (session.PendingBill is not null)
+        {
+            return;
+        }
+
+        var endUtc = session.EndedAtUtc ?? clock.UtcNow.UtcDateTime;
+        if (session.EndedAtUtc is null)
+        {
+            session.EndedAtUtc = endUtc;
+            foreach (var seg in session.Segments.Where(s => s.EndUtc is null))
+            {
+                seg.EndUtc = endUtc;
+            }
+        }
+
+        if (session.Station!.Group!.Kind == StationKind.Console)
+        {
+            var frozenAt = endUtc;
+            var revert = CaptureRevertState(session);
+            ApplyPlayEnd(session, frozenAt);
+            var saleLines = await LoadSaleLinesAsync(session.Id, ct);
+            var amounts = await calculator.ComputeAsync(session, frozenAt, 0, saleLines, ct);
+            var bill = new PendingBillEntity
+            {
+                Id = Guid.NewGuid(),
+                SessionId = session.Id,
+                FrozenAtUtc = frozenAt,
+                OpenedAtUtc = frozenAt,
+                UnroundedPayableToman = amounts.UnroundedPayableToman,
+                RoundingToman = amounts.RoundingToman,
+                CollectibleToman = amounts.CollectibleToman,
+                TimeGrossToman = amounts.TimeGrossToman,
+                BuffetGrossToman = amounts.BuffetGrossToman,
+                ServicesGrossToman = amounts.ServicesGrossToman,
+                Source = "close_settle",
+                RevertStateJson = JsonSerializer.Serialize(revert),
+            };
+            session.Status = SessionStatus.BillOpen;
+            session.PendingBill = bill;
+            db.PendingBills.Add(bill);
+        }
+        else
+        {
+            _ = await CreatePcPendingBillAsync(session, endUtc, "close_settle", "close", ct);
+            session.Status = SessionStatus.BillOpen;
+        }
+    }
+
+    private async Task<InvoiceEntity> ConfirmBillCoreAsync(
+        PlaySessionEntity session,
+        PendingBillEntity bill,
+        IReadOnlyList<PaymentInput> payments,
+        BillAmounts amounts,
+        IReadOnlyList<OpenSaleLineEntity> saleLines,
+        CancellationToken ct)
+    {
+        ValidatePayments(amounts.CollectibleToman, payments, amounts.Detail, session.CustomerId);
+        return await closer.FinalizeFromPendingAsync(session, bill, payments, amounts, ct);
     }
 
     public async Task<InvoiceEntity> ConfirmBillAsync(Guid sessionId, IReadOnlyList<PaymentInput> payments, CancellationToken ct)
@@ -620,11 +750,12 @@ public sealed class OperatorBillService(
             await using var tx = await db.Database.BeginTransactionAsync(ct);
             try
             {
+                await shiftGate.EnsureOpenShiftForMoneyAsync(ct);
                 await db.Database.ExecuteSqlRawAsync(
                     """SELECT "Id" FROM sessions WHERE "Id" = {0} FOR UPDATE NOWAIT""",
                     sessionId);
             }
-            catch (Exception ex) when (PostgresErrors.IsLockNotAvailable(ex))
+            catch (Exception ex) when (PostgresErrors.IsLockNotAvailable(ex) || PostgresErrors.IsDeadlock(ex))
             {
                 throw new ApiException(StatusCodes.Status409Conflict, "session_busy", "Session is being updated.");
             }
@@ -646,6 +777,10 @@ public sealed class OperatorBillService(
             catch (DbUpdateConcurrencyException) when (policies.ConcurrentBillActionReturns409)
             {
                 throw new ApiException(StatusCodes.Status409Conflict, "stale_bill", "Bill was updated elsewhere; refresh and retry.");
+            }
+            catch (Exception ex) when (PostgresErrors.IsDeadlock(ex))
+            {
+                throw new ApiException(StatusCodes.Status409Conflict, "session_busy", "Session is being updated.");
             }
         });
     }
@@ -828,6 +963,21 @@ public sealed class OperatorInvoiceService(
             .FirstOrDefaultAsync(i => i.Number == number, ct)
             ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Invoice not found.");
         return invoice;
+    }
+
+    public async Task SetOperatorNoteAsync(long number, string? note, CancellationToken ct)
+    {
+        if (context.Role == UserRole.Operator || context.Role is UserRole.Manager or UserRole.Owner)
+        {
+            var invoice = await db.Invoices.FirstOrDefaultAsync(i => i.Number == number, ct)
+                ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Invoice not found.");
+            invoice.OperatorNote = string.IsNullOrWhiteSpace(note) ? null : note.Trim();
+            await audit.AppendAsync("invoice.operator_note", new { number, note = invoice.OperatorNote }, ct);
+            await db.SaveChangesAsync(ct);
+            return;
+        }
+
+        throw new ApiException(StatusCodes.Status403Forbidden, "forbidden", "Not allowed.");
     }
 
     public async Task VoidAsync(long number, string? reason, CancellationToken ct)

@@ -54,11 +54,27 @@ public static class PostgresErrors
         return false;
     }
 
+    public static bool IsCloseRecordShiftUniqueViolation(DbUpdateException ex)
+        => IsUniqueViolation(ex, "IX_close_records_ShiftId");
+
     public static bool IsLockNotAvailable(Exception ex)
     {
         for (Exception? current = ex; current is not null; current = current.InnerException)
         {
             if (current is PostgresException pg && pg.SqlState == PostgresErrorCodes.LockNotAvailable)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    public static bool IsDeadlock(Exception ex)
+    {
+        for (Exception? current = ex; current is not null; current = current.InnerException)
+        {
+            if (current is PostgresException pg && pg.SqlState == PostgresErrorCodes.DeadlockDetected)
             {
                 return true;
             }

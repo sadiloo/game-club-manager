@@ -89,7 +89,7 @@ public class GameClubWebApplicationFactory : WebApplicationFactory<Program>
 internal static class S3TestHelpers
 {
     public const string TruncateSql = """
-        TRUNCATE invoice_member_effects, loyalty_hour_ledger, wallet_ledger, pending_wallet_topups, customer_packages, package_products, customer_members, branch_member_settings, invoice_catalog_lines, open_sale_lines, open_sales, catalog_items, catalog_categories RESTART IDENTITY CASCADE;
+        TRUNCATE invoice_member_effects, loyalty_hour_ledger, wallet_ledger, pending_wallet_topups, customer_packages, package_products, customer_members, branch_member_settings, branch_cafe_settings, close_records, shifts, invoice_catalog_lines, open_sale_lines, open_sales, catalog_items, catalog_categories RESTART IDENTITY CASCADE;
         TRUNCATE rejected_card_to_card, payment_lines, pending_bills, audit_log, checkpoints, pause_intervals, play_segments, invoices, sessions, customers, rate_card_snapshot, stations, destination_cards RESTART IDENTITY CASCADE;
         TRUNCATE operator_users RESTART IDENTITY CASCADE;
         SELECT setval('invoice_number_seq', 1, false);
@@ -110,6 +110,18 @@ internal static class S3TestHelpers
     {
         var op = await factory.CreateOperatorClientAsync();
         await ConfirmCashAsync(op, sessionId, amountToman);
+    }
+
+    public static async Task EnableShiftsAsync(HttpClient manager, bool enabled = true)
+    {
+        var response = await manager.PutAsJsonAsync("/api/operator/shift/settings", new { shiftsEnabled = enabled });
+        response.EnsureSuccessStatusCode();
+    }
+
+    public static async Task OpenShiftAsync(HttpClient op, long openingFloatToman = 0)
+    {
+        var response = await op.PostAsJsonAsync("/api/operator/shift/open", new { openingFloatToman = openingFloatToman });
+        response.EnsureSuccessStatusCode();
     }
 
     public static async Task ConfirmCashAsync(HttpClient op, Guid sessionId, long amountToman)

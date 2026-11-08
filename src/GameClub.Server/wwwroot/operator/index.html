@@ -143,6 +143,52 @@
       <button id="cancelBillBtn" type="button">لغو صورتحساب</button>
     </section>
 
+    <section id="shiftPanel" class="panel">
+      <h2>شیفت / اتمام روزکاری</h2>
+      <p id="shiftState"></p>
+      <div id="cafeSettings" class="hidden">
+        <label><input type="checkbox" id="shiftsEnabledToggle" /> شیفت فعال</label>
+        <label><input type="checkbox" id="multiOperatorToggle" /> چند اپراتور / کشوی مشترک</label>
+        <button id="saveCafeSettingsBtn" type="button">ذخیره تنظیمات</button>
+      </div>
+      <button id="openShiftBtn" type="button">باز کردن شیفت</button>
+      <button id="closePreviewBtn" type="button">پیش‌نمایش بستن</button>
+      <div id="closeSessionList"></div>
+      <label>روزکاری (شمسی) سال <input id="closeJy" type="number" /></label>
+      <label>ماه <input id="closeJm" type="number" /></label>
+      <label>روز <input id="closeJd" type="number" /></label>
+      <label>نقد شمارش‌شده <input id="closeCash" type="number" /></label>
+      <label>جمع کارتخوان <input id="closeReader" type="number" /></label>
+      <label>توضیح مغایرت <input id="closeExpl" /></label>
+      <button id="closeShiftBtn" type="button">بستن شیفت / روزکاری</button>
+      <div id="closePreviewSummary"></div>
+    </section>
+
+    <section id="reportsPanel" class="panel hidden">
+      <h2>گزارش‌های مدیریتی</h2>
+      <label>روزکاری (شمسی) سال <input id="repJy" type="number" value="1405" /></label>
+      <label>ماه <input id="repJm" type="number" value="8" /></label>
+      <label>روز <input id="repJd" type="number" value="16" /></label>
+      <button id="dailyIncomeBtn" type="button">درآمد روزانه</button>
+      <button id="monthlyIncomeBtn" type="button">درآمد ماهانه (شمسی)</button>
+      <button id="yearlyIncomeBtn" type="button">درآمد سالانه (شمسی)</button>
+      <p>بازه مصرف (شمسی)</p>
+      <label>از — سال <input id="usageFromJy" type="number" value="1405" /> ماه <input id="usageFromJm" type="number" value="8" /> روز <input id="usageFromJd" type="number" value="16" /></label>
+      <label>تا — سال <input id="usageToJy" type="number" value="1405" /> ماه <input id="usageToJm" type="number" value="8" /> روز <input id="usageToJd" type="number" value="17" /></label>
+      <button id="usageBtn" type="button">مصرف ایستگاه</button>
+      <button id="cu8Btn" type="button">CU-8 کیف پول</button>
+      <p>فیلتر تاریخچه</p>
+      <label>از — سال <input id="histFromJy" type="number" /> ماه <input id="histFromJm" type="number" /> روز <input id="histFromJd" type="number" /></label>
+      <label>تا — سال <input id="histToJy" type="number" /> ماه <input id="histToJm" type="number" /> روز <input id="histToJd" type="number" /></label>
+      <label>ایستگاه <input id="histStation" type="text" placeholder="PS5-1" /></label>
+      <label>مشتری (UUID) <input id="histCustomer" type="text" /></label>
+      <label>اپراتور (UUID) <input id="histOperator" type="text" /></label>
+      <label>روش <input id="histMethod" type="text" placeholder="Cash" /></label>
+      <button id="historyBtn" type="button">تاریخچه</button>
+      <button id="exportHistoryBtn" type="button">خروجی CSV تاریخچه</button>
+      <div id="reportsOut"></div>
+    </section>
+
     <section id="invoicePanel" class="panel">
       <h2>جستجوی فاکتور</h2>
       <label>شماره <input id="invoiceNumber" type="number" /></label>

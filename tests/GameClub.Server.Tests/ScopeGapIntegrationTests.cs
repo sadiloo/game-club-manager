@@ -27,6 +27,8 @@ public sealed class ScopeGapIntegrationTests(GameClubWebApplicationFactory facto
               WHERE "GroupId" = 'pc-normal' AND "IsSpecialBand" = false AND "PlayMode" = 'Offline' AND "PlayerCount" = 1;
             """);
         await GameClub.Server.Services.DatabaseSeed.EnsureAsync(db);
+        await db.Database.ExecuteSqlRawAsync(
+            """UPDATE branch_cafe_settings SET "ShiftsEnabled" = false, "MultiOperatorEnabled" = false WHERE "Id" = 1;""");
     }
 
     [Fact]

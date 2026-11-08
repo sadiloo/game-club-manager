@@ -112,7 +112,8 @@ public sealed class OperatorMemberWalletService(
     IClock clock,
     AuditService audit,
     OperatorContext op,
-    OperatorMemberContext members)
+    OperatorMemberContext members,
+    OperatorShiftGate shiftGate)
 {
     public async Task<object> GetWalletAsync(Guid customerId, CancellationToken ct)
     {
@@ -155,6 +156,8 @@ public sealed class OperatorMemberWalletService(
         await members.EnsureMemberAsync(customerId, ct);
         if (method == PaymentMethod.CardToCard)
         {
+            await shiftGate.EnsureMoneyRecordingAllowedAsync(ct);
+            var c2cShiftId = await shiftGate.RequireOpenShiftIdAsync(ct);
             db.PendingWalletTopUps.Add(new PendingWalletTopUpEntity
             {
                 CustomerId = customerId,
@@ -165,10 +168,36 @@ public sealed class OperatorMemberWalletService(
                 Status = PendingWalletTopUpStatus.Pending,
                 CreatedAtUtc = clock.UtcNow.UtcDateTime,
                 ActorUserId = op.UserId,
+                ShiftId = c2cShiftId,
             });
             await audit.AppendAsync("wallet.topup.pending", new { customerId, amountToman, method = method.ToString() }, ct);
             await db.SaveChangesAsync(ct);
             return;
+        }
+
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        var settings = await shiftGate.LoadSettingsAsync(ct);
+        Guid? shiftId = null;
+        if (settings.ShiftsEnabled)
+        {
+            var shift = await shiftGate.GetOpenShiftForUpdateAsync(ct)
+                ?? throw new ApiException(
+                    StatusCodes.Status409Conflict,
+                    "no_open_shift",
+                    "No shift is open.");
+            if (shift.Status != ShiftStatus.Open)
+            {
+                throw new ApiException(
+                    StatusCodes.Status409Conflict,
+                    "shift_closed",
+                    "Shift is already closed.");
+            }
+
+            shiftId = shift.Id;
+        }
+        else
+        {
+            await db.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock({0})", 884_2002);
         }
 
         await WithMemberWriteLockAsync(customerId, async (_, member, innerCt) =>
@@ -186,9 +215,20 @@ public sealed class OperatorMemberWalletService(
                 Reference = reference,
                 Label = method.ToString(),
                 ActorUserId = op.UserId,
+                ShiftId = shiftId,
             });
             await audit.AppendAsync("wallet.topup", new { customerId, amountToman, method = method.ToString() }, innerCt);
-        }, ct);
+        }, ct, tx);
+        if (settings.ShiftsEnabled && shiftId is Guid sid)
+        {
+            var shift = await db.Shifts.AsNoTracking().FirstOrDefaultAsync(s => s.Id == sid, ct);
+            if (shift is null || shift.Status != ShiftStatus.Open)
+            {
+                throw new ApiException(StatusCodes.Status409Conflict, "shift_closed", "Shift is already closed.");
+            }
+        }
+
+        await tx.CommitAsync(ct);
     }
 
     public async Task ConfirmPendingTopUpAsync(long pendingId, CancellationToken ct)
@@ -213,7 +253,7 @@ public sealed class OperatorMemberWalletService(
             var pocket = MemberWalletMapper.ToPocket(member);
             pocket = MemberWalletMapper.ApplyRealTopUp(pocket, pending.AmountToman);
             MemberWalletMapper.ApplyPocket(member, pocket);
-            db.WalletLedger.Add(new WalletLedgerEntryEntity
+            var ledger = new WalletLedgerEntryEntity
             {
                 CustomerId = pending.CustomerId,
                 AtUtc = clock.UtcNow.UtcDateTime,
@@ -224,7 +264,10 @@ public sealed class OperatorMemberWalletService(
                 Reference = pending.Reference,
                 Label = "card_to_card_confirmed",
                 ActorUserId = op.UserId,
-            });
+                ShiftId = pending.ShiftId,
+            };
+            await ApplyWalletTopUpOriginatingWorkingDayAsync(ledger, pending.ShiftId, pending.CreatedAtUtc, innerCt);
+            db.WalletLedger.Add(ledger);
             await audit.AppendAsync("wallet.topup.confirmed", new { pendingId, before, after = new { member.RealToman, member.GiftToman } }, innerCt);
         }, ct, tx);
         await tx.CommitAsync(ct);
@@ -554,6 +597,37 @@ public sealed class OperatorMemberWalletService(
         };
     }
 
+    private async Task ApplyWalletTopUpOriginatingWorkingDayAsync(
+        WalletLedgerEntryEntity row,
+        Guid? shiftId,
+        DateTime originatingAtUtc,
+        CancellationToken ct)
+    {
+        CloseRecordEntity? close;
+        if (shiftId is Guid sid)
+        {
+            close = await db.CloseRecords.AsNoTracking().FirstOrDefaultAsync(c => c.ShiftId == sid, ct);
+        }
+        else
+        {
+            close = await db.CloseRecords.AsNoTracking()
+                .Where(c => c.ShiftId == null
+                            && c.PeriodOpenedAtUtc <= originatingAtUtc
+                            && c.ClosedAtUtc >= originatingAtUtc)
+                .OrderByDescending(c => c.ClosedAtUtc)
+                .FirstOrDefaultAsync(ct);
+        }
+
+        if (close is null)
+        {
+            return;
+        }
+
+        row.WorkingDayYear = close.WorkingDayYear;
+        row.WorkingDayMonth = close.WorkingDayMonth;
+        row.WorkingDayDay = close.WorkingDayDay;
+    }
+
     private void EnsureManager()
     {
         if (op.Role is not UserRole.Manager and not UserRole.Owner)
@@ -845,13 +919,16 @@ public sealed class OperatorPackageService(
     AuditService audit,
     OperatorMemberContext members,
     OperatorContext op,
-    IClock clock)
+    IClock clock,
+    OperatorShiftGate shiftGate)
 {
     public async Task SellPackageAsync(Guid customerId, string productId, IReadOnlyList<OperatorBillService.PaymentInput> payments, CancellationToken ct)
     {
         var product = await db.PackageProducts.AsNoTracking().FirstOrDefaultAsync(p => p.Id == productId && p.IsActive, ct)
             ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Package not found.");
 
+        await shiftGate.EnsureMoneyRecordingAllowedAsync(ct);
+        var shiftId = await shiftGate.RequireOpenShiftIdAsync(ct);
         await members.EnsureMemberAsync(customerId, ct);
         await using var tx = await db.Database.BeginTransactionAsync(ct);
         await db.Database.ExecuteSqlRawAsync(
@@ -885,6 +962,8 @@ public sealed class OperatorPackageService(
             IssuedAtUtc = clock.UtcNow.UtcDateTime,
             BilledToUtc = clock.UtcNow.UtcDateTime,
             Status = "confirmed",
+            ShiftId = shiftId,
+            SettledByUserId = op.UserId,
         };
         invoice.CatalogLines.Add(new InvoiceCatalogLineEntity
         {
@@ -903,7 +982,9 @@ public sealed class OperatorPackageService(
             {
                 Method = method,
                 AmountToman = pay.AmountToman,
-                ConfirmationStatus = PaymentConfirmationStatus.Settled,
+                ConfirmationStatus = method == PaymentMethod.CardToCard
+                    ? PaymentConfirmationStatus.Pending
+                    : PaymentConfirmationStatus.Settled,
                 WalletCustomerId = method == PaymentMethod.Wallet ? customerId : null,
                 WalletRealDrawnToman = splitLine?.RealDrawnToman ?? 0,
                 WalletGiftDrawnToman = splitLine?.GiftDrawnToman ?? 0,

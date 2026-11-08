@@ -116,6 +116,12 @@ public sealed class PlaySessionEntity
     public InvoiceEntity? Invoice { get; set; }
 
     public PendingBillEntity? PendingBill { get; set; }
+
+    public Guid? OpenShiftId { get; set; }
+
+    public ShiftEntity? OpenShift { get; set; }
+
+    public Guid? CarriedAtCloseRecordId { get; set; }
 }
 
 public sealed class PlaySegmentEntity
@@ -223,6 +229,24 @@ public sealed class InvoiceEntity
     public long LevelDiscountToman { get; set; }
 
     public long BirthdayDiscountToman { get; set; }
+
+    public Guid? ShiftId { get; set; }
+
+    public ShiftEntity? Shift { get; set; }
+
+    public Guid? CloseRecordId { get; set; }
+
+    public CloseRecordEntity? CloseRecord { get; set; }
+
+    public int? WorkingDayYear { get; set; }
+
+    public int? WorkingDayMonth { get; set; }
+
+    public int? WorkingDayDay { get; set; }
+
+    public Guid? SettledByUserId { get; set; }
+
+    public string? OperatorNote { get; set; }
 }
 
 public sealed class PendingBillEntity
