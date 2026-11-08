@@ -581,11 +581,149 @@ public sealed class OperatorReportingService(AppDbContext db, OperatorContext op
                         && w.Method == PaymentMethod.CardToCard)
             .ToListAsync(ct);
 
+        var offCloses = await db.CloseRecords.AsNoTracking()
+            .Where(c => c.ShiftId == null)
+            .ToListAsync(ct);
+        var onClosesByShift = await db.CloseRecords.AsNoTracking()
+            .Where(c => c.ShiftId != null)
+            .ToDictionaryAsync(c => c.ShiftId!.Value, ct);
+
         static string GroupKey(Guid customerId, long amountToman, string? destinationCardId)
             => $"{customerId:N}:{amountToman}:{destinationCardId ?? "\0"}";
 
         var pendingToLedger = new Dictionary<long, WalletLedgerEntryEntity>();
         var ledgerToPending = new Dictionary<long, PendingWalletTopUpEntity>();
+
+        CloseRecordEntity? OriginatingCloseForEdge(
+            PendingWalletTopUpEntity pending,
+            WalletLedgerEntryEntity ledger)
+        {
+            if (pending.ShiftId is Guid shiftId)
+            {
+                return onClosesByShift.GetValueOrDefault(shiftId);
+            }
+
+            var containing = offCloses
+                .Where(c => c.PeriodOpenedAtUtc <= pending.CreatedAtUtc && c.ClosedAtUtc >= pending.CreatedAtUtc)
+                .ToList();
+            if (containing.Count == 0)
+            {
+                return null;
+            }
+
+            if (ledger.WorkingDayYear is int y && ledger.WorkingDayMonth is int m && ledger.WorkingDayDay is int d)
+            {
+                var byStampedDay = containing.FirstOrDefault(c =>
+                    c.WorkingDayYear == y && c.WorkingDayMonth == m && c.WorkingDayDay == d);
+                if (byStampedDay is not null)
+                {
+                    return byStampedDay;
+                }
+            }
+
+            return containing.OrderByDescending(c => c.ClosedAtUtc).First();
+        }
+
+        bool IsValidWalletC2CEdge(PendingWalletTopUpEntity pending, WalletLedgerEntryEntity ledger)
+        {
+            if (ledger.AtUtc < pending.CreatedAtUtc)
+            {
+                return false;
+            }
+
+            var originatingClose = OriginatingCloseForEdge(pending, ledger);
+            if (originatingClose is null)
+            {
+                return true;
+            }
+
+            if (ledger.WorkingDayYear is not int year)
+            {
+                return true;
+            }
+
+            return ledger.WorkingDayYear == originatingClose.WorkingDayYear
+                   && ledger.WorkingDayMonth == originatingClose.WorkingDayMonth
+                   && ledger.WorkingDayDay == originatingClose.WorkingDayDay;
+        }
+
+        static bool TryPerfectMatching(
+            IReadOnlyList<PendingWalletTopUpEntity> groupPendings,
+            IReadOnlyList<WalletLedgerEntryEntity> groupLedgers,
+            Func<PendingWalletTopUpEntity, WalletLedgerEntryEntity, bool> isValidEdge,
+            Dictionary<long, WalletLedgerEntryEntity> outPendingToLedger,
+            Dictionary<long, PendingWalletTopUpEntity> outLedgerToPending)
+        {
+            if (groupPendings.Count == 0 || groupLedgers.Count == 0)
+            {
+                return false;
+            }
+
+            if (groupPendings.Count != groupLedgers.Count)
+            {
+                return false;
+            }
+
+            var validLedgersForPending = new List<int>[groupPendings.Count];
+            for (var pi = 0; pi < groupPendings.Count; pi++)
+            {
+                var candidates = new List<int>();
+                for (var li = 0; li < groupLedgers.Count; li++)
+                {
+                    if (isValidEdge(groupPendings[pi], groupLedgers[li]))
+                    {
+                        candidates.Add(li);
+                    }
+                }
+
+                validLedgersForPending[pi] = candidates;
+            }
+
+            var usedLedger = new bool[groupLedgers.Count];
+            var assignment = new int[groupPendings.Count];
+
+            bool Search(int pendingIndex)
+            {
+                if (pendingIndex == groupPendings.Count)
+                {
+                    return true;
+                }
+
+                foreach (var li in validLedgersForPending[pendingIndex])
+                {
+                    if (usedLedger[li])
+                    {
+                        continue;
+                    }
+
+                    usedLedger[li] = true;
+                    assignment[pendingIndex] = li;
+                    if (Search(pendingIndex + 1))
+                    {
+                        return true;
+                    }
+
+                    usedLedger[li] = false;
+                }
+
+                return false;
+            }
+
+            if (!Search(0))
+            {
+                return false;
+            }
+
+            for (var pi = 0; pi < groupPendings.Count; pi++)
+            {
+                var pending = groupPendings[pi];
+                var ledger = groupLedgers[assignment[pi]];
+                outPendingToLedger[pending.Id] = ledger;
+                outLedgerToPending[ledger.Id] = pending;
+            }
+
+            return true;
+        }
 
         foreach (var group in pendings.GroupBy(p => GroupKey(p.CustomerId, p.AmountToman, p.DestinationCardId)))
         {
@@ -595,14 +733,7 @@ public sealed class OperatorReportingService(AppDbContext db, OperatorContext op
                 .OrderBy(w => w.AtUtc).ThenBy(w => w.Id)
                 .ToList();
 
-            var pairCount = Math.Min(groupPendings.Count, groupLedgers.Count);
-            for (var i = 0; i < pairCount; i++)
-            {
-                var pending = groupPendings[i];
-                var ledger = groupLedgers[i];
-                pendingToLedger[pending.Id] = ledger;
-                ledgerToPending[ledger.Id] = pending;
-            }
+            TryPerfectMatching(groupPendings, groupLedgers, IsValidWalletC2CEdge, pendingToLedger, ledgerToPending);
         }
 
         return new ConfirmedWalletC2CBijection(pendingToLedger, ledgerToPending);
