@@ -488,6 +488,30 @@
           }
         }
       }
+    },
+    "/api/kiosk/pair": {
+      "post": { "tags": ["Kiosk"], "responses": { "200": { "description": "OK" } } }
+    },
+    "/api/kiosk/stations/{stationId}/config": {
+      "get": { "tags": ["Kiosk"], "responses": { "200": { "description": "OK" }, "403": { "description": "Foreign station" } } }
+    },
+    "/api/kiosk/stations/{stationId}/active-session": {
+      "get": { "tags": ["Kiosk"], "responses": { "200": { "description": "OK" }, "403": { "description": "Foreign station" } } }
+    },
+    "/api/kiosk/auth/login": {
+      "post": { "tags": ["Kiosk"], "responses": { "200": { "description": "OK" } } }
+    },
+    "/api/kiosk/catalog": {
+      "get": { "tags": ["Kiosk"], "responses": { "200": { "description": "OK" } } }
+    },
+    "/api/operator/stations/{stationId}/pairing-code": {
+      "post": { "tags": ["KioskOperator"], "responses": { "200": { "description": "OK" } } }
+    },
+    "/api/operator/sessions/{sessionId}/force-logout": {
+      "post": { "tags": ["KioskOperator"], "responses": { "204": { "description": "No content" } } }
+    },
+    "/hubs/kiosk": {
+      "get": { "tags": ["KioskHub"], "responses": { "200": { "description": "SignalR negotiate" } } }
     }
   },
   "components": {

@@ -5,16 +5,19 @@ using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
 using GameClub.Kiosk.Core.Connection;
-using GameClub.Kiosk.Core.Offline;
-using GameClub.Kiosk.Core.Protocol;
+using GameClub.Kiosk.Core.Runtime;
 
 namespace GameClub.Kiosk.Services;
 
-public sealed class KioskHostService
+public sealed class KioskHostService : IAsyncDisposable
 {
+    public const string DeviceIdHeader = "X-Device-Id";
+    public const string DeviceKeyHeader = "X-Device-Key";
+
     private readonly Window _shell;
     private readonly TextBlock _status;
     private readonly HttpClient _http = new();
+    private readonly KioskRuntime _runtime;
     private string _serverBase = Environment.GetEnvironmentVariable("CHECKPOINT_SERVER_URL") ?? "http://127.0.0.1:5000";
     private Guid _deviceId;
     private string _deviceKey = "";
@@ -24,9 +27,18 @@ public sealed class KioskHostService
     {
         _shell = shell;
         _status = status;
+        _runtime = new KioskRuntime(() => CreateHttpClient());
         _http.DefaultRequestHeaders.Add("User-Agent", "CheckpointKiosk/1.0");
         LoadDeviceState();
         _ = RefreshAsync();
+    }
+
+    public HttpClient CreateHttpClient()
+    {
+        var http = new HttpClient();
+        http.DefaultRequestHeaders.Add("User-Agent", "CheckpointKiosk/1.0");
+        ApplyDeviceHeaders(http);
+        return http;
     }
 
     public void SetServerBase(string url) => _serverBase = url.TrimEnd('/');
@@ -47,6 +59,7 @@ public sealed class KioskHostService
         _deviceKey = doc.RootElement.GetProperty("deviceKey").GetString()!;
         _stationId = doc.RootElement.GetProperty("stationId").GetString()!;
         SaveDeviceState();
+        await EnsureRuntimeAsync();
         _status.Text = $"Paired to {_stationId}";
     }
 
@@ -63,10 +76,20 @@ public sealed class KioskHostService
         _deviceId = doc.RootElement.GetProperty("deviceId").GetGuid();
         _deviceKey = doc.RootElement.GetProperty("deviceKey").GetString()!;
         _stationId = doc.RootElement.GetProperty("stationId").GetString()!;
-        _http.DefaultRequestHeaders.Remove("X-Kiosk-Device-Id");
-        _http.DefaultRequestHeaders.Remove("X-Kiosk-Device-Key");
-        _http.DefaultRequestHeaders.Add("X-Kiosk-Device-Id", _deviceId.ToString());
-        _http.DefaultRequestHeaders.Add("X-Kiosk-Device-Key", _deviceKey);
+        ApplyDeviceHeaders(_http);
+    }
+
+    private void ApplyDeviceHeaders(HttpClient http)
+    {
+        if (_deviceId == Guid.Empty)
+        {
+            return;
+        }
+
+        http.DefaultRequestHeaders.Remove(DeviceIdHeader);
+        http.DefaultRequestHeaders.Remove(DeviceKeyHeader);
+        http.DefaultRequestHeaders.Add(DeviceIdHeader, _deviceId.ToString());
+        http.DefaultRequestHeaders.Add(DeviceKeyHeader, _deviceKey);
     }
 
     private void SaveDeviceState()
@@ -74,14 +97,28 @@ public sealed class KioskHostService
         Directory.CreateDirectory(Path.GetDirectoryName(DeviceStorePath())!);
         var json = JsonSerializer.Serialize(new { deviceId = _deviceId, deviceKey = _deviceKey, stationId = _stationId });
         File.WriteAllText(DeviceStorePath(), json);
-        _http.DefaultRequestHeaders.Remove("X-Kiosk-Device-Id");
-        _http.DefaultRequestHeaders.Remove("X-Kiosk-Device-Key");
-        _http.DefaultRequestHeaders.Add("X-Kiosk-Device-Id", _deviceId.ToString());
-        _http.DefaultRequestHeaders.Add("X-Kiosk-Device-Key", _deviceKey);
+        ApplyDeviceHeaders(_http);
     }
 
     private static string DeviceStorePath()
         => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "Checkpoint", "kiosk", "device.json");
+
+    private async Task EnsureRuntimeAsync()
+    {
+        if (string.IsNullOrEmpty(_stationId))
+        {
+            return;
+        }
+
+        var queuePath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+            "Checkpoint",
+            "kiosk",
+            "events.db");
+        _runtime.Configure(new Uri($"{_serverBase}/hubs/kiosk"), _deviceId, _deviceKey, _stationId, queuePath, legacyWindows: true);
+        await _runtime.StartAsync(CancellationToken.None);
+        _ = _runtime.GetQueue();
+    }
 
     private async Task RefreshAsync()
     {
@@ -91,13 +128,16 @@ public sealed class KioskHostService
             return;
         }
 
-        _status.Text = $"Station {_stationId} — kiosk runtime active";
-        var queue = new SqliteOfflineEventQueue(Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-            "Checkpoint",
-            "kiosk",
-            "events.db"));
-        _ = queue;
-        await Task.Delay(500);
+        try
+        {
+            await EnsureRuntimeAsync();
+            _status.Text = $"Station {_stationId} — connected";
+        }
+        catch (Exception ex)
+        {
+            _status.Text = $"Station {_stationId} — {ex.Message}";
+        }
     }
+
+    public async ValueTask DisposeAsync() => await _runtime.DisposeAsync();
 }

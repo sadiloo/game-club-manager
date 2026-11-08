@@ -21,17 +21,22 @@ internal static class Program
 
 internal sealed class GuardService : ServiceBase
 {
+    private CancellationTokenSource? _cts;
     private Thread? _thread;
 
     protected override void OnStart(string[] args)
     {
-        var cts = new CancellationTokenSource();
-        _thread = new Thread(() => GuardWatchdog.Run(cts.Token)) { IsBackground = true };
+        _cts = new CancellationTokenSource();
+        _thread = new Thread(() => GuardWatchdog.Run(_cts.Token)) { IsBackground = true, Name = "CheckpointGuard" };
         _thread.Start();
     }
 
     protected override void OnStop()
     {
+        _cts?.Cancel();
+        _thread?.Join(TimeSpan.FromSeconds(5));
+        _cts?.Dispose();
+        _cts = null;
         _thread = null;
     }
 }

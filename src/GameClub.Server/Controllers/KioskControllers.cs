@@ -28,6 +28,7 @@ public sealed class KioskController(
     [HttpGet("stations/{stationId}/config")]
     public async Task<IActionResult> StationConfig(string stationId, CancellationToken ct)
     {
+        KioskDeviceAuthorization.EnsureStationMatches(HttpContext, stationId);
         var profile = await profiles.EnsureProfileAsync(stationId, ct);
         return Ok(new
         {
@@ -62,6 +63,7 @@ public sealed class KioskController(
     [HttpGet("stations/{stationId}/active-session")]
     public async Task<IActionResult> ActiveSession(string stationId, CancellationToken ct)
     {
+        KioskDeviceAuthorization.EnsureStationMatches(HttpContext, stationId);
         var id = StationIdNormalizer.Normalize(stationId);
         var session = await db.Sessions.AsNoTracking()
             .Where(s => s.StationId == id && s.Status == SessionStatus.Open)
@@ -173,23 +175,58 @@ public sealed class KioskOperatorController(
     public async Task<IActionResult> ListGames(CancellationToken ct)
         => Ok((await catalog.GetCatalogAsync(0, ct)));
 
-    public sealed record GameCreateBody(string Name, int CategoryId, string ExecutableOrUri);
+    public sealed record GameCreateBody(
+        string Name,
+        int CategoryId,
+        string ExecutableOrUri,
+        string? Arguments,
+        string? IconUrl,
+        int? SortOrder,
+        string[]? GroupRestrictions,
+        string[]? AllowedProcessNames);
 
     [HttpPost("games")]
     public async Task<IActionResult> CreateGame(GameCreateBody body, CancellationToken ct)
     {
         EnsureManager();
-        var row = await catalog.CreateEntryAsync(body.Name, body.CategoryId, body.ExecutableOrUri, ct);
+        var row = await catalog.CreateEntryAsync(
+            body.Name,
+            body.CategoryId,
+            body.ExecutableOrUri,
+            body.Arguments,
+            body.IconUrl,
+            body.SortOrder,
+            body.GroupRestrictions,
+            body.AllowedProcessNames,
+            ct);
         return Created($"/api/operator/games/{row.Id}", new { row.Id, row.Name, row.Enabled, row.CatalogVersion });
     }
 
-    public sealed record GameUpdateBody(string Name, bool Enabled);
+    public sealed record GameUpdateBody(
+        string Name,
+        bool Enabled,
+        string? ExecutableOrUri,
+        string? Arguments,
+        string? IconUrl,
+        int? SortOrder,
+        string[]? GroupRestrictions,
+        string[]? AllowedProcessNames);
 
     [HttpPut("games/{id:int}")]
     public async Task<IActionResult> UpdateGame(int id, GameUpdateBody body, CancellationToken ct)
     {
         EnsureManager();
-        var row = await catalog.UpdateEntryAsync(id, body.Name, body.Enabled, ct);
+        var row = await catalog.UpdateEntryAsync(
+            id,
+            body.Name,
+            body.Enabled,
+            body.ExecutableOrUri,
+            body.Arguments,
+            body.IconUrl,
+            body.SortOrder,
+            body.GroupRestrictions,
+            body.AllowedProcessNames,
+            ct);
         return Ok(new { row.Id, row.Name, row.Enabled, row.CatalogVersion });
     }
 

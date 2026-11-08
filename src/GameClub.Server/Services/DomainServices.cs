@@ -781,7 +781,8 @@ public sealed class SessionService(
     {
         return await ExecuteWithSessionWriteLockAsync(sessionId, async (session, innerCt) =>
         {
-            if (session.Status != SessionStatus.ManualSettle)
+            if (session.Status != SessionStatus.ManualSettle
+                && !(session.Status == SessionStatus.AwaitingPayment && session.ManualSettleReason != null))
             {
                 throw new ApiException(StatusCodes.Status409Conflict, "not_manual_settle", "Session is not awaiting manual settlement.");
             }

@@ -39,6 +39,19 @@ public sealed class KioskFundingGuard(
 
         if (estimate.TotalMinutes <= 0)
         {
+            if (estimate.RateIsFree)
+            {
+                var boundary = KioskPlayEstimate.NextPaidBandStart(snapshot.Card, groupId, PlayMode.Offline, 1, at);
+                if (boundary is not null)
+                {
+                    var post = CustomerPlay.Estimate(account, groupId, PlayMode.Offline, 1, boundary.Value, snapshot.Card);
+                    if (post.TotalMinutes > 0)
+                    {
+                        return;
+                    }
+                }
+            }
+
             throw new ApiException(StatusCodes.Status403Forbidden, "no_credit", "Insufficient credit or packages for PC play.");
         }
     }

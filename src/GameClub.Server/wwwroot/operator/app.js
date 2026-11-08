@@ -791,9 +791,16 @@ async function onTileClick(t) {
   } else {
     renderCustomerChip(t.linkedCustomer);
   }
-  document.getElementById("pauseBtn").classList.toggle("hidden", t.status !== "Playing");
-  document.getElementById("resumeBtn").classList.toggle("hidden", t.status !== "Paused");
-  document.getElementById("openBillBtn").classList.toggle("hidden", (t.groupId || "").startsWith("pc"));
+  const isPcGroup = (t.groupId || "").startsWith("pc");
+  const isPlayingPc = isPcGroup && (t.status === "Playing" || t.status === "Open");
+  document.getElementById("pauseBtn").classList.toggle("hidden", !(!isPcGroup && t.status === "Playing"));
+  document.getElementById("resumeBtn").classList.toggle("hidden", !(!isPcGroup && t.status === "Paused"));
+  document.getElementById("prepaidDurationBtn").classList.toggle("hidden", isPlayingPc || isPcGroup);
+  document.getElementById("prepaidAmountBtn").classList.toggle("hidden", isPlayingPc || isPcGroup);
+  document.getElementById("playerCountBtn").classList.toggle("hidden", isPcGroup);
+  document.getElementById("playerCountSelect").parentElement.classList.toggle("hidden", isPcGroup);
+  document.getElementById("forceLogoutBtn").classList.toggle("hidden", !isPlayingPc);
+  document.getElementById("openBillBtn").classList.toggle("hidden", isPcGroup);
   const transferVisible = t.status === "Playing" || t.status === "Paused";
   document.getElementById("transferBtn").classList.toggle("hidden", !transferVisible);
   document.getElementById("transferFaultWrap").classList.toggle("hidden", !transferVisible);
@@ -828,6 +835,13 @@ document.getElementById("transferBtn").onclick = async () => {
 
 document.getElementById("pauseBtn").onclick = async () => {
   await api(`/api/operator/sessions/${selectedSessionId}/pause`, { method: "POST" });
+  await refreshGrid();
+};
+
+document.getElementById("forceLogoutBtn").onclick = async () => {
+  if (!selectedSessionId) return;
+  await api(`/api/operator/sessions/${selectedSessionId}/force-logout`, { method: "POST" });
+  document.getElementById("sessionActions").classList.add("hidden");
   await refreshGrid();
 };
 
