@@ -546,9 +546,23 @@ public sealed class OperatorBillService(
         string? stopReason,
         CancellationToken ct)
     {
+        var existing = session.PendingBill
+            ?? await db.PendingBills.FirstOrDefaultAsync(b => b.SessionId == session.Id, ct);
+        if (existing is not null)
+        {
+            session.PendingBill = existing;
+            session.Status = SessionStatus.AwaitingPayment;
+            return existing;
+        }
+
         ApplyPlayEnd(session, endUtc);
         var saleLines = await LoadSaleLinesAsync(session.Id, ct);
         var amounts = await calculator.ComputeAsync(session, endUtc, 0, saleLines, ct);
+        if (amounts.Detail?.OvershootAlert is { } alert)
+        {
+            await audit.AppendAsync("pc_overshoot", new { sessionId = session.Id, alert.Code, alert.AmountToman, alert.Message }, ct);
+        }
+
         var bill = new PendingBillEntity
         {
             Id = Guid.NewGuid(),
@@ -893,6 +907,7 @@ public sealed class OperatorGridService(AppDbContext db, SessionService sessions
                     station.Id,
                     station.Name,
                     station.GroupId,
+                    groupKind = station.Group?.Kind.ToString(),
                     station.DefaultPlayerCount,
                     mode = station.DefaultPlayMode.ToString(),
                     operationalState = station.OperationalState.ToString(),
@@ -933,6 +948,7 @@ public sealed class OperatorGridService(AppDbContext db, SessionService sessions
                 station.Id,
                 station.Name,
                 station.GroupId,
+                groupKind = station.Group?.Kind.ToString(),
                 station.DefaultPlayerCount,
                 mode = station.DefaultPlayMode.ToString(),
                 operationalState = station.OperationalState.ToString(),

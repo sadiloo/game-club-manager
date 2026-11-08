@@ -4,7 +4,9 @@ using System.Text;
 using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Threading;
 using GameClub.Kiosk.Core.Connection;
+using GameClub.Kiosk.Core.Protocol;
 using GameClub.Kiosk.Core.Runtime;
 
 namespace GameClub.Kiosk.Services;
@@ -16,19 +18,45 @@ public sealed class KioskHostService : IAsyncDisposable
 
     private readonly Window _shell;
     private readonly TextBlock _status;
+    private readonly TextBlock _balance;
+    private readonly TextBlock _package;
+    private readonly TextBlock _elapsed;
+    private readonly TextBlock _freeBand;
+    private readonly UIElement _lockPanel;
+    private readonly UIElement _playingPanel;
     private readonly HttpClient _http = new();
     private readonly KioskRuntime _runtime;
+    private readonly DispatcherTimer _uiTick = new() { Interval = TimeSpan.FromSeconds(1) };
     private string _serverBase = Environment.GetEnvironmentVariable("CHECKPOINT_SERVER_URL") ?? "http://127.0.0.1:5000";
     private Guid _deviceId;
     private string _deviceKey = "";
     private string _stationId = "";
+    private Guid _sessionId;
+    private KioskDisplayDto? _lastDisplay;
 
-    public KioskHostService(Window shell, TextBlock status)
+    public string ServerBase => _serverBase;
+
+    public KioskHostService(
+        Window shell,
+        TextBlock status,
+        TextBlock balance,
+        TextBlock package,
+        TextBlock elapsed,
+        TextBlock freeBand,
+        UIElement lockPanel,
+        UIElement playingPanel)
     {
         _shell = shell;
         _status = status;
+        _balance = balance;
+        _package = package;
+        _elapsed = elapsed;
+        _freeBand = freeBand;
+        _lockPanel = lockPanel;
+        _playingPanel = playingPanel;
         _runtime = new KioskRuntime(() => CreateHttpClient());
         _http.DefaultRequestHeaders.Add("User-Agent", "CheckpointKiosk/1.0");
+        _uiTick.Tick += (_, _) => RenderDisplay();
         LoadDeviceState();
         _ = RefreshAsync();
     }
@@ -63,6 +91,77 @@ public sealed class KioskHostService : IAsyncDisposable
         _status.Text = $"Paired to {_stationId}";
     }
 
+    public async Task LoginAsync(string loginName, string password)
+    {
+        if (_deviceId == Guid.Empty)
+        {
+            _status.Text = "Pair before login";
+            return;
+        }
+
+        var response = await _http.PostAsync(
+            $"{_serverBase}/api/kiosk/auth/login",
+            new StringContent(JsonSerializer.Serialize(new { loginName, password, stationId = _stationId }), Encoding.UTF8, "application/json"));
+        if (!response.IsSuccessStatusCode)
+        {
+            _status.Text = "Login failed";
+            return;
+        }
+
+        var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        _sessionId = doc.RootElement.GetProperty("sessionId").GetGuid();
+        _runtime.BindSession(_sessionId);
+        _lockPanel.Visibility = Visibility.Collapsed;
+        _playingPanel.Visibility = Visibility.Visible;
+        _uiTick.Start();
+        _status.Text = $"Playing on {_stationId}";
+    }
+
+    public async Task LogoutAsync()
+    {
+        if (_sessionId != Guid.Empty)
+        {
+            await _http.PostAsync($"{_serverBase}/api/kiosk/sessions/{_sessionId}/logout", null);
+        }
+
+        _sessionId = Guid.Empty;
+        _runtime.BindSession(Guid.Empty);
+        _playingPanel.Visibility = Visibility.Collapsed;
+        _lockPanel.Visibility = Visibility.Visible;
+        _uiTick.Stop();
+        _status.Text = $"Locked — {_stationId}";
+    }
+
+    public void ApplyHeartbeatDisplay(KioskDisplayDto? display)
+    {
+        if (display is null)
+        {
+            return;
+        }
+
+        _lastDisplay = display;
+        _shell.Dispatcher.Invoke(RenderDisplay);
+    }
+
+    private void RenderDisplay()
+    {
+        if (_lastDisplay is null)
+        {
+            return;
+        }
+
+        _balance.Text = _lastDisplay.WalletBalanceToman is long w
+            ? $"Wallet: {w:N0} تومان"
+            : "";
+        _package.Text = _lastDisplay.PackageMinutesRemaining is { Count: > 0 } pk
+            ? $"Package minutes: {string.Join(", ", pk)}"
+            : "";
+        _elapsed.Text = _lastDisplay.ElapsedDisplaySeconds is long e
+            ? $"Elapsed: {TimeSpan.FromSeconds(e):hh\\:mm\\:ss}"
+            : "";
+        _freeBand.Text = _lastDisplay.FreeBandText ?? "";
+    }
+
     private void LoadDeviceState()
     {
         var path = DeviceStorePath();
@@ -95,7 +194,7 @@ public sealed class KioskHostService : IAsyncDisposable
     private void SaveDeviceState()
     {
         Directory.CreateDirectory(Path.GetDirectoryName(DeviceStorePath())!);
-        var json = JsonSerializer.Serialize(new { deviceId = _deviceId, deviceKey = _deviceKey, stationId = _stationId });
+        var json = JsonSerializer.Serialize(new { deviceId = _deviceId, deviceKey = _deviceKey, stationId = _stationId, serverBase = _serverBase });
         File.WriteAllText(DeviceStorePath(), json);
         ApplyDeviceHeaders(_http);
     }

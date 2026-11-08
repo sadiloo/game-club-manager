@@ -1,6 +1,7 @@
 using GameClub.Billing;
 using GameClub.Server.Data.Entities;
 using GameClub.Server.Services;
+using GameClub.Server.Time;
 
 namespace GameClub.Server.Operator;
 
@@ -17,7 +18,8 @@ public sealed record MemberBillResult(
     Invoice InvoicePreview,
     AllocationResult? Allocation,
     Settlement? PackageSettlement,
-    CustomerPricing? PricingUsed);
+    CustomerPricing? PricingUsed,
+    OperatorAlert? OvershootAlert = null);
 
 public sealed class MemberBillComposer
 {
@@ -42,8 +44,33 @@ public sealed class MemberBillComposer
         var accountPolicy = MemberSettingsMapper.LoadAccountPolicy(settings);
 
         Settlement? packageSettlement = null;
+        OperatorAlert? overshootAlert = null;
+        Invoice? pcChargeInvoice = null;
         IReadOnlyList<TimeChargeLine> timeLines;
-        if (member is not null && packages.Count > 0 && charge.TotalBilledMinutes > 0)
+        var isPc = charge.Lines.Count > 0 && charge.Lines.All(l =>
+            l.GroupId == PilotSeed.PcNormalGroupId
+            || l.GroupId == PilotSeed.PcVipGroupId
+            || l.GroupId.StartsWith("pc", StringComparison.Ordinal)
+            || l.GroupId.Contains("custom", StringComparison.OrdinalIgnoreCase));
+        if (member is not null && isPc && charge.TotalBilledMinutes > 0)
+        {
+            var wallet = MemberSettingsMapper.LoadWalletSettings(settings);
+            var pocket = MemberWalletMapper.ToPocket(member);
+            var account = new CustomerAccount(member.CustomerId.ToString(), wallet, pocket, new WalletPocket(0, 0), packages);
+            var play = CustomerPlay.Settle(
+                charge,
+                account,
+                accountPolicy,
+                BillingPolicy.Default,
+                pricing,
+                discounts: discountPolicy,
+                issuedAt: TimeMapping.ToTehran(billedToUtc));
+            packageSettlement = play.Settlement;
+            overshootAlert = play.Settlement.Alert;
+            pcChargeInvoice = play.ChargeInvoice;
+            timeLines = play.Settlement.MoneyTimeLines();
+        }
+        else if (member is not null && packages.Count > 0 && charge.TotalBilledMinutes > 0)
         {
             var pcAccount = new PcAccount(member.CustomerId.ToString(), charge.TotalAmountToman, packages);
             packageSettlement = AccountSettlement.Settle(
@@ -88,6 +115,10 @@ public sealed class MemberBillComposer
             invoice = collected;
             allocation = alloc;
         }
+        else if (pcChargeInvoice is not null && saleLines.Count == 0 && surchargeToman == 0)
+        {
+            invoice = pcChargeInvoice;
+        }
         else
         {
             invoice = InvoiceCalculator.Calculate(request);
@@ -114,7 +145,8 @@ public sealed class MemberBillComposer
             invoice,
             allocation,
             packageSettlement,
-            pricing);
+            pricing,
+            overshootAlert);
     }
 
     public static MemberBillResult ComputeBuffetOnly(

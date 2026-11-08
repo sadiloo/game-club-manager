@@ -18,12 +18,37 @@ try {
 } catch {
     $transport = $_.Exception.Message
 }
+$hubConnected = $false
+$chosen = $null
+if ($negotiate -and $negotiate.connectionToken) {
+    try {
+        $hubUrl = "$server/hubs/kiosk?id=$($negotiate.connectionToken)"
+        $ws = New-Object System.Net.WebSockets.ClientWebSocket
+        $cts = New-Object System.Threading.CancellationTokenSource
+        $cts.CancelAfter(5000)
+        $connect = $ws.ConnectAsync([Uri]$hubUrl, $cts.Token)
+        $connect.Wait()
+        $hubConnected = $ws.State -eq "Open"
+        $chosen = "WebSockets"
+        $ws.CloseAsync([System.Net.WebSockets.WebSocketCloseStatus]::NormalClosure, "probe", $cts.Token).Wait()
+    } catch {
+        $chosen = "LongPolling"
+        try {
+            $poll = Invoke-WebRequest -Uri "$server/hubs/kiosk?id=$($negotiate.connectionToken)" -Headers @{ "X-Requested-With" = "XMLHttpRequest" } -UseBasicParsing -TimeoutSec 5
+            $hubConnected = $poll.StatusCode -eq 200
+        } catch {
+            $hubConnected = $false
+        }
+    }
+}
 @{
     case          = 1
     server        = $server
     httpStatus    = if ($ping) { [int]$ping.StatusCode } else { 0 }
     tls           = [Enum]::GetName([System.Security.Authentication.SslProtocols], [Net.ServicePointManager]::SecurityProtocol)
     transport     = $transport
+    chosen        = $chosen
+    hubConnected  = $hubConnected
     negotiate     = $negotiate
     capturedAtUtc = (Get-Date).ToUniversalTime().ToString("o")
 } | ConvertTo-Json -Depth 5 | Set-Content $out

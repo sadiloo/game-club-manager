@@ -178,8 +178,17 @@ public sealed class KioskFixR2AcceptanceTests(GameClubWebApplicationFactory fact
             var sessionBefore = await billScope.ServiceProvider.GetRequiredService<AppDbContext>().Sessions.SingleAsync();
             Assert.Equal(SessionStatus.AwaitingPayment, sessionBefore.Status);
         }
-        var resolve = await op.PostAsJsonAsync($"/api/operator/sessions/{sessionId}/manual-settle/resolve", new { endAt = S3TestHelpers.T(2026, 6, 3, 14, 10) });
-        Assert.NotEqual(HttpStatusCode.Conflict, resolve.StatusCode);
+        using (var reasonScope = factory.Services.CreateScope())
+        {
+            var dbReason = reasonScope.ServiceProvider.GetRequiredService<AppDbContext>();
+            await dbReason.Database.ExecuteSqlRawAsync(
+                "UPDATE sessions SET \"ManualSettleReason\" = {0} WHERE \"Id\" = {1}",
+                "powered_offline_after_autoclose",
+                sessionId);
+        }
+
+        var resolve = await op.PostAsJsonAsync($"/api/operator/sessions/{sessionId}/manual-settle", new { endAt = (DateTimeOffset?)null });
+        Assert.True(resolve.IsSuccessStatusCode);
         var bill = await op.GetFromJsonAsync<JsonElement>($"/api/operator/sessions/{sessionId}/bill");
         Assert.Equal(80_000, bill.GetProperty("timeGrossToman").GetInt64());
     }
@@ -426,7 +435,7 @@ public sealed class KioskFixR2AcceptanceTests(GameClubWebApplicationFactory fact
         if (!string.IsNullOrWhiteSpace(text))
         {
             Assert.DoesNotContain("14:00", text, StringComparison.Ordinal);
-            Assert.DoesNotContain("0 دقیقه", text, StringComparison.Ordinal);
+            Assert.Matches(@"رایگان تا \d{2}:\d{2}، سپس \d+ دقیقه", text);
         }
     }
 

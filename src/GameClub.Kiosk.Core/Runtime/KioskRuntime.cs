@@ -79,8 +79,11 @@ public sealed class KioskRuntime : IAsyncDisposable
                 {
                     var ack = await _hub.InvokeAsync<KioskHeartbeatAck>(
                         "Heartbeat",
-                        _sessionId == Guid.Empty ? (Guid?)null : _sessionId,
-                        _monotonic.ElapsedMilliseconds,
+                        new KioskHeartbeatRequest
+                        {
+                            SessionId = _sessionId == Guid.Empty ? null : _sessionId,
+                            ClientMonotonicMs = _monotonic.ElapsedMilliseconds,
+                        },
                         ct);
                     if (ack.ManualSettle)
                     {

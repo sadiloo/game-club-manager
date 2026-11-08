@@ -791,16 +791,20 @@ async function onTileClick(t) {
   } else {
     renderCustomerChip(t.linkedCustomer);
   }
-  const isPcGroup = (t.groupId || "").startsWith("pc");
-  const isPlayingPc = isPcGroup && (t.status === "Playing" || t.status === "Open");
-  document.getElementById("pauseBtn").classList.toggle("hidden", !(!isPcGroup && t.status === "Playing"));
-  document.getElementById("resumeBtn").classList.toggle("hidden", !(!isPcGroup && t.status === "Paused"));
-  document.getElementById("prepaidDurationBtn").classList.toggle("hidden", isPlayingPc || isPcGroup);
-  document.getElementById("prepaidAmountBtn").classList.toggle("hidden", isPlayingPc || isPcGroup);
-  document.getElementById("playerCountBtn").classList.toggle("hidden", isPcGroup);
-  document.getElementById("playerCountSelect").parentElement.classList.toggle("hidden", isPcGroup);
+  const groupKind = t.groupKind ?? "";
+  const isPcStation =
+    groupKind === "Pc" ||
+    groupKind === "1" ||
+    (t.groupId || "").startsWith("pc");
+  const isPlayingPc = isPcStation && (t.status === "Playing" || t.status === "Open");
+  document.getElementById("pauseBtn").classList.toggle("hidden", !(!isPcStation && t.status === "Playing"));
+  document.getElementById("resumeBtn").classList.toggle("hidden", !(!isPcStation && t.status === "Paused"));
+  document.getElementById("prepaidDurationBtn").classList.toggle("hidden", isPlayingPc || isPcStation);
+  document.getElementById("prepaidAmountBtn").classList.toggle("hidden", isPlayingPc || isPcStation);
+  document.getElementById("playerCountBtn").classList.toggle("hidden", isPcStation);
+  document.getElementById("playerCountSelect").parentElement.classList.toggle("hidden", isPcStation);
   document.getElementById("forceLogoutBtn").classList.toggle("hidden", !isPlayingPc);
-  document.getElementById("openBillBtn").classList.toggle("hidden", isPcGroup);
+  document.getElementById("openBillBtn").classList.toggle("hidden", isPcStation);
   const transferVisible = t.status === "Playing" || t.status === "Paused";
   document.getElementById("transferBtn").classList.toggle("hidden", !transferVisible);
   document.getElementById("transferFaultWrap").classList.toggle("hidden", !transferVisible);
@@ -1060,6 +1064,18 @@ bindClick("mgrGiftBtn", async () => {
     body: JSON.stringify({ giftToman: Number(window.prompt("هدیه", "10000")) }),
   });
   await refreshWalletBalance();
+});
+
+bindClick("mgrPairingCodeBtn", async () => {
+  const stationId = document.getElementById("mgrPairStationId").value.trim();
+  if (!stationId) return showError("شناسه ایستگاه را وارد کنید.");
+  const res = await api(`/api/operator/stations/${stationId}/pairing-code`, { method: "POST" });
+  showError(`کد جفت‌سازی: ${res.code}`);
+});
+
+bindClick("mgrCatalogAdminBtn", async () => {
+  const games = await api("/api/operator/games");
+  showError(`بازی‌های کاتالوگ: ${(games || []).length} مورد`);
 });
 
 bindClick("mgrOpeningBtn", async () => {

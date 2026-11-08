@@ -3,9 +3,33 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Checkpoint Kiosk" WindowState="Maximized" WindowStyle="None">
   <Grid Background="#111827">
-    <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
-      <TextBlock Text="Checkpoint PC Kiosk" Foreground="White" FontSize="28" HorizontalAlignment="Center" />
-      <TextBlock x:Name="StatusText" Text="Unpaired — use operator pairing code" Foreground="#9CA3AF" FontSize="16" Margin="0,12,0,0" HorizontalAlignment="Center" />
-    </StackPanel>
+  <Grid.RowDefinitions>
+    <RowDefinition Height="Auto"/>
+    <RowDefinition Height="*"/>
+    <RowDefinition Height="Auto"/>
+  </Grid.RowDefinitions>
+
+  <StackPanel x:Name="LockPanel" Grid.Row="1" VerticalAlignment="Center" HorizontalAlignment="Center" Width="420">
+    <TextBlock Text="Checkpoint PC Kiosk" Foreground="White" FontSize="28" HorizontalAlignment="Center" />
+    <TextBlock x:Name="StatusText" Text="Unpaired — enter operator pairing code" Foreground="#9CA3AF" FontSize="16" Margin="0,12,0,16" TextWrapping="Wrap" TextAlignment="Center" />
+    <TextBox x:Name="PairingCodeBox" Height="40" Margin="0,4" FontSize="18" VerticalContentAlignment="Center" />
+    <Button Content="Pair station" Height="40" Margin="0,8" Click="OnPairClick"/>
+    <Separator Margin="0,16"/>
+    <TextBlock Text="Customer login" Foreground="#D1D5DB" FontSize="14"/>
+    <TextBox x:Name="LoginNameBox" Height="36" Margin="0,4"/>
+    <PasswordBox x:Name="PasswordBox" Height="36" Margin="0,4"/>
+    <Button Content="Login" Height="40" Margin="0,8" Click="OnLoginClick"/>
+    <TextBox x:Name="ServerUrlBox" Height="32" Margin="0,12" ToolTip="Manual server URL" />
+  </StackPanel>
+
+  <StackPanel x:Name="PlayingPanel" Grid.Row="1" VerticalAlignment="Center" HorizontalAlignment="Center" Visibility="Collapsed" Width="520">
+    <TextBlock x:Name="DisplayBalance" Foreground="White" FontSize="24" TextAlignment="Center"/>
+    <TextBlock x:Name="DisplayPackage" Foreground="#9CA3AF" FontSize="18" Margin="0,8" TextAlignment="Center"/>
+    <TextBlock x:Name="DisplayElapsed" Foreground="#9CA3AF" FontSize="18" TextAlignment="Center"/>
+    <TextBlock x:Name="DisplayFreeBand" Foreground="#60A5FA" FontSize="16" Margin="0,12" TextWrapping="Wrap" TextAlignment="Center"/>
+    <Button Content="Logout" Height="40" Margin="0,24,0,0" Click="OnLogoutClick"/>
+  </StackPanel>
+
+  <TextBlock Grid.Row="2" x:Name="FooterText" Foreground="#4B5563" FontSize="12" Margin="12" Text="F8: quick dev server URL"/>
   </Grid>
 </Window>

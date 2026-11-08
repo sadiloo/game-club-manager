@@ -512,6 +512,26 @@
     },
     "/hubs/kiosk": {
       "get": { "tags": ["KioskHub"], "responses": { "200": { "description": "SignalR negotiate" } } }
+    },
+    "/api/operator/games": {
+      "get": { "tags": ["KioskOperator"], "responses": { "200": { "description": "Catalog list" } } },
+      "post": { "tags": ["KioskOperator"], "responses": { "201": { "description": "Created" } } }
+    },
+    "/api/operator/games/{id}": {
+      "put": { "tags": ["KioskOperator"], "responses": { "200": { "description": "Updated" } } }
+    },
+    "/api/operator/sessions/{sessionId}/manual-settle": {
+      "post": {
+        "tags": ["Sessions"],
+        "requestBody": { "$ref": "#/components/schemas/ManualSettleRequest" },
+        "responses": { "200": { "description": "Manual settle resolve" } }
+      }
+    },
+    "/api/kiosk/stations/{stationId}/config": {
+      "get": { "tags": ["Kiosk"], "responses": { "200": { "description": "Station kiosk config" } } }
+    },
+    "/api/kiosk/profile/test-mode": {
+      "post": { "tags": ["Kiosk"], "responses": { "200": { "description": "Toggle test mode" } } }
     }
   },
   "components": {

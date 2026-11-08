@@ -808,8 +808,22 @@ public sealed class SessionService(
                 }
             }
 
-            var pending = await operatorBills.CreatePcPendingBillAsync(session, endUtc, "manual_settle", session.ManualSettleReason, innerCt);
-            await audit.AppendAsync("session.manual_settle_resolve", new { sessionId, endUtc }, innerCt);
+            var reason = session.ManualSettleReason;
+            PendingBillEntity pending;
+            if (session.PendingBill is not null
+                || await db.PendingBills.AnyAsync(b => b.SessionId == session.Id, innerCt))
+            {
+                pending = session.PendingBill
+                    ?? await db.PendingBills.FirstAsync(b => b.SessionId == session.Id, innerCt);
+            }
+            else
+            {
+                pending = await operatorBills.CreatePcPendingBillAsync(session, endUtc, "manual_settle", reason, innerCt);
+            }
+
+            session.ManualSettleReason = null;
+            await db.SaveChangesAsync(innerCt);
+            await audit.AppendAsync("session.manual_settle_resolve", new { sessionId, endUtc, reason }, innerCt);
             return pending;
         }, ct);
     }

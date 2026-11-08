@@ -361,16 +361,19 @@ public sealed class KioskDisplayService(
             freeBand = KioskPlayEstimate.FormatFreeBandText(snapshot.Card, settled.Account, groupId, session, at);
         }
 
-        var remainingSeconds = (debtOnly ? estimate.EligiblePackageMinutes : minutesLeft) * 60L;
+        var moneyOnlySeconds = Math.Max(0, debtOnly ? 0 : moneyMinutes) * 60L;
+        var graceActive = settled.Settlement.Grace is { } g
+            && clock.UtcNow.UtcDateTime < g.At.UtcDateTime.AddMinutes(1);
         return new KioskDisplayDto
         {
-            WalletBalanceToman = pocket.RealToman,
-            GiftBalanceToman = pocket.GiftToman,
+            WalletBalanceToman = settled.Account.Pc.TotalToman,
+            GiftBalanceToman = settled.Account.Pc.GiftToman,
             PackageMinutesRemaining = packageRemaining,
-            EstimatedRemainingSeconds = remainingSeconds,
+            EstimatedRemainingSeconds = moneyOnlySeconds,
             ElapsedDisplaySeconds = elapsed,
             OpenGuestElapsedOnly = false,
             FreeBandText = freeBand,
+            GraceActive = graceActive,
             BlockedByDebt = estimate.BlockedByDebt || (debtOnly && estimate.EligiblePackageMinutes <= 0),
             NearEndMinutesThresholds = thresholds,
             WarningRemainingMinutes = warning,
@@ -409,6 +412,8 @@ public sealed class KioskCheckpointCoordinator(
         {
             session = await db.Sessions
                 .Include(s => s.Station)!.ThenInclude(st => st!.Group)
+                .Include(s => s.Segments)
+                .Include(s => s.Pauses)
                 .FirstOrDefaultAsync(s => s.Id == sid, ct);
             if (session is not null)
             {
@@ -419,6 +424,8 @@ public sealed class KioskCheckpointCoordinator(
         {
             session = await db.Sessions
                 .Include(s => s.Station)!.ThenInclude(st => st!.Group)
+                .Include(s => s.Segments)
+                .Include(s => s.Pauses)
                 .Where(s => s.StationId == device.StationId && s.Status == SessionStatus.Open)
                 .OrderByDescending(s => s.StartedAtUtc)
                 .FirstOrDefaultAsync(ct);
@@ -445,10 +452,23 @@ public sealed class KioskCheckpointCoordinator(
                 foreach (var minute in CheckpointMinutePlanner.MinutesToAccept(last, clock.UtcNow.UtcDateTime))
                 {
                     await sessions.RecordCheckpointAsync(session.Id, new DateTimeOffset(minute, TimeSpan.Zero), ct);
-                    await db.Entry(session).ReloadAsync(ct);
+                    session = await db.Sessions
+                        .Include(s => s.Station)!.ThenInclude(st => st!.Group)
+                        .Include(s => s.Segments)
+                        .Include(s => s.Pauses)
+                        .FirstAsync(s => s.Id == session.Id, ct);
                     last = session.LastCheckpointUtc ?? last;
                 }
             }
+        }
+
+        if (session is not null)
+        {
+            session = await db.Sessions
+                .Include(s => s.Station)!.ThenInclude(st => st!.Group)
+                .Include(s => s.Segments)
+                .Include(s => s.Pauses)
+                .FirstAsync(s => s.Id == session.Id, ct);
         }
 
         SignedSessionLease? lease = session is not null ? await leases.BuildLeaseAsync(session, ct) : null;
