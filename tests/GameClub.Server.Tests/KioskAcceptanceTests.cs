@@ -35,6 +35,7 @@ public sealed class KioskAcceptanceTests(GameClubWebApplicationFactory factory)
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         var customer = new CustomerEntity { Id = Guid.NewGuid(), Name = "Ali", Mobile = "09120000001", CreatedAtUtc = DateTime.UtcNow };
         db.Customers.Add(customer);
+        db.CustomerMembers.Add(new CustomerMemberEntity { CustomerId = customer.Id, RealToman = 500_000 });
         await db.SaveChangesAsync();
         var auth = scope.ServiceProvider.GetRequiredService<KioskCustomerAuthService>();
         await auth.SetCredentialAsync(customer.Id, "ali", "good-pass", default);
@@ -68,7 +69,7 @@ public sealed class KioskAcceptanceTests(GameClubWebApplicationFactory factory)
         using var scope = factory.Services.CreateScope();
         var coordinator = scope.ServiceProvider.GetRequiredService<KioskCheckpointCoordinator>();
         var sessionId = await scope.ServiceProvider.GetRequiredService<AppDbContext>().Sessions.Select(s => s.Id).SingleAsync();
-        await coordinator.OnHeartbeatAsync(deviceId, sessionId, 0, default);
+        await coordinator.OnHeartbeatAsync(deviceId, sessionId, 120_000, default);
         var session = await scope.ServiceProvider.GetRequiredService<AppDbContext>().Sessions.SingleAsync();
         Assert.Equal(new DateTime(2026, 6, 3, 10, 32, 0, DateTimeKind.Utc), session.LastCheckpointUtc);
         _ = deviceKey;

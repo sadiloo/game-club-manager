@@ -107,6 +107,15 @@ public sealed class StationKioskProfileEntity
     public string? AlertSoundId { get; set; }
 }
 
+public sealed class KioskLeaseSigningKeyEntity
+{
+    public int Id { get; set; }
+
+    public string PrivateKeyPem { get; set; } = string.Empty;
+
+    public DateTime CreatedAtUtc { get; set; }
+}
+
 public sealed class KioskHeartbeatEntity
 {
     public long Id { get; set; }

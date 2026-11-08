@@ -1,4 +1,7 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
+using Microsoft.AspNetCore.Http;
 using GameClub.Billing;
 using GameClub.Kiosk.Core.Heartbeat;
 using GameClub.Kiosk.Core.Protocol;
@@ -43,22 +46,23 @@ public sealed class KioskPairingService(AppDbContext db, IClock clock, IKioskLea
             throw new ApiException(StatusCodes.Status400BadRequest, "expired_code", "Pairing code expired.");
         }
 
-        var existing = await db.KioskDevices.FirstOrDefaultAsync(d => d.StationId == row.StationId, ct);
-        if (existing is not null)
+        var deviceKey = KioskCrypto.NewDeviceKey();
+        var device = await db.KioskDevices.FirstOrDefaultAsync(d => d.StationId == row.StationId, ct);
+        if (device is null)
         {
-            existing.IsRevoked = true;
+            device = new KioskDeviceEntity
+            {
+                Id = Guid.NewGuid(),
+                StationId = row.StationId,
+            };
+            db.KioskDevices.Add(device);
         }
 
-        var deviceKey = KioskCrypto.NewDeviceKey();
-        var device = new KioskDeviceEntity
-        {
-            Id = Guid.NewGuid(),
-            StationId = row.StationId,
-            DeviceKeyHash = KioskCrypto.HashDeviceKey(deviceKey),
-            LeaseVerifyPublicKeyPem = leaseSigner.PublicKeyPem,
-            PairedAtUtc = clock.UtcNow.UtcDateTime,
-        };
-        db.KioskDevices.Add(device);
+        device.DeviceKeyHash = KioskCrypto.HashDeviceKey(deviceKey);
+        device.LeaseVerifyPublicKeyPem = leaseSigner.PublicKeyPem;
+        device.PairedAtUtc = clock.UtcNow.UtcDateTime;
+        device.IsRevoked = false;
+        device.LastSeenUtc = null;
         row.ConsumedAtUtc = clock.UtcNow.UtcDateTime;
         row.ConsumedDeviceId = device.Id;
         await audit.AppendAsync("kiosk.pair", new { device.Id, row.StationId }, ct);
@@ -78,50 +82,67 @@ public sealed class KioskCustomerAuthService(AppDbContext db, AuditService audit
     public async Task<Guid> LoginAsync(string loginName, string password, string stationId, CancellationToken ct)
     {
         var normalized = KioskCrypto.NormalizeLoginName(loginName);
-        var cred = await db.CustomerCredentials
-            .Include(c => c.Customer)
-            .FirstOrDefaultAsync(c => c.LoginNameNormalized == normalized, ct);
-        if (cred is null)
+        var strategy = db.Database.CreateExecutionStrategy();
+        return await strategy.ExecuteAsync(async () =>
         {
-            throw new ApiException(StatusCodes.Status401Unauthorized, "invalid_login", "Invalid login or password.");
-        }
+            await using var tx = await db.Database.BeginTransactionAsync(ct);
+            await db.Database.ExecuteSqlRawAsync(
+                """SELECT "CustomerId" FROM customer_credentials WHERE "LoginNameNormalized" = {0} FOR UPDATE""",
+                normalized);
+            var cred = await db.CustomerCredentials
+                .Include(c => c.Customer)
+                .FirstOrDefaultAsync(c => c.LoginNameNormalized == normalized, ct);
+            if (cred is null)
+            {
+                throw new ApiException(StatusCodes.Status401Unauthorized, "invalid_login", "Invalid login or password.");
+            }
 
-        if (cred.LockedUntilReset)
-        {
-            throw new ApiException(StatusCodes.Status403Forbidden, "account_locked", "Account locked; operator reset required."); // F6
-        }
+            if (cred.LockedUntilReset)
+            {
+                throw new ApiException(StatusCodes.Status403Forbidden, "account_locked", "Account locked; operator reset required."); // F6
+            }
 
         if (!KioskCrypto.VerifyPassword(password, cred.PasswordHash))
         {
-            cred.FailedLoginCount++;
+            await db.Database.ExecuteSqlRawAsync(
+                """
+                UPDATE customer_credentials
+                SET "FailedLoginCount" = "FailedLoginCount" + 1,
+                    "LockedUntilReset" = CASE WHEN "FailedLoginCount" + 1 >= 5 THEN TRUE ELSE "LockedUntilReset" END
+                WHERE "CustomerId" = {0}
+                """,
+                cred.CustomerId);
+            await db.Entry(cred).ReloadAsync(ct);
             if (cred.FailedLoginCount >= 5)
             {
-                cred.LockedUntilReset = true;
                 await audit.AppendAsync("kiosk.login_locked", new { cred.CustomerId }, ct);
             }
 
             await db.SaveChangesAsync(ct);
+            await tx.CommitAsync(ct);
             throw new ApiException(StatusCodes.Status401Unauthorized, "invalid_login", "Invalid login or password.");
         }
 
-        cred.FailedLoginCount = 0;
-        await db.SaveChangesAsync(ct);
+            cred.FailedLoginCount = 0;
+            await db.SaveChangesAsync(ct);
+            await tx.CommitAsync(ct);
 
-        var sid = StationIdNormalizer.Normalize(stationId);
-        var otherOpen = await db.Sessions
-            .Include(s => s.Station)!.ThenInclude(st => st!.Group)
-            .AnyAsync(
-                s => s.CustomerId == cred.CustomerId
-                    && s.StationId != sid
-                    && s.Station!.Group!.Kind == StationKind.Pc
-                    && (s.Status == SessionStatus.Open || s.Status == SessionStatus.Paused),
-                ct);
-        if (otherOpen)
-        {
-            throw new ApiException(StatusCodes.Status409Conflict, "session_elsewhere", "Customer already has an open PC session.");
-        }
+            var sid = StationIdNormalizer.Normalize(stationId);
+            var otherOpen = await db.Sessions
+                .Include(s => s.Station)!.ThenInclude(st => st!.Group)
+                .AnyAsync(
+                    s => s.CustomerId == cred.CustomerId
+                        && s.StationId != sid
+                        && s.Station!.Group!.Kind == StationKind.Pc
+                        && (s.Status == SessionStatus.Open || s.Status == SessionStatus.Paused),
+                    ct);
+            if (otherOpen)
+            {
+                throw new ApiException(StatusCodes.Status409Conflict, "session_elsewhere", "Customer already has an open PC session.");
+            }
 
-        return cred.CustomerId;
+            return cred.CustomerId;
+        });
     }
 
     public async Task SetCredentialAsync(Guid customerId, string loginName, string newPassword, CancellationToken ct)
@@ -185,7 +206,9 @@ public sealed class KioskProfileService(AppDbContext db)
 public sealed class KioskLeaseService(
     IClock clock,
     IKioskLeaseSigner signer,
-    AppDbContext db)
+    AppDbContext db,
+    RateConfigService rates,
+    OperatorMemberContext members)
 {
     public async Task<SignedSessionLease?> BuildLeaseAsync(PlaySessionEntity session, CancellationToken ct)
     {
@@ -194,13 +217,42 @@ public sealed class KioskLeaseService(
             return null;
         }
 
-        var authorizedUntil = (session.LastCheckpointUtc ?? session.StartedAtUtc).AddHours(4);
-        var walletDigest = session.CustomerId?.ToString() ?? "guest";
+        var lastCheckpoint = session.LastCheckpointUtc ?? session.StartedAtUtc;
+        DateTime authorizedUntil;
         long packageMinutes = 0;
-        if (session.CustomerId is Guid cid)
+        var walletDigest = session.CustomerId?.ToString() ?? "guest";
+        if (session.CustomerId is null)
         {
-            var pkgs = await db.CustomerPackages.Where(p => p.CustomerId == cid).ToListAsync(ct);
-            packageMinutes = pkgs.Sum(p => p.RemainingMinutes);
+            authorizedUntil = session.PrepaidKind != PrepaidSessionKind.None && session.PrepaidBookedActiveSeconds is long booked
+                ? session.StartedAtUtc.AddSeconds(booked)
+                : clock.UtcNow.UtcDateTime.Add(DeadPcMonitor.Timeout);
+        }
+        else
+        {
+            var settings = await members.LoadSettingsAsync(ct);
+            var wallet = MemberSettingsMapper.LoadWalletSettings(settings);
+            var (member, packages) = await members.LoadMemberStateAsync(session.CustomerId.Value, ct);
+            if (member is null)
+            {
+                return null;
+            }
+
+            packageMinutes = packages.Sum(p => p.RemainingMinutes);
+            var pocket = MemberWalletMapper.ToPocket(member);
+            var account = new CustomerAccount(session.CustomerId.Value.ToString(), wallet, pocket, new WalletPocket(0, 0), packages);
+            var snapshot = await rates.LoadSnapshotAsync(session.RateCardSnapshotId, ct);
+            var groupId = session.Station?.GroupId ?? PilotSeed.PcNormalGroupId;
+            var at = clock.UtcNow;
+            var estimate = CustomerPlay.Estimate(account, groupId, session.Mode, session.PlayerCount, at, snapshot.Card);
+            var moneyMinutes = estimate.MoneyMinutes ?? 0;
+            if (moneyMinutes <= 0 && estimate.EligiblePackageMinutes <= 0)
+            {
+                authorizedUntil = lastCheckpoint;
+            }
+            else
+            {
+                authorizedUntil = lastCheckpoint.AddMinutes(Math.Max(1, moneyMinutes + estimate.EligiblePackageMinutes));
+            }
         }
 
         var catalogVersion = await db.GameCatalogEntries.Select(e => (long?)e.CatalogVersion).MaxAsync(ct) ?? 0;
@@ -212,7 +264,7 @@ public sealed class KioskLeaseService(
             CustomerId = session.CustomerId,
             PrepaidKind = session.PrepaidKind.ToString(),
             AuthorizedUntilUtc = authorizedUntil,
-            MaxBillableCheckpointUtc = session.LastCheckpointUtc ?? session.StartedAtUtc,
+            MaxBillableCheckpointUtc = lastCheckpoint,
             WalletDigest = walletDigest,
             PackageMinutesTotal = packageMinutes,
             CatalogVersion = catalogVersion,
@@ -227,7 +279,8 @@ public sealed class KioskDisplayService(
     IClock clock,
     RateConfigService rates,
     OperatorMemberContext members,
-    KioskProfileService profiles)
+    KioskProfileService profiles,
+    SessionBilling billing)
 {
     public async Task<KioskDisplayDto?> BuildAsync(PlaySessionEntity session, CancellationToken ct)
     {
@@ -252,17 +305,24 @@ public sealed class KioskDisplayService(
             return null;
         }
 
+        var snapshot = await rates.LoadSnapshotAsync(session.RateCardSnapshotId, ct);
+        var endUtc = session.LastCheckpointUtc ?? clock.UtcNow.UtcDateTime;
+        var charge = billing.BuildCharge(session, endUtc, snapshot);
+        var packageRemaining = PackageMinutesRemainingAfterCharge(packages, charge);
         var pocket = MemberWalletMapper.ToPocket(member);
         var account = new CustomerAccount(member.CustomerId.ToString(), wallet, pocket, new WalletPocket(0, 0), packages);
-        var snapshot = await rates.LoadAsync(ct);
         var groupId = session.Station?.GroupId ?? PilotSeed.PcNormalGroupId;
         var at = clock.UtcNow;
-        var estimate = CustomerPlay.Estimate(account, groupId, session.Mode, session.PlayerCount, at, snapshot.Card);
+        var ladder = MemberSettingsMapper.LoadLadder(settings);
+        var pricing = wallet.ApplyDiscountsToPc ? MemberSettingsMapper.BuildPricing(member, settings, ladder) : null;
+        var discounts = wallet.ApplyDiscountsToPc ? MemberSettingsMapper.LoadDiscountPolicy(settings) : null;
+        var estimate = CustomerPlay.Estimate(account, groupId, session.Mode, session.PlayerCount, at, snapshot.Card, pricing: pricing, discounts: discounts);
         var elapsed = (long)Elapsed(session).TotalSeconds;
+        var moneyMinutes = estimate.MoneyMinutes ?? 0;
         int? warning = null;
-        if (estimate.TotalMinutes > 0)
+        if (moneyMinutes > 0)
         {
-            var minutesLeft = (int)estimate.TotalMinutes;
+            var minutesLeft = (int)moneyMinutes;
             warning = thresholds.Where(t => minutesLeft <= t).OrderBy(t => t).FirstOrDefault();
             if (warning == 0)
             {
@@ -270,17 +330,38 @@ public sealed class KioskDisplayService(
             }
         }
 
+        string? freeBand = null;
+        if (estimate.RateIsFree)
+        {
+            freeBand = $"رایگان تا {at.AddMinutes(estimate.TotalMinutes):HH:mm}، سپس {estimate.TotalMinutes} دقیقه";
+        }
+
         return new KioskDisplayDto
         {
             WalletBalanceToman = pocket.RealToman,
             GiftBalanceToman = pocket.GiftToman,
-            PackageMinutesRemaining = packages.Select(p => (int)p.RemainingMinutes).ToList(),
-            EstimatedRemainingSeconds = estimate.TotalMinutes * 60,
+            PackageMinutesRemaining = packageRemaining,
+            EstimatedRemainingSeconds = moneyMinutes * 60,
             ElapsedDisplaySeconds = elapsed,
+            FreeBandText = freeBand,
             BlockedByDebt = estimate.BlockedByDebt,
             NearEndMinutesThresholds = thresholds,
             WarningRemainingMinutes = warning,
         };
+    }
+
+    private static IReadOnlyList<int> PackageMinutesRemainingAfterCharge(IReadOnlyList<TimePackage> packages, SessionCharge charge)
+    {
+        var toConsume = charge.TotalBilledMinutes;
+        var remaining = new List<int>();
+        foreach (var pkg in packages)
+        {
+            var used = Math.Min(toConsume, pkg.RemainingMinutes);
+            remaining.Add((int)(pkg.RemainingMinutes - used));
+            toConsume = Math.Max(0, toConsume - used);
+        }
+
+        return remaining;
     }
 
     private TimeSpan Elapsed(PlaySessionEntity session)
@@ -316,6 +397,10 @@ public sealed class KioskCheckpointCoordinator(
             session = await db.Sessions
                 .Include(s => s.Station)!.ThenInclude(st => st!.Group)
                 .FirstOrDefaultAsync(s => s.Id == sid, ct);
+            if (session is not null)
+            {
+                KioskDeviceAuthorization.EnsureSessionOnDeviceStation(session, device.StationId);
+            }
         }
         else
         {
@@ -326,14 +411,27 @@ public sealed class KioskCheckpointCoordinator(
                 .FirstOrDefaultAsync(ct);
         }
 
-        if (session is not null && session.Station?.Group?.Kind == StationKind.Pc)
+        if (session is not null && session.Station?.Group?.Kind == StationKind.Pc
+            && session.Status == SessionStatus.Open)
         {
-            var last = session.LastCheckpointUtc ?? session.StartedAtUtc;
-            foreach (var minute in CheckpointMinutePlanner.MinutesToAccept(last, clock.UtcNow.UtcDateTime))
+            var lastHeartbeat = await db.KioskHeartbeats
+                .Where(h => h.DeviceId == deviceId && h.SessionId == session.Id)
+                .OrderByDescending(h => h.ReceivedUtc)
+                .Skip(1)
+                .FirstOrDefaultAsync(ct);
+            var checkpointAt = session.LastCheckpointUtc ?? session.StartedAtUtc;
+            var monotonicDropped = clientMonotonicMs == 0
+                && checkpointAt.AddMinutes(1) < clock.UtcNow.UtcDateTime
+                || lastHeartbeat is not null && clientMonotonicMs + 30_000 < lastHeartbeat.ClientMonotonicMs;
+            if (!monotonicDropped)
             {
-                await sessions.RecordCheckpointAsync(session.Id, new DateTimeOffset(minute, TimeSpan.Zero), ct);
-                await db.Entry(session).ReloadAsync(ct);
-                last = session.LastCheckpointUtc ?? last;
+                var last = session.LastCheckpointUtc ?? session.StartedAtUtc;
+                foreach (var minute in CheckpointMinutePlanner.MinutesToAccept(last, clock.UtcNow.UtcDateTime))
+                {
+                    await sessions.RecordCheckpointAsync(session.Id, new DateTimeOffset(minute, TimeSpan.Zero), ct);
+                    await db.Entry(session).ReloadAsync(ct);
+                    last = session.LastCheckpointUtc ?? last;
+                }
             }
         }
 
@@ -358,10 +456,34 @@ public sealed class KioskSessionService(
     AppDbContext db,
     SessionService sessions,
     OperatorCustomerService customers,
-    OperatorPrepaidService prepaid,
+    KioskPcPrepaidService pcPrepaid,
     KioskProfileService profiles,
+    KioskFundingGuard funding,
+    KioskCustomerAuthService auth,
     AuditService audit)
 {
+    public async Task<(Guid CustomerId, PlaySessionEntity Session)> LoginAndAttachAsync(
+        string loginName,
+        string password,
+        string stationId,
+        CancellationToken ct)
+    {
+        var normalized = KioskCrypto.NormalizeLoginName(loginName);
+        var nameHash = SHA256.HashData(Encoding.UTF8.GetBytes(normalized));
+        var lockKey = BitConverter.ToInt64(nameHash, 0);
+        await db.Database.ExecuteSqlRawAsync("SELECT pg_advisory_lock({0})", lockKey);
+        try
+        {
+            var customerId = await auth.LoginAsync(loginName, password, stationId, ct);
+            var session = await AttachOrStartMemberCoreAsync(customerId, stationId, ct);
+            return (customerId, session);
+        }
+        finally
+        {
+            await db.Database.ExecuteSqlRawAsync("SELECT pg_advisory_unlock({0})", lockKey);
+        }
+    }
+
     public async Task<PlaySessionEntity> StartGuestAsync(
         string stationId,
         PrepaidSessionKind? prepaidKind,
@@ -382,14 +504,41 @@ public sealed class KioskSessionService(
             throw new ApiException(StatusCodes.Status400BadRequest, "not_pc", "Guest start is for PC stations only.");
         }
 
-        var session = await sessions.StartAsync(station.Id, 1, PlayMode.Offline, null, ct);
         if (prepaidKind == PrepaidSessionKind.Duration && minutes is int m)
         {
-            await prepaid.StartDurationAsync(session.Id, m, ct);
+            if (m <= 0)
+            {
+                throw new ApiException(StatusCodes.Status400BadRequest, "invalid_minutes", "Prepaid minutes must be positive.");
+            }
         }
         else if (prepaidKind == PrepaidSessionKind.Amount && amountToman is long a)
         {
-            await prepaid.StartAmountAsync(session.Id, a, ct);
+            if (a <= 0)
+            {
+                throw new ApiException(StatusCodes.Status400BadRequest, "invalid_amount", "Prepaid amount must be positive.");
+            }
+        }
+
+        var session = await sessions.StartAsync(station.Id, 1, PlayMode.Offline, null, ct);
+        session = await db.Sessions.Include(s => s.Segments).Include(s => s.Station)!.ThenInclude(st => st!.Group)
+            .FirstAsync(s => s.Id == session.Id, ct);
+        try
+        {
+            if (prepaidKind == PrepaidSessionKind.Duration && minutes is int mins)
+            {
+                await pcPrepaid.ApplyDurationAsync(session, mins, ct);
+            }
+            else if (prepaidKind == PrepaidSessionKind.Amount && amountToman is long amt)
+            {
+                await pcPrepaid.ApplyAmountAsync(session, amt, ct);
+            }
+
+            await db.SaveChangesAsync(ct);
+        }
+        catch
+        {
+            await sessions.StopAsync(session.Id, ct);
+            throw;
         }
 
         await audit.AppendAsync("kiosk.guest_start", new { session.Id, stationId, openPayAtEnd, prepaidKind }, ct);
@@ -398,45 +547,100 @@ public sealed class KioskSessionService(
 
     public async Task<PlaySessionEntity> AttachOrStartMemberAsync(Guid customerId, string stationId, CancellationToken ct)
     {
+        var lockKey = BitConverter.ToInt64(customerId.ToByteArray(), 0);
+        await db.Database.ExecuteSqlRawAsync("SELECT pg_advisory_lock({0})", lockKey);
+        try
+        {
+            return await AttachOrStartMemberCoreAsync(customerId, stationId, ct);
+        }
+        finally
+        {
+            await db.Database.ExecuteSqlRawAsync("SELECT pg_advisory_unlock({0})", lockKey);
+        }
+    }
+
+    private async Task<PlaySessionEntity> AttachOrStartMemberCoreAsync(Guid customerId, string stationId, CancellationToken ct)
+    {
         var profile = await profiles.EnsureProfileAsync(stationId, ct);
         if (profile.IsTestMode)
         {
             throw new ApiException(StatusCodes.Status409Conflict, "test_mode", "Station is in test mode.");
         }
 
+        await funding.EnsureMemberMayPlayAsync(customerId, stationId, ct);
+
         var sid = StationIdNormalizer.Normalize(stationId);
-        var open = await db.Sessions
-            .Include(s => s.Station)!.ThenInclude(st => st!.Group)
-            .Where(s => s.StationId == sid && (s.Status == SessionStatus.Open || s.Status == SessionStatus.Paused))
-            .FirstOrDefaultAsync(ct);
-        if (open is null)
+        var strategy = db.Database.CreateExecutionStrategy();
+        return await strategy.ExecuteAsync(async () =>
         {
-            var session = await sessions.StartAsync(sid, 1, PlayMode.Offline, null, ct);
-            await customers.LinkSessionAsync(session.Id, customerId, ct);
-            return await db.Sessions.FirstAsync(s => s.Id == session.Id, ct);
-        }
+            var busyElsewhere = await db.Sessions
+                .Include(s => s.Station)!.ThenInclude(st => st!.Group)
+                .AnyAsync(
+                    s => s.CustomerId == customerId
+                        && s.StationId != sid
+                        && s.Station!.Group!.Kind == StationKind.Pc
+                        && (s.Status == SessionStatus.Open || s.Status == SessionStatus.Paused),
+                    ct);
+            if (busyElsewhere)
+            {
+                throw new ApiException(StatusCodes.Status409Conflict, "session_elsewhere", "Customer already has an open PC session.");
+            }
 
-        if (open.CustomerId is Guid existing && existing != customerId)
-        {
-            throw new ApiException(StatusCodes.Status409Conflict, "station_busy", "Station has another customer's session.");
-        }
+            var open = await db.Sessions
+                .Include(s => s.Station)!.ThenInclude(st => st!.Group)
+                .Where(s => s.StationId == sid && (s.Status == SessionStatus.Open || s.Status == SessionStatus.Paused))
+                .FirstOrDefaultAsync(ct);
+            if (open is null)
+            {
+                var alreadyOpen = await db.Sessions
+                    .Include(s => s.Station)!.ThenInclude(st => st!.Group)
+                    .AnyAsync(
+                        s => s.CustomerId == customerId
+                            && s.Station!.Group!.Kind == StationKind.Pc
+                            && (s.Status == SessionStatus.Open || s.Status == SessionStatus.Paused),
+                        ct);
+                if (alreadyOpen)
+                {
+                    throw new ApiException(StatusCodes.Status409Conflict, "session_elsewhere", "Customer already has an open PC session.");
+                }
 
-        if (open.CustomerId is null)
-        {
-            await customers.LinkSessionAsync(open.Id, customerId, ct);
-        }
+                var session = await sessions.StartAsync(sid, 1, PlayMode.Offline, null, ct);
+                await customers.LinkSessionAsync(session.Id, customerId, ct);
+                return await db.Sessions.FirstAsync(s => s.Id == session.Id, ct);
+            }
 
-        return open;
+            if (open.CustomerId is Guid existing && existing != customerId)
+            {
+                throw new ApiException(StatusCodes.Status409Conflict, "station_busy", "Station has another customer's session.");
+            }
+
+            if (open.CustomerId is null)
+            {
+                await customers.LinkSessionAsync(open.Id, customerId, ct);
+            }
+
+            return open;
+        });
     }
 
-    public Task LogoutAsync(Guid sessionId, CancellationToken ct)
-        => sessions.StopAsync(sessionId, ct);
+    public async Task LogoutAsync(Guid sessionId, string deviceStationId, CancellationToken ct)
+    {
+        var session = await db.Sessions.FirstOrDefaultAsync(s => s.Id == sessionId, ct)
+            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Session not found.");
+        KioskDeviceAuthorization.EnsureSessionOnDeviceStation(session, deviceStationId);
+        await sessions.StopAsync(sessionId, ct);
+    }
 }
 
-public sealed class KioskReconcileService(AppDbContext db, AuditService audit)
+public sealed class KioskReconcileService(
+    AppDbContext db,
+    AuditService audit,
+    IClock clock,
+    SessionService sessions)
 {
     public async Task<IReadOnlyList<Guid>> ApplyEventsAsync(Guid deviceId, IReadOnlyList<KioskOutboundEvent> events, CancellationToken ct)
     {
+        var device = await db.KioskDevices.FirstAsync(d => d.Id == deviceId, ct);
         var acked = new List<Guid>();
         foreach (var ev in events)
         {
@@ -448,7 +652,7 @@ public sealed class KioskReconcileService(AppDbContext db, AuditService audit)
 
             if (ev.Type == "offline_play_segment")
             {
-                await HandleOfflineSegmentAsync(ev, ct);
+                await HandleOfflineSegmentAsync(device, ev, ct);
             }
             else if (ev.Type == "process_violation" || ev.Type == "client_lock_grace_exhausted")
             {
@@ -462,14 +666,64 @@ public sealed class KioskReconcileService(AppDbContext db, AuditService audit)
         return acked;
     }
 
-    private async Task HandleOfflineSegmentAsync(KioskOutboundEvent ev, CancellationToken ct)
+    private async Task HandleOfflineSegmentAsync(KioskDeviceEntity device, KioskOutboundEvent ev, CancellationToken ct)
     {
-        // F1: after auto-close, route extra powered-offline time to manual settle instead of billing.
-        await audit.AppendAsync("kiosk.offline_segment", new { ev.EventId, ev.PayloadJson }, ct);
+        using var doc = JsonDocument.Parse(ev.PayloadJson);
+        var root = doc.RootElement;
+        var sessionId = root.GetProperty("sessionId").GetGuid();
+        var powered = root.TryGetProperty("powered", out var p) && p.GetBoolean();
+        var segmentEnd = root.TryGetProperty("segmentEndUtc", out var se)
+            ? DateTime.Parse(se.GetString()!, null, System.Globalization.DateTimeStyles.RoundtripKind)
+            : clock.UtcNow.UtcDateTime;
+
+        var session = await db.Sessions
+            .Include(s => s.Station)!.ThenInclude(st => st!.Group)
+            .Include(s => s.Segments)
+            .Include(s => s.Pauses)
+            .FirstOrDefaultAsync(s => s.Id == sessionId, ct);
+        if (session is null)
+        {
+            await audit.AppendAsync("kiosk.offline_segment", new { ev.EventId, reason = "missing_session" }, ct);
+            return;
+        }
+
+        KioskDeviceAuthorization.EnsureSessionOnDeviceStation(session, device.StationId);
+
+        if (!powered)
+        {
+            await audit.AppendAsync("kiosk.offline_segment", new { ev.EventId, ev.PayloadJson, skipped = "unpowered" }, ct);
+            return;
+        }
+
+        if (session.Status is SessionStatus.AwaitingPayment or SessionStatus.Closed)
+        {
+            session.ManualSettleReason = "powered_offline_after_autoclose";
+            await audit.AppendAsync("kiosk.offline_after_autoclose", new { sessionId, ev.EventId }, ct);
+            await audit.AppendAsync("pc_offline_after_autoclose", new { sessionId, ev.EventId }, ct);
+            await audit.AppendAsync("kiosk.offline_segment", new { ev.EventId, ev.PayloadJson, manualSettle = true }, ct);
+            return;
+        }
+
+        if (session.Status != SessionStatus.Open)
+        {
+            await audit.AppendAsync("kiosk.offline_segment", new { ev.EventId, skipped = session.Status.ToString() }, ct);
+            return;
+        }
+
+        var last = session.LastCheckpointUtc ?? session.StartedAtUtc;
+        var cappedEnd = segmentEnd > clock.UtcNow.UtcDateTime ? clock.UtcNow.UtcDateTime : segmentEnd;
+        foreach (var minute in CheckpointMinutePlanner.MinutesToAccept(last, cappedEnd))
+        {
+            await sessions.RecordCheckpointAsync(session.Id, new DateTimeOffset(minute, TimeSpan.Zero), ct);
+            await db.Entry(session).ReloadAsync(ct);
+            last = session.LastCheckpointUtc ?? last;
+        }
+
+        await audit.AppendAsync("kiosk.offline_segment", new { ev.EventId, ev.PayloadJson, reconciled = true }, ct);
     }
 }
 
-public sealed class GameCatalogService(AppDbContext db)
+public sealed class GameCatalogService(AppDbContext db, AuditService audit)
 {
     public async Task<object> GetCatalogAsync(long sinceVersion, CancellationToken ct)
     {
@@ -498,5 +752,36 @@ public sealed class GameCatalogService(AppDbContext db)
                 e.MinAge,
             }),
         };
+    }
+
+    public async Task<GameCatalogEntryEntity> CreateEntryAsync(string name, int categoryId, string executableOrUri, CancellationToken ct)
+    {
+        var version = await db.GameCatalogEntries.MaxAsync(e => (long?)e.CatalogVersion, ct) ?? 0;
+        version++;
+        var row = new GameCatalogEntryEntity
+        {
+            Name = name,
+            CategoryId = categoryId,
+            ExecutableOrUri = executableOrUri,
+            Enabled = true,
+            CatalogVersion = version,
+            SortOrder = (int)version,
+        };
+        db.GameCatalogEntries.Add(row);
+        await audit.AppendAsync("game_catalog.create", new { row.Name, row.Id }, ct);
+        await db.SaveChangesAsync(ct);
+        return row;
+    }
+
+    public async Task<GameCatalogEntryEntity> UpdateEntryAsync(int id, string name, bool enabled, CancellationToken ct)
+    {
+        var row = await db.GameCatalogEntries.FirstOrDefaultAsync(e => e.Id == id, ct)
+            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Game not found.");
+        row.Name = name;
+        row.Enabled = enabled;
+        row.CatalogVersion = (await db.GameCatalogEntries.MaxAsync(e => (long?)e.CatalogVersion, ct) ?? 0) + 1;
+        await audit.AppendAsync("game_catalog.update", new { row.Id, row.Name, row.Enabled }, ct);
+        await db.SaveChangesAsync(ct);
+        return row;
     }
 }

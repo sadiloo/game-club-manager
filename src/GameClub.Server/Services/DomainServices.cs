@@ -486,6 +486,16 @@ public sealed class SessionService(
                 throw new ApiException(StatusCodes.Status409Conflict, "target_unavailable", "Station cannot accept a new session.");
             }
 
+            if (station.Group.Kind == StationKind.Pc)
+            {
+                var kioskProfile = await db.StationKioskProfiles.AsNoTracking()
+                    .FirstOrDefaultAsync(p => p.StationId == station.Id, ct);
+                if (kioskProfile?.IsTestMode == true)
+                {
+                    throw new ApiException(StatusCodes.Status409Conflict, "test_mode", "Station is in test mode.");
+                }
+            }
+
             if (await db.Sessions.AnyAsync(
                     s => s.StationId == station.Id
                         && (s.Status == SessionStatus.Open

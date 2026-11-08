@@ -31,10 +31,13 @@ public sealed class MemberBillComposer
         CustomerMemberEntity? member,
         BranchMemberSettingsEntity settings,
         IReadOnlyList<TimePackage> packages,
-        IReadOnlyList<Tender>? previewTenders = null)
+        IReadOnlyList<Tender>? previewTenders = null,
+        bool applyMemberPricing = true)
     {
         var ladder = MemberSettingsMapper.LoadLadder(settings);
-        var pricing = customerId is null || member is null ? null : MemberSettingsMapper.BuildPricing(member, settings, ladder);
+        var pricing = customerId is null || member is null || !applyMemberPricing
+            ? null
+            : MemberSettingsMapper.BuildPricing(member, settings, ladder);
         var discountPolicy = MemberSettingsMapper.LoadDiscountPolicy(settings);
         var accountPolicy = MemberSettingsMapper.LoadAccountPolicy(settings);
 

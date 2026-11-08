@@ -31,7 +31,21 @@ namespace GameClub.Server.Data.Migrations
                 table: "branch_member_settings",
                 type: "boolean",
                 nullable: false,
-                defaultValue: false);
+                defaultValue: true);
+
+            migrationBuilder.CreateTable(
+                name: "kiosk_lease_signing_keys",
+                columns: table => new
+                {
+                    Id = table.Column<int>(type: "integer", nullable: false)
+                        .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
+                    PrivateKeyPem = table.Column<string>(type: "text", nullable: false),
+                    CreatedAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: false)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_kiosk_lease_signing_keys", x => x.Id);
+                });
 
             migrationBuilder.CreateTable(
                 name: "customer_credentials",
@@ -201,7 +215,8 @@ namespace GameClub.Server.Data.Migrations
                 name: "IX_kiosk_devices_StationId",
                 table: "kiosk_devices",
                 column: "StationId",
-                unique: true);
+                unique: true,
+                filter: "\"IsRevoked\" = false");
 
             migrationBuilder.CreateIndex(
                 name: "IX_kiosk_heartbeats_DeviceId",
@@ -217,6 +232,9 @@ namespace GameClub.Server.Data.Migrations
         /// <inheritdoc />
         protected override void Down(MigrationBuilder migrationBuilder)
         {
+            migrationBuilder.DropTable(
+                name: "kiosk_lease_signing_keys");
+
             migrationBuilder.DropTable(
                 name: "customer_credentials");
 

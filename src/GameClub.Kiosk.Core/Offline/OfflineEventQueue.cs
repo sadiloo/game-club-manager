@@ -1,4 +1,3 @@
-#if NET10_0_OR_GREATER
 using Microsoft.Data.Sqlite;
 
 namespace GameClub.Kiosk.Core.Offline;
@@ -19,9 +18,17 @@ public sealed class SqliteOfflineEventQueue(string dbPath) : IOfflineEventQueue
     public async Task EnqueueAsync(Guid eventId, string type, string payloadJson, DateTime createdUtc, CancellationToken ct = default)
     {
         await EnsureAsync(ct);
+#if NET10_0_OR_GREATER
         await using var conn = new SqliteConnection(_connection);
+#else
+        using var conn = new SqliteConnection(_connection);
+#endif
         await conn.OpenAsync(ct);
+#if NET10_0_OR_GREATER
         await using var cmd = conn.CreateCommand();
+#else
+        using var cmd = conn.CreateCommand();
+#endif
         cmd.CommandText = """
             INSERT OR IGNORE INTO outbound_events (event_id, type, payload_json, created_utc)
             VALUES ($id, $type, $payload, $created);
@@ -36,15 +43,27 @@ public sealed class SqliteOfflineEventQueue(string dbPath) : IOfflineEventQueue
     public async Task<IReadOnlyList<QueuedEvent>> PendingAsync(CancellationToken ct = default)
     {
         await EnsureAsync(ct);
+#if NET10_0_OR_GREATER
         await using var conn = new SqliteConnection(_connection);
+#else
+        using var conn = new SqliteConnection(_connection);
+#endif
         await conn.OpenAsync(ct);
+#if NET10_0_OR_GREATER
         await using var cmd = conn.CreateCommand();
+#else
+        using var cmd = conn.CreateCommand();
+#endif
         cmd.CommandText = """
             SELECT event_id, type, payload_json, created_utc
             FROM outbound_events WHERE acked_utc IS NULL ORDER BY created_utc;
             """;
         var list = new List<QueuedEvent>();
+#if NET10_0_OR_GREATER
         await using var reader = await cmd.ExecuteReaderAsync(ct);
+#else
+        using var reader = await cmd.ExecuteReaderAsync(ct);
+#endif
         while (await reader.ReadAsync(ct))
         {
             list.Add(new QueuedEvent(
@@ -60,9 +79,17 @@ public sealed class SqliteOfflineEventQueue(string dbPath) : IOfflineEventQueue
     public async Task AckAsync(Guid eventId, CancellationToken ct = default)
     {
         await EnsureAsync(ct);
+#if NET10_0_OR_GREATER
         await using var conn = new SqliteConnection(_connection);
+#else
+        using var conn = new SqliteConnection(_connection);
+#endif
         await conn.OpenAsync(ct);
+#if NET10_0_OR_GREATER
         await using var cmd = conn.CreateCommand();
+#else
+        using var cmd = conn.CreateCommand();
+#endif
         cmd.CommandText = "UPDATE outbound_events SET acked_utc = $ack WHERE event_id = $id;";
         cmd.Parameters.AddWithValue("$ack", DateTime.UtcNow.ToString("O"));
         cmd.Parameters.AddWithValue("$id", eventId.ToString());
@@ -71,9 +98,17 @@ public sealed class SqliteOfflineEventQueue(string dbPath) : IOfflineEventQueue
 
     private async Task EnsureAsync(CancellationToken ct)
     {
+#if NET10_0_OR_GREATER
         await using var conn = new SqliteConnection(_connection);
+#else
+        using var conn = new SqliteConnection(_connection);
+#endif
         await conn.OpenAsync(ct);
+#if NET10_0_OR_GREATER
         await using var cmd = conn.CreateCommand();
+#else
+        using var cmd = conn.CreateCommand();
+#endif
         cmd.CommandText = """
             CREATE TABLE IF NOT EXISTS outbound_events (
               event_id TEXT PRIMARY KEY,
@@ -85,4 +120,3 @@ public sealed class SqliteOfflineEventQueue(string dbPath) : IOfflineEventQueue
         await cmd.ExecuteNonQueryAsync(ct);
     }
 }
-#endif

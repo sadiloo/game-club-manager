@@ -59,6 +59,8 @@ public partial class Program
         builder.Services.AddScoped<KioskSessionService>();
         builder.Services.AddScoped<KioskReconcileService>();
         builder.Services.AddScoped<GameCatalogService>();
+        builder.Services.AddScoped<KioskPcPrepaidService>();
+        builder.Services.AddScoped<KioskFundingGuard>();
 
         var connectionString = builder.Configuration.GetConnectionString("Default")
             ?? Environment.GetEnvironmentVariable("GAMECLUB_DATABASE")

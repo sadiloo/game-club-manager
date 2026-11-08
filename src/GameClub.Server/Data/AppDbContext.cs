@@ -91,6 +91,8 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
 
     public DbSet<KioskHeartbeatEntity> KioskHeartbeats => Set<KioskHeartbeatEntity>();
 
+    public DbSet<KioskLeaseSigningKeyEntity> KioskLeaseSigningKeys => Set<KioskLeaseSigningKeyEntity>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<StationGroupEntity>(e =>
@@ -372,8 +374,14 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
         {
             e.ToTable("kiosk_devices");
             e.HasKey(x => x.Id);
-            e.HasIndex(x => x.StationId).IsUnique();
+            e.HasIndex(x => x.StationId).IsUnique().HasFilter("\"IsRevoked\" = false");
             e.HasOne(x => x.Station).WithMany().HasForeignKey(x => x.StationId);
+        });
+
+        modelBuilder.Entity<KioskLeaseSigningKeyEntity>(e =>
+        {
+            e.ToTable("kiosk_lease_signing_keys");
+            e.HasKey(x => x.Id);
         });
 
         modelBuilder.Entity<KioskPairingCodeEntity>(e =>

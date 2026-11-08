@@ -726,9 +726,30 @@ namespace GameClub.Server.Data.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("StationId")
-                        .IsUnique();
+                        .IsUnique()
+                        .HasFilter("\"IsRevoked\" = false");
 
                     b.ToTable("kiosk_devices", (string)null);
+                });
+
+            modelBuilder.Entity("GameClub.Server.Data.Entities.KioskLeaseSigningKeyEntity", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("PrivateKeyPem")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("kiosk_lease_signing_keys", (string)null);
                 });
 
             modelBuilder.Entity("GameClub.Server.Data.Entities.KioskHeartbeatEntity", b =>

@@ -100,6 +100,7 @@ public sealed class BillCalculator(
             (_, packages) = await memberContext.LoadMemberStateAsync(cid, ct);
         }
 
+        var applyPricing = session.Station?.Group?.Kind != StationKind.Pc || settings.ApplyDiscountsToPc;
         return MemberBillComposer.Compute(
             charge,
             snapshot,
@@ -110,7 +111,8 @@ public sealed class BillCalculator(
             member,
             settings,
             packages,
-            previewTenders.Count > 0 ? previewTenders : null);
+            previewTenders.Count > 0 ? previewTenders : null,
+            applyPricing);
     }
 
     private static BillAmounts ToBillAmounts(MemberBillResult result)
@@ -1151,7 +1153,8 @@ public sealed class ManualSettleQueueService(AppDbContext db, OperatorPolicies p
     {
         var rows = await db.Sessions.AsNoTracking()
             .Include(s => s.Station)
-            .Where(s => s.Status == SessionStatus.ManualSettle)
+            .Where(s => s.Status == SessionStatus.ManualSettle
+                || (s.Status == SessionStatus.AwaitingPayment && s.ManualSettleReason != null))
             .OrderBy(s => s.StartedAtUtc)
             .Select(s => new
             {

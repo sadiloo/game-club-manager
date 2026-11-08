@@ -13,7 +13,6 @@ namespace GameClub.Server.Controllers;
 [Route("api/kiosk")]
 public sealed class KioskController(
     KioskPairingService pairing,
-    KioskCustomerAuthService auth,
     KioskSessionService sessions,
     KioskReconcileService reconcile,
     GameCatalogService catalog,
@@ -43,15 +42,20 @@ public sealed class KioskController(
     [HttpPost("auth/login")]
     public async Task<IActionResult> Login(LoginRequest body, CancellationToken ct)
     {
-        var customerId = await auth.LoginAsync(body.LoginName, body.Password, body.StationId, ct);
-        var session = await sessions.AttachOrStartMemberAsync(customerId, body.StationId, ct);
+        KioskDeviceAuthorization.EnsureStationMatches(HttpContext, body.StationId);
+        var (customerId, session) = await sessions.LoginAndAttachAsync(body.LoginName, body.Password, body.StationId, ct);
         return Ok(new { customerId, sessionId = session.Id, status = session.Status.ToString() });
     }
 
     [HttpPost("sessions/{sessionId:guid}/logout")]
     public async Task<IActionResult> Logout(Guid sessionId, CancellationToken ct)
     {
-        await sessions.LogoutAsync(sessionId, ct);
+        if (!HttpContext.Items.TryGetValue("KioskStationId", out var sid) || sid is not string stationId)
+        {
+            return Unauthorized();
+        }
+
+        await sessions.LogoutAsync(sessionId, stationId, ct);
         return NoContent();
     }
 
@@ -98,6 +102,7 @@ public sealed class KioskOperatorController(
     GameCatalogService catalog,
     SessionService sessionService,
     OperatorContext op,
+    AuditService audit,
     AppDbContext db) : ControllerBase
 {
     [HttpPost("stations/{stationId}/pairing-code")]
@@ -121,6 +126,7 @@ public sealed class KioskOperatorController(
         }
 
         profile.AlertSoundId = body.AlertSoundId;
+        await audit.AppendAsync("kiosk.profile", new { stationId, profile.IsTestMode, actor = op.UserId }, ct);
         await db.SaveChangesAsync(ct);
         return Ok(new { profile.StationId, profile.IsTestMode });
     }
@@ -166,6 +172,26 @@ public sealed class KioskOperatorController(
     [HttpGet("games")]
     public async Task<IActionResult> ListGames(CancellationToken ct)
         => Ok((await catalog.GetCatalogAsync(0, ct)));
+
+    public sealed record GameCreateBody(string Name, int CategoryId, string ExecutableOrUri);
+
+    [HttpPost("games")]
+    public async Task<IActionResult> CreateGame(GameCreateBody body, CancellationToken ct)
+    {
+        EnsureManager();
+        var row = await catalog.CreateEntryAsync(body.Name, body.CategoryId, body.ExecutableOrUri, ct);
+        return Created($"/api/operator/games/{row.Id}", new { row.Id, row.Name, row.Enabled, row.CatalogVersion });
+    }
+
+    public sealed record GameUpdateBody(string Name, bool Enabled);
+
+    [HttpPut("games/{id:int}")]
+    public async Task<IActionResult> UpdateGame(int id, GameUpdateBody body, CancellationToken ct)
+    {
+        EnsureManager();
+        var row = await catalog.UpdateEntryAsync(id, body.Name, body.Enabled, ct);
+        return Ok(new { row.Id, row.Name, row.Enabled, row.CatalogVersion });
+    }
 
     private void EnsureOperator()
     {
