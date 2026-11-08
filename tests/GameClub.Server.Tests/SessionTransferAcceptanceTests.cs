@@ -358,6 +358,49 @@ public sealed class SessionTransferAcceptanceTests(GameClubWebApplicationFactory
     }
 
     [Fact]
+    public async Task ss4_fix_r2_two_fractional_hops_bill_30000_and_target_hourly_not_zero()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        try
+        {
+            await db.Database.ExecuteSqlRawAsync(
+                $"""UPDATE rate_lines SET "HourlyToman" = 600000 WHERE "GroupId" = '{GameTimerReference.Ps5GroupId}' AND "PlayerCount" = 1 AND "PlayMode" = 'Offline' AND "IsSpecialBand" = false;""");
+
+            var op = await factory.CreateOperatorClientAsync();
+            await S3TestHelpers.RegisterConsole(_api, op, "FRAC-A", 1);
+            await S3TestHelpers.RegisterConsole(_api, op, "FRAC-B", 1);
+            await S3TestHelpers.RegisterConsole(_api, op, "FRAC-C", 1);
+            var t0 = S3TestHelpers.T(2026, 11, 9, 14, 0);
+            factory.Clock.SetUtc(t0.ToUniversalTime());
+            var sessionId = await S3TestHelpers.StartSession(_api, "FRAC-A", 1);
+            factory.Clock.SetUtc(t0.AddTicks((long)(30.75 * TimeSpan.TicksPerSecond)).ToUniversalTime());
+            (await S3TestHelpers.TransferAsync(op, sessionId, "FRAC-B")).EnsureSuccessStatusCode();
+            factory.Clock.SetUtc(t0.AddTicks((long)(60.75 * TimeSpan.TicksPerSecond)).ToUniversalTime());
+            (await S3TestHelpers.TransferAsync(op, sessionId, "FRAC-C")).EnsureSuccessStatusCode();
+            factory.Clock.SetUtc(t0.AddTicks((long)(121.5 * TimeSpan.TicksPerSecond)).ToUniversalTime());
+            var bill = await op.PostAsync($"/api/operator/sessions/{sessionId}/bill/open", null);
+            bill.EnsureSuccessStatusCode();
+            var detail = await bill.Content.ReadFromJsonAsync<JsonElement>();
+            Assert.Equal(30_000, detail.GetProperty("timeGrossToman").GetInt64());
+            Assert.Equal(30_000, detail.GetProperty("unroundedPayableToman").GetInt64());
+            Assert.Equal(30_000, detail.GetProperty("collectibleToman").GetInt64());
+            var segments = detail.GetProperty("segments");
+            Assert.Equal(3, segments.GetArrayLength());
+            for (var i = 0; i < segments.GetArrayLength(); i++)
+            {
+                Assert.Equal(600_000, segments[i].GetProperty("hourlyToman").GetInt64());
+            }
+        }
+        finally
+        {
+            await db.Database.ExecuteSqlRawAsync(
+                $"""UPDATE rate_lines SET "HourlyToman" = {GameTimerReference.Ps5OnePlayerHourly} WHERE "GroupId" = '{GameTimerReference.Ps5GroupId}' AND "PlayerCount" = 1 AND "PlayMode" = 'Offline' AND "IsSpecialBand" = false;""");
+        }
+    }
+
+    [Fact]
     public async Task ss4_fix_r1_cookie_authenticated_operator_hub_negotiate_is_not_unauthorized()
     {
         await S3TestHelpers.ResetAsync(factory);

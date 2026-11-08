@@ -443,19 +443,22 @@ public static class SessionPricer
             var minutes = (next - cursor) * blockMinutes;
             DateTimeOffset lineEnd;
             long seconds;
+            long overlapTicks;
             if (next >= last)
             {
                 lineEnd = fragment.End;
-                seconds = (endOffset - (cursor * blockTicks)) / TimeSpan.TicksPerSecond;
+                overlapTicks = endOffset - (cursor * blockTicks);
+                seconds = overlapTicks / TimeSpan.TicksPerSecond;
             }
             else
             {
                 var endDeltaTicks = (next * blockTicks) - offset;
                 lineEnd = fragment.Start.AddTicks(endDeltaTicks);
-                seconds = (endDeltaTicks - startDeltaTicks) / TimeSpan.TicksPerSecond;
+                overlapTicks = endDeltaTicks - startDeltaTicks;
+                seconds = overlapTicks / TimeSpan.TicksPerSecond;
             }
 
-            if (minutes > 0 && seconds > 0)
+            if (minutes > 0 && (next >= last ? overlapTicks > 0 : seconds > 0))
             {
                 drafts.Add(SliceDraft.From(
                     fragment,
