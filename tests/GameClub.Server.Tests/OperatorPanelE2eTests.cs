@@ -798,4 +798,33 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
         Assert.Equal(SessionStatus.Open, (await db.Sessions.SingleAsync(s => s.Id == sessionId)).Status);
         Assert.True(await db.OpenSaleLines.AnyAsync());
     }
+
+    [Fact]
+    public async Task e2e_ss4_console_transfer_source_free_target_playing()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var op = await factory.CreateOperatorClientAsync();
+        await S3TestHelpers.RegisterConsole(_api, op, "PS5-FROM", 1);
+        await S3TestHelpers.RegisterConsole(_api, op, "PS5-TO", 1);
+        factory.Clock.SetTehran(2026, 6, 3, 14, 0);
+        await S3TestHelpers.StartSession(_api, "PS5-FROM", 1);
+        var page = await LoginAsync(op);
+        page.Dialog += (_, d) => d.AcceptAsync("PS5-TO");
+        await page.ClickAsync(".tile[data-station-id='PS5-FROM']");
+        await page.WaitForSelectorAsync("#transferBtn:not(.hidden)");
+        var transferTask = page.WaitForResponseAsync(r =>
+            r.Url.Contains("/transfer", StringComparison.Ordinal) && r.Request.Method == "POST");
+        await page.ClickAsync("#transferBtn");
+        var transferResponse = await transferTask;
+        Assert.True(transferResponse.Ok, await transferResponse.TextAsync());
+        await page.EvaluateAsync("() => refreshGrid()");
+        await page.WaitForFunctionAsync(
+            "() => [...document.querySelectorAll('.tile')].some(t => t.dataset.stationId === 'PS5-TO' && t.dataset.status === 'Playing')",
+            null,
+            new() { Timeout = 5000 });
+        await page.WaitForFunctionAsync(
+            "() => [...document.querySelectorAll('.tile')].some(t => t.dataset.stationId === 'PS5-FROM' && t.dataset.status === 'Free')",
+            null,
+            new() { Timeout = 5000 });
+    }
 }

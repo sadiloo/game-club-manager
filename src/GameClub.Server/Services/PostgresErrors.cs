@@ -9,6 +9,11 @@ public static class PostgresErrors
 
     public const string OpenPauseIndexName = "ux_pause_intervals_session_open";
 
+    public const string SessionCommandIndexName = "IX_session_commands_SessionId_CommandId";
+
+    public static bool IsSessionCommandUniqueViolation(DbUpdateException ex)
+        => IsUniqueViolation(ex, SessionCommandIndexName);
+
     public static bool IsActiveSessionUniqueViolation(DbUpdateException ex)
     {
         for (Exception? current = ex; current is not null; current = current.InnerException)

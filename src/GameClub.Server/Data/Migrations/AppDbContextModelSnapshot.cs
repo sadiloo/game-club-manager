@@ -956,6 +956,9 @@ namespace GameClub.Server.Data.Migrations
                     b.Property<DateTime>("StartUtc")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<string>("SplitReason")
+                        .HasColumnType("text");
+
                     b.Property<string>("StationId")
                         .IsRequired()
                         .HasColumnType("text");
@@ -1015,6 +1018,12 @@ namespace GameClub.Server.Data.Migrations
                     b.Property<int>("RateCardSnapshotId")
                         .HasColumnType("integer");
 
+                    b.Property<uint>("RowVersion")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
                     b.Property<DateTime>("StartedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
@@ -1037,6 +1046,38 @@ namespace GameClub.Server.Data.Migrations
                     b.HasIndex("StationId");
 
                     b.ToTable("sessions", (string)null);
+                });
+
+            modelBuilder.Entity("GameClub.Server.Data.Entities.SessionCommandEntity", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
+                    b.Property<Guid>("CommandId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("CommandType")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("AppliedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("ResultJson")
+                        .HasColumnType("text");
+
+                    b.Property<Guid>("SessionId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("SessionId", "CommandId")
+                        .IsUnique();
+
+                    b.ToTable("session_commands", (string)null);
                 });
 
             modelBuilder.Entity("GameClub.Server.Data.Entities.RateCardSnapshotEntity", b =>
@@ -1161,6 +1202,10 @@ namespace GameClub.Server.Data.Migrations
                         .HasColumnType("boolean");
 
                     b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("OperationalState")
                         .IsRequired()
                         .HasColumnType("text");
 
@@ -1453,6 +1498,17 @@ namespace GameClub.Server.Data.Migrations
                 {
                     b.HasOne("GameClub.Server.Data.Entities.PlaySessionEntity", "Session")
                         .WithMany("Segments")
+                        .HasForeignKey("SessionId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Session");
+                });
+
+            modelBuilder.Entity("GameClub.Server.Data.Entities.SessionCommandEntity", b =>
+                {
+                    b.HasOne("GameClub.Server.Data.Entities.PlaySessionEntity", "Session")
+                        .WithMany()
                         .HasForeignKey("SessionId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();

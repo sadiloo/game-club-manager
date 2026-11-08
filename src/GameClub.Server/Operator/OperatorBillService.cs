@@ -844,6 +844,12 @@ public sealed class OperatorGridService(AppDbContext db, SessionService sessions
         {
             if (!byStation.TryGetValue(station.Id, out var session))
             {
+                var idleStatus = station.OperationalState switch
+                {
+                    StationOperationalState.Broken => "Broken",
+                    StationOperationalState.Reserved => "Reserved",
+                    _ => "Free",
+                };
                 tiles.Add(new
                 {
                     station.Id,
@@ -851,7 +857,8 @@ public sealed class OperatorGridService(AppDbContext db, SessionService sessions
                     station.GroupId,
                     station.DefaultPlayerCount,
                     mode = station.DefaultPlayMode.ToString(),
-                    status = "Free",
+                    operationalState = station.OperationalState.ToString(),
+                    status = idleStatus,
                     amountToman = (long?)null,
                     sessionId = (Guid?)null,
                 });
@@ -890,9 +897,11 @@ public sealed class OperatorGridService(AppDbContext db, SessionService sessions
                 station.GroupId,
                 station.DefaultPlayerCount,
                 mode = station.DefaultPlayMode.ToString(),
+                operationalState = station.OperationalState.ToString(),
                 status,
                 amountToman = amount,
                 sessionId = session.Id,
+                rowVersion = session.RowVersion,
                 openSaleId,
                 linkedCustomer = CustomerMapper.ToLinkedChip(session.Customer),
             });

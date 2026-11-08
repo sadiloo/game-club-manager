@@ -1,4 +1,5 @@
 using GameClub.Server.Data;
+using GameClub.Server.Hubs;
 using GameClub.Server.Operator;
 using GameClub.Server.Services;
 using GameClub.Server.Time;
@@ -12,8 +13,10 @@ public partial class Program
     {
         var builder = WebApplication.CreateBuilder(args);
         builder.Services.AddControllers();
+        builder.Services.AddSignalR();
         builder.Services.AddEndpointsApiExplorer();
         builder.Services.AddSwaggerGen();
+        builder.Services.AddSingleton<IOperatorPanelNotifier, OperatorPanelNotifier>();
         builder.Services.AddSingleton<IClock, SystemClock>();
         builder.Services.AddScoped<OperatorContext>();
         builder.Services.AddSingleton<OperatorPolicies>();
@@ -71,6 +74,7 @@ public partial class Program
         app.UseStaticFiles();
         app.UseSwagger();
         app.MapControllers();
+        app.MapHub<OperatorHub>("/hubs/operator");
 
         using (var scope = app.Services.CreateScope())
         {

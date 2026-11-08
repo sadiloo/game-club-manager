@@ -36,6 +36,13 @@ public sealed class StationGroupEntity
     public StationKind Kind { get; set; }
 }
 
+public enum StationOperationalState
+{
+    Available = 0,
+    Broken = 1,
+    Reserved = 2,
+}
+
 public sealed class StationEntity
 {
     public string Id { get; set; } = string.Empty;
@@ -45,6 +52,8 @@ public sealed class StationEntity
     public string GroupId { get; set; } = string.Empty;
 
     public bool IsActive { get; set; } = true;
+
+    public StationOperationalState OperationalState { get; set; } = StationOperationalState.Available;
 
     public int DefaultPlayerCount { get; set; } = 1;
 
@@ -122,6 +131,8 @@ public sealed class PlaySessionEntity
     public ShiftEntity? OpenShift { get; set; }
 
     public Guid? CarriedAtCloseRecordId { get; set; }
+
+    public uint RowVersion { get; set; }
 }
 
 public sealed class PlaySegmentEntity
@@ -147,6 +158,26 @@ public sealed class PlaySegmentEntity
     public int PlayerCount { get; set; }
 
     public StationKind Kind { get; set; }
+
+    /// <summary>Segment split reason (e.g. انتقال for SS-4 transfer).</summary>
+    public string? SplitReason { get; set; }
+}
+
+public sealed class SessionCommandEntity
+{
+    public long Id { get; set; }
+
+    public Guid SessionId { get; set; }
+
+    public PlaySessionEntity? Session { get; set; }
+
+    public Guid CommandId { get; set; }
+
+    public string CommandType { get; set; } = string.Empty;
+
+    public DateTime AppliedAtUtc { get; set; }
+
+    public string? ResultJson { get; set; }
 }
 
 public sealed class PauseIntervalEntity
