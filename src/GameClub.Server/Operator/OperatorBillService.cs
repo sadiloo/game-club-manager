@@ -101,6 +101,7 @@ public sealed class BillCalculator(
         }
 
         var applyPricing = session.Station?.Group?.Kind != StationKind.Pc || settings.ApplyDiscountsToPc;
+        var stationKind = session.Station?.Group?.Kind ?? StationKind.Console;
         return MemberBillComposer.Compute(
             charge,
             snapshot,
@@ -111,6 +112,7 @@ public sealed class BillCalculator(
             member,
             settings,
             packages,
+            stationKind,
             previewTenders.Count > 0 ? previewTenders : null,
             applyPricing);
     }
@@ -660,6 +662,12 @@ public sealed class OperatorBillService(
             .Include(o => o.Lines).ThenInclude(l => l.CatalogItem)
             .FirstOrDefaultAsync(o => o.SessionId == sessionId, ct);
         var (levelDiscountToman, birthdayDiscountToman) = SplitMemberDiscounts(amounts.Detail);
+        var writeOffToman = amounts.Detail?.InvoicePreview.Lines
+            .Where(l => l.Kind == InvoiceLineKind.WriteOff)
+            .Sum(l => -l.AmountToman) ?? 0L;
+        var overshootAlert = amounts.Detail?.OvershootAlert is { } alert
+            ? new { alert.Code, alert.AmountToman, alert.Message }
+            : null;
         return new
         {
             bill.SessionId,
@@ -674,6 +682,8 @@ public sealed class OperatorBillService(
             servicesGrossToman = amounts.ServicesGrossToman,
             levelDiscountToman,
             birthdayDiscountToman,
+            writeOffToman,
+            overshootAlert,
             saleLines = sale is null ? Array.Empty<SaleLineDto>() : OpenSaleMapper.ToDtos(sale.Lines),
             frozenAtUtc = bill.FrozenAtUtc,
             source = bill.Source,

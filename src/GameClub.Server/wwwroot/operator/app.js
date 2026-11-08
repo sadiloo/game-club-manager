@@ -698,10 +698,13 @@ function renderBill(bill) {
     levelDisc || bdayDisc
       ? `\nتخفیف سطح ${levelDisc} · تولد ${bdayDisc}`
       : "";
+  const writeOff = bill.writeOffToman ?? 0;
+  const burnLine = writeOff > 0 ? `\nسوخت‌شده ${writeOff}` : "";
   d.textContent =
     `زمان ${bill.timeGrossToman ?? 0} · بوفه ${bill.buffetGrossToman ?? 0} · خدمات ${bill.servicesGrossToman ?? 0}\n` +
     `جمع ${bill.unroundedPayableToman} + رند ${bill.roundingToman} = ${bill.collectibleToman}` +
     discLine +
+    burnLine +
     (segText ? `\nبخش‌ها:\n${segText}` : "");
   renderBillSaleLines(bill.saleLines);
   renderCustomerChip(bill.linkedCustomer);
@@ -1073,9 +1076,76 @@ bindClick("mgrPairingCodeBtn", async () => {
   showError(`کد جفت‌سازی: ${res.code}`);
 });
 
+async function refreshCatalogAdminPanel() {
+  const box = document.getElementById("catalogAdminPanel");
+  if (!box) return;
+  const catalog = await api("/api/operator/games");
+  const entries = catalog.entries || [];
+  box.dataset.catalogVersion = String(catalog.catalogVersion ?? 0);
+  box.innerHTML = `<div>نسخه ${catalog.catalogVersion ?? 0} · ${entries.length} مورد</div>`;
+  entries.forEach((entry) => {
+    const row = document.createElement("div");
+    row.className = "sale-line";
+    row.textContent = `${entry.id}: ${entry.name} · ${entry.enabled ? "فعال" : "غیرفعال"} · order ${entry.sortOrder ?? 0}`;
+    box.appendChild(row);
+  });
+}
+
 bindClick("mgrCatalogAdminBtn", async () => {
-  const games = await api("/api/operator/games");
-  showError(`بازی‌های کاتالوگ: ${(games || []).length} مورد`);
+  await refreshCatalogAdminPanel();
+  const panel = document.getElementById("catalogAdminPanel");
+  if (panel) panel.classList.remove("hidden");
+});
+
+bindClick("catalogSaveBtn", async () => {
+  const name = document.getElementById("catalogName").value.trim();
+  const categoryId = Number(document.getElementById("catalogCategoryId").value || "1");
+  const executable = document.getElementById("catalogExecutable").value.trim();
+  const args = document.getElementById("catalogArgs").value.trim();
+  const icon = document.getElementById("catalogIcon").value.trim();
+  const order = Number(document.getElementById("catalogOrder").value || "0");
+  const enabled = document.getElementById("catalogEnabled").checked;
+  const allowlist = document
+    .getElementById("catalogAllowlist")
+    .value.split(",")
+    .map((v) => v.trim())
+    .filter(Boolean);
+  const groups = document
+    .getElementById("catalogGroups")
+    .value.split(",")
+    .map((v) => v.trim())
+    .filter(Boolean);
+  const editId = document.getElementById("catalogEditId").value.trim();
+  if (editId) {
+    await api(`/api/operator/games/${editId}`, {
+      method: "PUT",
+      body: JSON.stringify({
+        name,
+        enabled,
+        executableOrUri: executable,
+        arguments: args || null,
+        iconUrl: icon || null,
+        sortOrder: order,
+        groupRestrictions: groups,
+        allowedProcessNames: allowlist,
+      }),
+    });
+  } else {
+    await api("/api/operator/games", {
+      method: "POST",
+      body: JSON.stringify({
+        name,
+        categoryId,
+        executableOrUri: executable,
+        arguments: args || null,
+        iconUrl: icon || null,
+        sortOrder: order,
+        groupRestrictions: groups,
+        allowedProcessNames: allowlist,
+      }),
+    });
+  }
+  await refreshCatalogAdminPanel();
 });
 
 bindClick("mgrOpeningBtn", async () => {

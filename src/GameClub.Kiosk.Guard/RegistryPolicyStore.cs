@@ -8,7 +8,7 @@ internal static class RegistryPolicyStore
 
     internal static void EnsureDefaults()
     {
-        using var key = Registry.CurrentUser.CreateSubKey(PoliciesPath, true);
+        using var key = OpenKioskHive(writable: true);
         if (key is null)
         {
             return;
@@ -21,7 +21,7 @@ internal static class RegistryPolicyStore
 
     internal static bool Tampered()
     {
-        using var key = Registry.CurrentUser.OpenSubKey(PoliciesPath);
+        using var key = OpenKioskHive(writable: false);
         if (key is null)
         {
             return true;
@@ -31,4 +31,20 @@ internal static class RegistryPolicyStore
     }
 
     internal static void Repair() => EnsureDefaults();
+
+    private static RegistryKey? OpenKioskHive(bool writable)
+    {
+        var sid = Environment.GetEnvironmentVariable("CHECKPOINT_KIOSK_SID");
+        if (!string.IsNullOrWhiteSpace(sid))
+        {
+            var fullPath = $"{sid.Trim()}\\{PoliciesPath}";
+            return writable
+                ? Registry.Users.CreateSubKey(fullPath, true)
+                : Registry.Users.OpenSubKey(fullPath, writable: false);
+        }
+
+        return writable
+            ? Registry.CurrentUser.CreateSubKey(PoliciesPath, true)
+            : Registry.CurrentUser.OpenSubKey(PoliciesPath, writable: false);
+    }
 }

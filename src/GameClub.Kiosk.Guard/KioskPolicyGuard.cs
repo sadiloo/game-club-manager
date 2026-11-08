@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.Security.Principal;
 
 namespace GameClub.Kiosk.Guard;
 
@@ -15,14 +17,19 @@ internal static class KioskPolicyGuard
             }
 
             var user = TryGetProcessUser(process);
-            if (user is null || user.Equals(expectedUser, StringComparison.OrdinalIgnoreCase)
+            if (string.IsNullOrWhiteSpace(user))
+            {
+                continue;
+            }
+
+            if (user.Equals(expectedUser, StringComparison.OrdinalIgnoreCase)
                 || user.IndexOf("Kiosk", StringComparison.OrdinalIgnoreCase) >= 0)
             {
                 return true;
             }
         }
 
-        return processes.Length > 0;
+        return false;
     }
 
     internal static void LaunchInActiveConsoleSession(string path)
@@ -32,22 +39,36 @@ internal static class KioskPolicyGuard
             return;
         }
 
-        Process.Start(new ProcessStartInfo(path)
-        {
-            UseShellExecute = true,
-            WorkingDirectory = Path.GetDirectoryName(path) ?? "",
-        });
+        throw new InvalidOperationException("Could not relaunch kiosk in the kiosk user session.");
     }
 
     private static string? TryGetProcessUser(Process process)
     {
-        try
+        if (!OpenProcessToken(process.Handle, 8, out var token))
         {
             return null;
+        }
+
+        try
+        {
+            var user = new WindowsIdentity(token);
+            return user.Name.Contains('\\')
+                ? user.Name[(user.Name.LastIndexOf('\\') + 1)..]
+                : user.Name;
         }
         catch
         {
             return null;
         }
+        finally
+        {
+            CloseHandle(token);
+        }
     }
+
+    [DllImport("advapi32.dll", SetLastError = true)]
+    private static extern bool OpenProcessToken(IntPtr processHandle, uint desiredAccess, out IntPtr tokenHandle);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool CloseHandle(IntPtr handle);
 }

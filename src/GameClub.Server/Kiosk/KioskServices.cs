@@ -335,10 +335,10 @@ public sealed class KioskDisplayService(
         var at = clock.UtcNow;
         var (settled, estimate) = KioskPlayEstimate.AfterAcceptedPlay(session, member, account, charge, groupId, settings, snapshot.Card, at);
         var packageRemaining = settled.Account.Packages.Select(p => (int)p.RemainingMinutes).ToList();
-        var pocket = settled.Account.Pc;
+        var memberPocket = MemberWalletMapper.ToPocket(member);
         var elapsed = (long)Elapsed(session).TotalSeconds;
         var moneyMinutes = estimate.MoneyMinutes ?? 0;
-        var debtOnly = wallet.AllowPcWhileInDebt && pocket.TotalToman < 0;
+        var debtOnly = wallet.AllowPcWhileInDebt && memberPocket.TotalToman < 0;
         if (debtOnly)
         {
             moneyMinutes = 0;
@@ -361,13 +361,20 @@ public sealed class KioskDisplayService(
             freeBand = KioskPlayEstimate.FormatFreeBandText(snapshot.Card, settled.Account, groupId, session, at);
         }
 
-        var moneyOnlySeconds = Math.Max(0, debtOnly ? 0 : moneyMinutes) * 60L;
+        var moneyOnlySeconds = debtOnly
+            ? 0
+            : estimate.EligiblePackageMinutes > 0
+                ? Math.Max(0, (estimate.MoneyMinutes ?? 0) * 60L)
+                : Math.Max(0, estimate.TotalMinutes * 60L);
         var graceActive = settled.Settlement.Grace is { } g
             && clock.UtcNow.UtcDateTime < g.At.UtcDateTime.AddMinutes(1);
+        var walletToman = settled.Settlement.Grace is not null
+            ? memberPocket.TotalToman
+            : settled.Account.Pc.TotalToman;
         return new KioskDisplayDto
         {
-            WalletBalanceToman = settled.Account.Pc.TotalToman,
-            GiftBalanceToman = settled.Account.Pc.GiftToman,
+            WalletBalanceToman = walletToman,
+            GiftBalanceToman = memberPocket.GiftToman,
             PackageMinutesRemaining = packageRemaining,
             EstimatedRemainingSeconds = moneyOnlySeconds,
             ElapsedDisplaySeconds = elapsed,
@@ -378,6 +385,60 @@ public sealed class KioskDisplayService(
             NearEndMinutesThresholds = thresholds,
             WarningRemainingMinutes = warning,
         };
+    }
+
+    public async Task<bool> ShouldStopAfterGraceMinuteAsync(PlaySessionEntity session, CancellationToken ct)
+    {
+        if (session.Status != SessionStatus.Open || session.CustomerId is null)
+        {
+            return false;
+        }
+
+        if (session.Station?.Group?.Kind != StationKind.Pc)
+        {
+            return false;
+        }
+
+        var settings = await members.LoadSettingsAsync(ct);
+        var wallet = MemberSettingsMapper.LoadWalletSettings(settings);
+        var (member, packages) = await members.LoadMemberStateAsync(session.CustomerId.Value, ct);
+        if (member is null)
+        {
+            return false;
+        }
+
+        var snapshot = await rates.LoadSnapshotAsync(session.RateCardSnapshotId, ct);
+        var endUtc = session.LastCheckpointUtc ?? clock.UtcNow.UtcDateTime;
+        var charge = billing.BuildCharge(session, endUtc, snapshot);
+        var account = KioskPlayEstimate.BuildAccount(member, wallet, packages);
+        var groupId = session.Station?.GroupId ?? PilotSeed.PcNormalGroupId;
+        var (settled, estimate) = KioskPlayEstimate.AfterAcceptedPlay(
+            session,
+            member,
+            account,
+            charge,
+            groupId,
+            settings,
+            snapshot.Card,
+            clock.UtcNow);
+        var grace = settled.Settlement.Grace;
+        if (grace is not { Minutes: > 0, WaivedToman: > 0 })
+        {
+            return false;
+        }
+
+        if (clock.UtcNow.UtcDateTime < grace.At.UtcDateTime.AddMinutes(1))
+        {
+            return false;
+        }
+
+        var moneyMinutes = estimate.MoneyMinutes ?? 0;
+        if (moneyMinutes > 0 || estimate.EligiblePackageMinutes > 0)
+        {
+            return false;
+        }
+
+        return true;
     }
 
     private TimeSpan Elapsed(PlaySessionEntity session)
@@ -464,6 +525,17 @@ public sealed class KioskCheckpointCoordinator(
 
         if (session is not null)
         {
+            session = await db.Sessions
+                .Include(s => s.Station)!.ThenInclude(st => st!.Group)
+                .Include(s => s.Segments)
+                .Include(s => s.Pauses)
+                .FirstAsync(s => s.Id == session.Id, ct);
+        }
+
+        if (session is not null && session.Status == SessionStatus.Open
+            && await display.ShouldStopAfterGraceMinuteAsync(session, ct))
+        {
+            await sessions.StopAsync(session.Id, ct);
             session = await db.Sessions
                 .Include(s => s.Station)!.ThenInclude(st => st!.Group)
                 .Include(s => s.Segments)
@@ -786,7 +858,7 @@ public sealed class GameCatalogService(AppDbContext db, AuditService audit)
     public async Task<object> GetCatalogAsync(long sinceVersion, CancellationToken ct)
     {
         var entries = await db.GameCatalogEntries.AsNoTracking()
-            .Where(e => e.CatalogVersion > sinceVersion)
+            .Where(e => sinceVersion == 0 || e.CatalogVersion > sinceVersion)
             .OrderBy(e => e.SortOrder)
             .ToListAsync(ct);
         var version = entries.Count == 0

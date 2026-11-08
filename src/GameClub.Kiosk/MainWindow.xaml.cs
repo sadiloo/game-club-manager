@@ -16,11 +16,11 @@ public partial class MainWindow : Window
         KeyDown += OnKeyDown;
     }
 
-    private async void OnKeyDown(object sender, KeyEventArgs e)
+    private void OnKeyDown(object sender, KeyEventArgs e)
     {
         if (e.Key == Key.F8)
         {
-            _host.SetServerBase("http://127.0.0.1:5000");
+            ServerUrlBox.Focus();
         }
     }
 

@@ -30,6 +30,8 @@ public sealed class KioskRuntime : IAsyncDisposable
     public Guid DeviceId { get; private set; }
     public string DeviceKey { get; private set; } = "";
 
+    public event Action<KioskHeartbeatAck>? HeartbeatAcknowledged;
+
     public KioskRuntime(Func<HttpClient> httpFactory) => _httpFactory = httpFactory;
 
     public void Configure(Uri hubUri, Guid deviceId, string deviceKey, string stationId, string queuePath, bool legacyWindows)
@@ -54,10 +56,21 @@ public sealed class KioskRuntime : IAsyncDisposable
         _monotonic.Restart();
         _heartbeatCts = new CancellationTokenSource();
         _ = RunHeartbeatAsync(_heartbeatCts.Token);
-        State = KioskRuntimeState.Playing;
+        State = _sessionId == Guid.Empty ? KioskRuntimeState.Locked : KioskRuntimeState.Playing;
     }
 
-    public void BindSession(Guid sessionId) => _sessionId = sessionId;
+    public void BindSession(Guid sessionId)
+    {
+        _sessionId = sessionId;
+        if (_hub?.State == HubConnectionState.Connected && sessionId != Guid.Empty)
+        {
+            State = KioskRuntimeState.Playing;
+        }
+        else if (sessionId == Guid.Empty)
+        {
+            State = KioskRuntimeState.Locked;
+        }
+    }
 
     public SqliteOfflineEventQueue GetQueue()
     {
@@ -85,10 +98,8 @@ public sealed class KioskRuntime : IAsyncDisposable
                             ClientMonotonicMs = _monotonic.ElapsedMilliseconds,
                         },
                         ct);
-                    if (ack.ManualSettle)
-                    {
-                        State = KioskRuntimeState.ManualSettle;
-                    }
+                    ApplyAcknowledgement(ack);
+                    HeartbeatAcknowledged?.Invoke(ack);
                 }
             }
             catch (Exception ex)
@@ -97,6 +108,35 @@ public sealed class KioskRuntime : IAsyncDisposable
             }
 
             await Task.Delay(TimeSpan.FromSeconds(5), ct);
+        }
+    }
+
+    private void ApplyAcknowledgement(KioskHeartbeatAck ack)
+    {
+        if (ack.ManualSettle)
+        {
+            State = KioskRuntimeState.ManualSettle;
+            return;
+        }
+
+        if (string.Equals(ack.SessionStatus, "Open", StringComparison.OrdinalIgnoreCase) && _sessionId != Guid.Empty)
+        {
+            State = KioskRuntimeState.Playing;
+            return;
+        }
+
+        if (string.Equals(ack.SessionStatus, "AwaitingPayment", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(ack.SessionStatus, "Ended", StringComparison.OrdinalIgnoreCase)
+            || (_sessionId != Guid.Empty && !string.Equals(ack.SessionStatus, "Open", StringComparison.OrdinalIgnoreCase)
+                && !string.IsNullOrEmpty(ack.SessionStatus) && ack.SessionStatus != "Paused"))
+        {
+            State = KioskRuntimeState.Ended;
+            return;
+        }
+
+        if (_sessionId == Guid.Empty)
+        {
+            State = KioskRuntimeState.Locked;
         }
     }
 

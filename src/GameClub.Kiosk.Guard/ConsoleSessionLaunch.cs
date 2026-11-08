@@ -140,6 +140,19 @@ internal static class ConsoleSessionLaunch
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool CloseHandle(IntPtr hObject);
 
+    [DllImport("Wtsapi32.dll", CharSet = CharSet.Unicode)]
+    private static extern bool WTSQuerySessionInformation(
+        IntPtr hServer,
+        uint sessionId,
+        WtsInfoClass wtsInfoClass,
+        out IntPtr ppBuffer,
+        out int pBytesReturned);
+
+    private enum WtsInfoClass
+    {
+        WTSUserName = 5,
+    }
+
     private static uint? FindActiveUserSession(string userName)
     {
         if (!WTSEnumerateSessions(IntPtr.Zero, 0, 1, out var buffer, out var count))
@@ -158,7 +171,29 @@ internal static class ConsoleSessionLaunch
                     continue;
                 }
 
-                return (uint)info.SessionId;
+                if (string.IsNullOrWhiteSpace(userName))
+                {
+                    return (uint)info.SessionId;
+                }
+
+                if (!WTSQuerySessionInformation(IntPtr.Zero, (uint)info.SessionId, WtsInfoClass.WTSUserName, out var userPtr, out _))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    var sessionUser = Marshal.PtrToStringUni(userPtr);
+                    if (sessionUser is not null
+                        && sessionUser.Equals(userName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return (uint)info.SessionId;
+                    }
+                }
+                finally
+                {
+                    WTSFreeMemory(userPtr);
+                }
             }
         }
         finally

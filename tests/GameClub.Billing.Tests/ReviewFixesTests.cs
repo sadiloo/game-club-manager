@@ -136,27 +136,27 @@ public class ReviewFixesTests
         var minute = MoneyMath.ChargeForMinutes(110_000, 1, RateRemainderMode.Nearest);
         var charge = OneMinute();
         var plain = CustomerPlay.Settle(charge, PcWallet(500, false));
-        Assert.Equal(500, plain.Settlement.MoneyConsumedToman);
-        Assert.Equal(minute - 500, plain.Settlement.Grace!.WaivedToman);
-        Assert.Equal(0, plain.Account.PcMoneyToman);
+        Assert.Equal(0, plain.Settlement.MoneyConsumedToman);
+        Assert.Equal(minute, plain.Settlement.Grace!.WaivedToman);
+        Assert.Equal(500, plain.Account.PcMoneyToman);
         Assert.NotNull(plain.ChargeInvoice);
-        Assert.Equal(plain.ChargeInvoice!.PayableToman, 500 - plain.Account.PcMoneyToman);
+        Assert.Equal(0, plain.ChargeInvoice!.PayableToman);
 
         var discountedAccount = PcWallet(500, true);
         var titan = new CustomerPricing("Titan", 28, null, 0);
         var discounted = CustomerPlay.Settle(charge, discountedAccount, pricing: titan);
         var netMinute = new PcTimeDiscount(28, 0, 0).Net(minute);
-        Assert.Equal(500, discounted.ChargeInvoice!.PayableToman);
+        Assert.Equal(0, discounted.ChargeInvoice!.PayableToman);
         Assert.Equal(minute - netMinute, discounted.ChargeInvoice.DiscountToman);
-        Assert.Equal(500, discounted.Settlement.MoneyConsumedToman);
-        Assert.Equal(netMinute - 500, discounted.Settlement.Grace!.WaivedToman);
-        Assert.Equal(0, discounted.Account.PcMoneyToman);
-        Assert.Equal(discounted.ChargeInvoice.PayableToman, 500 - discounted.Account.PcMoneyToman);
+        Assert.Equal(0, discounted.Settlement.MoneyConsumedToman);
+        Assert.Equal(netMinute, discounted.Settlement.Grace!.WaivedToman);
+        Assert.Equal(500, discounted.Account.PcMoneyToman);
+        Assert.Equal(0, discounted.ChargeInvoice.PayableToman);
 
         var ignored = CustomerPlay.Settle(charge, PcWallet(500, false), pricing: titan);
-        Assert.Equal(500, ignored.Settlement.MoneyConsumedToman);
-        Assert.Equal(0, ignored.Account.PcMoneyToman);
-        Assert.Equal(500, ignored.ChargeInvoice!.PayableToman);
+        Assert.Equal(0, ignored.Settlement.MoneyConsumedToman);
+        Assert.Equal(500, ignored.Account.PcMoneyToman);
+        Assert.Equal(0, ignored.ChargeInvoice!.PayableToman);
     }
 
     [Fact]
@@ -372,7 +372,8 @@ public class ReviewFixesTests
             CafeFixture.Play("a", small.Start, small.End, "example-pc-1", CafeFixture.ExampleNormal, 1)));
         var smallPaid = AccountSettlement.Settle(smallPlayed, new PcAccount("m", 500, []));
         Assert.Equal(small.Grace!.WaivedToman, smallPaid.Grace!.WaivedToman);
-        Assert.Equal(500, smallPaid.MoneyConsumedToman);
+        Assert.Equal(0, smallPaid.MoneyConsumedToman);
+        Assert.Equal(500, smallPaid.UpdatedAccount.MoneyBalanceToman);
     }
 
     [Fact]

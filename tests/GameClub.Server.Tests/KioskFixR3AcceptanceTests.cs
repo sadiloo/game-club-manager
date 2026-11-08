@@ -208,7 +208,7 @@ public sealed class KioskFixR3AcceptanceTests(GameClubWebApplicationFactory fact
             var ack = await scope.ServiceProvider.GetRequiredService<KioskCheckpointCoordinator>().OnHeartbeatAsync(deviceId, sessionId, 60_000, default);
             Assert.NotNull(ack.Display);
             Assert.Equal(98_333, ack.Display!.WalletBalanceToman);
-            Assert.InRange(ack.Display.EstimatedRemainingSeconds!.Value, 4380, 4440);
+            Assert.Equal(4380, ack.Display.EstimatedRemainingSeconds!.Value);
         }
     }
 
@@ -220,7 +220,7 @@ public sealed class KioskFixR3AcceptanceTests(GameClubWebApplicationFactory fact
         await using (var scope = factory.Services.CreateAsyncScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            await db.Database.ExecuteSqlRawAsync("UPDATE rate_lines SET \"HourlyToman\" = 60000 WHERE \"GroupId\" = 'pc-normal' AND \"PlayerCount\" = 1");
+            await db.Database.ExecuteSqlRawAsync("UPDATE rate_lines SET \"HourlyToman\" = 80000 WHERE \"GroupId\" = 'pc-normal' AND \"PlayerCount\" = 1");
             var customer = new CustomerEntity { Id = Guid.NewGuid(), Name = "Grace", Mobile = "09125555555", CreatedAtUtc = DateTime.UtcNow };
             db.Customers.Add(customer);
             db.CustomerMembers.Add(new CustomerMemberEntity { CustomerId = customer.Id, RealToman = 500 });
@@ -237,15 +237,17 @@ public sealed class KioskFixR3AcceptanceTests(GameClubWebApplicationFactory fact
         await using (var scope = factory.Services.CreateAsyncScope())
         {
             var ack = await scope.ServiceProvider.GetRequiredService<KioskCheckpointCoordinator>().OnHeartbeatAsync(deviceId, sessionId, 60_000, default);
-            Assert.InRange(ack.Display!.WalletBalanceToman!.Value, 0, 500);
+            Assert.Equal(500, ack.Display!.WalletBalanceToman!.Value);
         }
 
         factory.Clock.SetTehran(2026, 6, 3, 14, 2, 1);
         await using (var scope2 = factory.Services.CreateAsyncScope())
         {
             var ack = await scope2.ServiceProvider.GetRequiredService<KioskCheckpointCoordinator>().OnHeartbeatAsync(deviceId, sessionId, 121_000, default);
-            Assert.False(ack.Display!.GraceActive);
+            Assert.Equal(500, ack.Display!.WalletBalanceToman!.Value);
+            Assert.False(ack.Display.GraceActive);
             Assert.True(ack.Display.EstimatedRemainingSeconds is 0 or null);
+            Assert.NotEqual("Open", ack.SessionStatus);
         }
     }
 

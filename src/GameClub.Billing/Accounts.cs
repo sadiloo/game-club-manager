@@ -1462,17 +1462,31 @@ public static class AccountSettlement
             var minuteNet = NetOf(taken, 1);
             if (balance < minuteNet)
             {
-                var pay = balance;
-                var waived = minuteNet - pay;
+                var graceEndsPlay = activeSeconds <= (playedBeforeMinutes + taken + 1) * 60L;
+                if (step == 1 && graceEndsPlay)
+                {
+                    grace.Waived += minuteNet;
+                    grace.Used = true;
+                    grace.At = Instant(minuteBase + taken);
+                    grace.SegmentId = segmentId;
+                    drawnGross += CommitRange(taken, 1);
+                    taken += 1;
+                    grace.Stopped = true;
+                }
+                else
+                {
+                    var pay = balance;
+                    var waived = minuteNet - pay;
 
-                grace.Waived += waived;
-                grace.Used = true;
-                grace.At = Instant(minuteBase + taken);
-                grace.SegmentId = segmentId;
-                consumed += pay;
-                balance = 0;
-                drawnGross += CommitRange(taken, 1);
-                taken += 1;
+                    grace.Waived += waived;
+                    grace.Used = true;
+                    grace.At = Instant(minuteBase + taken);
+                    grace.SegmentId = segmentId;
+                    consumed += pay;
+                    balance = 0;
+                    drawnGross += CommitRange(taken, 1);
+                    taken += 1;
+                }
             }
         }
 

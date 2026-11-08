@@ -333,10 +333,10 @@ public class InvoiceAndPaymentTests
             "pc",
             CafeFixture.Play("a", T.At(2026, 6, 2, 10, 0), T.At(2026, 6, 2, 10, 1), "example-pc-1", CafeFixture.ExampleNormal, 1)));
         var settled = AccountSettlement.Settle(charge, account);
-        Assert.Equal(500, settled.MoneyConsumedToman);
-        Assert.Equal(0, settled.UpdatedAccount.MoneyBalanceToman);
+        Assert.Equal(0, settled.MoneyConsumedToman);
+        Assert.Equal(500, settled.UpdatedAccount.MoneyBalanceToman);
         Assert.Equal(0, settled.UncoveredToman);
-        Assert.Equal(minute - 500, settled.Grace!.WaivedToman);
+        Assert.Equal(minute, settled.Grace!.WaivedToman);
         Assert.Equal(1, settled.Grace.Minutes);
 
         var invoice = InvoiceCalculator.Calculate(new InvoiceRequest(
@@ -350,9 +350,9 @@ public class InvoiceAndPaymentTests
             Issued,
             settled.Grace));
         var grace = Assert.Single(invoice.Lines, line => line.Kind == InvoiceLineKind.Grace);
-        Assert.Equal(-(minute - 500), grace.AmountToman);
-        Assert.Equal(500, invoice.PayableToman);
-        Assert.Equal(minute - 500, invoice.GraceWaivedToman);
+        Assert.Equal(-minute, grace.AmountToman);
+        Assert.Equal(0, invoice.PayableToman);
+        Assert.Equal(minute, invoice.GraceWaivedToman);
 
         var off = new CustomerAccount(
             "m",

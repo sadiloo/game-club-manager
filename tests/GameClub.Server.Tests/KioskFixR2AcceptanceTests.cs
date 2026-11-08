@@ -204,25 +204,40 @@ public sealed class KioskFixR2AcceptanceTests(GameClubWebApplicationFactory fact
             await db.Database.ExecuteSqlRawAsync("UPDATE rate_lines SET \"HourlyToman\" = 80000 WHERE \"GroupId\" = 'pc-normal' AND \"PlayerCount\" = 1");
         }
 
-        using var scope2 = factory.Services.CreateScope();
-        var db2 = scope2.ServiceProvider.GetRequiredService<AppDbContext>();
-        var customer = new CustomerEntity { Id = Guid.NewGuid(), Name = "Hr", Mobile = "09128888888", CreatedAtUtc = DateTime.UtcNow };
-        db2.Customers.Add(customer);
-        db2.CustomerMembers.Add(new CustomerMemberEntity { CustomerId = customer.Id, RealToman = 80_000 });
-        await db2.SaveChangesAsync();
-        await scope2.ServiceProvider.GetRequiredService<KioskCustomerAuthService>().SetCredentialAsync(customer.Id, "hr", "pass", default);
+        await using (var scope2 = factory.Services.CreateAsyncScope())
+        {
+            var db2 = scope2.ServiceProvider.GetRequiredService<AppDbContext>();
+            var customer = new CustomerEntity { Id = Guid.NewGuid(), Name = "Hr", Mobile = "09128888888", CreatedAtUtc = DateTime.UtcNow };
+            db2.Customers.Add(customer);
+            db2.CustomerMembers.Add(new CustomerMemberEntity { CustomerId = customer.Id, RealToman = 80_000 });
+            await db2.SaveChangesAsync();
+            await scope2.ServiceProvider.GetRequiredService<KioskCustomerAuthService>().SetCredentialAsync(customer.Id, "hr", "pass", default);
+        }
+
         factory.Clock.SetTehran(2026, 6, 3, 14, 0);
         var (deviceId, deviceKey, _) = await PairDeviceAsync("PC-1");
         var login = await CreateKioskClient(deviceId, deviceKey).PostAsJsonAsync("/api/kiosk/auth/login", new { loginName = "hr", password = "pass", stationId = "PC-1" });
         login.EnsureSuccessStatusCode();
-        var session = await db2.Sessions.SingleAsync();
+        Guid sessionId;
+        await using (var lookup = factory.Services.CreateAsyncScope())
+        {
+            sessionId = await lookup.ServiceProvider.GetRequiredService<AppDbContext>().Sessions.Select(s => s.Id).SingleAsync();
+        }
+
         factory.Clock.SetTehran(2026, 6, 3, 15, 0);
-        var coordinator = scope2.ServiceProvider.GetRequiredService<KioskCheckpointCoordinator>();
-        await coordinator.OnHeartbeatAsync(deviceId, session.Id, 3_600_000, default);
-        var display = await scope2.ServiceProvider.GetRequiredService<KioskDisplayService>().BuildAsync(
-            await db2.Sessions.Include(s => s.Station)!.ThenInclude(st => st!.Group).FirstAsync(s => s.Id == session.Id),
-            default);
-        Assert.True(display!.WalletBalanceToman < 80_000 || display.EstimatedRemainingSeconds < 3600);
+        await using (var hb = factory.Services.CreateAsyncScope())
+        {
+            await hb.ServiceProvider.GetRequiredService<KioskCheckpointCoordinator>()
+                .OnHeartbeatAsync(deviceId, sessionId, 3_600_000, default);
+        }
+
+        await using (var displayScope = factory.Services.CreateAsyncScope())
+        {
+            var db2 = displayScope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var session = await db2.Sessions.Include(s => s.Station)!.ThenInclude(st => st!.Group).FirstAsync(s => s.Id == sessionId);
+            var display = await displayScope.ServiceProvider.GetRequiredService<KioskDisplayService>().BuildAsync(session, default);
+            Assert.True(display!.WalletBalanceToman < 80_000 || display.EstimatedRemainingSeconds < 3600);
+        }
     }
 
     [Fact]
@@ -230,25 +245,41 @@ public sealed class KioskFixR2AcceptanceTests(GameClubWebApplicationFactory fact
     {
         await S3TestHelpers.ResetAsync(factory);
         await S3TestHelpers.RegisterPc(factory.CreateClientWithKey(), "PC-1", PilotSeed.PcNormalGroupId);
-        using var scope = factory.Services.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        var customer = new CustomerEntity { Id = Guid.NewGuid(), Name = "Pkg2", Mobile = "09129999999", CreatedAtUtc = DateTime.UtcNow };
-        db.Customers.Add(customer);
-        db.CustomerMembers.Add(new CustomerMemberEntity { CustomerId = customer.Id, RealToman = 0 });
-        db.CustomerPackages.Add(new CustomerPackageEntity { Id = Guid.NewGuid(), CustomerId = customer.Id, Name = "Pkg", RemainingMinutes = 120, FaceValueToman = 0 });
-        await db.SaveChangesAsync();
-        await scope.ServiceProvider.GetRequiredService<KioskCustomerAuthService>().SetCredentialAsync(customer.Id, "pkg2", "pass", default);
+        await using (var scope = factory.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var customer = new CustomerEntity { Id = Guid.NewGuid(), Name = "Pkg2", Mobile = "09129999999", CreatedAtUtc = DateTime.UtcNow };
+            db.Customers.Add(customer);
+            db.CustomerMembers.Add(new CustomerMemberEntity { CustomerId = customer.Id, RealToman = 0 });
+            db.CustomerPackages.Add(new CustomerPackageEntity { Id = Guid.NewGuid(), CustomerId = customer.Id, Name = "Pkg", RemainingMinutes = 120, FaceValueToman = 0 });
+            await db.SaveChangesAsync();
+            await scope.ServiceProvider.GetRequiredService<KioskCustomerAuthService>().SetCredentialAsync(customer.Id, "pkg2", "pass", default);
+        }
+
         factory.Clock.SetTehran(2026, 6, 3, 14, 0);
         var (deviceId, deviceKey, _) = await PairDeviceAsync("PC-1");
         var login = await CreateKioskClient(deviceId, deviceKey).PostAsJsonAsync("/api/kiosk/auth/login", new { loginName = "pkg2", password = "pass", stationId = "PC-1" });
         login.EnsureSuccessStatusCode();
-        var sessionId = await db.Sessions.Select(s => s.Id).SingleAsync();
+        Guid sessionId;
+        await using (var lookup = factory.Services.CreateAsyncScope())
+        {
+            sessionId = await lookup.ServiceProvider.GetRequiredService<AppDbContext>().Sessions.Select(s => s.Id).SingleAsync();
+        }
+
         factory.Clock.SetTehran(2026, 6, 3, 15, 0);
-        var coordinator = scope.ServiceProvider.GetRequiredService<KioskCheckpointCoordinator>();
-        await coordinator.OnHeartbeatAsync(deviceId, sessionId, 3_600_000, default);
-        await coordinator.OnHeartbeatAsync(deviceId, sessionId, 3_600_000, default);
-        var display = await scope.ServiceProvider.GetRequiredService<KioskDisplayService>().BuildAsync(await db.Sessions.Include(s => s.Station)!.ThenInclude(st => st!.Group).FirstAsync(s => s.Id == sessionId), default);
-        Assert.InRange(display!.PackageMinutesRemaining![0], 59, 60);
+        await using (var hb = factory.Services.CreateAsyncScope())
+        {
+            var coordinator = hb.ServiceProvider.GetRequiredService<KioskCheckpointCoordinator>();
+            await coordinator.OnHeartbeatAsync(deviceId, sessionId, 3_600_000, default);
+        }
+
+        await using (var displayScope = factory.Services.CreateAsyncScope())
+        {
+            var db = displayScope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var session = await db.Sessions.Include(s => s.Station)!.ThenInclude(st => st!.Group).FirstAsync(s => s.Id == sessionId);
+            var display = await displayScope.ServiceProvider.GetRequiredService<KioskDisplayService>().BuildAsync(session, default);
+            Assert.InRange(display!.PackageMinutesRemaining![0], 59, 60);
+        }
     }
 
     [Fact]

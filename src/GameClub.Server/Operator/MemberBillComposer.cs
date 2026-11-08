@@ -33,6 +33,7 @@ public sealed class MemberBillComposer
         CustomerMemberEntity? member,
         BranchMemberSettingsEntity settings,
         IReadOnlyList<TimePackage> packages,
+        StationKind stationKind,
         IReadOnlyList<Tender>? previewTenders = null,
         bool applyMemberPricing = true)
     {
@@ -47,11 +48,9 @@ public sealed class MemberBillComposer
         OperatorAlert? overshootAlert = null;
         Invoice? pcChargeInvoice = null;
         IReadOnlyList<TimeChargeLine> timeLines;
-        var isPc = charge.Lines.Count > 0 && charge.Lines.All(l =>
-            l.GroupId == PilotSeed.PcNormalGroupId
-            || l.GroupId == PilotSeed.PcVipGroupId
-            || l.GroupId.StartsWith("pc", StringComparison.Ordinal)
-            || l.GroupId.Contains("custom", StringComparison.OrdinalIgnoreCase));
+        var isPc = stationKind == StationKind.Pc
+            && charge.Lines.Count > 0
+            && charge.TotalBilledMinutes > 0;
         if (member is not null && isPc && charge.TotalBilledMinutes > 0)
         {
             var wallet = MemberSettingsMapper.LoadWalletSettings(settings);
@@ -107,17 +106,34 @@ public sealed class MemberBillComposer
 
         AllocationResult? allocation = null;
         Invoice invoice;
+        var pcWriteOff = pcChargeInvoice is not null
+            && pcChargeInvoice.Lines.Any(l => l.Kind == InvoiceLineKind.WriteOff);
         if (usingCollect && customerId is Guid cid && member is not null)
         {
             var wallets = new[] { MemberWalletMapper.ToMemberWallet(cid, member) };
             var debt = MemberSettingsMapper.LoadDebtPolicy(settings);
-            var (collected, alloc) = InvoiceCalculator.Collect(request, previewTenders!, wallets, debt);
-            invoice = collected;
+            var collectRequest = pcWriteOff && pcChargeInvoice is not null
+                ? request with { TimeCharges = CollectableTimeLines(timeLines, pcChargeInvoice) }
+                : request;
+            var (collected, alloc) = InvoiceCalculator.Collect(collectRequest, previewTenders!, wallets, debt);
+            invoice = pcWriteOff && pcChargeInvoice is not null
+                ? ComposePcOvershootInvoice(pcChargeInvoice, collected)
+                : collected;
             allocation = alloc;
         }
         else if (pcChargeInvoice is not null && saleLines.Count == 0 && surchargeToman == 0)
         {
             invoice = pcChargeInvoice;
+        }
+        else if (pcChargeInvoice is not null && pcWriteOff)
+        {
+            var buffetOnly = InvoiceCalculator.Calculate(request with { TimeCharges = [] });
+            invoice = ComposePcOvershootInvoice(pcChargeInvoice, buffetOnly);
+        }
+        else if (pcChargeInvoice is not null && (saleLines.Count > 0 || surchargeToman > 0))
+        {
+            var addOn = InvoiceCalculator.Calculate(request with { TimeCharges = [] });
+            invoice = MergeBuffetWithPcPlay(pcChargeInvoice, addOn);
         }
         else
         {
@@ -237,5 +253,87 @@ public sealed class MemberBillComposer
         }
 
         return lines.Select(l => l with { IsPcTime = true }).ToArray();
+    }
+
+    private static IReadOnlyList<TimeChargeLine> CollectableTimeLines(
+        IReadOnlyList<TimeChargeLine> lines,
+        Invoice pcChargeInvoice)
+    {
+        if (lines.Count == 0)
+        {
+            return lines;
+        }
+
+        var payable = pcChargeInvoice.PayableToman;
+        if (lines.Count == 1)
+        {
+            return [lines[0] with { AmountToman = payable, IsPcTime = true }];
+        }
+
+        var gross = MoneyMath.CheckedSum(lines.Select(l => l.AmountToman));
+        if (gross <= payable)
+        {
+            return lines.Select(l => l with { IsPcTime = true }).ToArray();
+        }
+
+        var scaled = new TimeChargeLine[lines.Count];
+        var assigned = 0L;
+        for (var i = 0; i < lines.Count; i++)
+        {
+            if (i == lines.Count - 1)
+            {
+                scaled[i] = lines[i] with { AmountToman = Math.Max(0, payable - assigned), IsPcTime = true };
+                continue;
+            }
+
+            var share = gross == 0 ? 0 : MoneyMath.MulDiv(payable, lines[i].AmountToman, gross);
+            scaled[i] = lines[i] with { AmountToman = share, IsPcTime = true };
+            assigned += share;
+        }
+
+        return scaled;
+    }
+
+    private static Invoice ComposePcOvershootInvoice(Invoice play, Invoice addOn)
+    {
+        var lines = new List<InvoiceLine>();
+        lines.AddRange(play.Lines);
+        lines.AddRange(addOn.Lines.Where(l => l.Kind is InvoiceLineKind.Buffet or InvoiceLineKind.Service or InvoiceLineKind.Rounding));
+        var discount = MoneyMath.CheckedAdd(play.DiscountToman, addOn.DiscountToman);
+        var net = MoneyMath.CheckedAdd(play.NetBeforeRoundingToman, addOn.BuffetGrossToman + addOn.ServicesGrossToman - addOn.DiscountToman);
+        var rounding = MoneyMath.CheckedAdd(play.RoundingToman, addOn.RoundingToman);
+        var payable = MoneyMath.CheckedAdd(play.PayableToman, addOn.BuffetGrossToman + addOn.ServicesGrossToman - addOn.DiscountToman);
+        payable = MoneyMath.CheckedAdd(payable, addOn.RoundingToman);
+        return new Invoice(
+            lines,
+            play.TimeGrossToman,
+            addOn.BuffetGrossToman,
+            addOn.ServicesGrossToman,
+            discount,
+            net,
+            rounding,
+            payable,
+            addOn.RejectedCode,
+            play.GraceWaivedToman);
+    }
+
+    private static Invoice MergeBuffetWithPcPlay(Invoice play, Invoice addOn)
+    {
+        var lines = new List<InvoiceLine>();
+        lines.AddRange(play.Lines);
+        lines.AddRange(addOn.Lines);
+        var net = MoneyMath.CheckedAdd(play.NetBeforeRoundingToman, addOn.BuffetGrossToman + addOn.ServicesGrossToman);
+        var payable = MoneyMath.CheckedAdd(play.PayableToman, addOn.PayableToman);
+        return new Invoice(
+            lines,
+            play.TimeGrossToman,
+            addOn.BuffetGrossToman,
+            addOn.ServicesGrossToman,
+            MoneyMath.CheckedAdd(play.DiscountToman, addOn.DiscountToman),
+            net,
+            MoneyMath.CheckedAdd(play.RoundingToman, addOn.RoundingToman),
+            payable,
+            addOn.RejectedCode,
+            play.GraceWaivedToman);
     }
 }

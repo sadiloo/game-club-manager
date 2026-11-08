@@ -55,6 +55,7 @@ public sealed class KioskHostService : IAsyncDisposable
         _lockPanel = lockPanel;
         _playingPanel = playingPanel;
         _runtime = new KioskRuntime(() => CreateHttpClient());
+        _runtime.HeartbeatAcknowledged += OnHeartbeatAcknowledged;
         _http.DefaultRequestHeaders.Add("User-Agent", "CheckpointKiosk/1.0");
         _uiTick.Tick += (_, _) => RenderDisplay();
         LoadDeviceState();
@@ -143,6 +144,32 @@ public sealed class KioskHostService : IAsyncDisposable
         _shell.Dispatcher.Invoke(RenderDisplay);
     }
 
+    private void OnHeartbeatAcknowledged(KioskHeartbeatAck ack)
+    {
+        ApplyHeartbeatDisplay(ack.Display);
+        _shell.Dispatcher.Invoke(() =>
+        {
+            if (ack.Display?.EstimatedRemainingSeconds is long seconds)
+            {
+                _status.Text = $"Station {_stationId} — ~{TimeSpan.FromSeconds(seconds):hh\\:mm\\:ss} left";
+            }
+
+            if (ack.ManualSettle || string.Equals(ack.SessionStatus, "AwaitingPayment", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(ack.SessionStatus, "Ended", StringComparison.OrdinalIgnoreCase))
+            {
+                _playingPanel.Visibility = Visibility.Collapsed;
+                _lockPanel.Visibility = Visibility.Visible;
+                _uiTick.Stop();
+                _status.Text = $"Locked — {_stationId}";
+            }
+            else if (string.Equals(ack.SessionStatus, "Open", StringComparison.OrdinalIgnoreCase) && _sessionId != Guid.Empty)
+            {
+                _lockPanel.Visibility = Visibility.Collapsed;
+                _playingPanel.Visibility = Visibility.Visible;
+            }
+        });
+    }
+
     private void RenderDisplay()
     {
         if (_lastDisplay is null)
@@ -175,6 +202,11 @@ public sealed class KioskHostService : IAsyncDisposable
         _deviceId = doc.RootElement.GetProperty("deviceId").GetGuid();
         _deviceKey = doc.RootElement.GetProperty("deviceKey").GetString()!;
         _stationId = doc.RootElement.GetProperty("stationId").GetString()!;
+        if (doc.RootElement.TryGetProperty("serverBase", out var savedBase))
+        {
+            _serverBase = savedBase.GetString() ?? _serverBase;
+        }
+
         ApplyDeviceHeaders(_http);
     }
 
@@ -216,7 +248,7 @@ public sealed class KioskHostService : IAsyncDisposable
             "events.db");
         _runtime.Configure(new Uri($"{_serverBase}/hubs/kiosk"), _deviceId, _deviceKey, _stationId, queuePath, legacyWindows: true);
         await _runtime.StartAsync(CancellationToken.None);
-        _ = _runtime.GetQueue();
+        _runtime.GetQueue();
     }
 
     private async Task RefreshAsync()
