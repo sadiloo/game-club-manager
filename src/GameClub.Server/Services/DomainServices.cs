@@ -705,6 +705,49 @@ public sealed class SessionService(
             await db.SaveChangesAsync(innerCt);
         }, ct);
 
+    public Task RecordAcceptedCheckpointsAsync(Guid sessionId, IReadOnlyList<DateTime> acceptedUtc, CancellationToken ct)
+        => ExecuteWithSessionWriteLockAsync(sessionId, async (session, innerCt) =>
+        {
+            if (session.Station!.Group!.Kind != StationKind.Pc)
+            {
+                throw new ApiException(StatusCodes.Status400BadRequest, "not_pc", "Checkpoints are for PC sessions only.");
+            }
+
+            if (session.Status is not SessionStatus.Open and not SessionStatus.Paused)
+            {
+                if (session.Status == SessionStatus.ManualSettle)
+                {
+                    throw new ApiException(StatusCodes.Status409Conflict, "manual_settle", "Session awaits manual settlement.");
+                }
+
+                throw new ApiException(StatusCodes.Status409Conflict, "closed", "Session is closed.");
+            }
+
+            if (acceptedUtc.Count == 0)
+            {
+                return;
+            }
+
+            foreach (var at in acceptedUtc)
+            {
+                var previous = session.LastCheckpointUtc ?? session.StartedAtUtc;
+                if (at < previous)
+                {
+                    session.Status = SessionStatus.ManualSettle;
+                    session.ManualSettleReason = "rejected_checkpoint";
+                    await audit.AppendAsync("session.manual_settle", new { sessionId, reason = "rejected_checkpoint" }, innerCt);
+                    await db.SaveChangesAsync(innerCt);
+                    return;
+                }
+
+                session.LastCheckpointUtc = at;
+                session.Checkpoints.Add(new CheckpointEntity { AtUtc = at });
+                await audit.AppendAsync("session.checkpoint", new { sessionId, atUtc = at }, innerCt);
+            }
+
+            await db.SaveChangesAsync(innerCt);
+        }, ct);
+
     public Task ChangePlayerCountAsync(Guid sessionId, int playerCount, CancellationToken ct)
         => ExecuteWithSessionWriteLockAsync(sessionId, async (session, innerCt) =>
         {

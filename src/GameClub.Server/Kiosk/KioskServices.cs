@@ -597,15 +597,15 @@ public sealed class KioskCheckpointCoordinator(
             if (!blockGraceCheckpoints && !monotonicDropped && !monotonicStalled)
             {
                 var last = session.LastCheckpointUtc ?? session.StartedAtUtc;
-                foreach (var minute in CheckpointMinutePlanner.MinutesToAccept(last, clock.UtcNow.UtcDateTime))
+                var minutes = CheckpointMinutePlanner.MinutesToAccept(last, clock.UtcNow.UtcDateTime).ToList();
+                if (minutes.Count > 0)
                 {
-                    await sessions.RecordCheckpointAsync(session.Id, new DateTimeOffset(minute, TimeSpan.Zero), ct);
+                    await sessions.RecordAcceptedCheckpointsAsync(session.Id, minutes, ct);
                     session = await db.Sessions
                         .Include(s => s.Station)!.ThenInclude(st => st!.Group)
                         .Include(s => s.Segments)
                         .Include(s => s.Pauses)
                         .FirstAsync(s => s.Id == session.Id, ct);
-                    last = session.LastCheckpointUtc ?? last;
                 }
             }
         }
@@ -930,11 +930,11 @@ public sealed class KioskReconcileService(
 
         var last = session.LastCheckpointUtc ?? session.StartedAtUtc;
         var cappedEnd = segmentEnd > clock.UtcNow.UtcDateTime ? clock.UtcNow.UtcDateTime : segmentEnd;
-        foreach (var minute in CheckpointMinutePlanner.MinutesToAccept(last, cappedEnd))
+        var offlineMinutes = CheckpointMinutePlanner.MinutesToAccept(last, cappedEnd).ToList();
+        if (offlineMinutes.Count > 0)
         {
-            await sessions.RecordCheckpointAsync(session.Id, new DateTimeOffset(minute, TimeSpan.Zero), ct);
+            await sessions.RecordAcceptedCheckpointsAsync(session.Id, offlineMinutes, ct);
             await db.Entry(session).ReloadAsync(ct);
-            last = session.LastCheckpointUtc ?? last;
         }
 
         await audit.AppendAsync("kiosk.offline_segment", new { ev.EventId, ev.PayloadJson, reconciled = true }, ct);
@@ -1008,6 +1008,7 @@ public sealed class GameCatalogService(AppDbContext db, AuditService audit)
     public async Task<GameCatalogEntryEntity> UpdateEntryAsync(
         int id,
         string name,
+        int? categoryId,
         bool enabled,
         string? executableOrUri,
         string? arguments,
@@ -1020,6 +1021,11 @@ public sealed class GameCatalogService(AppDbContext db, AuditService audit)
         var row = await db.GameCatalogEntries.FirstOrDefaultAsync(e => e.Id == id, ct)
             ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Game not found.");
         row.Name = name;
+        if (categoryId is int cat)
+        {
+            row.CategoryId = cat;
+        }
+
         row.Enabled = enabled;
         if (executableOrUri is not null)
         {
@@ -1044,7 +1050,7 @@ public sealed class GameCatalogService(AppDbContext db, AuditService audit)
         }
 
         row.CatalogVersion = (await db.GameCatalogEntries.MaxAsync(e => (long?)e.CatalogVersion, ct) ?? 0) + 1;
-        await audit.AppendAsync("game_catalog.update", new { row.Id, row.Name, row.Enabled }, ct);
+        await audit.AppendAsync("game_catalog.update", new { row.Id, row.Name, row.CategoryId, row.Enabled }, ct);
         await db.SaveChangesAsync(ct);
         return row;
     }

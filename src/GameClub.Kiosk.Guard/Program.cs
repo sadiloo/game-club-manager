@@ -26,6 +26,13 @@ internal sealed class GuardService : ServiceBase
 
     protected override void OnStart(string[] args)
     {
+        var identity = KioskGuardIdentity.Resolve();
+        if (!identity.IsResolved)
+        {
+            Stop();
+            return;
+        }
+
         _cts = new CancellationTokenSource();
         _thread = new Thread(() => GuardWatchdog.Run(_cts.Token)) { IsBackground = true, Name = "CheckpointGuard" };
         _thread.Start();

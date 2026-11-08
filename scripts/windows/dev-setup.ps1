@@ -11,9 +11,14 @@ if (-not (Get-LocalUser -Name $KioskUser -ErrorAction SilentlyContinue)) {
     Write-Host "Created local user $KioskUser"
 }
 
-$reg = "HKU:\Temp" # Per-user policies are applied by guard RegistryPolicyStore for the interactive kiosk profile.
+$sid = (New-Object System.Security.Principal.NTAccount($KioskUser)).Translate([System.Security.Principal.SecurityIdentifier]).Value
+[Environment]::SetEnvironmentVariable("CHECKPOINT_KIOSK_SID", $sid, "Machine")
+[Environment]::SetEnvironmentVariable("CHECKPOINT_KIOSK_USER", $KioskUser, "Machine")
+[Environment]::SetEnvironmentVariable("CHECKPOINT_KIOSK_EXE", (Resolve-Path $KioskExe).Path, "Machine")
+Write-Host "Configured CHECKPOINT_KIOSK_SID=$sid for Guard registry hive targeting."
 Write-Host "Set Winlogon Shell for $KioskUser to $KioskExe (HKCU\...\Winlogon\Shell)."
-Write-Host "Guard disables Task Manager / lock / password change / sign-out UI options for the kiosk user profile."
+Write-Host "Guard applies expanded Policies\System DWORD set and session-targeted shell recovery (not a process-name poll)."
+Write-Host "Optional: set service/process DACL so kiosk user cannot stop Checkpoint Guard."
 sc.exe create CheckpointGuard binPath= "`"$GuardExe`"" | Out-Null
 sc.exe config CheckpointGuard start= auto | Out-Null
 sc.exe failure CheckpointGuard reset= 86400 actions= restart/60000/restart/60000/restart/60000 | Out-Null

@@ -18,4 +18,8 @@
     <Reference Include="System.ServiceProcess" />
   </ItemGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\GameClub.Kiosk.Core\GameClub.Kiosk.Core.csproj" />
+  </ItemGroup>
+
 </Project>

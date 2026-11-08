@@ -206,6 +206,7 @@ public sealed class KioskOperatorController(
 
     public sealed record GameUpdateBody(
         string Name,
+        int? CategoryId,
         bool Enabled,
         string? ExecutableOrUri,
         string? Arguments,
@@ -221,6 +222,7 @@ public sealed class KioskOperatorController(
         var row = await catalog.UpdateEntryAsync(
             id,
             body.Name,
+            body.CategoryId,
             body.Enabled,
             body.ExecutableOrUri,
             body.Arguments,

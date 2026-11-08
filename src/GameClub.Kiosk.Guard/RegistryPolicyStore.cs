@@ -1,3 +1,4 @@
+using GameClub.Kiosk.Core.Security;
 using Microsoft.Win32;
 
 namespace GameClub.Kiosk.Guard;
@@ -14,9 +15,10 @@ internal static class RegistryPolicyStore
             return;
         }
 
-        key.SetValue("DisableTaskMgr", 1, RegistryValueKind.DWord);
-        key.SetValue("DisableLockWorkstation", 1, RegistryValueKind.DWord);
-        key.SetValue("DisableChangePassword", 1, RegistryValueKind.DWord);
+        foreach (var entry in KioskRegistryPolicyTemplate.SystemPolicies)
+        {
+            key.SetValue(entry.Key, entry.Value, RegistryValueKind.DWord);
+        }
     }
 
     internal static bool Tampered()
@@ -27,7 +29,13 @@ internal static class RegistryPolicyStore
             return true;
         }
 
-        return key.GetValue("DisableTaskMgr") is not int v || v != 1;
+        var actual = new Dictionary<string, int?>(StringComparer.OrdinalIgnoreCase);
+        foreach (var name in KioskRegistryPolicyTemplate.SystemPolicies.Keys)
+        {
+            actual[name] = key.GetValue(name) as int?;
+        }
+
+        return KioskRegistryPolicyTemplate.IsTampered(actual);
     }
 
     internal static void Repair() => EnsureDefaults();
@@ -35,7 +43,7 @@ internal static class RegistryPolicyStore
     private static RegistryKey? OpenKioskHive(bool writable)
     {
         var sid = Environment.GetEnvironmentVariable("CHECKPOINT_KIOSK_SID")?.Trim();
-        if (string.IsNullOrWhiteSpace(sid))
+        if (!KioskRegistryPolicyTemplate.SidConfigured(sid))
         {
             return null;
         }

@@ -23,14 +23,28 @@
     <TextBox x:Name="ServerUrlBox" Height="32" Margin="0,12" ToolTip="Manual server URL" IsReadOnly="True" />
   </StackPanel>
 
-  <StackPanel x:Name="PlayingPanel" Grid.Row="1" VerticalAlignment="Center" HorizontalAlignment="Center" Visibility="Collapsed" Width="520">
-    <TextBlock x:Name="DisplayBalance" Foreground="White" FontSize="24" TextAlignment="Center"/>
-    <TextBlock x:Name="DisplayPackage" Foreground="#9CA3AF" FontSize="18" Margin="0,8" TextAlignment="Center"/>
-    <TextBlock x:Name="DisplayElapsed" Foreground="#9CA3AF" FontSize="18" TextAlignment="Center"/>
-    <TextBlock x:Name="DisplayFreeBand" Foreground="#60A5FA" FontSize="16" Margin="0,12" TextWrapping="Wrap" TextAlignment="Center"/>
-    <Button Content="Logout" Height="40" Margin="0,24,0,0" Click="OnLogoutClick"/>
+  <Grid x:Name="LauncherPanel" Grid.Row="1" Visibility="Collapsed" Margin="24">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="*"/>
+    </Grid.RowDefinitions>
+    <TextBlock x:Name="LauncherHeader" Foreground="White" FontSize="22" Text="Games" Margin="0,0,0,8"/>
+    <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,12">
+      <TextBox x:Name="GameSearchBox" Width="280" Height="32" Margin="0,0,8,0" ToolTip="Search games"/>
+      <ComboBox x:Name="GameCategoryBox" Width="160" Height="32"/>
+    </StackPanel>
+    <ListBox x:Name="GameList" Grid.Row="2" Background="#1F2937" Foreground="White" FontSize="16"/>
+  </Grid>
+
+  <StackPanel x:Name="PlayingPanel" Grid.Row="1" VerticalAlignment="Top" HorizontalAlignment="Right" Visibility="Collapsed" Width="320" Margin="24">
+    <TextBlock x:Name="DisplayBalance" Foreground="White" FontSize="20" TextAlignment="Right"/>
+    <TextBlock x:Name="DisplayPackage" Foreground="#9CA3AF" FontSize="16" Margin="0,8" TextAlignment="Right"/>
+    <TextBlock x:Name="DisplayElapsed" Foreground="#9CA3AF" FontSize="16" TextAlignment="Right"/>
+    <TextBlock x:Name="DisplayFreeBand" Foreground="#60A5FA" FontSize="14" Margin="0,12" TextWrapping="Wrap" TextAlignment="Right"/>
+    <Button Content="Logout" Height="36" Margin="0,16,0,0" Click="OnLogoutClick"/>
   </StackPanel>
 
-  <TextBlock Grid.Row="2" x:Name="FooterText" Foreground="#4B5563" FontSize="12" Margin="12" Text="F8: focus server URL (admin password to save)"/>
+  <TextBlock Grid.Row="2" x:Name="FooterText" Foreground="#4B5563" FontSize="12" Margin="12" Text="F8: server URL (admin password) · F9: safe test exit"/>
   </Grid>
 </Window>

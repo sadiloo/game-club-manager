@@ -11,8 +11,24 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
-        _host = new KioskHostService(this, StatusText, DisplayBalance, DisplayPackage, DisplayElapsed, DisplayFreeBand, LockPanel, PlayingPanel);
+        _host = new KioskHostService(
+            this,
+            StatusText,
+            DisplayBalance,
+            DisplayPackage,
+            DisplayElapsed,
+            DisplayFreeBand,
+            LockPanel,
+            LauncherPanel,
+            PlayingPanel,
+            GameList,
+            GameSearchBox,
+            GameCategoryBox);
         ServerUrlBox.Text = _host.ServerBase;
+        GameCategoryBox.Items.Add("All");
+        GameCategoryBox.Items.Add("1");
+        GameCategoryBox.Items.Add("2");
+        GameCategoryBox.SelectedIndex = 0;
         KeyDown += OnKeyDown;
     }
 
@@ -25,6 +41,10 @@ public partial class MainWindow : Window
                 ServerUrlBox.IsReadOnly = false;
                 ServerUrlBox.Focus();
             }
+        }
+        else if (e.Key == Key.F9 && _host.TrySafeTestExit(AdminUrlPasswordBox.Password))
+        {
+            Application.Current.Shutdown();
         }
     }
 

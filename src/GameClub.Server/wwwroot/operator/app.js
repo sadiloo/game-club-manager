@@ -1142,6 +1142,7 @@ bindClick("catalogSaveBtn", async () => {
       method: "PUT",
       body: JSON.stringify({
         name,
+        categoryId,
         enabled,
         executableOrUri: executable,
         arguments: args || null,

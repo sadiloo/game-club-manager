@@ -13,8 +13,9 @@ $headers = @{
 $negotiate = Invoke-RestMethod -Uri "$server/hubs/kiosk/negotiate?negotiateVersion=1" -Method Post -Headers $headers
 $connectionId = $negotiate.connectionToken
 if (-not $connectionId) { throw "negotiate missing connectionToken" }
-$transport = ($negotiate.availableTransports | ForEach-Object { $_.transport }) -join ","
-$chosen = $negotiate.availableTransports[0].transport
+$transports = @($negotiate.availableTransports | ForEach-Object { $_.transport })
+$chosen = ($transports | Where-Object { $_ -eq "LongPolling" -or $_ -eq "ServerSentEvents" } | Select-Object -First 1)
+if (-not $chosen) { $chosen = $transports[0] }
 $startUrl = "$server/hubs/kiosk?id=$connectionId"
 $hubConnected = $false
 $handshakeOk = $false
@@ -25,13 +26,13 @@ if ($chosen -eq "ServerSentEvents" -or $chosen -eq "LongPolling") {
     $hubConnected = $first.StatusCode -eq 200
     $payload = '{"protocol":"json","version":1}' + [char]0x1e
     $post = Invoke-WebRequest -Uri $startUrl -Method Post -Body $payload -ContentType "application/json; charset=utf-8" -Headers $headers -UseBasicParsing
-    $handshakeOk = $post.Content -match '"type"\s*:\s*6'
+    $handshakeOk = $post.Content -match '\{\}'
 }
 @{
     case          = 1
     pass          = ($hubConnected -and $handshakeOk)
     server        = $server
-    transport     = $transport
+    transport     = ($transports -join ",")
     chosen        = $chosen
     hubConnected  = $hubConnected
     handshakeOk   = $handshakeOk

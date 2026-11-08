@@ -1647,7 +1647,7 @@ public static class RemainingTimeEstimator
                 }
             }
 
-            if (shown == fundedOnly + 1 && fundedOnly >= 60)
+            if (shown == fundedOnly + 1 && fundedOnly > 0)
             {
                 moneyMinutes = fundedOnly;
             }

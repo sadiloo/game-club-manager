@@ -32,6 +32,8 @@ public sealed class KioskRuntime : IAsyncDisposable
 
     public event Action<KioskHeartbeatAck>? HeartbeatAcknowledged;
 
+    public long ClientMonotonicMs => _monotonic.ElapsedMilliseconds;
+
     public KioskRuntime(Func<HttpClient> httpFactory) => _httpFactory = httpFactory;
 
     public void Configure(Uri hubUri, Guid deviceId, string deviceKey, string stationId, string queuePath, bool legacyWindows)
