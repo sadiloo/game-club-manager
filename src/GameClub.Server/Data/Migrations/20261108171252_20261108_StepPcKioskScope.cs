@@ -227,6 +227,11 @@ namespace GameClub.Server.Data.Migrations
                 name: "IX_kiosk_pairing_codes_StationId_Code",
                 table: "kiosk_pairing_codes",
                 columns: new[] { "StationId", "Code" });
+
+            migrationBuilder.InsertData(
+                table: "game_catalog_categories",
+                columns: new[] { "Id", "Name", "SortOrder" },
+                values: new object[] { 1, "عمومی", 1 });
         }
 
         /// <inheritdoc />

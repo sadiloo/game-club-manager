@@ -234,7 +234,11 @@ public sealed class KioskFixR2AcceptanceTests(GameClubWebApplicationFactory fact
         await using (var displayScope = factory.Services.CreateAsyncScope())
         {
             var db2 = displayScope.ServiceProvider.GetRequiredService<AppDbContext>();
-            var session = await db2.Sessions.Include(s => s.Station)!.ThenInclude(st => st!.Group).FirstAsync(s => s.Id == sessionId);
+            var session = await db2.Sessions
+                .Include(s => s.Station)!.ThenInclude(st => st!.Group)
+                .Include(s => s.Segments)
+                .Include(s => s.Pauses)
+                .FirstAsync(s => s.Id == sessionId);
             var display = await displayScope.ServiceProvider.GetRequiredService<KioskDisplayService>().BuildAsync(session, default);
             Assert.True(display!.WalletBalanceToman < 80_000 || display.EstimatedRemainingSeconds < 3600);
         }
@@ -276,7 +280,11 @@ public sealed class KioskFixR2AcceptanceTests(GameClubWebApplicationFactory fact
         await using (var displayScope = factory.Services.CreateAsyncScope())
         {
             var db = displayScope.ServiceProvider.GetRequiredService<AppDbContext>();
-            var session = await db.Sessions.Include(s => s.Station)!.ThenInclude(st => st!.Group).FirstAsync(s => s.Id == sessionId);
+            var session = await db.Sessions
+                .Include(s => s.Station)!.ThenInclude(st => st!.Group)
+                .Include(s => s.Segments)
+                .Include(s => s.Pauses)
+                .FirstAsync(s => s.Id == sessionId);
             var display = await displayScope.ServiceProvider.GetRequiredService<KioskDisplayService>().BuildAsync(session, default);
             Assert.InRange(display!.PackageMinutesRemaining![0], 59, 60);
         }
@@ -327,8 +335,7 @@ public sealed class KioskFixR2AcceptanceTests(GameClubWebApplicationFactory fact
         using (var scope = factory.Services.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            db.GameCatalogCategories.Add(new GameCatalogCategoryEntity { Name = "Cat", SortOrder = 1 });
-            await db.SaveChangesAsync();
+            await DatabaseSeed.EnsureAsync(db);
         }
 
         var post = await mgr.PostAsJsonAsync("/api/operator/games", new

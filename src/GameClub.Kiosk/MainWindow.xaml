@@ -12,6 +12,7 @@
   <StackPanel x:Name="LockPanel" Grid.Row="1" VerticalAlignment="Center" HorizontalAlignment="Center" Width="420">
     <TextBlock Text="Checkpoint PC Kiosk" Foreground="White" FontSize="28" HorizontalAlignment="Center" />
     <TextBlock x:Name="StatusText" Text="Unpaired — enter operator pairing code" Foreground="#9CA3AF" FontSize="16" Margin="0,12,0,16" TextWrapping="Wrap" TextAlignment="Center" />
+    <PasswordBox x:Name="AdminUrlPasswordBox" Height="32" Margin="0,8" ToolTip="Admin password to unlock server URL"/>
     <TextBox x:Name="PairingCodeBox" Height="40" Margin="0,4" FontSize="18" VerticalContentAlignment="Center" />
     <Button Content="Pair station" Height="40" Margin="0,8" Click="OnPairClick"/>
     <Separator Margin="0,16"/>
@@ -19,7 +20,7 @@
     <TextBox x:Name="LoginNameBox" Height="36" Margin="0,4"/>
     <PasswordBox x:Name="PasswordBox" Height="36" Margin="0,4"/>
     <Button Content="Login" Height="40" Margin="0,8" Click="OnLoginClick"/>
-    <TextBox x:Name="ServerUrlBox" Height="32" Margin="0,12" ToolTip="Manual server URL" />
+    <TextBox x:Name="ServerUrlBox" Height="32" Margin="0,12" ToolTip="Manual server URL" IsReadOnly="True" />
   </StackPanel>
 
   <StackPanel x:Name="PlayingPanel" Grid.Row="1" VerticalAlignment="Center" HorizontalAlignment="Center" Visibility="Collapsed" Width="520">
@@ -30,6 +31,6 @@
     <Button Content="Logout" Height="40" Margin="0,24,0,0" Click="OnLogoutClick"/>
   </StackPanel>
 
-  <TextBlock Grid.Row="2" x:Name="FooterText" Foreground="#4B5563" FontSize="12" Margin="12" Text="F8: quick dev server URL"/>
+  <TextBlock Grid.Row="2" x:Name="FooterText" Foreground="#4B5563" FontSize="12" Margin="12" Text="F8: focus server URL (admin password to save)"/>
   </Grid>
 </Window>

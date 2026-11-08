@@ -726,6 +726,12 @@ public sealed class OperatorBillService(
         var saleLines = sale?.Lines.ToList() ?? [];
         var amounts = await calculator.ComputeAsync(session, bill.FrozenAtUtc, bill.SurchargeToman, saleLines, ct);
         var (levelDiscountToman, birthdayDiscountToman) = SplitMemberDiscounts(amounts.Detail);
+        var writeOffToman = amounts.Detail?.InvoicePreview.Lines
+            .Where(l => l.Kind == InvoiceLineKind.WriteOff)
+            .Sum(l => -l.AmountToman) ?? 0L;
+        var overshootAlert = amounts.Detail?.OvershootAlert is { } alert
+            ? new { alert.Code, alert.AmountToman, alert.Message }
+            : null;
         return new
         {
             bill.SessionId,
@@ -740,6 +746,8 @@ public sealed class OperatorBillService(
             servicesGrossToman = bill.ServicesGrossToman,
             levelDiscountToman,
             birthdayDiscountToman,
+            writeOffToman,
+            overshootAlert,
             saleLines = sale is null ? Array.Empty<SaleLineDto>() : OpenSaleMapper.ToDtos(sale.Lines),
             frozenAtUtc = bill.FrozenAtUtc,
             source = bill.Source,

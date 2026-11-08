@@ -244,23 +244,32 @@ public sealed class KioskLeaseService(
             var at = clock.UtcNow;
             var endUtc = session.LastCheckpointUtc ?? clock.UtcNow.UtcDateTime;
             var charge = billing.BuildCharge(session, endUtc, snapshot);
-            var (_, estimate) = KioskPlayEstimate.AfterAcceptedPlay(session, member, account, charge, groupId, settings, snapshot.Card, at);
-            packageMinutes = estimate.EligiblePackageMinutes;
+            var (settled, estimate) = KioskPlayEstimate.AfterAcceptedPlay(session, member, account, charge, groupId, settings, snapshot.Card, at);
+            packageMinutes = settled.Account.Packages.Sum(p => p.RemainingMinutes);
             var moneyMinutes = estimate.MoneyMinutes ?? 0;
             var debtPlay = wallet.AllowPcWhileInDebt && account.Pc.TotalToman < 0;
-            if (debtPlay && packageMinutes <= 0)
+            var grace = settled.Settlement.Grace;
+            if (grace is { WaivedToman: > 0 } && clock.UtcNow.UtcDateTime < grace.At.UtcDateTime.AddMinutes(1))
+            {
+                authorizedUntil = grace.At.UtcDateTime.AddMinutes(1);
+            }
+            else if (debtPlay && packageMinutes <= 0)
             {
                 authorizedUntil = lastCheckpoint;
             }
-            else if (moneyMinutes <= 0 && estimate.EligiblePackageMinutes <= 0)
+            else if (moneyMinutes <= 0 && packageMinutes <= 0)
             {
                 authorizedUntil = lastCheckpoint;
+            }
+            else if (moneyMinutes <= 0 && settled.Account.Pc.TotalToman > 0)
+            {
+                authorizedUntil = lastCheckpoint.AddMinutes(1);
             }
             else
             {
                 var playableMinutes = debtPlay && moneyMinutes <= 0
-                    ? estimate.EligiblePackageMinutes
-                    : Math.Max(0, moneyMinutes) + estimate.EligiblePackageMinutes;
+                    ? packageMinutes
+                    : Math.Max(0, moneyMinutes) + packageMinutes;
                 authorizedUntil = lastCheckpoint.AddMinutes(Math.Max(1, playableMinutes));
             }
         }
@@ -361,14 +370,20 @@ public sealed class KioskDisplayService(
             freeBand = KioskPlayEstimate.FormatFreeBandText(snapshot.Card, settled.Account, groupId, session, at);
         }
 
-        var moneyOnlySeconds = debtOnly
+        var graceActive = settled.Settlement.Grace is { } g
+            && clock.UtcNow.UtcDateTime < g.At.UtcDateTime.AddMinutes(1);
+        var graceEnded = settled.Settlement.Grace is { WaivedToman: > 0 } ended
+            && clock.UtcNow.UtcDateTime >= ended.At.UtcDateTime.AddMinutes(1);
+        var moneyOnlySeconds = session.Status is not SessionStatus.Open and not SessionStatus.Paused
+            || graceEnded
+            ? 0
+            : debtOnly
             ? 0
             : estimate.EligiblePackageMinutes > 0
                 ? Math.Max(0, (estimate.MoneyMinutes ?? 0) * 60L)
                 : Math.Max(0, estimate.TotalMinutes * 60L);
-        var graceActive = settled.Settlement.Grace is { } g
-            && clock.UtcNow.UtcDateTime < g.At.UtcDateTime.AddMinutes(1);
-        var walletToman = settled.Settlement.Grace is not null
+        var walletToman = graceActive
+            || session.Status == SessionStatus.AwaitingPayment && settled.Settlement.Grace is { WaivedToman: > 0 }
             ? memberPocket.TotalToman
             : settled.Account.Pc.TotalToman;
         return new KioskDisplayDto
@@ -432,13 +447,83 @@ public sealed class KioskDisplayService(
             return false;
         }
 
-        var moneyMinutes = estimate.MoneyMinutes ?? 0;
-        if (moneyMinutes > 0 || estimate.EligiblePackageMinutes > 0)
+        return true;
+    }
+
+    public async Task<DateTime?> GetGraceWallEndUtcAsync(PlaySessionEntity session, CancellationToken ct)
+    {
+        if (session.Status != SessionStatus.Open || session.CustomerId is null)
+        {
+            return null;
+        }
+
+        var settings = await members.LoadSettingsAsync(ct);
+        var wallet = MemberSettingsMapper.LoadWalletSettings(settings);
+        var (member, packages) = await members.LoadMemberStateAsync(session.CustomerId.Value, ct);
+        if (member is null)
+        {
+            return null;
+        }
+
+        var snapshot = await rates.LoadSnapshotAsync(session.RateCardSnapshotId, ct);
+        var endUtc = session.LastCheckpointUtc ?? clock.UtcNow.UtcDateTime;
+        var charge = billing.BuildCharge(session, endUtc, snapshot);
+        var account = KioskPlayEstimate.BuildAccount(member, wallet, packages);
+        var groupId = session.Station?.GroupId ?? PilotSeed.PcNormalGroupId;
+        var (settled, _) = KioskPlayEstimate.AfterAcceptedPlay(
+            session,
+            member,
+            account,
+            charge,
+            groupId,
+            settings,
+            snapshot.Card,
+            clock.UtcNow);
+        var grace = settled.Settlement.Grace;
+        return grace is { WaivedToman: > 0 } ? grace.At.UtcDateTime.AddMinutes(1) : null;
+    }
+
+    public async Task<bool> ShouldBlockCheckpointDuringGraceAsync(PlaySessionEntity session, CancellationToken ct)
+    {
+        if (session.Status != SessionStatus.Open || session.CustomerId is null)
         {
             return false;
         }
 
-        return true;
+        if (session.Station?.Group?.Kind != StationKind.Pc)
+        {
+            return false;
+        }
+
+        var settings = await members.LoadSettingsAsync(ct);
+        var wallet = MemberSettingsMapper.LoadWalletSettings(settings);
+        var (member, packages) = await members.LoadMemberStateAsync(session.CustomerId.Value, ct);
+        if (member is null)
+        {
+            return false;
+        }
+
+        var snapshot = await rates.LoadSnapshotAsync(session.RateCardSnapshotId, ct);
+        var endUtc = session.LastCheckpointUtc ?? clock.UtcNow.UtcDateTime;
+        var charge = billing.BuildCharge(session, endUtc, snapshot);
+        var account = KioskPlayEstimate.BuildAccount(member, wallet, packages);
+        var groupId = session.Station?.GroupId ?? PilotSeed.PcNormalGroupId;
+        var (settled, _) = KioskPlayEstimate.AfterAcceptedPlay(
+            session,
+            member,
+            account,
+            charge,
+            groupId,
+            settings,
+            snapshot.Card,
+            clock.UtcNow);
+        var grace = settled.Settlement.Grace;
+        if (grace is not { WaivedToman: > 0 })
+        {
+            return false;
+        }
+
+        return clock.UtcNow.UtcDateTime < grace.At.UtcDateTime.AddMinutes(1);
     }
 
     private TimeSpan Elapsed(PlaySessionEntity session)
@@ -507,7 +592,9 @@ public sealed class KioskCheckpointCoordinator(
             var monotonicStalled = clientMonotonicMs > 0
                 && lastHeartbeat is not null
                 && clientMonotonicMs <= lastHeartbeat.ClientMonotonicMs;
-            if (!monotonicDropped && !monotonicStalled)
+            var blockGraceCheckpoints = session.CustomerId is not null
+                && await display.ShouldBlockCheckpointDuringGraceAsync(session, ct);
+            if (!blockGraceCheckpoints && !monotonicDropped && !monotonicStalled)
             {
                 var last = session.LastCheckpointUtc ?? session.StartedAtUtc;
                 foreach (var minute in CheckpointMinutePlanner.MinutesToAccept(last, clock.UtcNow.UtcDateTime))
@@ -535,7 +622,8 @@ public sealed class KioskCheckpointCoordinator(
         if (session is not null && session.Status == SessionStatus.Open
             && await display.ShouldStopAfterGraceMinuteAsync(session, ct))
         {
-            await sessions.StopAsync(session.Id, ct);
+            var graceEnd = await display.GetGraceWallEndUtcAsync(session, ct);
+            await sessions.StopAsync(session.Id, graceEnd, ct);
             session = await db.Sessions
                 .Include(s => s.Station)!.ThenInclude(st => st!.Group)
                 .Include(s => s.Segments)
@@ -891,6 +979,7 @@ public sealed class GameCatalogService(AppDbContext db, AuditService audit)
         string? arguments,
         string? iconUrl,
         int? sortOrder,
+        bool enabled,
         string[]? groupRestrictions,
         string[]? allowedProcessNames,
         CancellationToken ct)
@@ -904,7 +993,7 @@ public sealed class GameCatalogService(AppDbContext db, AuditService audit)
             ExecutableOrUri = executableOrUri,
             Arguments = arguments,
             IconUrl = iconUrl,
-            Enabled = true,
+            Enabled = enabled,
             CatalogVersion = version,
             SortOrder = sortOrder ?? (int)version,
             GroupRestrictionsJson = JsonSerializer.Serialize(groupRestrictions ?? []),

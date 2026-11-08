@@ -22,8 +22,7 @@ internal static class KioskPolicyGuard
                 continue;
             }
 
-            if (user.Equals(expectedUser, StringComparison.OrdinalIgnoreCase)
-                || user.IndexOf("Kiosk", StringComparison.OrdinalIgnoreCase) >= 0)
+            if (string.Equals(user, expectedUser, StringComparison.OrdinalIgnoreCase))
             {
                 return true;
             }
@@ -51,10 +50,15 @@ internal static class KioskPolicyGuard
 
         try
         {
-            var user = new WindowsIdentity(token);
-            return user.Name.Contains('\\')
-                ? user.Name[(user.Name.LastIndexOf('\\') + 1)..]
-                : user.Name;
+            using var user = new WindowsIdentity(token);
+            var full = user.Name ?? "";
+            if (string.IsNullOrEmpty(full))
+            {
+                return null;
+            }
+
+            var slash = full.LastIndexOf('\\');
+            return slash >= 0 ? full.Substring(slash + 1) : full;
         }
         catch
         {

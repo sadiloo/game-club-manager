@@ -99,7 +99,8 @@ internal static class ConsoleSessionLaunch
         var sessionId = FindActiveUserSession(kioskUser);
         if (sessionId is null)
         {
-            sessionId = WTSGetActiveConsoleSessionId();
+            detail = "kiosk_user_session_not_found";
+            return false;
         }
 
         if (!WTSQueryUserToken(sessionId.Value, out var token) || token == IntPtr.Zero)
@@ -152,6 +153,8 @@ internal static class ConsoleSessionLaunch
     {
         WTSUserName = 5,
     }
+
+    internal static uint? FindActiveUserSessionId(string userName) => FindActiveUserSession(userName);
 
     private static uint? FindActiveUserSession(string userName)
     {

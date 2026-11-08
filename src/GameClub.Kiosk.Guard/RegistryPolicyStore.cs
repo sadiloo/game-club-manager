@@ -34,17 +34,15 @@ internal static class RegistryPolicyStore
 
     private static RegistryKey? OpenKioskHive(bool writable)
     {
-        var sid = Environment.GetEnvironmentVariable("CHECKPOINT_KIOSK_SID");
-        if (!string.IsNullOrWhiteSpace(sid))
+        var sid = Environment.GetEnvironmentVariable("CHECKPOINT_KIOSK_SID")?.Trim();
+        if (string.IsNullOrWhiteSpace(sid))
         {
-            var fullPath = $"{sid.Trim()}\\{PoliciesPath}";
-            return writable
-                ? Registry.Users.CreateSubKey(fullPath, true)
-                : Registry.Users.OpenSubKey(fullPath, writable: false);
+            return null;
         }
 
+        var fullPath = $"{sid}\\{PoliciesPath}";
         return writable
-            ? Registry.CurrentUser.CreateSubKey(PoliciesPath, true)
-            : Registry.CurrentUser.OpenSubKey(PoliciesPath, writable: false);
+            ? Registry.Users.CreateSubKey(fullPath, true)
+            : Registry.Users.OpenSubKey(fullPath, writable: false);
     }
 }

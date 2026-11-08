@@ -20,7 +20,11 @@ public partial class MainWindow : Window
     {
         if (e.Key == Key.F8)
         {
-            ServerUrlBox.Focus();
+            if (_host.TryUnlockServerUrlEdit(AdminUrlPasswordBox.Password))
+            {
+                ServerUrlBox.IsReadOnly = false;
+                ServerUrlBox.Focus();
+            }
         }
     }
 

@@ -17,9 +17,23 @@ internal static class GuardWatchdog
         while (!ct.IsCancellationRequested)
         {
             var kiosk = Process.GetProcessesByName("GameClub.Kiosk");
-            if (kiosk.Length == 0 || !KioskPolicyGuard.IsInteractiveSessionKiosk(kiosk))
+            var expectedUser = Environment.GetEnvironmentVariable("CHECKPOINT_KIOSK_USER") ?? "CheckpointKiosk";
+            var kioskOk = kiosk.Length > 0 && KioskPolicyGuard.IsInteractiveSessionKiosk(kiosk);
+            if (!kioskOk)
             {
-                TryRestartKiosk("missing_or_wrong_session");
+                var sessionId = ConsoleSessionLaunch.FindActiveUserSessionId(expectedUser);
+                if (sessionId is null)
+                {
+                    TryRestartKiosk("missing_or_wrong_session");
+                }
+                else if (kiosk.Length == 0)
+                {
+                    TryRestartKiosk("missing_process_valid_session");
+                }
+                else
+                {
+                    TryRestartKiosk("missing_or_wrong_session");
+                }
             }
 
             if (RegistryPolicyStore.Tampered())

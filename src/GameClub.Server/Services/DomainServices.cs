@@ -616,6 +616,9 @@ public sealed class SessionService(
         }, ct);
 
     public Task<object> StopAsync(Guid sessionId, CancellationToken ct)
+        => StopAsync(sessionId, null, ct);
+
+    public Task<object> StopAsync(Guid sessionId, DateTime? pcEndUtc, CancellationToken ct)
         => ExecuteWithSessionWriteLockAsync(sessionId, async (session, innerCt) =>
         {
             if (session.Status == SessionStatus.ManualSettle)
@@ -630,7 +633,7 @@ public sealed class SessionService(
 
             if (session.Station!.Group!.Kind == StationKind.Pc)
             {
-                var endUtc = session.LastCheckpointUtc ?? session.StartedAtUtc;
+                var endUtc = pcEndUtc ?? session.LastCheckpointUtc ?? session.StartedAtUtc;
                 var bill = await operatorBills.CreatePcPendingBillAsync(session, endUtc, "pc_stop", "logout", innerCt);
                 await audit.AppendAsync("session.stop", new { sessionId, reason = "stop", pendingBillId = bill.Id }, innerCt);
                 return PendingStopBody(bill);
@@ -1116,6 +1119,18 @@ public sealed class DatabaseSeed
                 var op = new OperatorUserEntity { Id = Guid.NewGuid(), Username = "operator", Role = UserRole.Operator };
                 op.PinHash = OperatorAuthService.HashPin(op, "1111");
                 db.OperatorUsers.AddRange(manager, op);
+                await db.SaveChangesAsync(ct);
+            }
+        }
+        catch (PostgresException ex) when (ex.SqlState == "42P01")
+        {
+        }
+
+        try
+        {
+            if (!await db.GameCatalogCategories.AnyAsync(ct))
+            {
+                db.GameCatalogCategories.Add(new GameCatalogCategoryEntity { Id = 1, Name = "عمومی", SortOrder = 1 });
                 await db.SaveChangesAsync(ct);
             }
         }

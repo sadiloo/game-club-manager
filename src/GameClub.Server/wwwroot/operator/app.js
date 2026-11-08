@@ -1076,18 +1076,39 @@ bindClick("mgrPairingCodeBtn", async () => {
   showError(`کد جفت‌سازی: ${res.code}`);
 });
 
+function populateCatalogEditor(entry) {
+  document.getElementById("catalogEditId").value = entry ? String(entry.id) : "";
+  document.getElementById("catalogName").value = entry?.name ?? "";
+  document.getElementById("catalogCategoryId").value = String(entry?.categoryId ?? 1);
+  document.getElementById("catalogExecutable").value = entry?.executableOrUri ?? "";
+  document.getElementById("catalogArgs").value = entry?.arguments ?? "";
+  document.getElementById("catalogIcon").value = entry?.iconUrl ?? "";
+  document.getElementById("catalogOrder").value = String(entry?.sortOrder ?? 0);
+  document.getElementById("catalogEnabled").checked = entry?.enabled !== false;
+  document.getElementById("catalogGroups").value = (entry?.groupRestrictions ?? []).join(",");
+  document.getElementById("catalogAllowlist").value = (entry?.allowedProcessNames ?? []).join(",");
+}
+
 async function refreshCatalogAdminPanel() {
   const box = document.getElementById("catalogAdminPanel");
   if (!box) return;
+  const summary = document.getElementById("catalogAdminSummary");
+  const list = document.getElementById("catalogAdminEntries");
   const catalog = await api("/api/operator/games");
   const entries = catalog.entries || [];
   box.dataset.catalogVersion = String(catalog.catalogVersion ?? 0);
-  box.innerHTML = `<div>نسخه ${catalog.catalogVersion ?? 0} · ${entries.length} مورد</div>`;
+  if (summary) {
+    summary.textContent = `نسخه ${catalog.catalogVersion ?? 0} · ${entries.length} مورد`;
+  }
+  if (!list) return;
+  list.innerHTML = "";
   entries.forEach((entry) => {
     const row = document.createElement("div");
     row.className = "sale-line";
+    row.style.cursor = "pointer";
     row.textContent = `${entry.id}: ${entry.name} · ${entry.enabled ? "فعال" : "غیرفعال"} · order ${entry.sortOrder ?? 0}`;
-    box.appendChild(row);
+    row.addEventListener("click", () => populateCatalogEditor(entry));
+    list.appendChild(row);
   });
 }
 
@@ -1140,6 +1161,7 @@ bindClick("catalogSaveBtn", async () => {
         arguments: args || null,
         iconUrl: icon || null,
         sortOrder: order,
+        enabled,
         groupRestrictions: groups,
         allowedProcessNames: allowlist,
       }),

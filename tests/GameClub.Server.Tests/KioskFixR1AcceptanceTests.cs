@@ -221,11 +221,10 @@ public sealed class KioskFixR1AcceptanceTests(GameClubWebApplicationFactory fact
     {
         await S3TestHelpers.ResetAsync(factory);
         var mgr = await factory.CreateOperatorClientAsync("manager", "1234");
-        using (var scope = factory.Services.CreateScope())
+        await using (var scope = factory.Services.CreateAsyncScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            db.GameCatalogCategories.Add(new GameCatalogCategoryEntity { Name = "Cat", SortOrder = 1 });
-            await db.SaveChangesAsync();
+            await DatabaseSeed.EnsureAsync(db);
         }
 
         var post = await mgr.PostAsJsonAsync("/api/operator/games", new { name = "Test", categoryId = 1, executableOrUri = "game.exe" });

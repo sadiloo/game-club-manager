@@ -182,8 +182,9 @@ public sealed class KioskOperatorController(
         string? Arguments,
         string? IconUrl,
         int? SortOrder,
-        string[]? GroupRestrictions,
-        string[]? AllowedProcessNames);
+        bool Enabled = true,
+        string[]? GroupRestrictions = null,
+        string[]? AllowedProcessNames = null);
 
     [HttpPost("games")]
     public async Task<IActionResult> CreateGame(GameCreateBody body, CancellationToken ct)
@@ -196,6 +197,7 @@ public sealed class KioskOperatorController(
             body.Arguments,
             body.IconUrl,
             body.SortOrder,
+            body.Enabled,
             body.GroupRestrictions,
             body.AllowedProcessNames,
             ct);

@@ -72,6 +72,17 @@ public sealed class KioskHostService : IAsyncDisposable
 
     public void SetServerBase(string url) => _serverBase = url.TrimEnd('/');
 
+    public bool TryUnlockServerUrlEdit(string password)
+    {
+        var expected = Environment.GetEnvironmentVariable("CHECKPOINT_ADMIN_PASSWORD") ?? "checkpoint-admin";
+        if (!string.Equals(password, expected, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
     public async Task SubmitPairingCodeAsync(string code)
     {
         var pair = await _http.PostAsync(
@@ -162,10 +173,19 @@ public sealed class KioskHostService : IAsyncDisposable
                 _uiTick.Stop();
                 _status.Text = $"Locked — {_stationId}";
             }
-            else if (string.Equals(ack.SessionStatus, "Open", StringComparison.OrdinalIgnoreCase) && _sessionId != Guid.Empty)
+            else if (string.Equals(ack.SessionStatus, "Open", StringComparison.OrdinalIgnoreCase))
             {
-                _lockPanel.Visibility = Visibility.Collapsed;
-                _playingPanel.Visibility = Visibility.Visible;
+                if (_sessionId == Guid.Empty && ack.Lease?.Payload.SessionId is Guid leased && leased != Guid.Empty)
+                {
+                    _sessionId = leased;
+                    _runtime.BindSession(leased);
+                }
+
+                if (_sessionId != Guid.Empty)
+                {
+                    _lockPanel.Visibility = Visibility.Collapsed;
+                    _playingPanel.Visibility = Visibility.Visible;
+                }
             }
         });
     }

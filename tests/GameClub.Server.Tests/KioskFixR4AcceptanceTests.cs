@@ -5,6 +5,7 @@ using GameClub.Server.Data;
 using GameClub.Server.Data.Entities;
 using GameClub.Server.Kiosk;
 using GameClub.Server.Operator;
+using GameClub.Server.Services;
 using static GameClub.Server.Operator.CatalogSeed;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -45,8 +46,10 @@ public sealed class KioskFixR4AcceptanceTests(GameClubWebApplicationFactory fact
                 .Where(o => o.SessionId == sessionId)
                 .SelectMany(o => o.Lines)
                 .ToListAsync();
-            var amounts = await calculator.ComputeAsync(session, session.PendingBill!.FrozenAtUtc, 0, saleLines, default);
-            Assert.Equal(15_500, amounts.CollectibleToman);
+            var bill = await op.GetFromJsonAsync<JsonElement>($"/api/operator/sessions/{sessionId}/bill");
+            Assert.Equal(15_500, bill.GetProperty("collectibleToman").GetInt64());
+            Assert.Equal(15_500, session.PendingBill!.CollectibleToman);
+            Assert.True(bill.GetProperty("writeOffToman").GetInt64() >= 1_500);
         }
     }
 
@@ -73,16 +76,10 @@ public sealed class KioskFixR4AcceptanceTests(GameClubWebApplicationFactory fact
             groupId: "r3-overshoot",
             reset: false);
         await op.PostAsync($"/api/operator/sessions/{sessionId}/force-logout", null);
-        await using (var scope = factory.Services.CreateAsyncScope())
-        {
-            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            var session = await db.Sessions.Include(s => s.Station)!.ThenInclude(st => st!.Group).FirstAsync(s => s.Id == sessionId);
-            var calculator = scope.ServiceProvider.GetRequiredService<BillCalculator>();
-            var amounts = await calculator.ComputeAsync(session, session.LastCheckpointUtc!.Value, 0, default);
-            Assert.NotNull(amounts.Detail?.OvershootAlert);
-            Assert.Equal("pc_overshoot", amounts.Detail!.OvershootAlert!.Code);
-            Assert.True(amounts.CollectibleToman <= 500);
-        }
+        var bill = await op.GetFromJsonAsync<JsonElement>($"/api/operator/sessions/{sessionId}/bill");
+        Assert.True(bill.GetProperty("writeOffToman").GetInt64() >= 1_500);
+        Assert.Equal(500, bill.GetProperty("collectibleToman").GetInt64());
+        Assert.Equal("pc_overshoot", bill.GetProperty("overshootAlert").GetProperty("code").GetString());
     }
 
     [Fact]
@@ -93,8 +90,7 @@ public sealed class KioskFixR4AcceptanceTests(GameClubWebApplicationFactory fact
         await using (var scope = factory.Services.CreateAsyncScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            db.GameCatalogCategories.Add(new GameCatalogCategoryEntity { Name = "Cat", SortOrder = 1 });
-            await db.SaveChangesAsync();
+            await DatabaseSeed.EnsureAsync(db);
         }
 
         (await mgr.PostAsJsonAsync("/api/operator/games", new
@@ -165,34 +161,12 @@ public sealed class KioskFixR4AcceptanceTests(GameClubWebApplicationFactory fact
         Guid sessionId;
         await using (var lookup = factory.Services.CreateAsyncScope())
         {
-            var db = lookup.ServiceProvider.GetRequiredService<AppDbContext>();
-            var session = await db.Sessions.Include(s => s.Segments)
-                .Include(s => s.Station)!.ThenInclude(st => st!.Group).SingleAsync();
-            session.StartedAtUtc = factory.Clock.UtcNow.UtcDateTime;
-            session.LastCheckpointUtc = session.StartedAtUtc;
-            var play = session.Segments.SingleOrDefault(s => s.SegmentKey == "a");
-            if (play is null)
-            {
-                session.Segments.Add(new PlaySegmentEntity
-                {
-                    SegmentKey = "a",
-                    StartUtc = session.StartedAtUtc,
-                    EndUtc = session.StartedAtUtc.AddMinutes(3),
-                    StationId = session.StationId,
-                    GroupId = session.Station!.GroupId,
-                    Mode = PlayMode.Offline,
-                    PlayerCount = 1,
-                    Kind = StationKind.Pc,
-                });
-            }
-            else
-            {
-                play.StartUtc = session.StartedAtUtc;
-                play.EndUtc = session.StartedAtUtc.AddMinutes(3);
-            }
-
-            await db.SaveChangesAsync();
-            sessionId = session.Id;
+            sessionId = await lookup.ServiceProvider.GetRequiredService<AppDbContext>().Sessions.Select(s => s.Id).SingleAsync();
+            var coordinator = lookup.ServiceProvider.GetRequiredService<KioskCheckpointCoordinator>();
+            factory.Clock.SetTehran(2026, 6, 3, 14, 1);
+            await coordinator.OnHeartbeatAsync(deviceId, sessionId, 60_000, default);
+            factory.Clock.SetTehran(2026, 6, 3, 14, 2);
+            await coordinator.OnHeartbeatAsync(deviceId, sessionId, 120_000, default);
         }
 
         var op = await factory.CreateOperatorClientAsync();

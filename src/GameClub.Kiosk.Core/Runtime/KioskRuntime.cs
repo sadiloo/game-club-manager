@@ -119,9 +119,18 @@ public sealed class KioskRuntime : IAsyncDisposable
             return;
         }
 
-        if (string.Equals(ack.SessionStatus, "Open", StringComparison.OrdinalIgnoreCase) && _sessionId != Guid.Empty)
+        if (string.Equals(ack.SessionStatus, "Open", StringComparison.OrdinalIgnoreCase))
         {
-            State = KioskRuntimeState.Playing;
+            if (_sessionId == Guid.Empty && ack.Lease?.Payload.SessionId is Guid leased && leased != Guid.Empty)
+            {
+                _sessionId = leased;
+            }
+
+            if (_sessionId != Guid.Empty)
+            {
+                State = KioskRuntimeState.Playing;
+            }
+
             return;
         }
 
