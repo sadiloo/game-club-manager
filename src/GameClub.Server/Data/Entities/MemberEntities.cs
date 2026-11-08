@@ -51,6 +51,12 @@ public sealed class BranchMemberSettingsEntity
     public string PackageConsumptionOrder { get; set; } = "packages_then_money";
 
     public int MaxCombinedDiscountPercent { get; set; } = 100;
+
+    public bool AllowPcWhileInDebt { get; set; }
+
+    public bool ApplyDiscountsToPc { get; set; }
+
+    public bool GraceMinuteEnabled { get; set; } = true;
 }
 
 public sealed class CustomerMemberEntity

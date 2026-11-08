@@ -1,5 +1,6 @@
 using GameClub.Server.Data;
 using GameClub.Server.Hubs;
+using GameClub.Server.Kiosk;
 using GameClub.Server.Operator;
 using GameClub.Server.Services;
 using GameClub.Server.Time;
@@ -48,6 +49,16 @@ public partial class Program
         builder.Services.AddScoped<OperatorReportingService>();
         builder.Services.AddScoped<IDeadPcMonitor, DeadPcMonitor>();
         builder.Services.AddHostedService<DeadPcSweepBackgroundService>();
+        builder.Services.AddSingleton<IKioskLeaseSigner, KioskLeaseSigner>();
+        builder.Services.AddScoped<KioskPairingService>();
+        builder.Services.AddScoped<KioskCustomerAuthService>();
+        builder.Services.AddScoped<KioskProfileService>();
+        builder.Services.AddScoped<KioskLeaseService>();
+        builder.Services.AddScoped<KioskDisplayService>();
+        builder.Services.AddScoped<KioskCheckpointCoordinator>();
+        builder.Services.AddScoped<KioskSessionService>();
+        builder.Services.AddScoped<KioskReconcileService>();
+        builder.Services.AddScoped<GameCatalogService>();
 
         var connectionString = builder.Configuration.GetConnectionString("Default")
             ?? Environment.GetEnvironmentVariable("GAMECLUB_DATABASE")
@@ -69,12 +80,14 @@ public partial class Program
         app.UseMiddleware<ApiExceptionMiddleware>();
         app.UseMiddleware<OperatorSessionMiddleware>();
         app.UseMiddleware<OperatorAuthorizationMiddleware>();
+        app.UseMiddleware<KioskDeviceAuthMiddleware>();
         app.UseMiddleware<ApiKeyMiddleware>();
         app.UseDefaultFiles();
         app.UseStaticFiles();
         app.UseSwagger();
         app.MapControllers();
         app.MapHub<OperatorHub>("/hubs/operator");
+        app.MapHub<KioskHub>("/hubs/kiosk");
 
         using (var scope = app.Services.CreateScope())
         {

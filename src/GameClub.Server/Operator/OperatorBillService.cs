@@ -346,6 +346,14 @@ public sealed class OperatorBillService(
     {
         await WithSessionBillLockAsync(sessionId, async (session, innerCt) =>
         {
+            var isPc = session.Station?.Group?.Kind == StationKind.Pc;
+            if (isPc && session.Status == SessionStatus.AwaitingPayment)
+            {
+                // L7: dismiss payment UI; station stays occupied until confirm — no resume/unlock.
+                await audit.AppendAsync("bill.cancel", new { sessionId, pcAwaitingPayment = true }, innerCt);
+                return;
+            }
+
             if (session.Status != SessionStatus.BillOpen || session.PendingBill is null)
             {
                 throw new ApiException(StatusCodes.Status409Conflict, "no_bill", "No open bill to cancel.");

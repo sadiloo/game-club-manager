@@ -1,0 +1,11 @@
+<Window x:Class="GameClub.Kiosk.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Checkpoint Kiosk" WindowState="Maximized" WindowStyle="None">
+  <Grid Background="#111827">
+    <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+      <TextBlock Text="Checkpoint PC Kiosk" Foreground="White" FontSize="28" HorizontalAlignment="Center" />
+      <TextBlock x:Name="StatusText" Text="Unpaired — use operator pairing code" Foreground="#9CA3AF" FontSize="16" Margin="0,12,0,0" HorizontalAlignment="Center" />
+    </StackPanel>
+  </Grid>
+</Window>
