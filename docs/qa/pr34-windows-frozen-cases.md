@@ -2,7 +2,7 @@
 
 Job name: **`windows-2022 kiosk integration`** (`.github/workflows/ci.yml`).
 
-Artifacts (uploaded with `if: always()`): `kiosk-windows-integration` — `kiosk-windows-server.trx`, `kiosk-windows-guard.trx`, `watchdog.log`, `evidence/**` (includes `screenshot-lock.png` when WPF STA render succeeds).
+Artifacts (uploaded with `if: always()`): `kiosk-windows-integration` — `kiosk-windows-guard.trx`, `watchdog.log`, `evidence/**` (includes `screenshot-lock.png` when WPF STA render succeeds). KioskRuntime + server proofs run on **ubuntu net10** (`GameClub.Kiosk.Windows.IntegrationTests` net10.0) with the Linux postgres service on the same commit.
 
 | Case | Proved on runner | NOT PROVED (reason) |
 |------|------------------|---------------------|
