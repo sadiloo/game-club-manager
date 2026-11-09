@@ -96,12 +96,13 @@ public sealed class WindowsKioskServerIntegrationTests
         }
         else
         {
-            await api.PostAsJsonAsync($"/api/sessions/{sessionId}/checkpoints", new { at = DateTime.UtcNow });
             await _backend.BackdateOpenSessionForDeadPcSweepAsync(sessionId);
         }
 
         var sweep = await api.PostAsync("/api/internal/dead-pc-sweep", null);
         sweep.EnsureSuccessStatusCode();
+        var closed = (await sweep.Content.ReadFromJsonAsync<JsonElement>())!.GetProperty("closed").GetInt32();
+        Assert.Equal(1, closed);
         Assert.Equal(80_000, await _backend.PendingBillCollectibleAsync());
     }
 

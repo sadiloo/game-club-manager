@@ -40,6 +40,27 @@ function Ensure-LocalUser([string]$name, [string]$password) {
     Add-LocalGroupMember -Group "Users" -Member $name -ErrorAction SilentlyContinue
 }
 
+function Ensure-KioskRegistryHiveLoaded([string]$accountName, [string]$sid) {
+    $profileDir = Join-Path $env:SystemDrive "Users\$accountName"
+    $ntuser = Join-Path $profileDir "NTUSER.DAT"
+    if (-not (Test-Path $profileDir)) {
+        New-Item -ItemType Directory -Force -Path $profileDir | Out-Null
+    }
+    if (-not (Test-Path $ntuser)) {
+        $defaultHive = Join-Path $env:SystemDrive "Users\Default\NTUSER.DAT"
+        if (-not (Test-Path $defaultHive)) {
+            throw "Default user hive missing; cannot load $accountName policy hive."
+        }
+        Copy-Item -Path $defaultHive -Destination $ntuser -Force
+    }
+    $hiveRoot = "HKU\$sid"
+    reg query $hiveRoot 2>$null | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        reg load $hiveRoot $ntuser | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "reg load failed for $accountName ($sid)" }
+    }
+}
+
 try {
     Ensure-LocalUser -name $kioskAccountName -password $kioskPassword
     Ensure-LocalUser -name $guestUser -password $guestPassword
@@ -51,6 +72,7 @@ try {
 }
 
 $kioskSid = (New-Object System.Security.Principal.NTAccount($kioskAccountName)).Translate([System.Security.Principal.SecurityIdentifier]).Value
+Ensure-KioskRegistryHiveLoaded -accountName $kioskAccountName -sid $kioskSid
 $env:CHECKPOINT_KIOSK_SID = $kioskSid
 # Runner session launches Guard/shell; DACL deny + non-admin terminate proofs use CheckpointKiosk SID above.
 $env:CHECKPOINT_KIOSK_USER = $env:USERNAME

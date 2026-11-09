@@ -168,8 +168,8 @@ internal sealed class KioskIntegrationBackend
 
   public async Task BackdateOpenSessionForDeadPcSweepAsync(Guid sessionId)
     {
-        var started = DateTime.UtcNow.AddMinutes(-70);
         var checkpoint = DateTime.UtcNow.AddMinutes(-11);
+        var started = checkpoint.AddHours(-1);
         if (_factory is not null)
         {
             await using var scope = _factory.Services.CreateAsyncScope();
