@@ -1,5 +1,5 @@
 $ErrorActionPreference = "Stop"
-$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "../..")).Path
 Set-Location $repoRoot
 
 $artifactDir = Join-Path $env:GITHUB_WORKSPACE "artifacts"
