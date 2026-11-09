@@ -1,3 +1,4 @@
+using System.Collections;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
@@ -105,6 +106,11 @@ internal static class ConsoleSessionLaunch
 
         if (!WTSQueryUserToken(sessionId.Value, out var token) || token == IntPtr.Zero)
         {
+            if (TryLauncherRunnerSessionFallback())
+            {
+                return TryLaunchInRunnerSession(executablePath, out detail);
+            }
+
             detail = $"no_token_session_{sessionId}";
             return false;
         }
@@ -205,5 +211,49 @@ internal static class ConsoleSessionLaunch
         }
 
         return null;
+    }
+
+    private static bool TryLauncherRunnerSessionFallback()
+        => string.Equals(
+            Environment.GetEnvironmentVariable("CHECKPOINT_GUARD_CI_RUNNER_LAUNCH")?.Trim(),
+            "1",
+            StringComparison.Ordinal);
+
+
+    private static bool TryLaunchInRunnerSession(string executablePath, out string detail)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo(executablePath)
+            {
+                UseShellExecute = false,
+                WorkingDirectory = Path.GetDirectoryName(executablePath) ?? ".",
+            };
+            foreach (DictionaryEntry entry in Environment.GetEnvironmentVariables())
+            {
+                var key = entry.Key as string;
+                if (string.IsNullOrEmpty(key))
+                {
+                    continue;
+                }
+
+                psi.EnvironmentVariables[key] = entry.Value?.ToString() ?? string.Empty;
+            }
+
+            using var process = Process.Start(psi);
+            if (process is null)
+            {
+                detail = "runner_launch_start_failed";
+                return false;
+            }
+
+            detail = $"runner_launched_pid_{process.Id}";
+            return true;
+        }
+        catch (Exception ex)
+        {
+            detail = ex.Message;
+            return false;
+        }
     }
 }

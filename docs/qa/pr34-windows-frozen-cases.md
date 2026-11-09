@@ -24,4 +24,4 @@ Live server: PostgreSQL 16 on the runner, out-of-process `GameClub.Server` (`CHE
 | 14 | `session_end_clears_launcher_cache_paths` exercises `DeleteTreeContents` on **Downloads** only | — | PWA hold/cancel; on Windows: `AppData\Local\Temp`, `INetCache`, Edge/Chrome/Firefox cache paths under kiosk profile (**NOT PROVED** — runner lacks writable kiosk-profile trees / ACL on some caches) |
 | 15 | — | SS-4 server tests | Dual-PC hop on WPF |
 
-Shell launch/watchdog tests use the **runner logged-on session** (`CHECKPOINT_KIOSK_USER` = runner) while **CheckpointKiosk** SID is on the DACL; see case 10 NOT PROVED for true kiosk interactive session.
+Shell launch/watchdog tests use the **runner logged-on session** (`CHECKPOINT_KIOSK_USER` = runner; `CHECKPOINT_GUARD_CI_RUNNER_LAUNCH=1` when `WTSQueryUserToken` is unavailable on GHA) while **CheckpointKiosk** SID is on the DACL; see case 10 NOT PROVED for true kiosk interactive session.

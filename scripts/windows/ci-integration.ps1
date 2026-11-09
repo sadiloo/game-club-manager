@@ -86,6 +86,7 @@ if (-not [string]::IsNullOrWhiteSpace($loggedOnUser)) {
 }
 $env:CHECKPOINT_SECOND_USER = $guestUser
 $env:CHECKPOINT_SECOND_PASSWORD = $guestPassword
+$env:CHECKPOINT_GUARD_CI_RUNNER_LAUNCH = "1"
 
 $env:PGPASSWORD = "postgres"
 

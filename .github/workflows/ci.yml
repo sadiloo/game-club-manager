@@ -32,7 +32,7 @@ jobs:
         with:
           dotnet-version: 10.0.403
       - name: test net10
-        run: dotnet test GameClub.slnx -c Release -f net10.0 --nologo
+        run: dotnet build GameClub.slnx -c Release -f net10.0 --nologo -m:1 && dotnet test GameClub.slnx -c Release -f net10.0 --no-build --nologo
 
   windows:
     name: windows net48 and net10
