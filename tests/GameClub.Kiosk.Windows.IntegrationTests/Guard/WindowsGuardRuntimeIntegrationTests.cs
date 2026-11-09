@@ -13,6 +13,7 @@ using GameClub.Kiosk.Guard;
 
 namespace GameClub.Kiosk.Windows.IntegrationTests.Guard;
 
+[Collection(WindowsGuardIntegrationCollection.Name)]
 [Trait("Category", "WindowsGuard")]
 public sealed class WindowsGuardRuntimeIntegrationTests
 {

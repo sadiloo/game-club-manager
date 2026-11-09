@@ -11,6 +11,7 @@ using Microsoft.Win32;
 namespace GameClub.Kiosk.Windows.IntegrationTests.Guard;
 
 /// <summary>Real HKCU/Users hive policy checks (G1 a–e on windows-2022).</summary>
+[Collection(WindowsGuardIntegrationCollection.Name)]
 [Trait("Category", "WindowsGuard")]
 public sealed class WindowsGuardRegistryIntegrationTests : IDisposable
 {
