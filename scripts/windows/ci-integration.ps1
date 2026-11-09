@@ -25,7 +25,7 @@ if (-not $env:ASPNETCORE_URLS) {
 }
 $env:ASPNETCORE_ENVIRONMENT = "Production"
 
-$kioskUser = $env:USERNAME
+$kioskAccountName = "CheckpointKiosk"
 $guestUser = "CheckpointGuest"
 $guestPassword = "CkPt!" + ([Guid]::NewGuid().ToString("N").Substring(0, 16))
 $kioskPassword = "CkPt!" + ([Guid]::NewGuid().ToString("N").Substring(0, 16))
@@ -41,9 +41,7 @@ function Ensure-LocalUser([string]$name, [string]$password) {
 }
 
 try {
-    if ($kioskUser -ne $env:USERNAME) {
-        Ensure-LocalUser -name $kioskUser -password $kioskPassword
-    }
+    Ensure-LocalUser -name $kioskAccountName -password $kioskPassword
     Ensure-LocalUser -name $guestUser -password $guestPassword
     $guestProbe = Get-LocalUser -Name $guestUser -ErrorAction Stop
     if ($guestProbe.Enabled -eq $false) { Enable-LocalUser -Name $guestUser }
@@ -52,9 +50,10 @@ try {
     exit 1
 }
 
-$kioskSid = (New-Object System.Security.Principal.NTAccount($kioskUser)).Translate([System.Security.Principal.SecurityIdentifier]).Value
+$kioskSid = (New-Object System.Security.Principal.NTAccount($kioskAccountName)).Translate([System.Security.Principal.SecurityIdentifier]).Value
 $env:CHECKPOINT_KIOSK_SID = $kioskSid
-$env:CHECKPOINT_KIOSK_USER = $kioskUser
+# Runner session launches Guard/shell; DACL deny + non-admin terminate proofs use CheckpointKiosk SID above.
+$env:CHECKPOINT_KIOSK_USER = $env:USERNAME
 $env:CHECKPOINT_SECOND_USER = $guestUser
 $env:CHECKPOINT_SECOND_PASSWORD = $guestPassword
 

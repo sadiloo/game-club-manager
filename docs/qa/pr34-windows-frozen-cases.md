@@ -17,11 +17,11 @@ Live server: PostgreSQL 16 on the runner, out-of-process `GameClub.Server` (`CHE
 | 7 | Grace/burnt on Billing CI (unchanged) | Same | Full shift on shell |
 | 8 | `catalog_put_unknown_category_returns_400` + operator catalog on server CI | SQLite merge Core tests | USB/file-dialog on WPF |
 | 9 | `allowlist_blocks_cmd_allows_configured_game_process` | Core allowlist unit tests | Steam/Epic chains on runner |
-| 10 | G1 registry + `g1_tamper_triggers_guard_policy_tamper_log_line` + `g2_acl_on_guard_and_supervised_shell_after_launch` + watchdog + `g2_non_admin_terminate_attempt_reports_honestly` | Core G1/G2 seam | Ctrl+Alt+Del; reboot; Win7 Home gpedit; full kiosk-user session if runner lacks interactive logon |
+| 10 | G1 registry + `g1_tamper_triggers_guard_policy_tamper_log_line` + `g2_acl_on_guard_and_supervised_shell_after_launch` + watchdog + `g2_non_admin_terminate_attempt_reports_honestly` (DACL + terminate probe use **CheckpointKiosk** / **CheckpointGuest** SIDs; `CHECKPOINT_KIOSK_USER` is runner only so Guard can launch in the logged-on session) | Core G1/G2 seam | Ctrl+Alt+Del; reboot; Win7 Home gpedit; supervised shell as real interactive **CheckpointKiosk** logon |
 | 11 | `live_server_*` heartbeat + disconnect/reconnect | net10 factory on ubuntu | Full kill matrix |
 | 12 | disconnect + dead-PC sweep with DB backdate | ubuntu factory | Powered-offline WPF UX |
 | 13 | `live_server_dead_pc_sweep_after_checkpoint_gap` | `PoClarification` acceptance | Physical power-off |
-| 14 | `session_end_clears_launcher_cache_paths` | — | PWA hold/cancel |
+| 14 | `session_end_clears_launcher_cache_paths` exercises `DeleteTreeContents` on **Downloads** only | — | PWA hold/cancel; on Windows: `AppData\Local\Temp`, `INetCache`, Edge/Chrome/Firefox cache paths under kiosk profile (**NOT PROVED** — runner lacks writable kiosk-profile trees / ACL on some caches) |
 | 15 | — | SS-4 server tests | Dual-PC hop on WPF |
 
-Shell launch/watchdog tests use the **runner logged-on session** when `CheckpointKiosk` has no interactive session; see case 10 NOT PROVED notes.
+Shell launch/watchdog tests use the **runner logged-on session** (`CHECKPOINT_KIOSK_USER` = runner) while **CheckpointKiosk** SID is on the DACL; see case 10 NOT PROVED for true kiosk interactive session.
