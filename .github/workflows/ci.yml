@@ -51,8 +51,8 @@ jobs:
     name: windows-2022 kiosk integration
     runs-on: windows-2022
     env:
-      GAMECLUB_DATABASE: Host=localhost;Port=5432;Database=gameclub_test;Username=postgres;Password=postgres
-      GAMECLUB_TEST_DATABASE: Host=localhost;Port=5432;Database=gameclub_test;Username=postgres;Password=postgres
+      GAMECLUB_DATABASE: Host=localhost;Port=5432;Database=gameclub_test;Username=postgres;Password=postgres;SSL Mode=Disable
+      GAMECLUB_TEST_DATABASE: Host=localhost;Port=5432;Database=gameclub_test;Username=postgres;Password=postgres;SSL Mode=Disable
       GAMECLUB_API_KEY: ci-test-key
     steps:
       - uses: actions/checkout@v4
