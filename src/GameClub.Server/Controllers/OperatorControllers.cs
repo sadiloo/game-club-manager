@@ -304,6 +304,7 @@ public sealed class OperatorPanelController(
             invoice.RoundingToman,
             invoice.CollectibleToman,
             invoice.SurchargeToman,
+            writeOffToman = invoice.WriteOffToman,
             invoice.Status,
             invoice.VoidReason,
             invoice.BilledToUtc,

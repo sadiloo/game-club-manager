@@ -621,6 +621,9 @@ namespace GameClub.Server.Data.Migrations
                     b.Property<string>("VoidReason")
                         .HasColumnType("text");
 
+                    b.Property<long>("WriteOffToman")
+                        .HasColumnType("bigint");
+
                     b.Property<int?>("WorkingDayDay")
                         .HasColumnType("integer");
 

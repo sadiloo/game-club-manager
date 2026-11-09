@@ -64,5 +64,13 @@ public partial class MainWindow : Window
     private async void OnLogoutClick(object sender, RoutedEventArgs e)
         => await _host.LogoutAsync();
 
+    private void OnGameDoubleClick(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        if (GameList.SelectedIndex >= 0)
+        {
+            _host.LaunchGameAt(GameList.SelectedIndex);
+        }
+    }
+
     public Task PairAsync(string code) => _host.SubmitPairingCodeAsync(code);
 }

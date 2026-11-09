@@ -21,9 +21,11 @@ public sealed class KioskShellOrchestrator
     private LeaseVerifier? _leaseVerifier;
     private IOfflineEventQueue? _queue;
     private SignedSessionLease? _lastLease;
+    private Guid _boundSessionId;
     private long _lastReplayMonotonicMs;
     private long _lastSegmentMonotonicMs;
     private readonly ProcessPolicyEnforcer _policyEnforcer = new();
+    private readonly List<int> _trackedLaunchPids = [];
 
     public KioskShellPhase Phase { get; private set; } = KioskShellPhase.Locked;
     public bool AdminUrlUnlocked { get; private set; }
@@ -65,12 +67,21 @@ public sealed class KioskShellOrchestrator
 
         if (string.Equals(ack.SessionStatus, "Open", StringComparison.OrdinalIgnoreCase) && sessionId != Guid.Empty)
         {
+            if (ack.Lease?.Payload.SessionId is Guid leaseSession
+                && leaseSession != Guid.Empty
+                && leaseSession != sessionId)
+            {
+                Phase = KioskShellPhase.Locked;
+                return Phase;
+            }
+
             if (!VerifyLease(ack.Lease))
             {
                 Phase = KioskShellPhase.LeaseExpired;
                 return Phase;
             }
 
+            _boundSessionId = sessionId;
             _lastLease = ack.Lease;
             Phase = KioskShellPhase.Playing;
             EnqueuePoweredSegment(sessionId, clientMonotonicMs);
@@ -79,6 +90,39 @@ public sealed class KioskShellOrchestrator
 
         Phase = KioskShellPhase.Locked;
         return Phase;
+    }
+
+    public KioskShellPhase TickLease(Guid sessionId, long clientMonotonicMs, DateTime nowUtc)
+    {
+        if (Phase != KioskShellPhase.Playing || _lastLease is null)
+        {
+            return Phase;
+        }
+
+        if (sessionId != Guid.Empty && _boundSessionId != Guid.Empty && sessionId != _boundSessionId)
+        {
+            Phase = KioskShellPhase.Locked;
+            return Phase;
+        }
+
+        if (_lastLease.Payload.AuthorizedUntilUtc < nowUtc)
+        {
+            Phase = KioskShellPhase.LeaseExpired;
+            return Phase;
+        }
+
+        return Phase;
+    }
+
+    public void EnqueuePoweredSegmentOnDisconnect(Guid sessionId, long clientMonotonicMs)
+        => EnqueuePoweredSegment(sessionId, clientMonotonicMs);
+
+    public void TrackLaunchedProcess(int processId)
+    {
+        if (!_trackedLaunchPids.Contains(processId))
+        {
+            _trackedLaunchPids.Add(processId);
+        }
     }
 
     public bool VerifyLease(SignedSessionLease? lease)
@@ -140,11 +184,32 @@ public sealed class KioskShellOrchestrator
 
     public void EndSessionCleanup()
     {
+        foreach (var pid in _trackedLaunchPids.ToArray())
+        {
+            try
+            {
+                var proc = Process.GetProcessById(pid);
+                if (!proc.HasExited)
+                {
+                    proc.Kill();
+                }
+            }
+            catch
+            {
+                // process already gone
+            }
+        }
+
+        _trackedLaunchPids.Clear();
         Phase = KioskShellPhase.Locked;
         _lastLease = null;
+        _boundSessionId = Guid.Empty;
         _lastSegmentMonotonicMs = 0;
         _lastReplayMonotonicMs = 0;
+        AdminUrlUnlocked = false;
     }
+
+    public void KillDeniedProcesses() => _policyEnforcer.EnforceDenyList(ProcessPolicyEnforcer.FreezeDenyProcessNames);
 
     private void EnqueuePoweredSegment(Guid sessionId, long monotonicMs)
     {

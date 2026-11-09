@@ -234,6 +234,9 @@ public sealed class InvoiceEntity
 
     public long SurchargeToman { get; set; }
 
+    /// <summary>Uncovered post-credit play written off (never collected).</summary>
+    public long WriteOffToman { get; set; }
+
     public DateTime BilledToUtc { get; set; }
 
     public DateTime IssuedAtUtc { get; set; }

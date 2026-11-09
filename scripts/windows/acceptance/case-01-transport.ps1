@@ -19,14 +19,28 @@ if (-not $chosen) { $chosen = $transports[0] }
 $startUrl = "$server/hubs/kiosk?id=$connectionId"
 $hubConnected = $false
 $handshakeOk = $false
+$receiveBody = ""
 if ($chosen -eq "ServerSentEvents" -or $chosen -eq "LongPolling") {
-    $session = New-Object Microsoft.PowerShell.Commands.WebRequestSession
-    foreach ($h in $headers.GetEnumerator()) { $session.Headers[$h.Key] = $h.Value }
-    $first = Invoke-WebRequest -Uri $startUrl -Headers @{ Accept = "text/event-stream" } -WebSession $session -UseBasicParsing
-    $hubConnected = $first.StatusCode -eq 200
+    $receiveJob = Start-Job -ScriptBlock {
+        param($url, $deviceId, $deviceKey)
+        $headers = @{ "X-Device-Id" = $deviceId; "X-Device-Key" = $deviceKey; Accept = "text/event-stream" }
+        return (Invoke-WebRequest -Uri $url -Headers $headers -UseBasicParsing -TimeoutSec 30).Content
+    } -ArgumentList $startUrl, $deviceId, $deviceKey
+    Start-Sleep -Seconds 1
     $payload = '{"protocol":"json","version":1}' + [char]0x1e
     $post = Invoke-WebRequest -Uri $startUrl -Method Post -Body $payload -ContentType "application/json; charset=utf-8" -Headers $headers -UseBasicParsing
-    $handshakeOk = $post.Content -match '\{\}'
+    $hubConnected = $post.StatusCode -eq 200
+    $deadline = (Get-Date).AddSeconds(20)
+    while ((Get-Date) -lt $deadline) {
+        if ((Receive-Job $receiveJob -Keep) -match '\{\}') {
+            $receiveBody = (Receive-Job $receiveJob)
+            $handshakeOk = $true
+            break
+        }
+        Start-Sleep -Milliseconds 200
+    }
+    Stop-Job $receiveJob -ErrorAction SilentlyContinue | Out-Null
+    Remove-Job $receiveJob -Force -ErrorAction SilentlyContinue | Out-Null
 }
 @{
     case          = 1
@@ -36,6 +50,7 @@ if ($chosen -eq "ServerSentEvents" -or $chosen -eq "LongPolling") {
     chosen        = $chosen
     hubConnected  = $hubConnected
     handshakeOk   = $handshakeOk
+    receiveSample = $receiveBody.Substring(0, [Math]::Min(120, $receiveBody.Length))
     capturedAtUtc = (Get-Date).ToUniversalTime().ToString("o")
 } | ConvertTo-Json -Depth 5 | Set-Content $out
 if (-not $hubConnected -or -not $handshakeOk) { exit 1 }

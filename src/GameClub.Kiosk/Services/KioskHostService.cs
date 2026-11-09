@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
@@ -9,6 +10,7 @@ using System.Windows.Threading;
 using GameClub.Kiosk.Core.Catalog;
 using GameClub.Kiosk.Core.Protocol;
 using GameClub.Kiosk.Core.Runtime;
+using GameClub.Kiosk.Core.Security;
 
 namespace GameClub.Kiosk.Services;
 
@@ -35,6 +37,9 @@ public sealed class KioskHostService : IAsyncDisposable
     private readonly DispatcherTimer _uiTick = new() { Interval = TimeSpan.FromSeconds(1) };
     private readonly DispatcherTimer _replayTick = new() { Interval = TimeSpan.FromSeconds(30) };
     private readonly List<GameCatalogItem> _catalogCache = [];
+    private readonly List<GameCatalogItem> _visibleGames = [];
+    private SqliteCatalogCache? _catalogStore;
+    private long _catalogVersion;
     private string _serverBase = Environment.GetEnvironmentVariable("CHECKPOINT_SERVER_URL") ?? "http://127.0.0.1:5000";
     private string _leaseVerifyPublicKeyPem = "";
     private Guid _deviceId;
@@ -73,8 +78,9 @@ public sealed class KioskHostService : IAsyncDisposable
         _gameCategory = gameCategory;
         _runtime = new KioskRuntime(() => CreateHttpClient());
         _runtime.HeartbeatAcknowledged += OnHeartbeatAcknowledged;
+        _runtime.HeartbeatTransportFailed += OnHeartbeatTransportFailed;
         _http.DefaultRequestHeaders.Add("User-Agent", "CheckpointKiosk/1.0");
-        _uiTick.Tick += (_, _) => RenderDisplay();
+        _uiTick.Tick += (_, _) => OnUiTick();
         _replayTick.Tick += async (_, _) => await DrainOfflineQueueAsync();
         if (_gameSearch is not null)
         {
@@ -169,11 +175,52 @@ public sealed class KioskHostService : IAsyncDisposable
         var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         _sessionId = doc.RootElement.GetProperty("sessionId").GetGuid();
         _runtime.BindSession(_sessionId);
+        await ApplyStationProfileAsync();
         ShowPlayingLayout();
         _uiTick.Start();
         _replayTick.Start();
         _status.Text = $"Playing on {_stationId}";
         await RefreshCatalogAsync();
+    }
+
+    public void LaunchGameAt(int index)
+    {
+        if (index < 0 || index >= _visibleGames.Count)
+        {
+            return;
+        }
+
+        var game = _visibleGames[index];
+        try
+        {
+            var target = game.ExecutableOrUri.Trim();
+            var psi = target.Contains("://", StringComparison.Ordinal)
+                ? new ProcessStartInfo(target) { UseShellExecute = true }
+                : new ProcessStartInfo(target)
+                {
+                    Arguments = game.Arguments ?? "",
+                    UseShellExecute = true,
+                    WorkingDirectory = Path.GetDirectoryName(target) ?? Environment.CurrentDirectory,
+                };
+            var proc = Process.Start(psi);
+            if (proc is not null)
+            {
+                _orchestrator.TrackLaunchedProcess(proc.Id);
+            }
+
+            var allow = _orchestrator.FilterVisibleGames(_catalogCache)
+                .SelectMany(g => g.AllowedProcessNames)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            if (allow.Count > 0)
+            {
+                _orchestrator.EnforceAllowlist(allow);
+            }
+        }
+        catch (Exception ex)
+        {
+            _status.Text = $"Launch failed: {ex.Message}";
+        }
     }
 
     public async Task LogoutAsync()
@@ -185,7 +232,7 @@ public sealed class KioskHostService : IAsyncDisposable
 
         _sessionId = Guid.Empty;
         _runtime.BindSession(Guid.Empty);
-        _orchestrator.EndSessionCleanup();
+        RunSessionCleanup();
         ShowLockLayout();
         _uiTick.Stop();
         _replayTick.Stop();
@@ -219,7 +266,7 @@ public sealed class KioskHostService : IAsyncDisposable
                 || ack.ManualSettle || string.Equals(ack.SessionStatus, "AwaitingPayment", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(ack.SessionStatus, "Ended", StringComparison.OrdinalIgnoreCase))
             {
-                _orchestrator.EndSessionCleanup();
+                RunSessionCleanup();
                 ShowLockLayout();
                 _uiTick.Stop();
                 _replayTick.Stop();
@@ -293,7 +340,113 @@ public sealed class KioskHostService : IAsyncDisposable
             }
         }
 
+        _visibleGames.Clear();
+        _visibleGames.AddRange(games);
         _gameList.ItemsSource = games.Select(g => g.Name).ToList();
+    }
+
+    private void OnUiTick()
+    {
+        RenderDisplay();
+        if (_sessionId == Guid.Empty)
+        {
+            return;
+        }
+
+        var phase = _orchestrator.TickLease(_sessionId, _runtime.ClientMonotonicMs, DateTime.UtcNow);
+        if (phase == KioskShellPhase.LeaseExpired)
+        {
+            _shell.Dispatcher.Invoke(() =>
+            {
+                RunSessionCleanup();
+                ShowLockLayout();
+                _uiTick.Stop();
+                _replayTick.Stop();
+                _status.Text = $"Locked — lease expired ({_stationId})";
+            });
+        }
+    }
+
+    private void OnHeartbeatTransportFailed()
+    {
+        if (_orchestrator.Phase != KioskShellPhase.Playing || _sessionId == Guid.Empty)
+        {
+            return;
+        }
+
+        _orchestrator.EnqueuePoweredSegmentOnDisconnect(_sessionId, _runtime.ClientMonotonicMs);
+    }
+
+    private void RunSessionCleanup()
+    {
+        _orchestrator.KillDeniedProcesses();
+        _orchestrator.EndSessionCleanup();
+        ClearKioskProfileScratch();
+    }
+
+    private static void ClearKioskProfileScratch()
+    {
+        var root = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        foreach (var relative in new[] { "Downloads", @"AppData\Local\Temp", @"AppData\Local\Microsoft\Windows\INetCache" })
+        {
+            var dir = Path.Combine(root, relative);
+            if (!Directory.Exists(dir))
+            {
+                continue;
+            }
+
+            foreach (var file in Directory.EnumerateFiles(dir))
+            {
+                try
+                {
+                    File.Delete(file);
+                }
+                catch
+                {
+                    // best-effort profile cleanup
+                }
+            }
+        }
+    }
+
+    private async Task ApplyStationProfileAsync()
+    {
+        if (_deviceId == Guid.Empty || string.IsNullOrEmpty(_stationId))
+        {
+            return;
+        }
+
+        try
+        {
+            var response = await _http.GetAsync($"{_serverBase}/api/kiosk/stations/{_stationId}/config");
+            if (!response.IsSuccessStatusCode)
+            {
+                return;
+            }
+
+            using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            var isTestMode = doc.RootElement.TryGetProperty("isTestMode", out var tm) && tm.GetBoolean();
+            _orchestrator.SetFinalMode(!isTestMode);
+            _shell.Dispatcher.Invoke(() =>
+            {
+                if (isTestMode)
+                {
+                    _shell.WindowStyle = WindowStyle.SingleBorderWindow;
+                    _shell.ResizeMode = ResizeMode.CanResize;
+                    _shell.WindowState = WindowState.Normal;
+                }
+                else
+                {
+                    _shell.WindowStyle = WindowStyle.None;
+                    _shell.ResizeMode = ResizeMode.NoResize;
+                    _shell.WindowState = WindowState.Maximized;
+                }
+            });
+        }
+        catch
+        {
+            // keep default final mode when profile is unreachable
+        }
     }
 
     private async Task RefreshCatalogAsync()
@@ -305,40 +458,67 @@ public sealed class KioskHostService : IAsyncDisposable
 
         try
         {
-            var response = await _http.GetAsync($"{_serverBase}/api/kiosk/catalog?sinceVersion=0");
+            EnsureCatalogStore();
+            var since = _catalogVersion > 0 ? _catalogVersion : await _catalogStore!.LastVersionAsync();
+            var response = await _http.GetAsync($"{_serverBase}/api/kiosk/catalog?sinceVersion={since}");
             if (!response.IsSuccessStatusCode)
             {
+                var cached = await _catalogStore!.LoadAsync();
+                if (cached.Count > 0)
+                {
+                    _catalogCache.Clear();
+                    _catalogCache.AddRange(cached);
+                    _shell.Dispatcher.Invoke(RenderGameList);
+                }
+
                 return;
             }
 
             var json = await response.Content.ReadAsStringAsync();
             using var doc = JsonDocument.Parse(json);
-            _catalogCache.Clear();
-            if (!doc.RootElement.TryGetProperty("entries", out var entries))
+            var version = doc.RootElement.TryGetProperty("catalogVersion", out var cv) ? cv.GetInt64() : since;
+            var entries = doc.RootElement.TryGetProperty("entries", out var ent) ? ent : default;
+            if (entries.ValueKind != JsonValueKind.Array || entries.GetArrayLength() == 0)
             {
+                if (since == 0)
+                {
+                    var cached = await _catalogStore!.LoadAsync();
+                    _catalogCache.Clear();
+                    _catalogCache.AddRange(cached);
+                    _shell.Dispatcher.Invoke(RenderGameList);
+                }
+
                 return;
             }
 
-            foreach (var entry in entries.EnumerateArray())
+            if (since > 0 && _catalogCache.Count > 0)
             {
-                _catalogCache.Add(new GameCatalogItem(
-                    entry.GetProperty("id").GetInt32(),
-                    entry.GetProperty("name").GetString() ?? "",
-                    entry.TryGetProperty("categoryId", out var c) ? c.GetInt32() : 1,
-                    entry.GetProperty("executableOrUri").GetString() ?? "",
-                    entry.TryGetProperty("arguments", out var a) ? a.GetString() : null,
-                    entry.TryGetProperty("iconUrl", out var i) ? i.GetString() : null,
-                    entry.TryGetProperty("sortOrder", out var o) ? o.GetInt32() : 0,
-                    entry.GetProperty("enabled").GetBoolean(),
-                    entry.TryGetProperty("allowedProcessNames", out var al)
-                        ? al.EnumerateArray().Select(x => x.GetString() ?? "").Where(x => x.Length > 0).ToList()
-                        : [],
-                    entry.TryGetProperty("groupRestrictions", out var gr)
-                        ? gr.EnumerateArray().Select(x => x.GetString() ?? "").Where(x => x.Length > 0).ToList()
-                        : [],
-                    null));
+                foreach (var entry in entries.EnumerateArray())
+                {
+                    var id = entry.GetProperty("id").GetInt32();
+                    var idx = _catalogCache.FindIndex(g => g.Id == id);
+                    var item = ParseCatalogItem(entry);
+                    if (idx >= 0)
+                    {
+                        _catalogCache[idx] = item;
+                    }
+                    else
+                    {
+                        _catalogCache.Add(item);
+                    }
+                }
+            }
+            else
+            {
+                _catalogCache.Clear();
+                foreach (var entry in entries.EnumerateArray())
+                {
+                    _catalogCache.Add(ParseCatalogItem(entry));
+                }
             }
 
+            _catalogVersion = version;
+            await _catalogStore!.SaveAsync(_catalogCache, _catalogVersion);
             _shell.Dispatcher.Invoke(RenderGameList);
         }
         catch
@@ -465,15 +645,39 @@ public sealed class KioskHostService : IAsyncDisposable
             return;
         }
 
-        var queuePath = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-            "Checkpoint",
-            "kiosk",
-            "events.db");
+        var root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "Checkpoint", "kiosk");
+        Directory.CreateDirectory(root);
+        var queuePath = Path.Combine(root, "events.db");
         _runtime.Configure(new Uri($"{_serverBase}/hubs/kiosk"), _deviceId, _deviceKey, _stationId, queuePath, legacyWindows: true);
         await _runtime.StartAsync(CancellationToken.None);
         _orchestrator.BindOfflineQueue(_runtime.GetQueue());
+        EnsureCatalogStore();
     }
+
+    private void EnsureCatalogStore()
+    {
+        var root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "Checkpoint", "kiosk");
+        Directory.CreateDirectory(root);
+        _catalogStore ??= new SqliteCatalogCache(Path.Combine(root, "catalog.db"));
+    }
+
+    private static GameCatalogItem ParseCatalogItem(JsonElement entry)
+        => new(
+            entry.GetProperty("id").GetInt32(),
+            entry.GetProperty("name").GetString() ?? "",
+            entry.TryGetProperty("categoryId", out var c) ? c.GetInt32() : 1,
+            entry.GetProperty("executableOrUri").GetString() ?? "",
+            entry.TryGetProperty("arguments", out var a) ? a.GetString() : null,
+            entry.TryGetProperty("iconUrl", out var i) ? i.GetString() : null,
+            entry.TryGetProperty("sortOrder", out var o) ? o.GetInt32() : 0,
+            entry.GetProperty("enabled").GetBoolean(),
+            entry.TryGetProperty("allowedProcessNames", out var al)
+                ? al.EnumerateArray().Select(x => x.GetString() ?? "").Where(x => x.Length > 0).ToList()
+                : [],
+            entry.TryGetProperty("groupRestrictions", out var gr)
+                ? gr.EnumerateArray().Select(x => x.GetString() ?? "").Where(x => x.Length > 0).ToList()
+                : [],
+            null);
 
     private async Task RefreshAsync()
     {

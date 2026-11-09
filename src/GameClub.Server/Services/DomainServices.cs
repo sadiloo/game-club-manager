@@ -304,6 +304,13 @@ public sealed class SessionCloser(
         CancellationToken ct)
     {
         var number = await NextInvoiceNumberAsync(ct);
+        var writeOffToman = amounts.Detail?.PackageSettlement?.WriteOffToman ?? 0;
+        if (writeOffToman == 0)
+        {
+            writeOffToman = amounts.Detail?.InvoicePreview.Lines
+                .Where(l => l.Kind == InvoiceLineKind.WriteOff)
+                .Sum(l => -l.AmountToman) ?? 0L;
+        }
         var invoice = new InvoiceEntity
         {
             Id = Guid.NewGuid(),
@@ -319,6 +326,7 @@ public sealed class SessionCloser(
             RoundingToman = amounts.RoundingToman,
             CollectibleToman = amounts.CollectibleToman,
             SurchargeToman = amounts.SurchargeToman,
+            WriteOffToman = writeOffToman,
             DiscountToman = amounts.DiscountToman,
             LevelDiscountToman = SplitMemberDiscounts(amounts.Detail).Level,
             BirthdayDiscountToman = SplitMemberDiscounts(amounts.Detail).Birthday,

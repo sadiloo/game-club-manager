@@ -228,6 +228,13 @@ namespace GameClub.Server.Data.Migrations
                 table: "kiosk_pairing_codes",
                 columns: new[] { "StationId", "Code" });
 
+            migrationBuilder.AddColumn<long>(
+                name: "WriteOffToman",
+                table: "invoices",
+                type: "bigint",
+                nullable: false,
+                defaultValue: 0L);
+
             migrationBuilder.InsertData(
                 table: "game_catalog_categories",
                 columns: new[] { "Id", "Name", "SortOrder" },
@@ -272,6 +279,10 @@ namespace GameClub.Server.Data.Migrations
             migrationBuilder.DropColumn(
                 name: "GraceMinuteEnabled",
                 table: "branch_member_settings");
+
+            migrationBuilder.DropColumn(
+                name: "WriteOffToman",
+                table: "invoices");
         }
     }
 }

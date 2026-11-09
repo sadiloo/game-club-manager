@@ -108,17 +108,16 @@ public sealed class MemberBillComposer
         Invoice invoice;
         var pcWriteOff = pcChargeInvoice is not null
             && pcChargeInvoice.Lines.Any(l => l.Kind == InvoiceLineKind.WriteOff);
-        var graceWaivedZeroPayable = pcChargeInvoice is not null
-            && pcChargeInvoice.PayableToman == 0
+        var pcGraceWaivedPlay = pcChargeInvoice is not null
             && pcChargeInvoice.GraceWaivedToman > 0
             && !pcWriteOff;
         if (usingCollect && customerId is Guid cid && member is not null)
         {
             var wallets = new[] { MemberWalletMapper.ToMemberWallet(cid, member) };
             var debt = MemberSettingsMapper.LoadDebtPolicy(settings);
-            var collectRequest = graceWaivedZeroPayable
+            var collectRequest = pcGraceWaivedPlay && pcChargeInvoice!.PayableToman == 0
                 ? request with { TimeCharges = [] }
-                : pcWriteOff && pcChargeInvoice is not null
+                : (pcGraceWaivedPlay || pcWriteOff) && pcChargeInvoice is not null
                     ? request with { TimeCharges = CollectableTimeLines(timeLines, pcChargeInvoice) }
                     : request;
             var (collected, alloc) = InvoiceCalculator.Collect(collectRequest, previewTenders!, wallets, debt);

@@ -10,7 +10,48 @@ public static class KioskRegistryPolicyTemplate
         ["DisableChangePassword"] = 1,
         ["NoDispCPL"] = 1,
         ["NoCloseExplorer"] = 1,
+        ["HideFastUserSwitching"] = 1,
+        ["NoLogoff"] = 1,
     };
+
+    public static IReadOnlyList<string> DefaultDisallowRunExecutables { get; } =
+    [
+        "explorer.exe",
+        "cmd.exe",
+        "powershell.exe",
+        "regedit.exe",
+        "taskmgr.exe",
+        "chrome.exe",
+        "msedge.exe",
+        "firefox.exe",
+        "iexplore.exe",
+    ];
+
+    public static IReadOnlyList<string> ResolveDisallowRunEntries()
+    {
+        var extra = Environment.GetEnvironmentVariable("CHECKPOINT_DISALLOW_RUN");
+        if (string.IsNullOrWhiteSpace(extra))
+        {
+            return DefaultDisallowRunExecutables;
+        }
+
+        var merged = new List<string>(DefaultDisallowRunExecutables);
+        foreach (var raw in extra.Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries))
+        {
+            var part = raw.Trim();
+            if (part.Length == 0)
+            {
+                continue;
+            }
+
+            if (!merged.Contains(part, StringComparer.OrdinalIgnoreCase))
+            {
+                merged.Add(part);
+            }
+        }
+
+        return merged;
+    }
 
     public static bool IsTampered(IReadOnlyDictionary<string, int?> actual)
     {

@@ -32,6 +32,8 @@ public sealed class KioskRuntime : IAsyncDisposable
 
     public event Action<KioskHeartbeatAck>? HeartbeatAcknowledged;
 
+    public event Action? HeartbeatTransportFailed;
+
     public long ClientMonotonicMs => _monotonic.ElapsedMilliseconds;
 
     public KioskRuntime(Func<HttpClient> httpFactory) => _httpFactory = httpFactory;
@@ -107,6 +109,10 @@ public sealed class KioskRuntime : IAsyncDisposable
             catch (Exception ex)
             {
                 await _queue!.EnqueueAsync(Guid.NewGuid(), "heartbeat_error", ex.Message, DateTime.UtcNow);
+                if (_hub?.State != HubConnectionState.Connected && _sessionId != Guid.Empty)
+                {
+                    HeartbeatTransportFailed?.Invoke();
+                }
             }
 
             await Task.Delay(TimeSpan.FromSeconds(5), ct);
@@ -123,9 +129,18 @@ public sealed class KioskRuntime : IAsyncDisposable
 
         if (string.Equals(ack.SessionStatus, "Open", StringComparison.OrdinalIgnoreCase))
         {
-            if (_sessionId == Guid.Empty && ack.Lease?.Payload.SessionId is Guid leased && leased != Guid.Empty)
+            if (ack.Lease?.Payload.SessionId is Guid leased && leased != Guid.Empty)
             {
-                _sessionId = leased;
+                if (_sessionId != Guid.Empty && leased != _sessionId)
+                {
+                    State = KioskRuntimeState.Locked;
+                    return;
+                }
+
+                if (_sessionId == Guid.Empty)
+                {
+                    _sessionId = leased;
+                }
             }
 
             if (_sessionId != Guid.Empty)

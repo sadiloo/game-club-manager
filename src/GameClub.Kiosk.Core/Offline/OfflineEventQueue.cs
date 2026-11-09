@@ -7,6 +7,7 @@ public interface IOfflineEventQueue
     Task EnqueueAsync(Guid eventId, string type, string payloadJson, DateTime createdUtc, CancellationToken ct = default);
     Task<IReadOnlyList<QueuedEvent>> PendingAsync(CancellationToken ct = default);
     Task AckAsync(Guid eventId, CancellationToken ct = default);
+    void Close();
 }
 
 public sealed record QueuedEvent(Guid EventId, string Type, string PayloadJson, DateTime CreatedUtc);
@@ -14,6 +15,11 @@ public sealed record QueuedEvent(Guid EventId, string Type, string PayloadJson, 
 public sealed class SqliteOfflineEventQueue(string dbPath) : IOfflineEventQueue
 {
     private readonly string _connection = new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString;
+
+    public void Close()
+    {
+        SqliteConnection.ClearAllPools();
+    }
 
     public async Task EnqueueAsync(Guid eventId, string type, string payloadJson, DateTime createdUtc, CancellationToken ct = default)
     {

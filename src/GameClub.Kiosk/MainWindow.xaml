@@ -34,7 +34,7 @@
       <TextBox x:Name="GameSearchBox" Width="280" Height="32" Margin="0,0,8,0" ToolTip="Search games"/>
       <ComboBox x:Name="GameCategoryBox" Width="160" Height="32"/>
     </StackPanel>
-    <ListBox x:Name="GameList" Grid.Row="2" Background="#1F2937" Foreground="White" FontSize="16"/>
+    <ListBox x:Name="GameList" Grid.Row="2" Background="#1F2937" Foreground="White" FontSize="16" MouseDoubleClick="OnGameDoubleClick"/>
   </Grid>
 
   <StackPanel x:Name="PlayingPanel" Grid.Row="1" VerticalAlignment="Top" HorizontalAlignment="Right" Visibility="Collapsed" Width="320" Margin="24">

@@ -969,7 +969,12 @@ document.getElementById("cancelBillBtn").onclick = async () => {
 document.getElementById("loadInvoiceBtn").onclick = async () => {
   const n = document.getElementById("invoiceNumber").value;
   const inv = await api(`/api/operator/invoices/${n}`);
-  document.getElementById("invoiceDetail").textContent = JSON.stringify(inv, null, 2);
+  const writeOff = inv.writeOffToman ?? 0;
+  const burnLine = writeOff > 0 ? `\nسوخت‌شده ${writeOff}` : "";
+  document.getElementById("invoiceDetail").textContent =
+    `زمان ${inv.timeGrossToman ?? 0} · بوفه ${inv.buffetGrossToman ?? 0} · خدمات ${inv.servicesGrossToman ?? 0}\n` +
+    `جمع ${inv.unroundedPayableToman ?? 0} + رند ${inv.roundingToman ?? 0} = ${inv.collectibleToman ?? 0}` +
+    burnLine;
 };
 
 document.getElementById("voidInvoiceBtn").onclick = async () => {

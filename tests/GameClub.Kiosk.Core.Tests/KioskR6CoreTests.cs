@@ -27,6 +27,8 @@ public sealed class KioskR6CoreTests
             ["DisableChangePassword"] = 1,
             ["NoDispCPL"] = 0,
             ["NoCloseExplorer"] = 1,
+            ["HideFastUserSwitching"] = 1,
+            ["NoLogoff"] = 1,
         };
         Assert.True(KioskRegistryPolicyTemplate.IsTampered(actual));
     }
@@ -50,6 +52,7 @@ public sealed class KioskR6CoreTests
         using var rsa = System.Security.Cryptography.RSA.Create(2048);
         var orchestrator = new KioskShellOrchestrator();
         orchestrator.ConfigureLeaseVerifier(rsa.ExportSubjectPublicKeyInfoPem());
+        var sessionId = Guid.NewGuid();
         var ack = new KioskHeartbeatAck
         {
             SessionStatus = "Open",
@@ -57,14 +60,14 @@ public sealed class KioskR6CoreTests
             {
                 Payload = new SessionLeasePayload
                 {
-                    SessionId = Guid.NewGuid(),
+                    SessionId = sessionId,
                     AuthorizedUntilUtc = DateTime.UtcNow.AddMinutes(-1),
                     IssuedAtUtc = DateTime.UtcNow,
                 },
                 SignatureBase64 = Convert.ToBase64String([1, 2, 3]),
             },
         };
-        var phase = orchestrator.OnHeartbeatAck(ack, Guid.NewGuid(), 1);
+        var phase = orchestrator.OnHeartbeatAck(ack, sessionId, 1);
         Assert.Equal(KioskShellPhase.LeaseExpired, phase);
     }
 
@@ -72,6 +75,7 @@ public sealed class KioskR6CoreTests
     public async Task orchestrator_offline_queue_enqueue_then_drain_ack()
     {
         var path = Path.Combine(Path.GetTempPath(), $"r6-queue-{Guid.NewGuid():N}.db");
+        SqliteOfflineEventQueue? queue = null;
         try
         {
             using var rsa = System.Security.Cryptography.RSA.Create(2048);
@@ -91,7 +95,7 @@ public sealed class KioskR6CoreTests
             };
             Assert.True(verifier.TryVerify(lease));
 
-            var queue = new SqliteOfflineEventQueue(path);
+            queue = new SqliteOfflineEventQueue(path);
             var orchestrator = new KioskShellOrchestrator();
             orchestrator.ConfigureLeaseVerifier(rsa.ExportSubjectPublicKeyInfoPem());
             orchestrator.BindOfflineQueue(queue);
@@ -104,6 +108,7 @@ public sealed class KioskR6CoreTests
         }
         finally
         {
+            queue?.Close();
             if (File.Exists(path))
             {
                 File.Delete(path);
