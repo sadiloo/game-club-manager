@@ -59,25 +59,23 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.403
-      - name: start postgres (docker)
+      - name: install and start postgresql
         shell: pwsh
         run: |
-          docker rm -f gameclub-ci-pg 2>$null
-          docker run -d --name gameclub-ci-pg -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=gameclub_test -p 5432:5432 postgres:16
-          $deadline = (Get-Date).AddMinutes(2)
+          choco install postgresql16 --params '/Password:postgres' -y --no-progress
+          $psql = 'C:\Program Files\PostgreSQL\16\bin\psql.exe'
+          $pgIsReady = 'C:\Program Files\PostgreSQL\16\bin\pg_isready.exe'
+          $deadline = (Get-Date).AddMinutes(5)
           while ((Get-Date) -lt $deadline) {
-            docker exec gameclub-ci-pg pg_isready -U postgres 2>$null
+            & $pgIsReady -U postgres 2>$null
             if ($LASTEXITCODE -eq 0) { break }
-            Start-Sleep -Seconds 2
+            Start-Sleep -Seconds 3
           }
-          if ($LASTEXITCODE -ne 0) { throw "postgres not ready" }
+          if ($LASTEXITCODE -ne 0) { throw 'postgresql service not ready' }
+          & $psql -U postgres -c "CREATE DATABASE gameclub_test;" 2>$null
       - name: windows kiosk integration
         shell: pwsh
         run: ./scripts/windows/ci-integration.ps1
-      - name: stop postgres
-        if: always()
-        shell: pwsh
-        run: docker rm -f gameclub-ci-pg
       - name: upload kiosk integration artifacts
         if: always()
         uses: actions/upload-artifact@v4
