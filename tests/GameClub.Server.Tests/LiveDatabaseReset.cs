@@ -1,5 +1,6 @@
 using GameClub.Server.Data;
 using GameClub.Server.Data.Entities;
+using GameClub.Server.Services;
 using Microsoft.EntityFrameworkCore;
 
 namespace GameClub.Server.Tests;

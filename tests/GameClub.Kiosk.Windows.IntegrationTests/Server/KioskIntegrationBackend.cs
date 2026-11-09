@@ -173,8 +173,9 @@ internal sealed class KioskIntegrationBackend
         await using var conn = new NpgsqlConnection(ResolveConnectionString());
         await conn.OpenAsync();
         await using var cmd = new NpgsqlCommand(
-            """SELECT "Id" FROM sessions WHERE "Status" = 'Open' LIMIT 1""",
+            """SELECT "Id" FROM sessions WHERE "Status" = @open LIMIT 1""",
             conn);
+        cmd.Parameters.AddWithValue("open", (int)SessionStatus.Open);
         return (Guid)(await cmd.ExecuteScalarAsync() ?? throw new InvalidOperationException("No open session."));
     }
 

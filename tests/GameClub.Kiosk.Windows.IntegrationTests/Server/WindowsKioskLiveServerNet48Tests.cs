@@ -105,8 +105,10 @@ public sealed class WindowsKioskLiveServerNet48Tests
             ?? Environment.GetEnvironmentVariable("GAMECLUB_DATABASE");
         await using var conn = new NpgsqlConnection(cs);
         await conn.OpenAsync();
-        await using var cmd = new NpgsqlCommand("SELECT COUNT(*)::int FROM kiosk_heartbeats", conn);
-        return (int)(await cmd.ExecuteScalarAsync() ?? 0);
+        using (var cmd = new NpgsqlCommand("SELECT COUNT(*)::int FROM kiosk_heartbeats", conn))
+        {
+            return (int)(await cmd.ExecuteScalarAsync() ?? 0);
+        }
     }
 }
 

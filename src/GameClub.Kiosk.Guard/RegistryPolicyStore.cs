@@ -3,9 +3,9 @@ using Microsoft.Win32;
 
 namespace GameClub.Kiosk.Guard;
 
-internal static class RegistryPolicyStore
+public static class RegistryPolicyStore
 {
-    internal static void EnsureDefaults()
+    public static void EnsureDefaults()
     {
         using var systemKey = OpenKioskHive(KioskRegistryPolicyTemplate.SystemPoliciesRelativePath, writable: true);
         if (systemKey is not null)
@@ -36,7 +36,7 @@ internal static class RegistryPolicyStore
         }
     }
 
-    internal static bool Tampered()
+    public static bool Tampered()
     {
         using var systemKey = OpenKioskHive(KioskRegistryPolicyTemplate.SystemPoliciesRelativePath, writable: false);
         if (systemKey is null)
@@ -99,7 +99,7 @@ internal static class RegistryPolicyStore
         return KioskRegistryPolicyTemplate.IsTampered(systemActual!, explorerActual!, disallowSnapshot);
     }
 
-    internal static void Repair() => EnsureDefaults();
+    public static void Repair() => EnsureDefaults();
 
     private static RegistryKey? OpenKioskHive(string relativePath, bool writable)
     {

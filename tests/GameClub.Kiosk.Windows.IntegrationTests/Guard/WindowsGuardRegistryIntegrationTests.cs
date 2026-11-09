@@ -116,7 +116,7 @@ public sealed class WindowsGuardRegistryIntegrationTests : IDisposable
                 var log = File.ReadAllText(_watchdogLog);
                 if (log.Contains("guard.policy_tamper", StringComparison.Ordinal))
                 {
-                    guard!.Kill(entireProcessTree: true);
+                    guard!.Kill();
                     return;
                 }
             }
@@ -124,7 +124,7 @@ public sealed class WindowsGuardRegistryIntegrationTests : IDisposable
             Thread.Sleep(500);
         }
 
-        guard!.Kill(entireProcessTree: true);
+        guard!.Kill();
         Assert.Fail("Guard did not write guard.policy_tamper to watchdog.log after registry tamper.");
     }
 

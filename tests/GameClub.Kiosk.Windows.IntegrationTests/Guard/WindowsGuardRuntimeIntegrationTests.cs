@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Threading;
@@ -65,6 +66,72 @@ public sealed class WindowsGuardRuntimeIntegrationTests
             File.Delete(logPath);
         }
 
+        using var guard = StartGuard(kioskExe, sid);
+        Process shell = null;
+        var deadline = DateTime.UtcNow.AddSeconds(45);
+        while (DateTime.UtcNow < deadline && shell == null)
+        {
+            shell = Process.GetProcessesByName("GameClub.Kiosk").FirstOrDefault();
+            Thread.Sleep(500);
+        }
+
+        if (shell == null)
+        {
+            guard.Kill();
+            Assert.Fail("Guard did not launch GameClub.Kiosk within 45s (runner session may lack interactive kiosk user).");
+        }
+
+        var shellPid = shell.Id;
+        shell.Kill();
+        var restartDeadline = DateTime.UtcNow.AddSeconds(15);
+        while (DateTime.UtcNow < restartDeadline)
+        {
+            if (File.Exists(logPath) && File.ReadAllText(logPath).Contains("guard.restart"))
+            {
+                var relaunched = Process.GetProcessesByName("GameClub.Kiosk").FirstOrDefault(p => p.Id != shellPid);
+                if (relaunched != null)
+                {
+                    Assert.True(TryReadDenyTerminateAce(relaunched.Handle, new SecurityIdentifier(sid), out var found));
+                    Assert.True(found);
+                    relaunched.Kill();
+                }
+
+                guard.Kill();
+                return;
+            }
+
+            Thread.Sleep(500);
+        }
+
+        guard.Kill();
+        Assert.Fail("Guard did not log guard.restart after shell kill within 15s.");
+    }
+
+    [Fact]
+    public void g2_acl_on_guard_and_supervised_shell_after_launch()
+    {
+        var sid = Environment.GetEnvironmentVariable("CHECKPOINT_KIOSK_SID") ?? ResolveSid();
+        var kioskExe = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "GameClub.Kiosk.exe");
+        Assert.True(File.Exists(kioskExe));
+        using var guard = StartGuard(kioskExe, sid);
+        Thread.Sleep(3000);
+        Assert.True(TryReadDenyTerminateAce(guard.Handle, new SecurityIdentifier(sid), out var guardAce));
+        Assert.True(guardAce);
+        var shell = Process.GetProcessesByName("GameClub.Kiosk").FirstOrDefault();
+        if (shell == null)
+        {
+            guard.Kill();
+            Assert.Fail("Supervised shell PID not found after Guard launch.");
+        }
+
+        Assert.True(TryReadDenyTerminateAce(shell.Handle, new SecurityIdentifier(sid), out var shellAce));
+        Assert.True(shellAce);
+        shell.Kill();
+        guard.Kill();
+    }
+
+    private static Process StartGuard(string kioskExe, string sid)
+    {
         var guardExe = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "GameClub.Kiosk.Guard.exe");
         var psi = new ProcessStartInfo(guardExe)
         {
@@ -75,105 +142,57 @@ public sealed class WindowsGuardRuntimeIntegrationTests
         psi.EnvironmentVariables["CHECKPOINT_KIOSK_SID"] = sid;
         psi.EnvironmentVariables["CHECKPOINT_KIOSK_USER"] = Environment.GetEnvironmentVariable("CHECKPOINT_KIOSK_USER") ?? Environment.UserName;
         psi.EnvironmentVariables["CHECKPOINT_KIOSK_EXE"] = kioskExe;
-        using var guard = Process.Start(psi);
+        var guard = Process.Start(psi);
         Assert.NotNull(guard);
-
-        Process? shell = null;
-        var deadline = DateTime.UtcNow.AddSeconds(45);
-        while (DateTime.UtcNow < deadline && shell is null)
-        {
-            shell = Process.GetProcessesByName("GameClub.Kiosk").FirstOrDefault();
-            Thread.Sleep(500);
-        }
-
-        if (shell is null)
-        {
-            guard!.Kill(entireProcessTree: true);
-            Assert.Fail("Guard did not launch GameClub.Kiosk within 45s (runner session may lack interactive kiosk user).");
-        }
-
-        var shellPid = shell!.Id;
-        shell.Kill();
-        var restartDeadline = DateTime.UtcNow.AddSeconds(15);
-        while (DateTime.UtcNow < restartDeadline)
-        {
-            if (File.Exists(logPath) && File.ReadAllText(logPath).Contains("guard.restart", StringComparison.Ordinal))
-            {
-                var relaunched = Process.GetProcessesByName("GameClub.Kiosk").FirstOrDefault(p => p.Id != shellPid);
-                if (relaunched is not null)
-                {
-                    Assert.True(TryReadDenyTerminate(relaunched.Id, sid));
-                    relaunched.Kill();
-                }
-
-                guard!.Kill(entireProcessTree: true);
-                return;
-            }
-
-            Thread.Sleep(500);
-        }
-
-        guard!.Kill(entireProcessTree: true);
-        Assert.Fail("Guard did not log guard.restart after shell kill within 15s.");
+        return guard;
     }
 
-  [Fact]
-    public void g2_acl_on_guard_and_supervised_shell_after_launch()
+    private static bool TryReadDenyTerminateAce(IntPtr handle, SecurityIdentifier sid, out bool found)
     {
-        var sid = Environment.GetEnvironmentVariable("CHECKPOINT_KIOSK_SID") ?? ResolveSid();
-        var kioskExe = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "GameClub.Kiosk.exe");
-        Assert.True(File.Exists(kioskExe));
-        var guardExe = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "GameClub.Kiosk.Guard.exe");
-        var psi = new ProcessStartInfo(guardExe)
-        {
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
-        psi.EnvironmentVariables["CHECKPOINT_KIOSK_SID"] = sid;
-        psi.EnvironmentVariables["CHECKPOINT_KIOSK_USER"] = Environment.GetEnvironmentVariable("CHECKPOINT_KIOSK_USER") ?? Environment.UserName;
-        psi.EnvironmentVariables["CHECKPOINT_KIOSK_EXE"] = kioskExe;
-        using var guard = Process.Start(psi);
-        Assert.NotNull(guard);
-        Thread.Sleep(3000);
-        Assert.True(TryReadDenyTerminate(guard!.Id, sid));
-        var shell = Process.GetProcessesByName("GameClub.Kiosk").FirstOrDefault();
-        if (shell is null)
-        {
-            guard.Kill(entireProcessTree: true);
-            Assert.Fail("Supervised shell PID not found after Guard launch.");
-        }
-
-        Assert.True(TryReadDenyTerminate(shell.Id, sid));
-        shell.Kill();
-        guard.Kill(entireProcessTree: true);
-    }
-
-    private static bool TryReadDenyTerminate(int pid, string sid)
-    {
-        try
-        {
-            using var process = Process.GetProcessById(pid);
-            var handle = process.Handle;
-            const int daclSecurityInformation = 0x00000004;
-            const uint processTerminate = 0x0001;
-            var sd = process.GetAccessControl();
-            foreach (KnownAce ace in sd.GetAccessRules(true, true, typeof(SecurityIdentifier)))
-            {
-                if (ace is CommonAce common
-                    && common.AceQualifier == AceQualifier.AccessDenied
-                    && (common.AccessMask & processTerminate) != 0
-                    && common.SecurityIdentifier?.Value == sid)
-                {
-                    return true;
-                }
-            }
-        }
-        catch
+        found = false;
+        const int daclSecurityInformation = 0x00000004;
+        const uint processTerminate = 0x0001;
+        if (!GetKernelObjectSecurity(handle, daclSecurityInformation, IntPtr.Zero, 0, out var length) && Marshal.GetLastWin32Error() != 122)
         {
             return false;
         }
 
-        return false;
+        var buffer = Marshal.AllocHGlobal(Math.Max((int)length, 512));
+        try
+        {
+            if (!GetKernelObjectSecurity(handle, daclSecurityInformation, buffer, length, out _))
+            {
+                return false;
+            }
+
+            var sdBytes = new byte[length];
+            Marshal.Copy(buffer, sdBytes, 0, (int)length);
+            var sd = new RawSecurityDescriptor(sdBytes, 0);
+            var dacl = sd.DiscretionaryAcl;
+            if (dacl == null)
+            {
+                return true;
+            }
+
+            foreach (var ace in dacl)
+            {
+                if (ace is CommonAce common
+                    && common.AceQualifier == AceQualifier.AccessDenied
+                    && (common.AccessMask & processTerminate) != 0
+                    && common.SecurityIdentifier != null
+                    && common.SecurityIdentifier.Value == sid.Value)
+                {
+                    found = true;
+                    return true;
+                }
+            }
+
+            return true;
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(buffer);
+        }
     }
 
     private static string ResolveSid()
@@ -181,5 +200,13 @@ public sealed class WindowsGuardRuntimeIntegrationTests
         var account = new NTAccount(Environment.UserName);
         return ((SecurityIdentifier)account.Translate(typeof(SecurityIdentifier))).Value;
     }
+
+    [DllImport("advapi32.dll", SetLastError = true)]
+    private static extern bool GetKernelObjectSecurity(
+        IntPtr handle,
+        int securityInformation,
+        IntPtr securityDescriptor,
+        uint length,
+        out uint lengthNeeded);
 }
 #endif

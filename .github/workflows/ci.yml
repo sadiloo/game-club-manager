@@ -66,6 +66,7 @@ jobs:
         shell: pwsh
         run: |
           choco install postgresql16 --params '/Password:postgres' -y --no-progress
+          $env:PGPASSWORD = 'postgres'
           $pgIsReady = 'C:\Program Files\PostgreSQL\16\bin\pg_isready.exe'
           $psql = 'C:\Program Files\PostgreSQL\16\bin\psql.exe'
           $deadline = (Get-Date).AddMinutes(5)
@@ -75,8 +76,8 @@ jobs:
             Start-Sleep -Seconds 3
           }
           if ($LASTEXITCODE -ne 0) { throw 'postgresql service not ready' }
-          $exists = & $psql -U postgres -c "SELECT 1 FROM pg_database WHERE datname='gameclub_test'" -tA 2>$null
-          if (-not $exists) { & $psql -U postgres -c "CREATE DATABASE gameclub_test;" }
+          $exists = & $psql -h 127.0.0.1 -U postgres -c "SELECT 1 FROM pg_database WHERE datname='gameclub_test'" -tA 2>$null
+          if (-not $exists) { & $psql -h 127.0.0.1 -U postgres -c "CREATE DATABASE gameclub_test;" }
       - name: windows kiosk integration
         shell: pwsh
         run: ./scripts/windows/ci-integration.ps1

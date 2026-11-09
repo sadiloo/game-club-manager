@@ -45,7 +45,7 @@ public sealed class WindowsGuardAclIntegrationTests
         Thread.Sleep(2000);
         Assert.True(TryReadDenyTerminateAce(guard!.Handle, new SecurityIdentifier(sid), out var found));
         Assert.True(found);
-        guard.Kill(entireProcessTree: true);
+        guard.Kill();
     }
 
     [Fact]

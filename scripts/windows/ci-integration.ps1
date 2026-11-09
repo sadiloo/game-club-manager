@@ -57,6 +57,8 @@ $env:CHECKPOINT_KIOSK_USER = $kioskUser
 $env:CHECKPOINT_SECOND_USER = $guestUser
 $env:CHECKPOINT_SECOND_PASSWORD = $guestPassword
 
+$env:PGPASSWORD = "postgres"
+
 Write-Host "Building Release (-warnaserror)..."
 dotnet build GameClub.slnx -c Release -warnaserror --nologo
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
