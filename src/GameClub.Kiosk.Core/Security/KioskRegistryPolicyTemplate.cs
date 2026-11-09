@@ -20,6 +20,7 @@ public static class KioskRegistryPolicyTemplate
     public static IReadOnlyDictionary<string, int> ExplorerPolicies { get; } = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
     {
         ["NoLogoff"] = 1,
+        ["DisallowRun"] = 1,
     };
 
     public static IReadOnlyList<string> DefaultDisallowRunExecutables { get; } =
@@ -85,20 +86,61 @@ public static class KioskRegistryPolicyTemplate
             }
         }
 
-        if (disallowRunActual is not null)
+        if (disallowRunActual is not null && IsDisallowRunListTampered(disallowRunActual))
         {
-            var expected = ResolveDisallowRunEntries();
-            if (disallowRunActual.Count != expected.Count)
+            return true;
+        }
+
+        return false;
+    }
+
+    public static bool IsTampered(
+        IReadOnlyDictionary<string, int?> systemActual,
+        IReadOnlyDictionary<string, int?> explorerActual,
+        DisallowRunPolicySnapshot disallowRun)
+    {
+        foreach (var entry in SystemPolicies)
+        {
+            if (!systemActual.TryGetValue(entry.Key, out var value) || value != entry.Value)
             {
                 return true;
             }
+        }
 
-            for (var i = 0; i < expected.Count; i++)
+        foreach (var entry in ExplorerPolicies)
+        {
+            if (!explorerActual.TryGetValue(entry.Key, out var value) || value != entry.Value)
             {
-                if (!string.Equals(disallowRunActual[i], expected[i], StringComparison.OrdinalIgnoreCase))
-                {
-                    return true;
-                }
+                return true;
+            }
+        }
+
+        if (disallowRun.ChildKeyMissing)
+        {
+            return true;
+        }
+
+        if (disallowRun.Entries is not null && IsDisallowRunListTampered(disallowRun.Entries))
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsDisallowRunListTampered(IReadOnlyList<string> disallowRunActual)
+    {
+        var expected = ResolveDisallowRunEntries();
+        if (disallowRunActual.Count != expected.Count)
+        {
+            return true;
+        }
+
+        for (var i = 0; i < expected.Count; i++)
+        {
+            if (!string.Equals(disallowRunActual[i], expected[i], StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
             }
         }
 

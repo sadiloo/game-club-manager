@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.IO;
+using GameClub.Kiosk.Core.Security;
 
 namespace GameClub.Kiosk.Guard;
 
@@ -30,7 +31,9 @@ internal sealed class KioskShellSupervisor
 
         Environment.SetEnvironmentVariable("CHECKPOINT_KIOSK_SID", _identity.Sid);
         RegistryPolicyStore.EnsureDefaults();
-        KioskProcessAcl.ApplyForProtectedProcesses();
+        var protector = new KioskProcessTerminateProtector();
+        var protection = new KioskShellProtectionLifecycle(protector, fault => File.AppendAllText(LogPath, $"{DateTime.UtcNow:O} {fault}{Environment.NewLine}"));
+        KioskProcessTerminateProtector.ApplyStartupProtection(protection);
         while (!ct.IsCancellationRequested)
         {
             if (RegistryPolicyStore.Tampered())
@@ -53,14 +56,14 @@ internal sealed class KioskShellSupervisor
                 continue;
             }
 
-            if (!EnsureShellRunning(sessionId.Value))
+            if (!EnsureShellRunning(sessionId.Value, protection))
             {
                 Wait(ct, TimeSpan.FromSeconds(5));
             }
         }
     }
 
-    private bool EnsureShellRunning(uint sessionId)
+    private bool EnsureShellRunning(uint sessionId, KioskShellProtectionLifecycle protection)
     {
         if (DateTime.UtcNow - _lastRelaunchUtc < TimeSpan.FromSeconds(5))
         {
@@ -89,6 +92,7 @@ internal sealed class KioskShellSupervisor
             try
             {
                 _supervised = Process.GetProcessById(pid);
+                protection.ProtectShellAfterLaunch(pid);
             }
             catch
             {

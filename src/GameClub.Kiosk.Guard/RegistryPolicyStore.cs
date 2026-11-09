@@ -23,8 +23,6 @@ internal static class RegistryPolicyStore
             {
                 explorerKey.SetValue(entry.Key, entry.Value, RegistryValueKind.DWord);
             }
-
-            explorerKey.SetValue("DisallowRun", 1, RegistryValueKind.DWord);
         }
 
         using var disallowKey = OpenKioskHive(KioskRegistryPolicyTemplate.DisallowRunRelativePath, writable: true);
@@ -67,12 +65,16 @@ internal static class RegistryPolicyStore
             }
         }
 
-        List<string>? disallowActual = null;
+        DisallowRunPolicySnapshot disallowSnapshot;
         using (var disallowKey = OpenKioskHive(KioskRegistryPolicyTemplate.DisallowRunRelativePath, writable: false))
         {
-            if (disallowKey is not null)
+            if (disallowKey is null)
             {
-                disallowActual = [];
+                disallowSnapshot = DisallowRunPolicySnapshot.MissingChild;
+            }
+            else
+            {
+                var disallowActual = new List<string>();
                 var index = 1;
                 while (true)
                 {
@@ -89,10 +91,12 @@ internal static class RegistryPolicyStore
                         break;
                     }
                 }
+
+                disallowSnapshot = DisallowRunPolicySnapshot.WithEntries(disallowActual);
             }
         }
 
-        return KioskRegistryPolicyTemplate.IsTampered(systemActual, explorerActual, disallowActual);
+        return KioskRegistryPolicyTemplate.IsTampered(systemActual!, explorerActual!, disallowSnapshot);
     }
 
     internal static void Repair() => EnsureDefaults();

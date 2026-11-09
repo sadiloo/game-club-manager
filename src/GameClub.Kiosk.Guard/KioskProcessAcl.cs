@@ -3,25 +3,46 @@ using System.IO;
 using System.Runtime.InteropServices;
 using System.Security.AccessControl;
 using System.Security.Principal;
+using GameClub.Kiosk.Core.Security;
 
 namespace GameClub.Kiosk.Guard;
 
 /// <summary>Deny the kiosk user terminate/stop rights on guard and kiosk shell processes (freeze L5).</summary>
-internal static class KioskProcessAcl
+internal sealed class KioskProcessTerminateProtector : IKioskProcessTerminateProtector
 {
     private const uint ProcessTerminate = 0x0001;
     private const int DaclSecurityInformation = 0x00000004;
 
-    internal static void ApplyForProtectedProcesses()
+    public bool TryDenyTerminate(int processId, out int win32Error)
     {
+        win32Error = 0;
         var sidRaw = Environment.GetEnvironmentVariable("CHECKPOINT_KIOSK_SID")?.Trim();
         if (string.IsNullOrWhiteSpace(sidRaw))
         {
-            return;
+            win32Error = 87;
+            return false;
         }
 
-        var kioskSid = new SecurityIdentifier(sidRaw);
-        DenyTerminateOnProcess(Process.GetCurrentProcess(), kioskSid);
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            return TryDenyTerminateOnProcess(process, new SecurityIdentifier(sidRaw), out win32Error);
+        }
+        catch
+        {
+            win32Error = Marshal.GetLastWin32Error();
+            if (win32Error == 0)
+            {
+                win32Error = 87;
+            }
+
+            return false;
+        }
+    }
+
+    internal static void ApplyStartupProtection(KioskShellProtectionLifecycle lifecycle)
+    {
+        lifecycle.ProtectGuardProcess(Process.GetCurrentProcess().Id);
 
         var kioskExe = Environment.GetEnvironmentVariable("CHECKPOINT_KIOSK_EXE");
         if (string.IsNullOrWhiteSpace(kioskExe))
@@ -34,7 +55,7 @@ internal static class KioskProcessAcl
         {
             try
             {
-                DenyTerminateOnProcess(process, kioskSid);
+                lifecycle.ProtectShellAfterLaunch(process.Id);
             }
             catch
             {
@@ -43,13 +64,17 @@ internal static class KioskProcessAcl
         }
     }
 
-    private static void DenyTerminateOnProcess(Process process, SecurityIdentifier kioskSid)
+    private static bool TryDenyTerminateOnProcess(Process process, SecurityIdentifier kioskSid, out int win32Error)
     {
+        win32Error = 0;
         var handle = process.Handle;
-        if (!GetKernelObjectSecurity(handle, DaclSecurityInformation, IntPtr.Zero, 0, out var length)
-            && Marshal.GetLastWin32Error() != 122)
+        if (!GetKernelObjectSecurity(handle, DaclSecurityInformation, IntPtr.Zero, 0, out var length))
         {
-            return;
+            win32Error = Marshal.GetLastWin32Error();
+            if (win32Error != 122)
+            {
+                return false;
+            }
         }
 
         var buffer = Marshal.AllocHGlobal(Math.Max((int)length, 512));
@@ -57,7 +82,8 @@ internal static class KioskProcessAcl
         {
             if (!GetKernelObjectSecurity(handle, DaclSecurityInformation, buffer, length, out _))
             {
-                return;
+                win32Error = Marshal.GetLastWin32Error();
+                return false;
             }
 
             var sdBytes = new byte[length];
@@ -74,7 +100,13 @@ internal static class KioskProcessAcl
             try
             {
                 Marshal.Copy(form, 0, writePtr, form.Length);
-                SetKernelObjectSecurity(handle, DaclSecurityInformation, writePtr);
+                if (!SetKernelObjectSecurity(handle, DaclSecurityInformation, writePtr))
+                {
+                    win32Error = Marshal.GetLastWin32Error();
+                    return false;
+                }
+
+                return true;
             }
             finally
             {
