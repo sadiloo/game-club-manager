@@ -177,23 +177,40 @@ internal sealed class KioskIntegrationBackend
             var session = await db.Sessions.SingleAsync(s => s.Id == sessionId);
             session.StartedAtUtc = started;
             session.LastCheckpointUtc = checkpoint;
+            var segments = await db.PlaySegments.Where(s => s.SessionId == sessionId).ToListAsync();
+            foreach (var segment in segments)
+            {
+                segment.StartUtc = started;
+            }
+
             await db.SaveChangesAsync();
             return;
         }
 
         await using var conn = new NpgsqlConnection(ResolveConnectionString());
         await conn.OpenAsync();
-        await using var cmd = new NpgsqlCommand(
+        await using (var cmd = new NpgsqlCommand(
             """
             UPDATE sessions
             SET "StartedAtUtc" = @started, "LastCheckpointUtc" = @checkpoint
             WHERE "Id" = @id
             """,
-            conn);
-        cmd.Parameters.AddWithValue("started", started);
-        cmd.Parameters.AddWithValue("checkpoint", checkpoint);
-        cmd.Parameters.AddWithValue("id", sessionId);
-        await cmd.ExecuteNonQueryAsync();
+            conn))
+        {
+            cmd.Parameters.AddWithValue("started", started);
+            cmd.Parameters.AddWithValue("checkpoint", checkpoint);
+            cmd.Parameters.AddWithValue("id", sessionId);
+            await cmd.ExecuteNonQueryAsync();
+        }
+
+        await using (var segCmd = new NpgsqlCommand(
+            """UPDATE play_segments SET "StartUtc" = @started WHERE "SessionId" = @id""",
+            conn))
+        {
+            segCmd.Parameters.AddWithValue("started", started);
+            segCmd.Parameters.AddWithValue("id", sessionId);
+            await segCmd.ExecuteNonQueryAsync();
+        }
     }
 
     public async Task<Guid> OpenSessionIdAsync()
