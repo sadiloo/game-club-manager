@@ -22,6 +22,7 @@ if (-not $customerId) {
     $customerId = $create.id
     $loginName = "f6script$([Guid]::NewGuid().ToString('N').Substring(0,6))"
     $null = Invoke-RestMethod -Uri "$server/api/operator/customers/$customerId/credential" -Method Put -Body (@{ loginName = $loginName; password = "wrong-seed" } | ConvertTo-Json) -ContentType "application/json" -WebSession $opSession
+    $null = Invoke-RestMethod -Uri "$server/api/operator/members/customers/$customerId/wallet/top-up" -Method Post -Body (@{ method = "Cash"; amountToman = 500000 } | ConvertTo-Json) -ContentType "application/json" -WebSession $opSession
 }
 $codes = @()
 $lockedCodes = @()

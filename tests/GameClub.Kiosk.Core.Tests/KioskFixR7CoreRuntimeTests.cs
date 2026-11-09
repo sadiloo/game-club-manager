@@ -81,12 +81,16 @@ public sealed class KioskFixR7CoreRuntimeTests
   [Fact]
     public void registry_policy_tamper_detects_sign_out_policy_drift()
     {
-        var actual = KioskRegistryPolicyTemplate.SystemPolicies.ToDictionary(
+        var system = KioskRegistryPolicyTemplate.SystemPolicies.ToDictionary(
             kvp => kvp.Key,
             kvp => (int?)kvp.Value,
             StringComparer.OrdinalIgnoreCase);
-        actual["NoLogoff"] = 0;
-        Assert.True(KioskRegistryPolicyTemplate.IsTampered(actual));
+        var explorer = KioskRegistryPolicyTemplate.ExplorerPolicies.ToDictionary(
+            kvp => kvp.Key,
+            kvp => (int?)kvp.Value,
+            StringComparer.OrdinalIgnoreCase);
+        explorer["NoLogoff"] = 0;
+        Assert.True(KioskRegistryPolicyTemplate.IsTampered(system, explorer));
     }
 
     private static SignedSessionLease SignLease(System.Security.Cryptography.RSA rsa, Guid sessionId, DateTime untilUtc)

@@ -41,6 +41,8 @@ public sealed class KioskShellOrchestrator
 
     public void SetFinalMode(bool finalMode) => FinalMode = finalMode;
 
+    public void ApplyStationConfig(bool isTestMode) => SetFinalMode(!isTestMode);
+
     public bool TryUnlockAdmin(string? configuredPassword, string attempt)
     {
         if (string.IsNullOrWhiteSpace(configuredPassword))
@@ -92,7 +94,7 @@ public sealed class KioskShellOrchestrator
         return Phase;
     }
 
-    public KioskShellPhase TickLease(Guid sessionId, long clientMonotonicMs, DateTime nowUtc)
+    public KioskShellPhase TickLease(Guid sessionId, long clientMonotonicMs, DateTime nowUtc, bool transportDown = false)
     {
         if (Phase != KioskShellPhase.Playing || _lastLease is null)
         {
@@ -103,6 +105,11 @@ public sealed class KioskShellOrchestrator
         {
             Phase = KioskShellPhase.Locked;
             return Phase;
+        }
+
+        if (transportDown && sessionId != Guid.Empty)
+        {
+            EnqueuePoweredSegment(sessionId, clientMonotonicMs);
         }
 
         if (_lastLease.Payload.AuthorizedUntilUtc < nowUtc)
@@ -186,18 +193,7 @@ public sealed class KioskShellOrchestrator
     {
         foreach (var pid in _trackedLaunchPids.ToArray())
         {
-            try
-            {
-                var proc = Process.GetProcessById(pid);
-                if (!proc.HasExited)
-                {
-                    proc.Kill();
-                }
-            }
-            catch
-            {
-                // process already gone
-            }
+            ProcessTreeTerminator.TerminateTree(pid);
         }
 
         _trackedLaunchPids.Clear();

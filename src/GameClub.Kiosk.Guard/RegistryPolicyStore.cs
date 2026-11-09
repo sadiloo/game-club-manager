@@ -5,12 +5,9 @@ namespace GameClub.Kiosk.Guard;
 
 internal static class RegistryPolicyStore
 {
-    private const string SystemPoliciesPath = @"Software\Microsoft\Windows\CurrentVersion\Policies\System";
-    private const string ExplorerPoliciesPath = @"Software\Microsoft\Windows\CurrentVersion\Policies\Explorer";
-
     internal static void EnsureDefaults()
     {
-        using var systemKey = OpenKioskHive(SystemPoliciesPath, writable: true);
+        using var systemKey = OpenKioskHive(KioskRegistryPolicyTemplate.SystemPoliciesRelativePath, writable: true);
         if (systemKey is not null)
         {
             foreach (var entry in KioskRegistryPolicyTemplate.SystemPolicies)
@@ -19,32 +16,83 @@ internal static class RegistryPolicyStore
             }
         }
 
-        using var explorerKey = OpenKioskHive(ExplorerPoliciesPath, writable: true);
+        using var explorerKey = OpenKioskHive(KioskRegistryPolicyTemplate.ExplorerPoliciesRelativePath, writable: true);
         if (explorerKey is not null)
         {
-            explorerKey.SetValue("DisallowRun", 1, RegistryValueKind.DWord);
-            foreach (var entry in KioskRegistryPolicyTemplate.ResolveDisallowRunEntries())
+            foreach (var entry in KioskRegistryPolicyTemplate.ExplorerPolicies)
             {
-                explorerKey.SetValue(entry, 1, RegistryValueKind.String);
+                explorerKey.SetValue(entry.Key, entry.Value, RegistryValueKind.DWord);
+            }
+
+            explorerKey.SetValue("DisallowRun", 1, RegistryValueKind.DWord);
+        }
+
+        using var disallowKey = OpenKioskHive(KioskRegistryPolicyTemplate.DisallowRunRelativePath, writable: true);
+        if (disallowKey is not null)
+        {
+            var entries = KioskRegistryPolicyTemplate.ResolveDisallowRunEntries();
+            for (var i = 0; i < entries.Count; i++)
+            {
+                disallowKey.SetValue((i + 1).ToString(), entries[i], RegistryValueKind.String);
             }
         }
     }
 
     internal static bool Tampered()
     {
-        using var key = OpenKioskHive(SystemPoliciesPath, writable: false);
-        if (key is null)
+        using var systemKey = OpenKioskHive(KioskRegistryPolicyTemplate.SystemPoliciesRelativePath, writable: false);
+        if (systemKey is null)
         {
             return true;
         }
 
-        var actual = new Dictionary<string, int?>(StringComparer.OrdinalIgnoreCase);
+        var systemActual = new Dictionary<string, int?>(StringComparer.OrdinalIgnoreCase);
         foreach (var name in KioskRegistryPolicyTemplate.SystemPolicies.Keys)
         {
-            actual[name] = key.GetValue(name) as int?;
+            systemActual[name] = systemKey.GetValue(name) as int?;
         }
 
-        return KioskRegistryPolicyTemplate.IsTampered(actual);
+        Dictionary<string, int?>? explorerActual = null;
+        using (var explorerKey = OpenKioskHive(KioskRegistryPolicyTemplate.ExplorerPoliciesRelativePath, writable: false))
+        {
+            if (explorerKey is null)
+            {
+                return true;
+            }
+
+            explorerActual = new Dictionary<string, int?>(StringComparer.OrdinalIgnoreCase);
+            foreach (var name in KioskRegistryPolicyTemplate.ExplorerPolicies.Keys)
+            {
+                explorerActual[name] = explorerKey.GetValue(name) as int?;
+            }
+        }
+
+        List<string>? disallowActual = null;
+        using (var disallowKey = OpenKioskHive(KioskRegistryPolicyTemplate.DisallowRunRelativePath, writable: false))
+        {
+            if (disallowKey is not null)
+            {
+                disallowActual = [];
+                var index = 1;
+                while (true)
+                {
+                    var value = disallowKey.GetValue(index.ToString()) as string;
+                    if (string.IsNullOrWhiteSpace(value))
+                    {
+                        break;
+                    }
+
+                    disallowActual.Add(value!);
+                    index++;
+                    if (index > 64)
+                    {
+                        break;
+                    }
+                }
+            }
+        }
+
+        return KioskRegistryPolicyTemplate.IsTampered(systemActual, explorerActual, disallowActual);
     }
 
     internal static void Repair() => EnsureDefaults();

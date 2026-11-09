@@ -8,6 +8,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Threading;
 using GameClub.Kiosk.Core.Catalog;
+using System.Linq;
 using GameClub.Kiosk.Core.Protocol;
 using GameClub.Kiosk.Core.Runtime;
 using GameClub.Kiosk.Core.Security;
@@ -151,6 +152,7 @@ public sealed class KioskHostService : IAsyncDisposable
 
         SaveDeviceState();
         await EnsureRuntimeAsync();
+        await ApplyStationProfileAsync();
         await RefreshCatalogAsync();
         _status.Text = $"Paired to {_stationId}";
     }
@@ -280,6 +282,7 @@ public sealed class KioskHostService : IAsyncDisposable
                 {
                     _sessionId = leased;
                     _runtime.BindSession(leased);
+                    _ = ApplyStationProfileAsync();
                 }
 
                 if (_sessionId != Guid.Empty)
@@ -353,7 +356,8 @@ public sealed class KioskHostService : IAsyncDisposable
             return;
         }
 
-        var phase = _orchestrator.TickLease(_sessionId, _runtime.ClientMonotonicMs, DateTime.UtcNow);
+        var transportDown = _sessionId != Guid.Empty && !_runtime.IsTransportConnected;
+        var phase = _orchestrator.TickLease(_sessionId, _runtime.ClientMonotonicMs, DateTime.UtcNow, transportDown);
         if (phase == KioskShellPhase.LeaseExpired)
         {
             _shell.Dispatcher.Invoke(() =>
@@ -387,7 +391,15 @@ public sealed class KioskHostService : IAsyncDisposable
     private static void ClearKioskProfileScratch()
     {
         var root = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        foreach (var relative in new[] { "Downloads", @"AppData\Local\Temp", @"AppData\Local\Microsoft\Windows\INetCache" })
+        foreach (var relative in new[]
+                 {
+                     "Downloads",
+                     @"AppData\Local\Temp",
+                     @"AppData\Local\Microsoft\Windows\INetCache",
+                     @"AppData\Local\Microsoft\Edge\User Data\Default\Cache",
+                     @"AppData\Local\Google\Chrome\User Data\Default\Cache",
+                     @"AppData\Local\Mozilla\Firefox\Profiles",
+                 })
         {
             var dir = Path.Combine(root, relative);
             if (!Directory.Exists(dir))
@@ -395,16 +407,33 @@ public sealed class KioskHostService : IAsyncDisposable
                 continue;
             }
 
-            foreach (var file in Directory.EnumerateFiles(dir))
+            DeleteTreeContents(dir);
+        }
+    }
+
+    private static void DeleteTreeContents(string directory)
+    {
+        foreach (var file in Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories))
+        {
+            try
             {
-                try
-                {
-                    File.Delete(file);
-                }
-                catch
-                {
-                    // best-effort profile cleanup
-                }
+                File.Delete(file);
+            }
+            catch
+            {
+                // best-effort profile cleanup
+            }
+        }
+
+        foreach (var dir in Directory.EnumerateDirectories(directory))
+        {
+            try
+            {
+                Directory.Delete(dir, recursive: true);
+            }
+            catch
+            {
+                // ignore locked directories
             }
         }
     }
@@ -426,7 +455,7 @@ public sealed class KioskHostService : IAsyncDisposable
 
             using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
             var isTestMode = doc.RootElement.TryGetProperty("isTestMode", out var tm) && tm.GetBoolean();
-            _orchestrator.SetFinalMode(!isTestMode);
+            _orchestrator.ApplyStationConfig(isTestMode);
             _shell.Dispatcher.Invoke(() =>
             {
                 if (isTestMode)
@@ -456,75 +485,34 @@ public sealed class KioskHostService : IAsyncDisposable
             return;
         }
 
-        try
-        {
-            EnsureCatalogStore();
-            var since = _catalogVersion > 0 ? _catalogVersion : await _catalogStore!.LastVersionAsync();
-            var response = await _http.GetAsync($"{_serverBase}/api/kiosk/catalog?sinceVersion={since}");
-            if (!response.IsSuccessStatusCode)
+        EnsureCatalogStore();
+        var result = await CatalogRefreshMerger.RefreshAsync(
+            async since =>
             {
-                var cached = await _catalogStore!.LoadAsync();
-                if (cached.Count > 0)
+                var response = await _http.GetAsync($"{_serverBase}/api/kiosk/catalog?sinceVersion={since}");
+                if (!response.IsSuccessStatusCode)
                 {
-                    _catalogCache.Clear();
-                    _catalogCache.AddRange(cached);
-                    _shell.Dispatcher.Invoke(RenderGameList);
+                    return new CatalogHttpOutcome(false, since, []);
                 }
 
-                return;
-            }
-
-            var json = await response.Content.ReadAsStringAsync();
-            using var doc = JsonDocument.Parse(json);
-            var version = doc.RootElement.TryGetProperty("catalogVersion", out var cv) ? cv.GetInt64() : since;
-            var entries = doc.RootElement.TryGetProperty("entries", out var ent) ? ent : default;
-            if (entries.ValueKind != JsonValueKind.Array || entries.GetArrayLength() == 0)
-            {
-                if (since == 0)
+                var json = await response.Content.ReadAsStringAsync();
+                using var doc = JsonDocument.Parse(json);
+                var version = doc.RootElement.TryGetProperty("catalogVersion", out var cv) ? cv.GetInt64() : since;
+                if (!doc.RootElement.TryGetProperty("entries", out var entries) || entries.ValueKind != JsonValueKind.Array)
                 {
-                    var cached = await _catalogStore!.LoadAsync();
-                    _catalogCache.Clear();
-                    _catalogCache.AddRange(cached);
-                    _shell.Dispatcher.Invoke(RenderGameList);
+                    return new CatalogHttpOutcome(true, version, []);
                 }
 
-                return;
-            }
-
-            if (since > 0 && _catalogCache.Count > 0)
-            {
-                foreach (var entry in entries.EnumerateArray())
-                {
-                    var id = entry.GetProperty("id").GetInt32();
-                    var idx = _catalogCache.FindIndex(g => g.Id == id);
-                    var item = ParseCatalogItem(entry);
-                    if (idx >= 0)
-                    {
-                        _catalogCache[idx] = item;
-                    }
-                    else
-                    {
-                        _catalogCache.Add(item);
-                    }
-                }
-            }
-            else
-            {
-                _catalogCache.Clear();
-                foreach (var entry in entries.EnumerateArray())
-                {
-                    _catalogCache.Add(ParseCatalogItem(entry));
-                }
-            }
-
-            _catalogVersion = version;
-            await _catalogStore!.SaveAsync(_catalogCache, _catalogVersion);
-            _shell.Dispatcher.Invoke(RenderGameList);
-        }
-        catch
-        {
-            // catalog fetch failures are surfaced via empty launcher list
-        }
+                var items = entries.EnumerateArray().Select(CatalogRefreshMerger.ParseCatalogItem).ToList();
+                return new CatalogHttpOutcome(true, version, items);
+            },
+            _catalogStore!,
+            _catalogCache,
+            _catalogVersion);
+        _catalogCache.Clear();
+        _catalogCache.AddRange(result.Items);
+        _catalogVersion = result.Version;
+        _shell.Dispatcher.Invoke(RenderGameList);
     }
 
     private async Task DrainOfflineQueueAsync()
@@ -661,24 +649,6 @@ public sealed class KioskHostService : IAsyncDisposable
         _catalogStore ??= new SqliteCatalogCache(Path.Combine(root, "catalog.db"));
     }
 
-    private static GameCatalogItem ParseCatalogItem(JsonElement entry)
-        => new(
-            entry.GetProperty("id").GetInt32(),
-            entry.GetProperty("name").GetString() ?? "",
-            entry.TryGetProperty("categoryId", out var c) ? c.GetInt32() : 1,
-            entry.GetProperty("executableOrUri").GetString() ?? "",
-            entry.TryGetProperty("arguments", out var a) ? a.GetString() : null,
-            entry.TryGetProperty("iconUrl", out var i) ? i.GetString() : null,
-            entry.TryGetProperty("sortOrder", out var o) ? o.GetInt32() : 0,
-            entry.GetProperty("enabled").GetBoolean(),
-            entry.TryGetProperty("allowedProcessNames", out var al)
-                ? al.EnumerateArray().Select(x => x.GetString() ?? "").Where(x => x.Length > 0).ToList()
-                : [],
-            entry.TryGetProperty("groupRestrictions", out var gr)
-                ? gr.EnumerateArray().Select(x => x.GetString() ?? "").Where(x => x.Length > 0).ToList()
-                : [],
-            null);
-
     private async Task RefreshAsync()
     {
         if (string.IsNullOrEmpty(_stationId))
@@ -690,6 +660,7 @@ public sealed class KioskHostService : IAsyncDisposable
         try
         {
             await EnsureRuntimeAsync();
+            await ApplyStationProfileAsync();
             await RefreshCatalogAsync();
             _status.Text = $"Station {_stationId} — connected";
         }

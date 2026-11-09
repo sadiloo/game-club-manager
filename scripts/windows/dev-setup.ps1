@@ -29,3 +29,4 @@ $exePath = (Resolve-Path $KioskExe).Path
 Write-Host "Harden executable ACL with: icacls `"$exePath`" /deny ${KioskUser}:(WD,AD,WEA,WA)"
 icacls $exePath /deny "${KioskUser}:(WD,AD,WEA,WA)" | Out-Null
 Write-Host "Registered CheckpointGuard Windows service with DACL."
+Write-Host "Guard applies process-object ACL denying kiosk terminate on guard and shell when the service runs."

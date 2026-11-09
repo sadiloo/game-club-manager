@@ -3,6 +3,10 @@ namespace GameClub.Kiosk.Core.Security;
 /// <summary>Expected kiosk-user policy DWORD values (Policies\System and related).</summary>
 public static class KioskRegistryPolicyTemplate
 {
+    public const string SystemPoliciesRelativePath = @"Software\Microsoft\Windows\CurrentVersion\Policies\System";
+    public const string ExplorerPoliciesRelativePath = @"Software\Microsoft\Windows\CurrentVersion\Policies\Explorer";
+    public const string DisallowRunRelativePath = @"Software\Microsoft\Windows\CurrentVersion\Policies\Explorer\DisallowRun";
+
     public static IReadOnlyDictionary<string, int> SystemPolicies { get; } = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
     {
         ["DisableTaskMgr"] = 1,
@@ -11,6 +15,10 @@ public static class KioskRegistryPolicyTemplate
         ["NoDispCPL"] = 1,
         ["NoCloseExplorer"] = 1,
         ["HideFastUserSwitching"] = 1,
+    };
+
+    public static IReadOnlyDictionary<string, int> ExplorerPolicies { get; } = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
+    {
         ["NoLogoff"] = 1,
     };
 
@@ -53,13 +61,44 @@ public static class KioskRegistryPolicyTemplate
         return merged;
     }
 
-    public static bool IsTampered(IReadOnlyDictionary<string, int?> actual)
+    public static bool IsTampered(
+        IReadOnlyDictionary<string, int?> systemActual,
+        IReadOnlyDictionary<string, int?>? explorerActual = null,
+        IReadOnlyList<string>? disallowRunActual = null)
     {
         foreach (var entry in SystemPolicies)
         {
-            if (!actual.TryGetValue(entry.Key, out var value) || value != entry.Value)
+            if (!systemActual.TryGetValue(entry.Key, out var value) || value != entry.Value)
             {
                 return true;
+            }
+        }
+
+        if (explorerActual is not null)
+        {
+            foreach (var entry in ExplorerPolicies)
+            {
+                if (!explorerActual.TryGetValue(entry.Key, out var value) || value != entry.Value)
+                {
+                    return true;
+                }
+            }
+        }
+
+        if (disallowRunActual is not null)
+        {
+            var expected = ResolveDisallowRunEntries();
+            if (disallowRunActual.Count != expected.Count)
+            {
+                return true;
+            }
+
+            for (var i = 0; i < expected.Count; i++)
+            {
+                if (!string.Equals(disallowRunActual[i], expected[i], StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
             }
         }
 

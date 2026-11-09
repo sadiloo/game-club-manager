@@ -36,6 +36,10 @@ public sealed class KioskRuntime : IAsyncDisposable
 
     public long ClientMonotonicMs => _monotonic.ElapsedMilliseconds;
 
+    public bool IsTransportConnected => _hub?.State == HubConnectionState.Connected;
+
+    private long _lastTransportFailedSignalMs;
+
     public KioskRuntime(Func<HttpClient> httpFactory) => _httpFactory = httpFactory;
 
     public void Configure(Uri hubUri, Guid deviceId, string deviceKey, string stationId, string queuePath, bool legacyWindows)
@@ -105,18 +109,36 @@ public sealed class KioskRuntime : IAsyncDisposable
                     ApplyAcknowledgement(ack);
                     HeartbeatAcknowledged?.Invoke(ack);
                 }
+                else
+                {
+                    SignalTransportDownIfNeeded();
+                }
             }
             catch (Exception ex)
             {
                 await _queue!.EnqueueAsync(Guid.NewGuid(), "heartbeat_error", ex.Message, DateTime.UtcNow);
-                if (_hub?.State != HubConnectionState.Connected && _sessionId != Guid.Empty)
-                {
-                    HeartbeatTransportFailed?.Invoke();
-                }
+                SignalTransportDownIfNeeded();
             }
 
             await Task.Delay(TimeSpan.FromSeconds(5), ct);
         }
+    }
+
+    public void SignalTransportDownIfNeeded()
+    {
+        if (_sessionId == Guid.Empty || _hub?.State == HubConnectionState.Connected)
+        {
+            return;
+        }
+
+        var ms = _monotonic.ElapsedMilliseconds;
+        if (_lastTransportFailedSignalMs > 0 && ms - _lastTransportFailedSignalMs < 30_000)
+        {
+            return;
+        }
+
+        HeartbeatTransportFailed?.Invoke();
+        _lastTransportFailedSignalMs = ms;
     }
 
     private void ApplyAcknowledgement(KioskHeartbeatAck ack)

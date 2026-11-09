@@ -30,6 +30,7 @@ internal sealed class KioskShellSupervisor
 
         Environment.SetEnvironmentVariable("CHECKPOINT_KIOSK_SID", _identity.Sid);
         RegistryPolicyStore.EnsureDefaults();
+        KioskProcessAcl.ApplyForProtectedProcesses();
         while (!ct.IsCancellationRequested)
         {
             if (RegistryPolicyStore.Tampered())

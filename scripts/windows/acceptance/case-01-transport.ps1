@@ -22,19 +22,51 @@ $handshakeOk = $false
 $receiveBody = ""
 if ($chosen -eq "ServerSentEvents" -or $chosen -eq "LongPolling") {
     $receiveJob = Start-Job -ScriptBlock {
-        param($url, $deviceId, $deviceKey)
-        $headers = @{ "X-Device-Id" = $deviceId; "X-Device-Key" = $deviceKey; Accept = "text/event-stream" }
-        return (Invoke-WebRequest -Uri $url -Headers $headers -UseBasicParsing -TimeoutSec 30).Content
-    } -ArgumentList $startUrl, $deviceId, $deviceKey
-    Start-Sleep -Seconds 1
+        param($url, $deviceId, $deviceKey, $transport)
+        if ($transport -eq "ServerSentEvents") {
+            $req = [System.Net.HttpWebRequest]::Create($url)
+            $req.Method = "GET"
+            $req.Accept = "text/event-stream"
+            $req.Headers.Add("X-Device-Id", $deviceId)
+            $req.Headers.Add("X-Device-Key", $deviceKey)
+            $req.Timeout = 30000
+            $resp = $req.GetResponse()
+            $reader = New-Object System.IO.StreamReader($resp.GetResponseStream())
+            $builder = New-Object System.Text.StringBuilder
+            $deadline = [DateTime]::UtcNow.AddSeconds(22)
+            while ([DateTime]::UtcNow -lt $deadline) {
+                if ($reader.EndOfStream) { break }
+                $line = $reader.ReadLine()
+                if ($null -eq $line) {
+                    Start-Sleep -Milliseconds 50
+                    continue
+                }
+                [void]$builder.AppendLine($line)
+                if ($line -match '\{\}') { return $builder.ToString() }
+            }
+            return $builder.ToString()
+        }
+        $pollUrl = "$url&transport=LongPolling"
+        $pollHeaders = @{ "X-Device-Id" = $deviceId; "X-Device-Key" = $deviceKey }
+        $null = Invoke-WebRequest -Uri $pollUrl -Headers $pollHeaders -UseBasicParsing -TimeoutSec 10
+        Start-Sleep -Milliseconds 300
+        return (Invoke-WebRequest -Uri $pollUrl -Headers $pollHeaders -UseBasicParsing -TimeoutSec 20).Content
+    } -ArgumentList $startUrl, $deviceId, $deviceKey, $chosen
+    Start-Sleep -Milliseconds 400
     $payload = '{"protocol":"json","version":1}' + [char]0x1e
     $post = Invoke-WebRequest -Uri $startUrl -Method Post -Body $payload -ContentType "application/json; charset=utf-8" -Headers $headers -UseBasicParsing
     $hubConnected = $post.StatusCode -eq 200
     $deadline = (Get-Date).AddSeconds(20)
     while ((Get-Date) -lt $deadline) {
-        if ((Receive-Job $receiveJob -Keep) -match '\{\}') {
-            $receiveBody = (Receive-Job $receiveJob)
+        $jobOut = Receive-Job $receiveJob -Keep
+        if ($jobOut -match '\{\}') {
+            $receiveBody = [string]$jobOut
             $handshakeOk = $true
+            break
+        }
+        if ((Get-Job $receiveJob).State -eq "Completed") {
+            $receiveBody = [string](Receive-Job $receiveJob)
+            $handshakeOk = $receiveBody -match '\{\}'
             break
         }
         Start-Sleep -Milliseconds 200

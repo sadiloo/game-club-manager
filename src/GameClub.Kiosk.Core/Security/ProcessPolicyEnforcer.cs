@@ -15,12 +15,7 @@ public sealed class ProcessPolicyEnforcer
     public bool IsProcessAllowed(string processName, IReadOnlyCollection<string> allowedProcessNames)
     {
         var allow = BuildAllowSet(allowedProcessNames);
-        if (allow.Contains(processName))
-        {
-            return true;
-        }
-
-        return allowedProcessNames.Any(a => processName.IndexOf(a, StringComparison.OrdinalIgnoreCase) >= 0);
+        return allow.Contains(processName);
     }
 
     public void EnforceAllowlist(IReadOnlyCollection<string> allowedProcessNames)
