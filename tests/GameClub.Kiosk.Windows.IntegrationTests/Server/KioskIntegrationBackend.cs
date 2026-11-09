@@ -177,7 +177,7 @@ internal sealed class KioskIntegrationBackend
             var session = await db.Sessions.SingleAsync(s => s.Id == sessionId);
             session.StartedAtUtc = started;
             session.LastCheckpointUtc = checkpoint;
-            var segments = await db.PlaySegments.Where(s => s.SessionId == sessionId).ToListAsync();
+            var segments = await db.Segments.Where(s => s.SessionId == sessionId).ToListAsync();
             foreach (var segment in segments)
             {
                 segment.StartUtc = started;
