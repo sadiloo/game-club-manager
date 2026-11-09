@@ -186,14 +186,14 @@ internal sealed class KioskIntegrationBackend
         {
             await using var scope = _factory.Services.CreateAsyncScope();
             return await scope.ServiceProvider.GetRequiredService<AppDbContext>().WalletLedger
-                .Where(l => l.CustomerId == customerId && l.AmountToman < 0)
-                .SumAsync(l => l.AmountToman);
+                .Where(l => l.CustomerId == customerId && l.RealDeltaToman < 0)
+                .SumAsync(l => l.RealDeltaToman);
         }
 
         await using var conn = new NpgsqlConnection(ResolveConnectionString());
         await conn.OpenAsync();
         await using var cmd = new NpgsqlCommand(
-            """SELECT COALESCE(SUM("AmountToman"),0) FROM wallet_ledger WHERE "CustomerId" = @id AND "AmountToman" < 0""",
+            """SELECT COALESCE(SUM("RealDeltaToman"),0) FROM wallet_ledger WHERE "CustomerId" = @id AND "RealDeltaToman" < 0""",
             conn);
         cmd.Parameters.AddWithValue("id", customerId);
         return Convert.ToInt64(await cmd.ExecuteScalarAsync());
@@ -238,7 +238,7 @@ internal sealed class KioskIntegrationBackend
             await using var scope = _factory.Services.CreateAsyncScope();
             var device = await scope.ServiceProvider.GetRequiredService<AppDbContext>().KioskDevices.SingleAsync(d => d.Id == deviceId);
             Assert.Equal(stationId, device.StationId);
-            Assert.NotNull(device.PairedAtUtc);
+            Assert.NotEqual(default, device.PairedAtUtc);
             return;
         }
 
