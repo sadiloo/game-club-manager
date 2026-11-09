@@ -95,11 +95,8 @@ public sealed class WindowsGuardRegistryIntegrationTests : IDisposable
         }
 
         using var guard = GuardProcessStart.StartGuard();
-        RegistryPolicyStore.EnsureDefaults();
-        using (var key = OpenExplorerKey(writable: true))
-        {
-            key?.DeleteValue("DisallowRun", throwOnMissingValue: false);
-        }
+        Thread.Sleep(1500);
+        DeleteDisallowRunHive();
 
         var deadline = DateTime.UtcNow.AddSeconds(30);
         while (DateTime.UtcNow < deadline)
