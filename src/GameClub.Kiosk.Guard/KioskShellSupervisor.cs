@@ -31,9 +31,9 @@ internal sealed class KioskShellSupervisor
 
         Environment.SetEnvironmentVariable("CHECKPOINT_KIOSK_SID", _identity.Sid);
         RegistryPolicyStore.EnsureDefaults();
-        var protector = new KioskProcessTerminateProtector();
+        var protector = new GuardProcessProtection();
         var protection = new KioskShellProtectionLifecycle(protector, fault => File.AppendAllText(LogPath, $"{DateTime.UtcNow:O} {fault}{Environment.NewLine}"));
-        KioskProcessTerminateProtector.ApplyStartupProtection(protection);
+        GuardProcessProtection.ApplyStartupProtection(protection);
         while (!ct.IsCancellationRequested)
         {
             if (RegistryPolicyStore.Tampered())

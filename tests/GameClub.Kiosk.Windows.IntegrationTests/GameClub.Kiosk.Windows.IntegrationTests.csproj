@@ -23,6 +23,7 @@
   </ItemGroup>
 
   <ItemGroup Condition="'$(TargetFramework)' == 'net48'">
+    <PackageReference Include="Npgsql" Version="8.0.7" />
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3">
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
@@ -38,6 +39,10 @@
   <Target Name="CopyKioskExeForSmoke" AfterTargets="Build" Condition="'$(TargetFramework)' == 'net48'">
     <Copy
       SourceFiles="..\..\src\GameClub.Kiosk\bin\$(Configuration)\net48\GameClub.Kiosk.exe"
+      DestinationFolder="$(OutputPath)"
+      SkipUnchangedFiles="true" />
+    <Copy
+      SourceFiles="..\..\src\GameClub.Kiosk.Guard\bin\$(Configuration)\net48\GameClub.Kiosk.Guard.exe"
       DestinationFolder="$(OutputPath)"
       SkipUnchangedFiles="true" />
   </Target>

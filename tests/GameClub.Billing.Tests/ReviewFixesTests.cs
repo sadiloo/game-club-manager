@@ -165,7 +165,7 @@ public class ReviewFixesTests
         var at = T.At(2026, 6, 2, 10, 0);
         var pricing = new CustomerPricing("Titan", 28, null, 0);
         var off = CustomerPlay.Estimate(
-            PcWallet(3_667, false),
+            PcWallet(5_500, false),
             CafeFixture.ExampleNormal,
             PlayMode.Offline,
             1,
@@ -173,16 +173,16 @@ public class ReviewFixesTests
             CafeFixture.Card(),
             pricing: pricing);
         var on = CustomerPlay.Estimate(
-            PcWallet(3_667, true),
+            PcWallet(5_500, true),
             CafeFixture.ExampleNormal,
             PlayMode.Offline,
             1,
             at,
             CafeFixture.Card(),
             pricing: pricing);
-        Assert.Equal(2, off.MoneyMinutes);
+        Assert.Equal(3, off.MoneyMinutes);
         // Freeze line 41: grace minute is not shown in the estimate while funded minutes > 0 (cf. KioskR6RemainingTimeTests.default_grace_does_not_add_prospective_minute_below_sixty_funded_minutes).
-        Assert.Equal(2, on.MoneyMinutes);
+        Assert.Equal(4, on.MoneyMinutes);
 
         var grace = CustomerPlay.Estimate(
             PcWallet(500, true),

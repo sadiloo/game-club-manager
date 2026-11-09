@@ -1,23 +1,27 @@
-# PR #34 — `windows-2022 kiosk integration` honesty table
+# PR #34 — frozen cases 1–15 Windows vs Linux proof
 
 Job name: **`windows-2022 kiosk integration`** (`.github/workflows/ci.yml`).
 
-Artifacts (uploaded with `if: always()`): `kiosk-windows-integration` — `kiosk-windows-guard.trx`, `watchdog.log`, `evidence/**` (includes `screenshot-lock.png` when WPF STA render succeeds). KioskRuntime + server proofs run on **ubuntu net10** (`GameClub.Kiosk.Windows.IntegrationTests` net10.0) with the Linux postgres service on the same commit.
+Artifacts (uploaded with `if: always()`): `kiosk-windows-integration` — `kiosk-windows-server.trx`, `kiosk-windows-guard.trx`, `watchdog.log`, `evidence/**` (includes `screenshot-lock.png` when WPF STA render succeeds). The job log also prints trx summaries, `watchdog.log`, evidence files, and screenshot metadata (`print kiosk integration evidence`).
 
-| Case | Proved on runner | NOT PROVED (reason) |
-|------|------------------|---------------------|
-| 1 | net48 build; SignalR transport via `KioskRuntime` against in-process `MutableClock` server host | Win 7 SP1 / 8.1 / Home matrix; SSE-only on 7 |
-| 2 | Partial: WPF smoke (process start or STA screenshot when session allows) | Full gpedit / Home policy matrix across editions |
-| 3 | F6 five failures + operator credential reset + funded login (server integration test) | Full dual-PC WPF race |
-| 4 | Guest session paths not exercised in this job | Full guest prepaid UI |
-| 5 | Heartbeat transport connect on paired device | Next-day retention UI |
-| 6 | Server-backed estimate bands remain on Linux CI | Wall-clock skew warning on Windows UI |
-| 7 | Dead PC 600 s (10 min) auto-close via `MutableClock` + internal sweep | Full shift attribution on Windows shell |
-| 8 | Category catalog FK covered on Linux; SQLite merge in Core tests | USB / file-dialog escape on WPF |
-| 9 | Allowlist exact-match rules in Core tests (Linux) | Steam/Epic/D: chains on runner |
-| 10 | G1 (a–e) registry tamper/repair on real `Registry.Users` hive; `guard.policy_tamper` in `watchdog.log`; G2 DACL read-back after `SetKernelObjectSecurity` | Non-admin terminate unless `CHECKPOINT_SECOND_USER` set; Ctrl+Alt+Del |
-| 11 | 5 s heartbeat loop in `KioskRuntime` against live hub | Full kill/restart durability matrix |
-| 12 | Disconnect = dispose hub + reconnect test | Powered-offline lock UX on WPF |
-| 13 | Dead PC sweep at T+10 min checkpoint gap (case 13 server rule) | Physical power-off |
-| 14 | Logout/hold not driven from WPF in this job | Full PWA hold/cancel |
-| 15 | Station target lock on Linux server tests | Dual-PC WPF hop |
+Live server: PostgreSQL 16 on the runner, out-of-process `GameClub.Server` (`CHECKPOINT_SERVER_URL`). KioskRuntime proofs use **real** SignalR on Windows (no `testHubHandler` when the live URL is set). The 600 s dead-PC case backdates `sessions.LastCheckpointUtc` in the test database, then calls the existing `POST /api/internal/dead-pc-sweep` (no production clock switch).
+
+| Case | Windows proof (test name + job) | Linux proof | NOT PROVED |
+|------|----------------------------------|-------------|------------|
+| 1 | net48/net10 build; `live_server_net48_transport_heartbeat_rows` / server live tests on `windows-2022 kiosk integration` | Core + net10 factory integration | Win 7 SP1 / 8.1 / Home matrix; SSE on 7 |
+| 2 | `wpf_lock_screen_and_remaining_time_visible` | — | Full test/final/recovery matrix |
+| 3 | `live_server_pair_f6_lock_and_heartbeat_rows` | `KioskFixR1` F6 server tests | Dual-PC WPF race |
+| 4 | — | Server guest tests | Guest paths on WPF/Win |
+| 5 | WPF lock/status + display fields in smoke | Billing/server estimate tests | Multi-day retention UI |
+| 6 | — | Band/discount server tests | Wall-clock skew on WPF |
+| 7 | Grace/burnt on Billing CI (unchanged) | Same | Full shift on shell |
+| 8 | `catalog_put_unknown_category_returns_400` + operator catalog on server CI | SQLite merge Core tests | USB/file-dialog on WPF |
+| 9 | `allowlist_blocks_cmd_allows_configured_game_process` | Core allowlist unit tests | Steam/Epic chains on runner |
+| 10 | G1 registry + `g1_tamper_triggers_guard_policy_tamper_log_line` + `g2_acl_on_guard_and_supervised_shell_after_launch` + watchdog + `g2_non_admin_terminate_attempt_reports_honestly` | Core G1/G2 seam | Ctrl+Alt+Del; reboot; Win7 Home gpedit; full kiosk-user session if runner lacks interactive logon |
+| 11 | `live_server_*` heartbeat + disconnect/reconnect | net10 factory on ubuntu | Full kill matrix |
+| 12 | disconnect + dead-PC sweep with DB backdate | ubuntu factory | Powered-offline WPF UX |
+| 13 | `live_server_dead_pc_sweep_after_checkpoint_gap` | `PoClarification` acceptance | Physical power-off |
+| 14 | `session_end_clears_launcher_cache_paths` | — | PWA hold/cancel |
+| 15 | — | SS-4 server tests | Dual-PC hop on WPF |
+
+Shell launch/watchdog tests use the **runner logged-on session** when `CheckpointKiosk` has no interactive session; see case 10 NOT PROVED notes.

@@ -9,41 +9,99 @@ if ([string]::IsNullOrWhiteSpace($env:GITHUB_WORKSPACE)) {
 New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
 
 if (-not $env:GAMECLUB_TEST_DATABASE) {
-    $env:GAMECLUB_TEST_DATABASE = "Host=localhost;Port=5432;Database=gameclub_test;Username=postgres;Password=postgres"
+    $env:GAMECLUB_TEST_DATABASE = "Host=localhost;Port=5432;Database=gameclub_test;Username=postgres;Password=postgres;SSL Mode=Disable"
     $env:GAMECLUB_DATABASE = $env:GAMECLUB_TEST_DATABASE
     $env:GAMECLUB_API_KEY = "ci-test-key"
 }
 
-$kioskUser = $env:CHECKPOINT_KIOSK_USER
-if ([string]::IsNullOrWhiteSpace($kioskUser)) { $kioskUser = "CheckpointKiosk" }
-$sid = $env:CHECKPOINT_KIOSK_SID
-if ([string]::IsNullOrWhiteSpace($sid)) {
-    try {
-        $sid = (New-Object System.Security.Principal.NTAccount($env:USERNAME)).Translate([System.Security.Principal.SecurityIdentifier]).Value
-    } catch {
-        $sid = (New-Object System.Security.Principal.NTAccount($kioskUser)).Translate([System.Security.Principal.SecurityIdentifier]).Value
-    }
+if (-not $env:CHECKPOINT_SERVER_URL) {
+    $env:CHECKPOINT_SERVER_URL = "http://127.0.0.1:5225"
 }
-$env:CHECKPOINT_KIOSK_SID = $sid
+if (-not $env:OperatorSessionSecret) {
+    $env:OperatorSessionSecret = "ci-operator-secret-r11"
+}
+if (-not $env:ASPNETCORE_URLS) {
+    $env:ASPNETCORE_URLS = $env:CHECKPOINT_SERVER_URL
+}
+$env:ASPNETCORE_ENVIRONMENT = "Production"
+
+$kioskUser = "CheckpointKiosk"
+$guestUser = "CheckpointGuest"
+$guestPassword = [Guid]::NewGuid().ToString("N")
+$kioskPassword = [Guid]::NewGuid().ToString("N")
+
+function Ensure-LocalUser([string]$name, [string]$password) {
+    $existing = Get-LocalUser -Name $name -ErrorAction SilentlyContinue
+    if ($existing) {
+        Set-LocalUser -Name $name -Password (ConvertTo-SecureString $password -AsPlainText -Force)
+        return
+    }
+    New-LocalUser -Name $name -Password (ConvertTo-SecureString $password -AsPlainText -Force) -UserMayNotChangePassword -PasswordNeverExpires | Out-Null
+    Add-LocalGroupMember -Group "Users" -Member $name -ErrorAction SilentlyContinue
+}
+
+try {
+    Ensure-LocalUser -name $kioskUser -password $kioskPassword
+    Ensure-LocalUser -name $guestUser -password $guestPassword
+} catch {
+    Write-Warning "Local user provisioning failed: $_"
+}
+
+try {
+    $kioskSid = (New-Object System.Security.Principal.NTAccount($kioskUser)).Translate([System.Security.Principal.SecurityIdentifier]).Value
+} catch {
+    $kioskSid = (New-Object System.Security.Principal.NTAccount($env:USERNAME)).Translate([System.Security.Principal.SecurityIdentifier]).Value
+}
+$env:CHECKPOINT_KIOSK_SID = $kioskSid
 $env:CHECKPOINT_KIOSK_USER = $kioskUser
+$env:CHECKPOINT_SECOND_USER = $guestUser
+$env:CHECKPOINT_SECOND_PASSWORD = $guestPassword
 
 Write-Host "Building Release (-warnaserror)..."
 dotnet build GameClub.slnx -c Release -warnaserror --nologo
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-$logDir = Join-Path $artifactDir "kiosk-windows-logs"
-New-Item -ItemType Directory -Force -Path $logDir | Out-Null
-
-# Server + KioskRuntime hub tests (net10) run on ubuntu net10 with the Linux postgres service.
-# This job executes real Windows-only guard registry/ACL and WPF smoke (net48).
-Write-Host "Running windows guard/wpf integration (net48)..."
 dotnet build src/GameClub.Kiosk/GameClub.Kiosk.csproj -c Release -f net48 --nologo
+dotnet build src/GameClub.Kiosk.Guard/GameClub.Kiosk.Guard.csproj -c Release -f net48 --nologo
+dotnet build src/GameClub.Server/GameClub.Server.csproj -c Release --nologo
 dotnet build tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj -c Release -f net48 --nologo
+dotnet build tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj -c Release -f net10.0 --nologo
+
+$serverDll = Join-Path $repoRoot "src/GameClub.Server/bin/Release/net10.0/GameClub.Server.dll"
+$serverLog = Join-Path $artifactDir "kiosk-windows-logs/server-out.log"
+New-Item -ItemType Directory -Force -Path (Split-Path $serverLog) | Out-Null
+$serverProc = Start-Process -FilePath "dotnet" -ArgumentList @("exec", $serverDll) -PassThru -NoNewWindow -RedirectStandardOutput $serverLog -RedirectStandardError $serverLog -WorkingDirectory $repoRoot
+$env:GAMECLUB_SERVER_PID = $serverProc.Id
+
+$ready = $false
+for ($i = 0; $i -lt 60; $i++) {
+    try {
+        $r = Invoke-WebRequest -Uri "$($env:CHECKPOINT_SERVER_URL)/api/stations" -Headers @{ "X-Api-Key" = $env:GAMECLUB_API_KEY } -UseBasicParsing -TimeoutSec 3
+        if ($r.StatusCode -eq 200) { $ready = $true; break }
+    } catch {
+        Start-Sleep -Seconds 2
+    }
+}
+if (-not $ready) {
+    Stop-Process -Id $serverProc.Id -Force -ErrorAction SilentlyContinue
+    throw "GameClub.Server did not become ready on $($env:CHECKPOINT_SERVER_URL)"
+}
+
+Write-Host "Running windows server integration (net10.0, live server)..."
+dotnet test tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj `
+    -c Release -f net10.0 --no-build --nologo `
+    --logger "trx;LogFileName=kiosk-windows-server.trx" `
+    --results-directory $artifactDir
+$serverTestExit = $LASTEXITCODE
+
+Write-Host "Running windows guard/wpf integration (net48, live server env)..."
 dotnet test tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj `
     -c Release -f net48 --no-build --nologo `
     --logger "trx;LogFileName=kiosk-windows-guard.trx" `
     --results-directory $artifactDir
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+$guardTestExit = $LASTEXITCODE
+
+try { Stop-Process -Id $serverProc.Id -Force -ErrorAction SilentlyContinue } catch { }
 
 $watchdog = Join-Path $env:ProgramData "Checkpoint\guard\watchdog.log"
 if (Test-Path $watchdog) {
@@ -54,5 +112,8 @@ $evidence = Join-Path $env:ProgramData "Checkpoint\evidence"
 if (Test-Path $evidence) {
     Copy-Item $evidence (Join-Path $artifactDir "evidence") -Recurse -Force
 }
+
+if ($serverTestExit -ne 0) { exit $serverTestExit }
+if ($guardTestExit -ne 0) { exit $guardTestExit }
 
 Write-Host "ci-integration.ps1 completed."

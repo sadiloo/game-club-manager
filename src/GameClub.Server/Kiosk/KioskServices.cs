@@ -1023,6 +1023,14 @@ public sealed class GameCatalogService(AppDbContext db, AuditService audit)
         row.Name = name;
         if (categoryId is int cat)
         {
+            if (!await db.GameCatalogCategories.AnyAsync(c => c.Id == cat, ct))
+            {
+                throw new ApiException(
+                    StatusCodes.Status400BadRequest,
+                    "invalid_category",
+                    $"Game catalog category {cat} does not exist.");
+            }
+
             row.CategoryId = cat;
         }
 

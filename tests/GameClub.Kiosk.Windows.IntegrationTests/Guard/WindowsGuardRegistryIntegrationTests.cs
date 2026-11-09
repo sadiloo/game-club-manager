@@ -1,7 +1,9 @@
 #if NET48
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using GameClub.Kiosk.Core.Security;
 using GameClub.Kiosk.Guard;
 using Microsoft.Win32;
@@ -66,7 +68,7 @@ public sealed class WindowsGuardRegistryIntegrationTests : IDisposable
         {
             if (key is null)
             {
-                return;
+                Assert.Fail("DisallowRun hive key is not available on this runner.");
             }
 
             foreach (var name in key.GetValueNames())
@@ -84,19 +86,57 @@ public sealed class WindowsGuardRegistryIntegrationTests : IDisposable
     }
 
     [Fact]
-    public void g1_tamper_repair_writes_policy_tamper_to_watchdog_log()
+    public void g1_tamper_triggers_guard_policy_tamper_log_line()
     {
+        if (File.Exists(_watchdogLog))
+        {
+            File.Delete(_watchdogLog);
+        }
+
+        var guardExe = ResolveGuardExePath();
+        var psi = new ProcessStartInfo(guardExe)
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            WorkingDirectory = Path.GetDirectoryName(guardExe),
+        };
+        using var guard = Process.Start(psi);
+        Assert.NotNull(guard);
         RegistryPolicyStore.EnsureDefaults();
         using (var key = OpenExplorerKey(writable: true))
         {
             key?.DeleteValue("DisallowRun", throwOnMissingValue: false);
         }
 
-        Assert.True(RegistryPolicyStore.Tampered());
-        RegistryPolicyStore.Repair();
-        File.AppendAllText(_watchdogLog, $"{DateTime.UtcNow:O} guard.policy_tamper{Environment.NewLine}");
-        var log = File.ReadAllText(_watchdogLog);
-        Assert.Contains("guard.policy_tamper", log, StringComparison.Ordinal);
+        var deadline = DateTime.UtcNow.AddSeconds(30);
+        while (DateTime.UtcNow < deadline)
+        {
+            if (File.Exists(_watchdogLog))
+            {
+                var log = File.ReadAllText(_watchdogLog);
+                if (log.Contains("guard.policy_tamper", StringComparison.Ordinal))
+                {
+                    guard!.Kill(entireProcessTree: true);
+                    return;
+                }
+            }
+
+            Thread.Sleep(500);
+        }
+
+        guard!.Kill(entireProcessTree: true);
+        Assert.Fail("Guard did not write guard.policy_tamper to watchdog.log after registry tamper.");
+    }
+
+    private static string ResolveGuardExePath()
+    {
+        var probe = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "GameClub.Kiosk.Guard.exe");
+        if (!File.Exists(probe))
+        {
+            throw new InvalidOperationException("GameClub.Kiosk.Guard.exe not found beside test output.");
+        }
+
+        return probe;
     }
 
     private string ResolveKioskSid()

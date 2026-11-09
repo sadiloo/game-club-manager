@@ -134,6 +134,34 @@ public sealed class KioskFixR6AcceptanceTests(GameClubWebApplicationFactory fact
         Assert.Equal(2, row.GetProperty("categoryId").GetInt32());
     }
 
+    [Fact]
+    public async Task catalog_put_unknown_category_returns_400()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var mgr = await factory.CreateOperatorClientAsync("manager", "1234");
+        var created = await mgr.PostAsJsonAsync("/api/operator/games", new
+        {
+            name = "CatUnknown",
+            categoryId = 1,
+            executableOrUri = "cat.exe",
+        });
+        created.EnsureSuccessStatusCode();
+        var gameId = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetInt32();
+        var put = await mgr.PutAsJsonAsync($"/api/operator/games/{gameId}", new
+        {
+            name = "CatUnknown",
+            categoryId = 99,
+            enabled = true,
+            executableOrUri = "cat.exe",
+        });
+        Assert.Equal(System.Net.HttpStatusCode.BadRequest, put.StatusCode);
+        var body = await put.Content.ReadAsStringAsync();
+        Assert.Contains("invalid_category", body, StringComparison.OrdinalIgnoreCase);
+        var listed = await mgr.GetFromJsonAsync<JsonElement>("/api/operator/games");
+        var row = listed.GetProperty("entries").EnumerateArray().First(e => e.GetProperty("id").GetInt32() == gameId);
+        Assert.Equal(1, row.GetProperty("categoryId").GetInt32());
+    }
+
     private async Task<Guid> SeedGraceWalletSessionAsync(long hourly)
     {
         await S3TestHelpers.ResetAsync(factory);
