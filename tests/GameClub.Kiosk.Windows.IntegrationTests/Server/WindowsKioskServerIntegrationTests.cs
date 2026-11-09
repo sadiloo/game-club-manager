@@ -65,10 +65,6 @@ public sealed class WindowsKioskServerIntegrationTests
         await runtime.StartAsync(default);
         Assert.True(runtime.IsTransportConnected);
         await runtime.DisposeAsync();
-        if (File.Exists(queuePath))
-        {
-            File.Delete(queuePath);
-        }
     }
 
     [Fact]
