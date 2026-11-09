@@ -93,23 +93,7 @@ public sealed class WindowsGuardRegistryIntegrationTests : IDisposable
             File.Delete(_watchdogLog);
         }
 
-        var guardExe = ResolveGuardExePath();
-        var psi = new ProcessStartInfo(guardExe)
-        {
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            WorkingDirectory = Path.GetDirectoryName(guardExe),
-        };
-        var sid = Environment.GetEnvironmentVariable("CHECKPOINT_KIOSK_SID");
-        if (!string.IsNullOrWhiteSpace(sid))
-        {
-            psi.EnvironmentVariables["CHECKPOINT_KIOSK_SID"] = sid;
-        }
-
-        psi.EnvironmentVariables["CHECKPOINT_KIOSK_USER"] =
-            Environment.GetEnvironmentVariable("CHECKPOINT_KIOSK_USER") ?? Environment.UserName;
-        using var guard = Process.Start(psi);
-        Assert.NotNull(guard);
+        using var guard = GuardProcessStart.StartGuard();
         RegistryPolicyStore.EnsureDefaults();
         using (var key = OpenExplorerKey(writable: true))
         {

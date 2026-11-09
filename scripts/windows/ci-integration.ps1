@@ -78,7 +78,12 @@ $kioskSid = (New-Object System.Security.Principal.NTAccount($kioskAccountName)).
 Ensure-KioskRegistryHiveLoaded -accountName $kioskAccountName -sid $kioskSid
 $env:CHECKPOINT_KIOSK_SID = $kioskSid
 # Runner session launches Guard/shell; DACL deny + non-admin terminate proofs use CheckpointKiosk SID above.
-$env:CHECKPOINT_KIOSK_USER = $env:USERNAME
+$loggedOnUser = (Get-CimInstance -ClassName Win32_ComputerSystem -ErrorAction SilentlyContinue).UserName
+if (-not [string]::IsNullOrWhiteSpace($loggedOnUser)) {
+    $env:CHECKPOINT_KIOSK_USER = $loggedOnUser.Split('\')[-1]
+} else {
+    $env:CHECKPOINT_KIOSK_USER = $env:USERNAME
+}
 $env:CHECKPOINT_SECOND_USER = $guestUser
 $env:CHECKPOINT_SECOND_PASSWORD = $guestPassword
 

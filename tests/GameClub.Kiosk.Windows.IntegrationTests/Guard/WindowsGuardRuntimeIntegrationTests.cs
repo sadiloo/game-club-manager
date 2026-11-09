@@ -66,7 +66,7 @@ public sealed class WindowsGuardRuntimeIntegrationTests
             File.Delete(logPath);
         }
 
-        using var guard = StartGuard(kioskExe, sid);
+        using var guard = GuardProcessStart.StartGuard(kioskExe);
         Process shell = null;
         var deadline = DateTime.UtcNow.AddSeconds(45);
         while (DateTime.UtcNow < deadline && shell == null)
@@ -113,7 +113,7 @@ public sealed class WindowsGuardRuntimeIntegrationTests
         var sid = Environment.GetEnvironmentVariable("CHECKPOINT_KIOSK_SID") ?? ResolveSid();
         var kioskExe = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "GameClub.Kiosk.exe");
         Assert.True(File.Exists(kioskExe));
-        using var guard = StartGuard(kioskExe, sid);
+        using var guard = GuardProcessStart.StartGuard(kioskExe);
         Thread.Sleep(3000);
         Assert.True(TryReadDenyTerminateAce(guard.Handle, new SecurityIdentifier(sid), out var guardAce));
         Assert.True(guardAce);
@@ -128,23 +128,6 @@ public sealed class WindowsGuardRuntimeIntegrationTests
         Assert.True(shellAce);
         shell.Kill();
         guard.Kill();
-    }
-
-    private static Process StartGuard(string kioskExe, string sid)
-    {
-        var guardExe = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "GameClub.Kiosk.Guard.exe");
-        var psi = new ProcessStartInfo(guardExe)
-        {
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            WorkingDirectory = Path.GetDirectoryName(guardExe),
-        };
-        psi.EnvironmentVariables["CHECKPOINT_KIOSK_SID"] = sid;
-        psi.EnvironmentVariables["CHECKPOINT_KIOSK_USER"] = Environment.GetEnvironmentVariable("CHECKPOINT_KIOSK_USER") ?? Environment.UserName;
-        psi.EnvironmentVariables["CHECKPOINT_KIOSK_EXE"] = kioskExe;
-        var guard = Process.Start(psi);
-        Assert.NotNull(guard);
-        return guard;
     }
 
     private static bool TryReadDenyTerminateAce(IntPtr handle, SecurityIdentifier sid, out bool found)

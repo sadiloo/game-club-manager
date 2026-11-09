@@ -31,17 +31,7 @@ public sealed class WindowsGuardAclIntegrationTests
     {
         var sid = ResolveSid();
         Environment.SetEnvironmentVariable("CHECKPOINT_KIOSK_SID", sid);
-        var guardExe = ResolveGuardExePath();
-        var psi = new ProcessStartInfo(guardExe)
-        {
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            WorkingDirectory = Path.GetDirectoryName(guardExe),
-        };
-        psi.EnvironmentVariables["CHECKPOINT_KIOSK_SID"] = sid;
-        psi.EnvironmentVariables["CHECKPOINT_KIOSK_USER"] = Environment.GetEnvironmentVariable("CHECKPOINT_KIOSK_USER") ?? Environment.UserName;
-        using var guard = Process.Start(psi);
-        Assert.NotNull(guard);
+        using var guard = GuardProcessStart.StartGuard();
         Thread.Sleep(2000);
         Assert.True(TryReadDenyTerminateAce(guard!.Handle, new SecurityIdentifier(sid), out var found));
         Assert.True(found);
