@@ -37,6 +37,8 @@ New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 # Server + KioskRuntime hub tests (net10) run on ubuntu net10 with the Linux postgres service.
 # This job executes real Windows-only guard registry/ACL and WPF smoke (net48).
 Write-Host "Running windows guard/wpf integration (net48)..."
+dotnet build src/GameClub.Kiosk/GameClub.Kiosk.csproj -c Release -f net48 --nologo
+dotnet build tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj -c Release -f net48 --nologo
 dotnet test tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj `
     -c Release -f net48 --no-build --nologo `
     --logger "trx;LogFileName=kiosk-windows-guard.trx" `
