@@ -1,6 +1,7 @@
 #if NET10_0_OR_GREATER
 using System.Net;
 using System.Net.Http.Json;
+using System.Text.Json;
 using GameClub.Kiosk.Core.Runtime;
 using GameClub.Server.Tests;
 
@@ -43,6 +44,7 @@ public sealed class WindowsKioskServerIntegrationTests
         await op.PutAsJsonAsync($"/api/operator/customers/{customerId}/credential", new { loginName = "winkiosk", password = "good-pass" });
         var good = await kioskHttp.PostAsJsonAsync("/api/kiosk/auth/login", new { loginName = "winkiosk", password = "good-pass", stationId = "PC-WIN" });
         good.EnsureSuccessStatusCode();
+        var sessionId = (await good.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("sessionId").GetGuid();
 
         var heartbeatBefore = await _backend.CountHeartbeatsAsync();
         var lastSeenBefore = await _backend.DeviceLastSeenUtcAsync(deviceId);
@@ -57,6 +59,7 @@ public sealed class WindowsKioskServerIntegrationTests
             queuePath,
             legacyWindows: true,
             testHubHandler: _backend.TestHubHandler);
+        runtime.BindSession(sessionId);
         await runtime.StartAsync(default);
         await WaitForHeartbeatAdvanceAsync(deviceId, heartbeatBefore, lastSeenBefore);
         await runtime.DisposeAsync();
@@ -152,7 +155,17 @@ public sealed class WindowsKioskServerIntegrationTests
             await Task.Delay(TimeSpan.FromSeconds(6));
             var count = await _backend.CountHeartbeatsAsync();
             var lastSeen = await _backend.DeviceLastSeenUtcAsync(deviceId);
-            if (count >= heartbeatBefore + 3 && lastSeen > lastSeenBefore)
+            if (count < heartbeatBefore + 3)
+            {
+                continue;
+            }
+
+            if (lastSeenBefore is null || !lastSeen.HasValue)
+            {
+                return;
+            }
+
+            if (lastSeen > lastSeenBefore)
             {
                 return;
             }

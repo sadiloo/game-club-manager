@@ -70,6 +70,7 @@ dotnet build tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Window
 dotnet build tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj -c Release -f net10.0 --nologo
 
 $serverDll = Join-Path $repoRoot "src/GameClub.Server/bin/Release/net10.0/GameClub.Server.dll"
+if (-not (Test-Path $serverDll)) { throw "GameClub.Server.dll not found at $serverDll" }
 $serverLog = Join-Path $artifactDir "kiosk-windows-logs/server-out.log"
 New-Item -ItemType Directory -Force -Path (Split-Path $serverLog) | Out-Null
 $serverErr = Join-Path (Split-Path $serverLog) "server-err.log"
