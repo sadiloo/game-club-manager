@@ -50,20 +50,6 @@ jobs:
   windows-kiosk-integration:
     name: windows-2022 kiosk integration
     runs-on: windows-2022
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: gameclub_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
     env:
       GAMECLUB_DATABASE: Host=localhost;Port=5432;Database=gameclub_test;Username=postgres;Password=postgres
       GAMECLUB_TEST_DATABASE: Host=localhost;Port=5432;Database=gameclub_test;Username=postgres;Password=postgres
@@ -73,9 +59,25 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.403
+      - name: start postgres (docker)
+        shell: pwsh
+        run: |
+          docker rm -f gameclub-ci-pg 2>$null
+          docker run -d --name gameclub-ci-pg -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=gameclub_test -p 5432:5432 postgres:16
+          $deadline = (Get-Date).AddMinutes(2)
+          while ((Get-Date) -lt $deadline) {
+            docker exec gameclub-ci-pg pg_isready -U postgres 2>$null
+            if ($LASTEXITCODE -eq 0) { break }
+            Start-Sleep -Seconds 2
+          }
+          if ($LASTEXITCODE -ne 0) { throw "postgres not ready" }
       - name: windows kiosk integration
         shell: pwsh
         run: ./scripts/windows/ci-integration.ps1
+      - name: stop postgres
+        if: always()
+        shell: pwsh
+        run: docker rm -f gameclub-ci-pg
       - name: upload kiosk integration artifacts
         if: always()
         uses: actions/upload-artifact@v4
