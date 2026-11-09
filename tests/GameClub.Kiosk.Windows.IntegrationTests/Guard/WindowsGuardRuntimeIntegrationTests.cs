@@ -31,13 +31,13 @@ public sealed class WindowsGuardRuntimeIntegrationTests
         Directory.CreateDirectory(downloads);
         var seed = Path.Combine(downloads, "checkpoint-r11-" + Guid.NewGuid().ToString("N") + ".tmp");
         File.WriteAllText(seed, "x");
-        var method = typeof(GameClub.Kiosk.Services.KioskHostService).GetMethod(
-            "ClearKioskProfileScratch",
+        var deleteTree = typeof(GameClub.Kiosk.Services.KioskHostService).GetMethod(
+            "DeleteTreeContents",
             BindingFlags.NonPublic | BindingFlags.Static);
-        Assert.NotNull(method);
+        Assert.NotNull(deleteTree);
         try
         {
-            method!.Invoke(null, null);
+            deleteTree!.Invoke(null, new object[] { downloads });
             Assert.False(File.Exists(seed));
         }
         finally

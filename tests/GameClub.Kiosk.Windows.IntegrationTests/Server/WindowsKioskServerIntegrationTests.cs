@@ -97,7 +97,7 @@ public sealed class WindowsKioskServerIntegrationTests
         else
         {
             await api.PostAsJsonAsync($"/api/sessions/{sessionId}/checkpoints", new { at = DateTime.UtcNow });
-            await _backend.BackdateSessionCheckpointAsync(sessionId, TimeSpan.FromMinutes(11));
+            await _backend.BackdateOpenSessionForDeadPcSweepAsync(sessionId);
         }
 
         var sweep = await api.PostAsync("/api/internal/dead-pc-sweep", null);

@@ -100,6 +100,14 @@ public sealed class WindowsGuardRegistryIntegrationTests : IDisposable
             CreateNoWindow = true,
             WorkingDirectory = Path.GetDirectoryName(guardExe),
         };
+        var sid = Environment.GetEnvironmentVariable("CHECKPOINT_KIOSK_SID");
+        if (!string.IsNullOrWhiteSpace(sid))
+        {
+            psi.EnvironmentVariables["CHECKPOINT_KIOSK_SID"] = sid;
+        }
+
+        psi.EnvironmentVariables["CHECKPOINT_KIOSK_USER"] =
+            Environment.GetEnvironmentVariable("CHECKPOINT_KIOSK_USER") ?? Environment.UserName;
         using var guard = Process.Start(psi);
         Assert.NotNull(guard);
         RegistryPolicyStore.EnsureDefaults();

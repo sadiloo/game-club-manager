@@ -25,10 +25,10 @@ if (-not $env:ASPNETCORE_URLS) {
 }
 $env:ASPNETCORE_ENVIRONMENT = "Production"
 
-$kioskUser = "CheckpointKiosk"
+$kioskUser = $env:USERNAME
 $guestUser = "CheckpointGuest"
-$guestPassword = [Guid]::NewGuid().ToString("N")
-$kioskPassword = [Guid]::NewGuid().ToString("N")
+$guestPassword = "CkPt!" + ([Guid]::NewGuid().ToString("N").Substring(0, 16))
+$kioskPassword = "CkPt!" + ([Guid]::NewGuid().ToString("N").Substring(0, 16))
 
 function Ensure-LocalUser([string]$name, [string]$password) {
     $existing = Get-LocalUser -Name $name -ErrorAction SilentlyContinue
@@ -41,17 +41,18 @@ function Ensure-LocalUser([string]$name, [string]$password) {
 }
 
 try {
-    Ensure-LocalUser -name $kioskUser -password $kioskPassword
+    if ($kioskUser -ne $env:USERNAME) {
+        Ensure-LocalUser -name $kioskUser -password $kioskPassword
+    }
     Ensure-LocalUser -name $guestUser -password $guestPassword
+    $guestProbe = Get-LocalUser -Name $guestUser -ErrorAction Stop
+    if ($guestProbe.Enabled -eq $false) { Enable-LocalUser -Name $guestUser }
 } catch {
-    Write-Warning "Local user provisioning failed: $_"
+    Write-Error "Local user provisioning failed: $_"
+    exit 1
 }
 
-try {
-    $kioskSid = (New-Object System.Security.Principal.NTAccount($kioskUser)).Translate([System.Security.Principal.SecurityIdentifier]).Value
-} catch {
-    $kioskSid = (New-Object System.Security.Principal.NTAccount($env:USERNAME)).Translate([System.Security.Principal.SecurityIdentifier]).Value
-}
+$kioskSid = (New-Object System.Security.Principal.NTAccount($kioskUser)).Translate([System.Security.Principal.SecurityIdentifier]).Value
 $env:CHECKPOINT_KIOSK_SID = $kioskSid
 $env:CHECKPOINT_KIOSK_USER = $kioskUser
 $env:CHECKPOINT_SECOND_USER = $guestUser

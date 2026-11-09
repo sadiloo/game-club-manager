@@ -1,4 +1,5 @@
 #if NET10_0_OR_GREATER
+using System;
 using System.Net.Http.Json;
 using System.Text.Json;
 using GameClub.Billing;
@@ -134,7 +135,12 @@ internal sealed class KioskIntegrationBackend
             conn);
         cmd.Parameters.AddWithValue("id", deviceId);
         var result = await cmd.ExecuteScalarAsync();
-        return result is DateTime dt ? dt : result is null ? null : (DateTime?)Convert.ToDateTime(result);
+        if (result is null or DBNull)
+        {
+            return null;
+        }
+
+        return result is DateTime dt ? dt : Convert.ToDateTime(result);
     }
 
     public async Task BackdateSessionCheckpointAsync(Guid sessionId, TimeSpan ago)
@@ -160,6 +166,36 @@ internal sealed class KioskIntegrationBackend
         await cmd.ExecuteNonQueryAsync();
     }
 
+  public async Task BackdateOpenSessionForDeadPcSweepAsync(Guid sessionId)
+    {
+        var started = DateTime.UtcNow.AddMinutes(-70);
+        var checkpoint = DateTime.UtcNow.AddMinutes(-11);
+        if (_factory is not null)
+        {
+            await using var scope = _factory.Services.CreateAsyncScope();
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var session = await db.Sessions.SingleAsync(s => s.Id == sessionId);
+            session.StartedAtUtc = started;
+            session.LastCheckpointUtc = checkpoint;
+            await db.SaveChangesAsync();
+            return;
+        }
+
+        await using var conn = new NpgsqlConnection(ResolveConnectionString());
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            """
+            UPDATE sessions
+            SET "StartedAtUtc" = @started, "LastCheckpointUtc" = @checkpoint
+            WHERE "Id" = @id
+            """,
+            conn);
+        cmd.Parameters.AddWithValue("started", started);
+        cmd.Parameters.AddWithValue("checkpoint", checkpoint);
+        cmd.Parameters.AddWithValue("id", sessionId);
+        await cmd.ExecuteNonQueryAsync();
+    }
+
     public async Task<Guid> OpenSessionIdAsync()
     {
         if (_factory is not null)
@@ -174,9 +210,8 @@ internal sealed class KioskIntegrationBackend
         await using var conn = new NpgsqlConnection(ResolveConnectionString());
         await conn.OpenAsync();
         await using var cmd = new NpgsqlCommand(
-            """SELECT "Id" FROM sessions WHERE "Status" = @open LIMIT 1""",
+            """SELECT "Id" FROM sessions WHERE "Status" = 'Open' LIMIT 1""",
             conn);
-        cmd.Parameters.AddWithValue("open", (int)SessionStatus.Open);
         return (Guid)(await cmd.ExecuteScalarAsync() ?? throw new InvalidOperationException("No open session."));
     }
 
