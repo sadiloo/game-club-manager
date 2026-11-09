@@ -725,6 +725,10 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
         await page.ClickAsync(".tile[data-station-id='PS5-CU15C']");
         await page.WaitForSelectorAsync("#sessionActions:not(.hidden)");
         await page.WaitForFunctionAsync("() => document.getElementById('buffetPanel').classList.contains('hidden')");
+        await page.WaitForFunctionAsync(
+            "() => (document.getElementById('customerChip')?.textContent ?? '').includes('station-y3')",
+            null,
+            new() { Timeout = 10_000 });
         var chip = await page.TextContentAsync("#customerChip");
         Assert.Contains("station-y3", chip!);
 

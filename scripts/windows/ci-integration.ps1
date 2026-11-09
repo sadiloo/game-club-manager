@@ -49,6 +49,9 @@ function Ensure-KioskRegistryHiveLoaded([string]$accountName, [string]$sid) {
     if (-not (Test-Path $ntuser)) {
         $defaultHive = Join-Path $env:SystemDrive "Users\Default\NTUSER.DAT"
         if (-not (Test-Path $defaultHive)) {
+            $defaultHive = Join-Path $env:windir "System32\config\Default"
+        }
+        if (-not (Test-Path $defaultHive)) {
             throw "Default user hive missing; cannot load $accountName policy hive."
         }
         Copy-Item -Path $defaultHive -Destination $ntuser -Force
