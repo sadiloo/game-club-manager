@@ -118,7 +118,6 @@ public sealed class WindowsKioskServerIntegrationTests
         await runtime2.StartAsync(default);
         Assert.True(runtime2.IsTransportConnected);
         await runtime2.DisposeAsync();
-        File.Delete(queuePath);
     }
 
     private async Task<Guid> FindCustomerIdAsync()

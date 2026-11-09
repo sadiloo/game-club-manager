@@ -87,7 +87,7 @@ public sealed class WindowsKioskWpfSmokeTests
         var candidates = new[]
         {
             Path.Combine(startDir, "GameClub.Kiosk.exe"),
-            Path.GetFullPath(Path.Combine(startDir, "..", "..", "..", "..", "src", "GameClub.Kiosk", "bin", "Release", "net48", "GameClub.Kiosk.exe")),
+            Path.GetFullPath(Path.Combine(startDir, "..", "..", "..", "..", "..", "src", "GameClub.Kiosk", "bin", "Release", "net48", "GameClub.Kiosk.exe")),
         };
         foreach (var path in candidates)
         {
