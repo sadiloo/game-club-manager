@@ -105,6 +105,19 @@ internal static class S3TestHelpers
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         await db.Database.ExecuteSqlRawAsync(TruncateSql);
         await DatabaseSeed.EnsureAsync(db);
+        await EnsureCatalogCategoryTwoForTestsAsync(db);
+    }
+
+    /// <summary>Test fixture only — category id 2 for operator catalog PUT (freeze PC-5 / case 8).</summary>
+    private static async Task EnsureCatalogCategoryTwoForTestsAsync(AppDbContext db)
+    {
+        if (await db.GameCatalogCategories.AnyAsync(c => c.Id == 2))
+        {
+            return;
+        }
+
+        db.GameCatalogCategories.Add(new GameCatalogCategoryEntity { Id = 2, Name = "اختصاصی", SortOrder = 2 });
+        await db.SaveChangesAsync();
     }
 
     public static async Task FinishPcPaymentAsync(GameClubWebApplicationFactory factory, Guid sessionId, long amountToman)

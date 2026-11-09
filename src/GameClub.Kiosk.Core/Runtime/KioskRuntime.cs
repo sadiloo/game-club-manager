@@ -42,14 +42,21 @@ public sealed class KioskRuntime : IAsyncDisposable
 
     public KioskRuntime(Func<HttpClient> httpFactory) => _httpFactory = httpFactory;
 
-    public void Configure(Uri hubUri, Guid deviceId, string deviceKey, string stationId, string queuePath, bool legacyWindows)
+    public void Configure(
+        Uri hubUri,
+        Guid deviceId,
+        string deviceKey,
+        string stationId,
+        string queuePath,
+        bool legacyWindows,
+        HttpMessageHandler? testHubHandler = null)
     {
         ServerBase = hubUri.GetLeftPart(UriPartial.Authority);
         DeviceId = deviceId;
         DeviceKey = deviceKey;
         StationId = stationId;
         _queue = new SqliteOfflineEventQueue(queuePath);
-        _hub = KioskConnectionFactory.Create(hubUri, deviceId.ToString(), deviceKey, legacyWindows);
+        _hub = KioskConnectionFactory.Create(hubUri, deviceId.ToString(), deviceKey, legacyWindows, testHubHandler);
         State = KioskRuntimeState.Locked;
     }
 

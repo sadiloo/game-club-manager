@@ -72,8 +72,9 @@ public class WalletModeTests
 
         var estimate = CustomerPlay.Estimate(console.Account, CafeFixture.ExampleNormal, PlayMode.Offline, 1, At, CafeFixture.Card());
         Assert.False(estimate.BlockedByDebt);
-        Assert.Equal(28, estimate.MoneyMinutes);
-        Assert.Equal(28, estimate.TotalMinutes);
+        // Freeze line 41: grace minute is not shown in the estimate while funded minutes > 0 (cf. KioskR6RemainingTimeTests.default_grace_does_not_add_prospective_minute_below_sixty_funded_minutes, 36 min band).
+        Assert.Equal(27, estimate.MoneyMinutes);
+        Assert.Equal(27, estimate.TotalMinutes);
 
         var pc = CustomerPlay.Settle(PcHour(), console.Account);
         var through = MoneyMath.ChargeForMinutes(CafeFixture.ExampleNormalOnePlayerHourly, 28, RateRemainderMode.Nearest);

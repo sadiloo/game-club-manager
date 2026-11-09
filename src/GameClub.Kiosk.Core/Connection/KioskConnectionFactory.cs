@@ -9,7 +9,8 @@ public static class KioskConnectionFactory
         Uri hubUri,
         string deviceId,
         string deviceKey,
-        bool legacyWindows)
+        bool legacyWindows,
+        HttpMessageHandler? testHubHandler = null)
     {
         var transport = legacyWindows
             ? HttpTransportType.LongPolling
@@ -20,6 +21,10 @@ public static class KioskConnectionFactory
                 options.Transports = transport;
                 options.Headers["X-Device-Id"] = deviceId;
                 options.Headers["X-Device-Key"] = deviceKey;
+                if (testHubHandler is not null)
+                {
+                    options.HttpMessageHandlerFactory = _ => testHubHandler;
+                }
             })
             .WithAutomaticReconnect()
             .Build();

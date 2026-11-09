@@ -7,4 +7,5 @@
   <Project Path="tests/GameClub.Billing.Tests/GameClub.Billing.Tests.csproj" />
   <Project Path="tests/GameClub.Kiosk.Core.Tests/GameClub.Kiosk.Core.Tests.csproj" />
   <Project Path="tests/GameClub.Server.Tests/GameClub.Server.Tests.csproj" />
+  <Project Path="tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj" />
 </Solution>

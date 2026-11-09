@@ -36,7 +36,7 @@ jobs:
 
   windows:
     name: windows net48 and net10
-    runs-on: windows-latest
+    runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
@@ -44,5 +44,46 @@ jobs:
           dotnet-version: 10.0.403
       - name: build net48 kiosk and guard
         run: dotnet build src/GameClub.Kiosk/GameClub.Kiosk.csproj -c Release -f net48 --nologo && dotnet build src/GameClub.Kiosk.Guard/GameClub.Kiosk.Guard.csproj -c Release -f net48 --nologo
-      - name: test every target framework except server integration
-        run: dotnet test GameClub.slnx -c Release --nologo --filter "FullyQualifiedName!~GameClub.Server.Tests"
+      - name: test every target framework except server and windows kiosk integration
+        run: dotnet test GameClub.slnx -c Release --nologo --filter "FullyQualifiedName!~GameClub.Server.Tests&FullyQualifiedName!~GameClub.Kiosk.Windows.IntegrationTests"
+
+  windows-kiosk-integration:
+    name: windows-2022 kiosk integration
+    runs-on: windows-2022
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: gameclub_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      GAMECLUB_DATABASE: Host=localhost;Port=5432;Database=gameclub_test;Username=postgres;Password=postgres
+      GAMECLUB_TEST_DATABASE: Host=localhost;Port=5432;Database=gameclub_test;Username=postgres;Password=postgres
+      GAMECLUB_API_KEY: ci-test-key
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.403
+      - name: windows kiosk integration
+        shell: pwsh
+        run: ./scripts/windows/ci-integration.ps1
+      - name: upload kiosk integration artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kiosk-windows-integration
+          path: |
+            artifacts/kiosk-windows-server.trx
+            artifacts/kiosk-windows-guard.trx
+            artifacts/watchdog.log
+            artifacts/evidence/**
+            artifacts/kiosk-windows-logs/**
