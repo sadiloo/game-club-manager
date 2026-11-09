@@ -72,7 +72,8 @@ dotnet build tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Window
 $serverDll = Join-Path $repoRoot "src/GameClub.Server/bin/Release/net10.0/GameClub.Server.dll"
 $serverLog = Join-Path $artifactDir "kiosk-windows-logs/server-out.log"
 New-Item -ItemType Directory -Force -Path (Split-Path $serverLog) | Out-Null
-$serverProc = Start-Process -FilePath "dotnet" -ArgumentList @("exec", $serverDll) -PassThru -NoNewWindow -RedirectStandardOutput $serverLog -RedirectStandardError $serverLog -WorkingDirectory $repoRoot
+$serverErr = Join-Path (Split-Path $serverLog) "server-err.log"
+$serverProc = Start-Process -FilePath "dotnet" -ArgumentList @("exec", $serverDll) -PassThru -NoNewWindow -RedirectStandardOutput $serverLog -RedirectStandardError $serverErr -WorkingDirectory $repoRoot
 $env:GAMECLUB_SERVER_PID = $serverProc.Id
 
 $ready = $false

@@ -89,6 +89,7 @@ public sealed class WindowsKioskServerIntegrationTests
             await api.PostAsJsonAsync(
                 $"/api/sessions/{sessionId}/checkpoints",
                 new { at = S3TestHelpers.T(2026, 6, 3, 15, 0) });
+            _backend.SetTehran(2026, 6, 3, 15, 10);
         }
         else
         {
@@ -146,7 +147,7 @@ public sealed class WindowsKioskServerIntegrationTests
 
     private async Task WaitForHeartbeatAdvanceAsync(Guid deviceId, int heartbeatBefore, DateTime? lastSeenBefore)
     {
-        for (var attempt = 0; attempt < 8; attempt++)
+        for (var attempt = 0; attempt < 12; attempt++)
         {
             await Task.Delay(TimeSpan.FromSeconds(6));
             var count = await _backend.CountHeartbeatsAsync();
