@@ -16,8 +16,6 @@ public sealed class WindowsKioskWpfSmokeTests
     [Fact]
     public void wpf_main_window_starts_and_writes_screenshot_or_process_evidence()
     {
-        var exeDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location)!;
-        var kioskPath = FindKioskExecutable(exeDir);
         var artifactDir = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
             "Checkpoint",
@@ -64,13 +62,29 @@ public sealed class WindowsKioskWpfSmokeTests
             return;
         }
 
+        var exeDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
+        string kioskPath = null;
+        var probe = Path.Combine(exeDir ?? ".", "GameClub.Kiosk.exe");
+        if (File.Exists(probe))
+        {
+            kioskPath = probe;
+        }
+
+        if (kioskPath is null)
+        {
+            File.WriteAllText(
+                Path.Combine(artifactDir, "wpf-smoke.json"),
+                $"{{\"inProcessOk\":false,\"reason\":\"STA render failed; kiosk exe not beside test output\",\"inProcessError\":\"{inProcessError?.Message}\"}}");
+            Assert.Fail(inProcessError?.Message ?? "WPF STA smoke failed and GameClub.Kiosk.exe was not copied to test output.");
+        }
+
         Environment.SetEnvironmentVariable(
             "CHECKPOINT_SERVER_URL",
             Environment.GetEnvironmentVariable("CHECKPOINT_SERVER_URL") ?? "http://127.0.0.1:5000");
         var psi = new ProcessStartInfo(kioskPath)
         {
             UseShellExecute = true,
-            WorkingDirectory = Path.GetDirectoryName(kioskPath)!,
+            WorkingDirectory = Path.GetDirectoryName(kioskPath),
         };
         using var process = Process.Start(psi);
         Thread.Sleep(TimeSpan.FromSeconds(8));
@@ -80,24 +94,6 @@ public sealed class WindowsKioskWpfSmokeTests
         Assert.NotNull(process);
         Assert.False(process.HasExited);
         process.Kill();
-    }
-
-    private static string FindKioskExecutable(string startDir)
-    {
-        var candidates = new[]
-        {
-            Path.Combine(startDir, "GameClub.Kiosk.exe"),
-            Path.GetFullPath(Path.Combine(startDir, "..", "..", "..", "..", "..", "src", "GameClub.Kiosk", "bin", "Release", "net48", "GameClub.Kiosk.exe")),
-        };
-        foreach (var path in candidates)
-        {
-            if (File.Exists(path))
-            {
-                return path;
-            }
-        }
-
-        throw new FileNotFoundException("GameClub.Kiosk.exe not found for WPF smoke.");
     }
 }
 #endif
