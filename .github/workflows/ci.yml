@@ -72,7 +72,11 @@ jobs:
             Start-Sleep -Seconds 3
           }
           if ($LASTEXITCODE -ne 0) { throw 'postgresql service not ready' }
-          & $psql -U postgres -c "CREATE DATABASE gameclub_test;" 2>$null
+          $env:PGPASSWORD = 'postgres'
+          $exists = & $psql -U postgres -tAc "SELECT 1 FROM pg_database WHERE datname='gameclub_test'"
+          if ($exists -ne '1') {
+            & $psql -U postgres -c 'CREATE DATABASE gameclub_test;'
+          }
       - name: windows kiosk integration
         shell: pwsh
         run: ./scripts/windows/ci-integration.ps1
