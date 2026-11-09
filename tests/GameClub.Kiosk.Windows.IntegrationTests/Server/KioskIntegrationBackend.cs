@@ -2,10 +2,10 @@
 using System.Net.Http.Json;
 using System.Text.Json;
 using GameClub.Billing;
+using GameClub.Server;
 using GameClub.Server.Data;
 using GameClub.Server.Data.Entities;
 using GameClub.Server.Kiosk;
-using GameClub.Server.Middleware;
 using GameClub.Server.Tests;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
