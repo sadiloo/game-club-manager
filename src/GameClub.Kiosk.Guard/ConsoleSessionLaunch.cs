@@ -247,7 +247,7 @@ internal static class ConsoleSessionLaunch
                 return false;
             }
 
-            detail = $"runner_launched_pid_{process.Id}";
+            detail = $"launched_pid_{process.Id}";
             return true;
         }
         catch (Exception ex)
