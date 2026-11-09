@@ -1,4 +1,5 @@
 #if NET48
+#nullable disable
 using System;
 using System.Collections;
 using System.Diagnostics;
@@ -9,7 +10,7 @@ namespace GameClub.Kiosk.Windows.IntegrationTests.Guard;
 
 internal static class GuardProcessStart
 {
-    internal static Process StartGuard(string? kioskExe = null, string? guardExe = null)
+    internal static Process StartGuard(string kioskExe = null, string guardExe = null)
     {
         guardExe ??= Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "GameClub.Kiosk.Guard.exe");
         Assert.True(File.Exists(guardExe), "GameClub.Kiosk.Guard.exe not found beside test output.");
