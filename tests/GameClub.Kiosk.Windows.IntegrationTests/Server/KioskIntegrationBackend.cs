@@ -8,6 +8,7 @@ using GameClub.Server.Data.Entities;
 using GameClub.Server.Kiosk;
 using GameClub.Server.Tests;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
 using Xunit;
 
