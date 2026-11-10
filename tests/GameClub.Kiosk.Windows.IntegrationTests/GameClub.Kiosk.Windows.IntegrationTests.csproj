@@ -34,6 +34,7 @@
     <ProjectReference Include="..\..\src\GameClub.Kiosk.Guard\GameClub.Kiosk.Guard.csproj" />
     <ProjectReference Include="..\..\src\GameClub.Kiosk\GameClub.Kiosk.csproj" />
     <ProjectReference Include="..\..\src\GameClub.Kiosk.Core\GameClub.Kiosk.Core.csproj" />
+    <ProjectReference Include="..\..\src\GameClub.Billing\GameClub.Billing.csproj" />
   </ItemGroup>
 
   <Target Name="CopyKioskExeForSmoke" AfterTargets="Build" Condition="'$(TargetFramework)' == 'net48'">

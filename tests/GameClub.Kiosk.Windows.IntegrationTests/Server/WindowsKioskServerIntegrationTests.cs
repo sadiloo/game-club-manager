@@ -1,7 +1,10 @@
 #if NET10_0_OR_GREATER
+using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Json;
+using System.Text;
 using System.Text.Json;
+using GameClub.Kiosk.Core.Protocol;
 using GameClub.Kiosk.Core.Runtime;
 using GameClub.Server.Tests;
 
@@ -61,7 +64,7 @@ public sealed class WindowsKioskServerIntegrationTests
             testHubHandler: _backend.TestHubHandler);
         runtime.BindSession(sessionId);
         await runtime.StartAsync(default);
-        await WaitForHeartbeatAdvanceAsync(deviceId, heartbeatBefore, lastSeenBefore);
+        await WaitForHeartbeatAdvanceAsync(_backend, deviceId, heartbeatBefore, lastSeenBefore);
         await runtime.DisposeAsync();
     }
 
@@ -109,53 +112,199 @@ public sealed class WindowsKioskServerIntegrationTests
     [Fact]
     public async Task live_server_disconnect_reconnect_same_session_no_double_debit()
     {
-        await _backend.ResetAsync();
-        await _backend.RegisterPcAsync(_backend.CreateApiClient(), "PC-DISC");
-        var customerId = await _backend.SeedCustomerWithCredentialAsync("disc", "pass", 200_000);
+        OutOfProcessLiveServer? ownedServer = null;
+        var priorCheckpointUrl = Environment.GetEnvironmentVariable("CHECKPOINT_SERVER_URL");
+        var ciPid = 0;
+        var usesCiServer = KioskIntegrationBackend.IsLiveMode
+            && int.TryParse(Environment.GetEnvironmentVariable("GAMECLUB_SERVER_PID"), out ciPid);
+        KioskIntegrationBackend backend;
+        if (KioskIntegrationBackend.IsLiveMode)
+        {
+            Assert.True(usesCiServer, "GAMECLUB_SERVER_PID must be set on windows-2022 kiosk integration.");
+            backend = KioskIntegrationBackend.Create(null);
+            ownedServer = OutOfProcessLiveServer.AttachExisting(ciPid, priorCheckpointUrl!);
+        }
+        else if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("GAMECLUB_DATABASE")))
+        {
+            ownedServer = await OutOfProcessLiveServer.StartNewAsync();
+            Environment.SetEnvironmentVariable("CHECKPOINT_SERVER_URL", ownedServer.BaseUrl);
+            backend = KioskIntegrationBackend.CreateForBaseUrl(ownedServer.BaseUrl);
+        }
+        else
+        {
+            throw new InvalidOperationException("Out-of-process GameClub.Server with Postgres is required for reconnect proof.");
+        }
 
-        var (deviceId, deviceKey, _) = await _backend.PairAsync("PC-DISC");
-        var kioskHttp = _backend.CreateKioskHttpClient(deviceId, deviceKey);
-        var login = await kioskHttp.PostAsJsonAsync("/api/kiosk/auth/login", new { loginName = "disc", password = "pass", stationId = "PC-DISC" });
-        login.EnsureSuccessStatusCode();
-        var sessionId = await _backend.OpenSessionIdAsync();
-        var debitBefore = await _backend.WalletDebitTotalAsync(customerId);
+        try
+        {
+            await backend.ResetAsync();
+            await backend.RegisterPcAsync(backend.CreateApiClient(), "PC-DISC");
+            var customerId = await backend.SeedCustomerWithCredentialAsync("disc", "pass", 200_000);
+            var (deviceId, deviceKey, leasePem) = await backend.PairAsync("PC-DISC");
+            var kioskHttp = backend.CreateKioskHttpClient(deviceId, deviceKey);
+            var login = await kioskHttp.PostAsJsonAsync(
+                "/api/kiosk/auth/login",
+                new { loginName = "disc", password = "pass", stationId = "PC-DISC" });
+            login.EnsureSuccessStatusCode();
+            var sessionId = await backend.OpenSessionIdAsync();
+            var debitBefore = await backend.WalletDebitTotalAsync(customerId);
 
-        var queuePath = Path.Combine(Path.GetTempPath(), $"kiosk-disc-{Guid.NewGuid():N}.db");
-        var runtime = new KioskRuntime(() => kioskHttp);
-        runtime.Configure(
-            _backend.HubUri,
-            deviceId,
-            deviceKey,
-            "PC-DISC",
-            queuePath,
-            legacyWindows: true,
-            testHubHandler: _backend.TestHubHandler);
-        await runtime.StartAsync(default);
-        await runtime.DisposeAsync();
+            var queuePath = Path.Combine(Path.GetTempPath(), $"kiosk-disc-{Guid.NewGuid():N}.db");
+            var orchestrator = new KioskShellOrchestrator();
+            orchestrator.ConfigureLeaseVerifier(leasePem);
+            var runtime = new KioskRuntime(() => kioskHttp);
+            runtime.Configure(
+                backend.HubUri,
+                deviceId,
+                deviceKey,
+                "PC-DISC",
+                queuePath,
+                legacyWindows: true,
+                testHubHandler: backend.TestHubHandler);
+            orchestrator.BindOfflineQueue(runtime.GetQueue());
+            runtime.BindSession(sessionId);
+            runtime.HeartbeatAcknowledged += ack =>
+                orchestrator.OnHeartbeatAck(ack, sessionId, runtime.ClientMonotonicMs);
+            runtime.HeartbeatTransportFailed += () =>
+                orchestrator.EnqueuePoweredSegmentOnDisconnect(sessionId, runtime.ClientMonotonicMs);
 
-        var runtime2 = new KioskRuntime(() => kioskHttp);
-        runtime2.Configure(
-            _backend.HubUri,
-            deviceId,
-            deviceKey,
-            "PC-DISC",
-            queuePath,
-            legacyWindows: true,
-            testHubHandler: _backend.TestHubHandler);
-        await runtime2.StartAsync(default);
-        await runtime2.DisposeAsync();
+            using var leaseCts = new CancellationTokenSource();
+            _ = Task.Run(async () =>
+            {
+                while (!leaseCts.IsCancellationRequested)
+                {
+                    orchestrator.TickLease(
+                        sessionId,
+                        runtime.ClientMonotonicMs,
+                        DateTime.UtcNow,
+                        transportDown: sessionId != Guid.Empty && !runtime.IsTransportConnected);
+                    try
+                    {
+                        await Task.Delay(TimeSpan.FromSeconds(1), leaseCts.Token);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        break;
+                    }
+                }
+            }, leaseCts.Token);
 
-        Assert.Equal(sessionId, await _backend.OpenSessionIdAsync());
-        Assert.Equal(debitBefore, await _backend.WalletDebitTotalAsync(customerId));
+            await runtime.StartAsync(default);
+            await WaitUntilTransportConnectedAsync(runtime, TimeSpan.FromSeconds(45));
+            var heartbeatBefore = await backend.CountHeartbeatsAsync();
+            await WaitForHeartbeatAdvanceAsync(backend, deviceId, heartbeatBefore, await backend.DeviceLastSeenUtcAsync(deviceId));
+
+            if (usesCiServer)
+            {
+                Process.GetProcessById(ciPid).Kill(entireProcessTree: true);
+            }
+            else
+            {
+                ownedServer!.Stop();
+            }
+
+            var outageStart = DateTime.UtcNow;
+            var sawDisconnected = false;
+            while (DateTime.UtcNow - outageStart < TimeSpan.FromSeconds(20))
+            {
+                if (!runtime.IsTransportConnected)
+                {
+                    sawDisconnected = true;
+                }
+
+                if (sawDisconnected && DateTime.UtcNow - outageStart >= TimeSpan.FromSeconds(12))
+                {
+                    break;
+                }
+
+                await Task.Delay(500);
+            }
+
+            Assert.True(sawDisconnected, "IsTransportConnected must be false during a real server outage.");
+            var pending = await runtime.GetQueue().PendingAsync();
+            Assert.Contains(pending, p => p.Type == "offline_play_segment");
+
+            await ownedServer!.RelaunchAsync();
+
+            await WaitUntilTransportConnectedAsync(runtime, TimeSpan.FromSeconds(60));
+            Assert.True(runtime.IsTransportConnected, "IsTransportConnected must be true after the server restarts.");
+
+            var drained = await orchestrator.DrainOfflineQueueAsync(async events =>
+            {
+                var payload = JsonSerializer.Serialize(events.Select(e => new KioskOutboundEvent
+                {
+                    EventId = e.EventId,
+                    Type = e.Type,
+                    PayloadJson = e.PayloadJson,
+                    CreatedUtc = e.CreatedUtc,
+                }));
+                var response = await kioskHttp.PostAsync(
+                    "/api/kiosk/devices/events",
+                    new StringContent(payload, Encoding.UTF8, "application/json"));
+                if (!response.IsSuccessStatusCode)
+                {
+                    return Array.Empty<Guid>();
+                }
+
+                var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+                if (!body.RootElement.TryGetProperty("ackedEventIds", out var ids))
+                {
+                    return Array.Empty<Guid>();
+                }
+
+                return ids.EnumerateArray().Select(e => e.GetGuid()).ToList();
+            }, default);
+            Assert.True(drained > 0, "Offline queue must drain through production /api/kiosk/devices/events after reconnect.");
+
+            Assert.Equal(sessionId, await backend.OpenSessionIdAsync());
+            Assert.Equal(debitBefore, await backend.WalletDebitTotalAsync(customerId));
+            leaseCts.Cancel();
+            await runtime.DisposeAsync();
+        }
+        finally
+        {
+            if (ownedServer is not null && usesCiServer)
+            {
+                try
+                {
+                    await ownedServer.RelaunchAsync();
+                }
+                catch
+                {
+                    // Best-effort restore for follow-on net48 tests.
+                }
+            }
+            else if (ownedServer is not null)
+            {
+                await ownedServer.DisposeAsync();
+                Environment.SetEnvironmentVariable("CHECKPOINT_SERVER_URL", priorCheckpointUrl);
+            }
+        }
     }
 
-    private async Task WaitForHeartbeatAdvanceAsync(Guid deviceId, int heartbeatBefore, DateTime? lastSeenBefore)
+    private static async Task WaitUntilTransportConnectedAsync(KioskRuntime runtime, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow.Add(timeout);
+        while (DateTime.UtcNow < deadline)
+        {
+            if (runtime.IsTransportConnected)
+            {
+                return;
+            }
+
+            await Task.Delay(500);
+        }
+
+        Assert.Fail("Kiosk runtime transport did not connect before timeout.");
+    }
+
+    private static async Task WaitForHeartbeatAdvanceAsync(KioskIntegrationBackend backend, Guid deviceId, int heartbeatBefore, DateTime? lastSeenBefore)
     {
         for (var attempt = 0; attempt < 12; attempt++)
         {
             await Task.Delay(TimeSpan.FromSeconds(6));
-            var count = await _backend.CountHeartbeatsAsync();
-            var lastSeen = await _backend.DeviceLastSeenUtcAsync(deviceId);
+            var count = await backend.CountHeartbeatsAsync();
+            var lastSeen = await backend.DeviceLastSeenUtcAsync(deviceId);
             if (count < heartbeatBefore + 3)
             {
                 continue;

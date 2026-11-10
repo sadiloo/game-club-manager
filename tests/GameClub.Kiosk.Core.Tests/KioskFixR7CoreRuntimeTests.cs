@@ -72,6 +72,14 @@ public sealed class KioskFixR7CoreRuntimeTests
     }
 
     [Fact]
+    public void process_policy_predicate_cmd_notepad_exact_allowlist()
+    {
+        var enforcer = new ProcessPolicyEnforcer();
+        Assert.False(enforcer.IsProcessAllowed("cmd", ["notepad"]));
+        Assert.True(enforcer.IsProcessAllowed("notepad", ["notepad"]));
+    }
+
+    [Fact]
     public void registry_policy_template_includes_disallow_run_entries()
     {
         Assert.True(KioskRegistryPolicyTemplate.DefaultDisallowRunExecutables.Count >= 5);

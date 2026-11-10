@@ -8,6 +8,7 @@ using System.Runtime.InteropServices;
 using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Threading;
+using GameClub.Kiosk.Core.Runtime;
 using GameClub.Kiosk.Core.Security;
 using GameClub.Kiosk.Guard;
 
@@ -18,11 +19,64 @@ namespace GameClub.Kiosk.Windows.IntegrationTests.Guard;
 public sealed class WindowsGuardRuntimeIntegrationTests
 {
     [Fact]
-    public void allowlist_blocks_cmd_allows_configured_game_process()
+    public void allowlist_terminates_real_denied_process_and_preserves_allowed()
     {
-        var enforcer = new ProcessPolicyEnforcer();
-        Assert.False(enforcer.IsProcessAllowed("cmd", new[] { "notepad" }));
-        Assert.True(enforcer.IsProcessAllowed("notepad", new[] { "notepad" }));
+        Process cmd = null;
+        Process deniedCopy = null;
+        Process notepad = null;
+        var deniedCopyPath = (string)null;
+        try
+        {
+            cmd = Process.Start(new ProcessStartInfo("cmd.exe") { UseShellExecute = false, CreateNoWindow = true });
+            Assert.NotNull(cmd);
+            Thread.Sleep(500);
+            Assert.False(cmd.HasExited, "cmd.exe must be alive before deny-list enforcement.");
+
+            new KioskShellOrchestrator().KillDeniedProcesses();
+            var denyDeadline = DateTime.UtcNow.AddSeconds(10);
+            while (DateTime.UtcNow < denyDeadline && !cmd.HasExited)
+            {
+                Thread.Sleep(200);
+            }
+
+            Assert.True(cmd.HasExited, "Production deny-list enforcement must terminate cmd.exe within 10s.");
+
+            var pingSrc = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "ping.exe");
+            deniedCopyPath = Path.Combine(Path.GetTempPath(), $"notallowed_{Guid.NewGuid():N}.exe");
+            File.Copy(pingSrc, deniedCopyPath);
+            deniedCopy = Process.Start(new ProcessStartInfo(deniedCopyPath, "-t 127.0.0.1") { UseShellExecute = false, CreateNoWindow = true });
+            Assert.NotNull(deniedCopy);
+            Thread.Sleep(500);
+            Assert.False(deniedCopy.HasExited, "Copied denied executable must be alive before allow-list enforcement.");
+
+            new KioskShellOrchestrator().EnforceAllowlist(new[] { "onlygame" });
+            var allowDeadline = DateTime.UtcNow.AddSeconds(10);
+            while (DateTime.UtcNow < allowDeadline && !deniedCopy.HasExited)
+            {
+                Thread.Sleep(200);
+            }
+
+            Assert.True(deniedCopy.HasExited, "Allow-list enforcement must terminate non-allowlisted copied exe within 10s.");
+
+            notepad = Process.Start("notepad.exe");
+            Assert.NotNull(notepad);
+            Thread.Sleep(300);
+            Assert.False(notepad.HasExited, "notepad.exe must be alive before allow-list preservation check.");
+
+            new KioskShellOrchestrator().EnforceAllowlist(new[] { "notepad" });
+            Thread.Sleep(TimeSpan.FromSeconds(10));
+            Assert.False(notepad.HasExited, "Allow-listed notepad.exe must still be running 10s after enforcement.");
+        }
+        finally
+        {
+            try { cmd?.Kill(); } catch { }
+            try { deniedCopy?.Kill(); } catch { }
+            try { notepad?.Kill(); } catch { }
+            if (!string.IsNullOrEmpty(deniedCopyPath))
+            {
+                try { File.Delete(deniedCopyPath); } catch { }
+            }
+        }
     }
 
     [Fact]
@@ -83,20 +137,58 @@ public sealed class WindowsGuardRuntimeIntegrationTests
         }
 
         var shellPid = shell.Id;
+        var killTimeUtc = DateTime.UtcNow;
         shell.Kill();
         var restartDeadline = DateTime.UtcNow.AddSeconds(15);
         while (DateTime.UtcNow < restartDeadline)
         {
-            if (File.Exists(logPath) && File.ReadAllText(logPath).Contains("guard.restart"))
+            if (!File.Exists(logPath))
             {
-                var relaunched = Process.GetProcessesByName("GameClub.Kiosk").FirstOrDefault(p => p.Id != shellPid);
-                if (relaunched != null)
+                Thread.Sleep(500);
+                continue;
+            }
+
+            foreach (var raw in File.ReadAllLines(logPath))
+            {
+                if (!raw.Contains("guard.restart", StringComparison.Ordinal) || !raw.Contains("launched_pid_", StringComparison.Ordinal))
                 {
-                    Assert.True(TryReadDenyTerminateAce(relaunched.Handle, new SecurityIdentifier(sid), out var found));
-                    Assert.True(found);
-                    relaunched.Kill();
+                    continue;
                 }
 
+                var parts = raw.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length < 3 || !DateTime.TryParse(parts[0], null, System.Globalization.DateTimeStyles.RoundtripKind, out var stamp))
+                {
+                    continue;
+                }
+
+                if (stamp.ToUniversalTime() <= killTimeUtc)
+                {
+                    continue;
+                }
+
+                var launched = parts[2];
+                const string prefix = "launched_pid_";
+                if (!launched.StartsWith(prefix, StringComparison.Ordinal)
+                    || !int.TryParse(launched.Substring(prefix.Length), out var newPid)
+                    || newPid == shellPid)
+                {
+                    continue;
+                }
+
+                Process relaunched;
+                try
+                {
+                    relaunched = Process.GetProcessById(newPid);
+                }
+                catch
+                {
+                    continue;
+                }
+
+                Assert.False(relaunched.HasExited, "Relaunched kiosk PID must be alive.");
+                Assert.True(TryReadDenyTerminateAce(relaunched.Handle, new SecurityIdentifier(sid), out var found));
+                Assert.True(found);
+                relaunched.Kill();
                 guard.Kill();
                 return;
             }
@@ -105,7 +197,7 @@ public sealed class WindowsGuardRuntimeIntegrationTests
         }
 
         guard.Kill();
-        Assert.Fail("Guard did not log guard.restart after shell kill within 15s.");
+        Assert.Fail("Guard did not log guard.restart with ISO timestamp after shell kill and a new live PID within 15s.");
     }
 
     [Fact]

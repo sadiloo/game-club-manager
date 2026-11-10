@@ -27,7 +27,7 @@ if (Test-Path $watchdog) {
 $evidenceRoot = Join-Path $artifactDir "evidence"
 if (Test-Path $evidenceRoot) {
     Get-ChildItem -Path $evidenceRoot -Recurse -File | ForEach-Object {
-        Write-Host ("--- evidence file: {0} ---", $_.FullName)
+        Write-Host ("--- evidence file: {0} ---" -f $_.FullName)
         Get-Content $_.FullName -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
     }
 }
@@ -36,7 +36,7 @@ $screenshot = Join-Path $evidenceRoot "screenshot-lock.png"
 if (Test-Path $screenshot) {
     $info = Get-Item $screenshot
     $hash = (Get-FileHash -Algorithm SHA256 -Path $screenshot).Hash
-    Write-Host ("--- screenshot-lock.png path={0} size={1} sha256={2} ---", $info.FullName, $info.Length, $hash)
+    Write-Host ("--- screenshot-lock.png path={0} size={1} sha256={2} ---" -f $info.FullName, $info.Length, $hash)
 }
 
 Write-Host "=== end CI R11 evidence dump ==="

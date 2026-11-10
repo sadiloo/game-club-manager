@@ -51,6 +51,9 @@ internal sealed class KioskIntegrationBackend
         return new KioskIntegrationBackend(factory);
     }
 
+    public static KioskIntegrationBackend CreateForBaseUrl(string baseUrl)
+        => new KioskIntegrationBackend(new Uri(baseUrl.TrimEnd('/')));
+
     public bool UsesMutableClock => _factory is not null;
 
     public async Task ResetAsync()

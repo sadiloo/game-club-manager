@@ -107,6 +107,7 @@ New-Item -ItemType Directory -Force -Path (Split-Path $serverLog) | Out-Null
 $serverErr = Join-Path (Split-Path $serverLog) "server-err.log"
 $serverProc = Start-Process -FilePath "dotnet" -ArgumentList @("exec", $serverDll) -PassThru -NoNewWindow -RedirectStandardOutput $serverLog -RedirectStandardError $serverErr -WorkingDirectory $repoRoot
 $env:GAMECLUB_SERVER_PID = $serverProc.Id
+$env:GAMECLUB_SERVER_DLL = $serverDll
 
 $ready = $false
 for ($i = 0; $i -lt 60; $i++) {
