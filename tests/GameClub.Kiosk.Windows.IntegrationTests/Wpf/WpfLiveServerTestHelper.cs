@@ -30,6 +30,21 @@ internal static class WpfLiveServerTestHelper
         await cmd.ExecuteNonQueryAsync();
     }
 
+    public static async Task<Guid> LookupCustomerIdByLoginAsync(string loginName)
+    {
+        await using var conn = new NpgsqlConnection(ResolveConnectionString());
+        await conn.OpenAsync();
+        using var cmd = new NpgsqlCommand(
+            """
+            SELECT c."CustomerId"
+            FROM customer_credentials c
+            WHERE c."LoginName" = @login
+            """,
+            conn);
+        cmd.Parameters.AddWithValue("login", loginName);
+        return (Guid)(await cmd.ExecuteScalarAsync() ?? throw new InvalidOperationException($"No customer for login {loginName}."));
+    }
+
     public static async Task<long> ReadWalletTomanAsync(Guid customerId)
     {
         await using var conn = new NpgsqlConnection(ResolveConnectionString());

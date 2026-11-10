@@ -110,7 +110,7 @@ public sealed class WindowsKioskServerIntegrationTests
     }
 
     [Fact]
-    public async Task live_server_disconnect_reconnect_same_session_no_double_debit()
+    public async Task live_server_z_disconnect_reconnect_same_session_no_double_debit()
     {
         OutOfProcessLiveServer? ownedServer = null;
         var priorCheckpointUrl = Environment.GetEnvironmentVariable("CHECKPOINT_SERVER_URL");

@@ -65,6 +65,7 @@ internal sealed class OutOfProcessLiveServer : IAsyncDisposable
     {
         Stop();
         _process = null;
+        await Task.Delay(TimeSpan.FromSeconds(3), ct);
         await LaunchAndWaitReadyAsync(ct);
     }
 
