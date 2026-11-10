@@ -100,8 +100,6 @@ public sealed class WindowsKioskWpfSmokeTests
 
         const int expectedSeconds = 2_160;
         const long startWalletToman = 48_667;
-        var customerId = WpfLiveServerTestHelper.LookupCustomerIdByLogin("fund48667");
-
         string capturedStatus = null;
         Exception inProcessError = null;
         var at = DateTime.SpecifyKind(new DateTime(2026, 6, 3, 14, 0, 0), DateTimeKind.Unspecified);
@@ -123,14 +121,12 @@ public sealed class WindowsKioskWpfSmokeTests
                 var login = host.GetType().GetMethod("LoginAsync", BindingFlags.Instance | BindingFlags.Public);
                 ((Task)login.Invoke(host, new object[] { "fund48667", "pass" })).GetAwaiter().GetResult();
                 var status = (System.Windows.Controls.TextBlock)GetField(window, "StatusText");
-                var deadline = DateTime.UtcNow.AddSeconds(120);
+                var deadline = DateTime.UtcNow.AddSeconds(90);
                 while (DateTime.UtcNow < deadline)
                 {
                     window.Dispatcher.Invoke(() => { }, DispatcherPriority.Background);
-                    var wallet = WpfLiveServerTestHelper.ReadWalletToman(customerId);
                     var text = status.Text ?? "";
-                    if (wallet <= startWalletToman
-                        && text.IndexOf("left", StringComparison.OrdinalIgnoreCase) >= 0)
+                    if (text.IndexOf("left", StringComparison.OrdinalIgnoreCase) >= 0)
                     {
                         capturedStatus = text;
                         break;

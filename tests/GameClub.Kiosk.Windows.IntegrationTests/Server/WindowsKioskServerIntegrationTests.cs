@@ -137,6 +137,7 @@ public sealed class WindowsKioskServerIntegrationTests
 
         KioskRuntime? runtime = null;
         using var leaseCts = new CancellationTokenSource();
+        var serverStoppedForOutage = false;
         try
         {
             await backend.ResetAsync();
@@ -204,6 +205,8 @@ public sealed class WindowsKioskServerIntegrationTests
                 ownedServer!.Stop();
             }
 
+            serverStoppedForOutage = true;
+
             var outageStart = DateTime.UtcNow;
             var sawDisconnected = false;
             while (DateTime.UtcNow - outageStart < TimeSpan.FromSeconds(20))
@@ -226,6 +229,7 @@ public sealed class WindowsKioskServerIntegrationTests
             Assert.Contains(pending, p => p.Type == "offline_play_segment");
 
             await ownedServer!.RelaunchAsync();
+            serverStoppedForOutage = false;
 
             await WaitUntilTransportConnectedAsync(runtime, TimeSpan.FromSeconds(60));
             Assert.True(runtime.IsTransportConnected, "IsTransportConnected must be true after the server restarts.");
@@ -268,7 +272,7 @@ public sealed class WindowsKioskServerIntegrationTests
                 await runtime.DisposeAsync();
             }
 
-            if (ownedServer is not null && usesCiServer)
+            if (ownedServer is not null && usesCiServer && serverStoppedForOutage)
             {
                 try
                 {
