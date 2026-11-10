@@ -135,6 +135,8 @@ public sealed class WindowsKioskServerIntegrationTests
             throw new InvalidOperationException("Out-of-process GameClub.Server with Postgres is required for reconnect proof.");
         }
 
+        KioskRuntime? runtime = null;
+        using var leaseCts = new CancellationTokenSource();
         try
         {
             await backend.ResetAsync();
@@ -152,7 +154,7 @@ public sealed class WindowsKioskServerIntegrationTests
             var queuePath = Path.Combine(Path.GetTempPath(), $"kiosk-disc-{Guid.NewGuid():N}.db");
             var orchestrator = new KioskShellOrchestrator();
             orchestrator.ConfigureLeaseVerifier(leasePem);
-            var runtime = new KioskRuntime(() => kioskHttp);
+            runtime = new KioskRuntime(() => kioskHttp);
             runtime.Configure(
                 backend.HubUri,
                 deviceId,
@@ -168,7 +170,6 @@ public sealed class WindowsKioskServerIntegrationTests
             runtime.HeartbeatTransportFailed += () =>
                 orchestrator.EnqueuePoweredSegmentOnDisconnect(sessionId, runtime.ClientMonotonicMs);
 
-            using var leaseCts = new CancellationTokenSource();
             _ = Task.Run(async () =>
             {
                 while (!leaseCts.IsCancellationRequested)
@@ -258,11 +259,15 @@ public sealed class WindowsKioskServerIntegrationTests
 
             Assert.Equal(sessionId, await backend.OpenSessionIdAsync());
             Assert.Equal(debitBefore, await backend.WalletDebitTotalAsync(customerId));
-            leaseCts.Cancel();
-            await runtime.DisposeAsync();
         }
         finally
         {
+            leaseCts.Cancel();
+            if (runtime is not null)
+            {
+                await runtime.DisposeAsync();
+            }
+
             if (ownedServer is not null && usesCiServer)
             {
                 try
