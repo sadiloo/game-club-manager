@@ -139,6 +139,12 @@ internal sealed class OutOfProcessLiveServer : IAsyncDisposable
         {
             psi.Environment["ASPNETCORE_ENVIRONMENT"] = "Production";
         }
+
+        if (!psi.Environment.ContainsKey("OperatorSessionSecret")
+            || string.IsNullOrWhiteSpace(psi.Environment["OperatorSessionSecret"]))
+        {
+            psi.Environment["OperatorSessionSecret"] = "ci-operator-secret-r11";
+        }
     }
 
     private static string ResolveRepoRoot()
