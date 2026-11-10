@@ -76,7 +76,7 @@ public sealed class WindowsKioskWpfSmokeTests
         Assert.True(new FileInfo(screenshotPath).Length > 0);
     }
 
-    [Fact]
+    [Fact(Timeout = 180_000)]
     public void wpf_remaining_time_matches_funded_session_within_one_tick()
     {
         var setupError = (Exception)null;
@@ -100,15 +100,7 @@ public sealed class WindowsKioskWpfSmokeTests
 
         const int expectedSeconds = 2_160;
         const long startWalletToman = 48_667;
-        Guid customerId = Guid.Empty;
-        try
-        {
-            customerId = WpfLiveServerTestHelper.LookupCustomerIdByLoginAsync("fund48667").GetAwaiter().GetResult();
-        }
-        catch (Exception ex)
-        {
-            Assert.Fail(ex.ToString());
-        }
+        var customerId = WpfLiveServerTestHelper.LookupCustomerIdByLogin("fund48667");
 
         string capturedStatus = null;
         Exception inProcessError = null;
@@ -135,9 +127,7 @@ public sealed class WindowsKioskWpfSmokeTests
                 while (DateTime.UtcNow < deadline)
                 {
                     window.Dispatcher.Invoke(() => { }, DispatcherPriority.Background);
-                    var wallet = customerId == Guid.Empty
-                        ? 0
-                        : WpfLiveServerTestHelper.ReadWalletTomanAsync(customerId).GetAwaiter().GetResult();
+                    var wallet = WpfLiveServerTestHelper.ReadWalletToman(customerId);
                     var text = status.Text ?? "";
                     if (wallet <= startWalletToman
                         && text.IndexOf("left", StringComparison.OrdinalIgnoreCase) >= 0)

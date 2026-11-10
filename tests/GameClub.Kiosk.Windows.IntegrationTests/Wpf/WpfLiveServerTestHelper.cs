@@ -56,6 +56,32 @@ internal static class WpfLiveServerTestHelper
         return Convert.ToInt64(await cmd.ExecuteScalarAsync() ?? 0L);
     }
 
+    public static Guid LookupCustomerIdByLogin(string loginName)
+    {
+        using var conn = new NpgsqlConnection(ResolveConnectionString());
+        conn.Open();
+        using var cmd = new NpgsqlCommand(
+            """
+            SELECT c."CustomerId"
+            FROM customer_credentials c
+            WHERE c."LoginName" = @login
+            """,
+            conn);
+        cmd.Parameters.AddWithValue("login", loginName);
+        return (Guid)(cmd.ExecuteScalar() ?? throw new InvalidOperationException($"No customer for login {loginName}."));
+    }
+
+    public static long ReadWalletToman(Guid customerId)
+    {
+        using var conn = new NpgsqlConnection(ResolveConnectionString());
+        conn.Open();
+        using var cmd = new NpgsqlCommand(
+            """SELECT COALESCE("RealToman",0) FROM customer_members WHERE "CustomerId" = @id""",
+            conn);
+        cmd.Parameters.AddWithValue("id", customerId);
+        return Convert.ToInt64(cmd.ExecuteScalar() ?? 0L);
+    }
+
     public static async Task<string> SetupFundedSessionAsync(string loginName, string password)
     {
         var baseUrl = RequireServerUrl();
