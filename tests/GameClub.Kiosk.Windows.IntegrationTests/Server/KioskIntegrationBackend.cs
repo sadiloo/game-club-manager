@@ -168,8 +168,8 @@ internal sealed class KioskIntegrationBackend
 
   public async Task BackdateOpenSessionForDeadPcSweepAsync(Guid sessionId)
     {
-        var checkpoint = DateTime.SpecifyKind(DateTime.UtcNow.AddMinutes(-11), DateTimeKind.Utc);
-        var started = DateTime.SpecifyKind(checkpoint.AddHours(-1), DateTimeKind.Utc);
+        var started = DateTime.SpecifyKind(S3TestHelpers.T(2026, 6, 3, 14, 0).UtcDateTime, DateTimeKind.Utc);
+        var checkpoint = DateTime.SpecifyKind(S3TestHelpers.T(2026, 6, 3, 15, 0).UtcDateTime, DateTimeKind.Utc);
         if (_factory is not null)
         {
             await using var scope = _factory.Services.CreateAsyncScope();
@@ -189,13 +189,15 @@ internal sealed class KioskIntegrationBackend
 
         await using var conn = new NpgsqlConnection(ResolveConnectionString());
         await conn.OpenAsync();
+        await using var tx = await conn.BeginTransactionAsync();
         await using (var cmd = new NpgsqlCommand(
             """
             UPDATE sessions
             SET "StartedAtUtc" = @started, "LastCheckpointUtc" = @checkpoint
             WHERE "Id" = @id
             """,
-            conn))
+            conn,
+            tx))
         {
             cmd.Parameters.AddWithValue("started", started);
             cmd.Parameters.AddWithValue("checkpoint", checkpoint);
@@ -205,12 +207,15 @@ internal sealed class KioskIntegrationBackend
 
         await using (var segCmd = new NpgsqlCommand(
             """UPDATE play_segments SET "StartUtc" = @started WHERE "SessionId" = @id""",
-            conn))
+            conn,
+            tx))
         {
             segCmd.Parameters.AddWithValue("started", started);
             segCmd.Parameters.AddWithValue("id", sessionId);
             await segCmd.ExecuteNonQueryAsync();
         }
+
+        await tx.CommitAsync();
     }
 
     public async Task<Guid> OpenSessionIdAsync()
