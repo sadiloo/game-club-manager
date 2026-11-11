@@ -54,11 +54,12 @@ public sealed class Round9CapTests
                 issuedAt: d0.AddMinutes(2));
             var st = r.Settlement;
             AssertConservation(charge, st);
-            // B2: full grace minute retains wallet; post-grace minute not billed in this 2-minute stop.
-            Assert.Equal(0, st.MoneyConsumedToman);
+            // r9_1 amendment 2026-11-11: leftover retained balance after post-grace minutes goes to the grace minute up to its net.
+            Assert.Equal(300, st.MoneyConsumedToman);
             Assert.Equal(1_707, st.DiscountToman);
-            Assert.Equal(960, st.Grace!.WaivedToman);
+            Assert.Equal(660, st.Grace!.WaivedToman);
             Assert.Equal(0, st.WriteOffToman);
+            Assert.Equal(0, r.Account.PcMoneyToman);
             AssertInvoice(r);
         }
     }
