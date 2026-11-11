@@ -54,9 +54,10 @@ public sealed class Round9CapTests
                 issuedAt: d0.AddMinutes(2));
             var st = r.Settlement;
             AssertConservation(charge, st);
-            Assert.Equal(300, st.MoneyConsumedToman);
+            // B2: full grace minute retains wallet; post-grace minute not billed in this 2-minute stop.
+            Assert.Equal(0, st.MoneyConsumedToman);
             Assert.Equal(1_707, st.DiscountToman);
-            Assert.Equal(660, st.Grace!.WaivedToman);
+            Assert.Equal(960, st.Grace!.WaivedToman);
             Assert.Equal(0, st.WriteOffToman);
             AssertInvoice(r);
         }
@@ -121,8 +122,8 @@ public sealed class Round9CapTests
         AssertConservation(charge, st);
         Assert.Equal(348, st.MoneyConsumedToman);
         Assert.Equal(8_433, st.DiscountToman);
-        Assert.Equal(936, st.Grace!.WaivedToman);
-        Assert.Equal(1_283, st.WriteOffToman);
+        Assert.Equal(1_284, st.Grace!.WaivedToman);
+        Assert.Equal(935, st.WriteOffToman);
         Assert.Equal(0, st.OmittedToman);
         AssertInvoice(r);
     }
@@ -154,8 +155,8 @@ public sealed class Round9CapTests
         AssertConservation(charge, st);
         Assert.Equal(348, st.MoneyConsumedToman);
         Assert.Equal(8_433, st.DiscountToman);
-        Assert.Equal(936, st.Grace!.WaivedToman);
-        Assert.Equal(1_283, st.WriteOffToman);
+        Assert.Equal(1_284, st.Grace!.WaivedToman);
+        Assert.Equal(935, st.WriteOffToman);
         Assert.Equal(0, st.OmittedToman);
         AssertInvoice(r);
     }

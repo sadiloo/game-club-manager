@@ -1475,15 +1475,10 @@ public static class AccountSettlement
                 }
                 else
                 {
-                    var pay = balance;
-                    var waived = minuteNet - pay;
-
-                    grace.Waived += waived;
+                    grace.Waived += minuteNet;
                     grace.Used = true;
                     grace.At = Instant(minuteBase + taken);
                     grace.SegmentId = segmentId;
-                    consumed += pay;
-                    balance = 0;
                     drawnGross += CommitRange(taken, 1);
                     taken += 1;
                 }

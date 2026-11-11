@@ -142,6 +142,23 @@ public sealed class OperatorShiftCloseService(
         var pendingWallet = await ListPendingWalletForPeriodAsync(shift?.Id, periodStart, ct);
         var destinationBreakdown = await DestinationBreakdownAsync(shift?.Id, periodStart, ct);
         var auditFacts = await ShiftAuditFactsAsync(periodStart, ct);
+        var writeOffQuery = db.Invoices.AsNoTracking()
+            .Include(i => i.Session)
+            .Where(i => i.Status != "void" && i.WriteOffToman > 0 && i.IssuedAtUtc >= periodStart);
+        if (settings.ShiftsEnabled && shift is not null)
+        {
+            writeOffQuery = writeOffQuery.Where(i => i.ShiftId == shift.Id);
+        }
+
+        var writeOffRows = await writeOffQuery.OrderBy(i => i.IssuedAtUtc).ToListAsync(ct);
+        var writeOffs = writeOffRows.Select(i => new
+        {
+            invoiceNumber = i.Number,
+            sessionId = i.SessionId,
+            stationId = i.Session?.StationId,
+            writeOffToman = i.WriteOffToman,
+        }).ToList();
+        var writeOffTotalToman = writeOffRows.Sum(i => i.WriteOffToman);
         return new
         {
             settings.ShiftsEnabled,
@@ -159,6 +176,8 @@ public sealed class OperatorShiftCloseService(
             pendingWalletTopUps = pendingWallet,
             destinationCards = destinationBreakdown,
             audit = auditFacts,
+            writeOffTotalToman,
+            writeOffs,
         };
     }
 
