@@ -16,6 +16,24 @@ foreach ($name in @("server-out.log", "server-err.log", "ci-phase.log")) {
     }
 }
 
+foreach ($name in @("ci-heartbeat.log", "ci-firewall.log", "deadman.supervisor.log", "firewall-initial.json")) {
+    $p = Join-Path $logDir $name
+    if (Test-Path $p) {
+        if ($name -eq "firewall-initial.json") {
+            Write-Host "--- tail $name (full) ---"
+            Get-Content $p -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
+        } else {
+            Write-Host "--- tail $name (last 80 lines) ---"
+            Get-Content $p -Tail 80 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
+        }
+    }
+}
+
+Get-ChildItem -Path $logDir -Filter "vstest-diag-*.log" -File -ErrorAction SilentlyContinue | ForEach-Object {
+    Write-Host ("--- tail {0} (last 80 lines) ---" -f $_.Name)
+    Get-Content $_.FullName -Tail 80 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
+}
+
 $marker = Join-Path $artifactDir "ci-timeout-marker.log"
 if (Test-Path $marker) {
     Write-Host "--- ci-timeout-marker.log (full) ---"

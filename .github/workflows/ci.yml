@@ -90,6 +90,11 @@ jobs:
         timeout-minutes: 22
         shell: pwsh
         run: ./scripts/windows/ci-integration.ps1
+      - name: reset kiosk ci firewall and probe egress
+        if: always()
+        timeout-minutes: 3
+        shell: pwsh
+        run: ./scripts/windows/ci-firewall-restore.ps1 -Restore -Evidence
       - name: print kiosk integration evidence
         if: always()
         shell: pwsh
@@ -106,6 +111,11 @@ jobs:
             artifacts/watchdog.log
             artifacts/evidence/**
             artifacts/kiosk-windows-logs/**
+            artifacts/kiosk-windows-logs/ci-heartbeat.log
+            artifacts/kiosk-windows-logs/ci-firewall.log
+            artifacts/kiosk-windows-logs/firewall-initial.json
+            artifacts/kiosk-windows-logs/deadman.supervisor.log
+            artifacts/kiosk-windows-logs/vstest-diag-*.log
             artifacts/ci-timeout-marker.log
             artifacts/**/*.trx
             artifacts/**/Sequence*.xml

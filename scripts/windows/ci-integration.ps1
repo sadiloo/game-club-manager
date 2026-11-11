@@ -12,8 +12,11 @@ $logDir = Join-Path $artifactDir "kiosk-windows-logs"
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 $phaseLog = Join-Path $logDir "ci-phase.log"
 $timeoutMarker = Join-Path $artifactDir "ci-timeout-marker.log"
+$heartbeatLog = Join-Path $logDir "ci-heartbeat.log"
+$firewallLog = Join-Path $logDir "ci-firewall.log"
+$cancelFile = Join-Path $logDir "deadman.cancel"
 
-$script:GlobalDeadline = (Get-Date).AddMinutes(20)
+$script:GlobalDeadline = (Get-Date).AddMinutes(16)
 $script:FinalExitCode = 0
 
 function Write-PhaseLog([string]$message) {
@@ -78,11 +81,18 @@ function Stop-LeftoverCiProcesses() {
     }
 }
 
+function Write-CiPhaseFirewallProbe([string]$label) {
+    Write-PhaseLog "PHASE boundary $label"
+    Write-CiFirewallEvidence -Path $firewallLog -Label $label
+    Write-CiEgressToLogs -FirewallLog $firewallLog -WritePhase { param($line) Write-PhaseLog $line }
+}
+
 function Invoke-DotNetWithWatchdog {
     param(
         [string]$PhaseName,
         [string[]]$ArgumentList,
-        [int]$PhaseCapMs
+        [int]$PhaseCapMs,
+        [string]$DiagLogPath = ""
     )
     $timeoutMs = Get-EffectiveTimeoutMs -phaseCapMs $PhaseCapMs
     if ($timeoutMs -le 0) {
@@ -95,7 +105,11 @@ function Invoke-DotNetWithWatchdog {
     }
 
     Write-PhaseLog "START $PhaseName"
-    $proc = Start-Process -FilePath "dotnet" -ArgumentList $ArgumentList -PassThru -NoNewWindow -WorkingDirectory $repoRoot
+    $dotnetArgs = $ArgumentList
+    if (-not [string]::IsNullOrWhiteSpace($DiagLogPath)) {
+        $dotnetArgs = $ArgumentList + @("--diag:$DiagLogPath")
+    }
+    $proc = Start-Process -FilePath "dotnet" -ArgumentList $dotnetArgs -PassThru -NoNewWindow -WorkingDirectory $repoRoot
     $null = $proc.Handle
     $exited = $proc.WaitForExit($timeoutMs)
     if (-not $exited) {
@@ -177,6 +191,31 @@ $serverProc = $null
 $serverTestExit = 0
 $guardTestExit = 0
 
+. (Join-Path $PSScriptRoot "ci-firewall-restore.ps1")
+Save-CiFirewallInitialState -LogDir $logDir | Out-Null
+Write-PhaseLog "START phase=script-entry"
+
+$scriptStartUtc = (Get-Date).ToUniversalTime()
+$deadmanDeadlineUtc = $scriptStartUtc.AddMinutes(18).ToString("o")
+$deadmanLog = Join-Path $logDir "deadman.supervisor.log"
+$deadmanScript = Join-Path $PSScriptRoot "ci-integration-deadman.ps1"
+$deadmanArgs = @(
+    "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $deadmanScript,
+    "-DeadlineUtcIso", $deadmanDeadlineUtc,
+    "-CancelFilePath", $cancelFile,
+    "-MarkerPath", $timeoutMarker,
+    "-SupervisorLogPath", $deadmanLog,
+    "-PhaseLogPath", $phaseLog,
+    "-HeartbeatLogPath", $heartbeatLog,
+    "-LogDir", $logDir,
+    "-RepoRoot", $repoRoot
+)
+$supervisorProc = Start-Process -FilePath "pwsh" -ArgumentList $deadmanArgs -PassThru -NoNewWindow -WorkingDirectory $repoRoot
+$null = $supervisorProc.Handle
+Write-PhaseLog "START deadman pid=$($supervisorProc.Id) deadline=$deadmanDeadlineUtc"
+
+Write-CiPhaseFirewallProbe -label "pre-integration"
+
 try {
     try {
         Ensure-LocalUser -name $kioskAccountName -password $kioskPassword
@@ -239,6 +278,7 @@ try {
         }
     }
     Write-PhaseLog "END phase=builds exit=0"
+    Write-CiPhaseFirewallProbe -label "after-builds"
 
     $serverDll = Join-Path $repoRoot "src/GameClub.Server/bin/Release/net10.0/GameClub.Server.dll"
     if (-not (Test-Path $serverDll)) { throw "GameClub.Server.dll not found at $serverDll" }
@@ -273,8 +313,10 @@ try {
         throw "server not ready"
     }
     Write-PhaseLog "END phase=server-ready exit=0"
+    Write-CiPhaseFirewallProbe -label "after-server-ready"
 
     Write-Host "Running windows server integration (net10.0, live server)..."
+    Write-CiPhaseFirewallProbe -label "before-dotnet-test-net10-server"
     $serverTestArgs = @(
     "test", "tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj",
     "-c", "Release", "-f", "net10.0", "--no-build", "--nologo",
@@ -283,10 +325,13 @@ try {
     "--blame-hang", "--blame-hang-timeout", "5m", "--blame-hang-dump-type", "none",
     "--logger", "console;verbosity=detailed"
 )
-    $serverTestExit = Invoke-DotNetWithWatchdog -PhaseName "dotnet-test-net10-server" -ArgumentList $serverTestArgs -PhaseCapMs (6 * 60 * 1000)
+    $serverDiag = Join-Path $logDir "vstest-diag-dotnet-test-net10-server.log"
+    $serverTestExit = Invoke-DotNetWithWatchdog -PhaseName "dotnet-test-net10-server" -ArgumentList $serverTestArgs -PhaseCapMs (6 * 60 * 1000) -DiagLogPath $serverDiag
+    Write-CiPhaseFirewallProbe -label "after-dotnet-test-net10-server"
     if ($serverTestExit -eq 124) { throw "server test watchdog" }
 
     Write-Host "Running windows guard/wpf integration (net48, live server env)..."
+    Write-CiPhaseFirewallProbe -label "before-dotnet-test-net48-guard-wpf"
     $guardTestArgs = @(
         "test", "tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj",
         "-c", "Release", "-f", "net48", "--no-build", "--nologo",
@@ -295,14 +340,25 @@ try {
         "--blame-hang", "--blame-hang-timeout", "5m", "--blame-hang-dump-type", "none",
         "--logger", "console;verbosity=detailed"
     )
-    $guardTestExit = Invoke-DotNetWithWatchdog -PhaseName "dotnet-test-net48-guard-wpf" -ArgumentList $guardTestArgs -PhaseCapMs (8 * 60 * 1000)
+    $guardDiag = Join-Path $logDir "vstest-diag-dotnet-test-net48-guard-wpf.log"
+    $guardTestExit = Invoke-DotNetWithWatchdog -PhaseName "dotnet-test-net48-guard-wpf" -ArgumentList $guardTestArgs -PhaseCapMs (8 * 60 * 1000) -DiagLogPath $guardDiag
+    Write-CiPhaseFirewallProbe -label "after-dotnet-test-net48-guard-wpf"
     if ($guardTestExit -eq 124) { throw "guard test watchdog" }
 
     if ($serverTestExit -ne 0) { $script:FinalExitCode = $serverTestExit }
     if ($guardTestExit -ne 0 -and $script:FinalExitCode -eq 0) { $script:FinalExitCode = $guardTestExit }
 } catch {
+    $errMsg = $_.Exception.Message
+    $stack = $_.ScriptStackTrace
+    Write-Host "CI integration error: $errMsg"
+    if ($stack) { Write-Host $stack }
+    Write-PhaseLog "CI integration error: $errMsg"
+    if ($stack) { Write-PhaseLog $stack }
     if ($script:FinalExitCode -eq 0) { $script:FinalExitCode = 1 }
 } finally {
+    if (-not [string]::IsNullOrWhiteSpace($cancelFile)) {
+        try { New-Item -Force -Path $cancelFile -ItemType File | Out-Null } catch { }
+    }
     if ($null -ne $serverProc -and -not $serverProc.HasExited) {
         try {
             Stop-ProcessTree -rootProcId $serverProc.Id
