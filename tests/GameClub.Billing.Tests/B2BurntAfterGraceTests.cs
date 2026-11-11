@@ -120,18 +120,18 @@ public sealed class B2BurntAfterGraceTests
     [Fact]
     public void b2_titan_28_post_grace_burnt_oracle_from_discounted_marginals()
     {
-        // PcTimeDiscount: net = gross - floor(gross*28/100) per minute (integer division on PercentOf).
-        // gross marginals 1333,1334,1333 → net 960,961,960; wallet 1460 (=960+500 like 1833=1333+500).
-        // grace 961; m3 pay 500; burnt 960-500=460; consumed 1460.
+        // PcTimeDiscount: net = gross - (gross*28)/100 trunc per minute (MoneyMath.PercentOf).
+        // Row marginals 1333,1334,1331 → net 960,961,959; wallet 1460 (=960+500).
+        // grace 961; m3 pay 500; burnt 959-500=459; consumed 1460.
         var start = T.At(2026, 6, 3, 14, 0);
         var play = CustomerPlay.Settle(
             PlayPc(start, start.AddSeconds(180)),
             DiscountWallet(1_460),
             pricing: new CustomerPricing("Titan", 28, null, 0));
         Assert.Equal(961, play.Settlement.Grace!.WaivedToman);
-        Assert.Equal(460, play.Settlement.WriteOffToman);
+        Assert.Equal(459, play.Settlement.WriteOffToman);
         Assert.Equal(1_460, play.Settlement.MoneyConsumedToman);
         Assert.Equal(1_460, play.ChargeInvoice!.PayableToman);
-        Assert.Equal(460, play.Settlement.Alert!.AmountToman);
+        Assert.Equal(459, play.Settlement.Alert!.AmountToman);
     }
 }

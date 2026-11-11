@@ -166,7 +166,23 @@ public sealed class OperatorReportingService(AppDbContext db, OperatorContext op
             .Select(kv => new { hour = kv.Key, durationSeconds = kv.Value }).ToList();
         var rankedStations = byStation.OrderByDescending(kv => kv.Value)
             .Select(kv => new { stationId = kv.Key, durationSeconds = kv.Value }).ToList();
-        return new { byStation = rankedStations, peakHours, writeOffs = Array.Empty<object>() };
+        var writeOffRows = await db.Invoices.AsNoTracking()
+            .Include(i => i.Session)!.ThenInclude(s => s!.Station)
+            .Where(i => i.Status != "void" && i.WriteOffToman > 0 && i.Session != null
+                        && i.Session.StartedAtUtc <= toUtc
+                        && (i.Session.EndedAtUtc == null || i.Session.EndedAtUtc >= fromUtc))
+            .OrderBy(i => i.IssuedAtUtc)
+            .ToListAsync(ct);
+        var writeOffs = writeOffRows.Select(i => new
+        {
+            invoiceNumber = i.Number,
+            sessionId = i.SessionId,
+            stationId = i.Session!.StationId,
+            writeOffToman = i.WriteOffToman,
+            issuedAtUtc = i.IssuedAtUtc,
+        }).ToList();
+        var writeOffTotalToman = writeOffRows.Sum(i => i.WriteOffToman);
+        return new { byStation = rankedStations, peakHours, writeOffTotalToman, writeOffs };
     }
 
     public async Task<object> Cu8WalletReportsAsync(CancellationToken ct)
@@ -284,6 +300,19 @@ public sealed class OperatorReportingService(AppDbContext db, OperatorContext op
 
         var destinationCards = await BuildDestinationCardsForDayAsync(year, month, day, ct);
 
+        var writeOffRows = invoices
+            .Where(i => i.Status != "void" && i.WriteOffToman > 0)
+            .OrderBy(i => i.IssuedAtUtc)
+            .ToList();
+        var writeOffs = writeOffRows.Select(i => new
+        {
+            invoiceNumber = i.Number,
+            sessionId = i.SessionId,
+            stationId = i.Session?.StationId ?? "(buffet)",
+            writeOffToman = i.WriteOffToman,
+        }).ToList();
+        var writeOffTotalToman = writeOffRows.Sum(i => i.WriteOffToman);
+
         return new
         {
             workingDay = new { year, month, day },
@@ -301,6 +330,8 @@ public sealed class OperatorReportingService(AppDbContext db, OperatorContext op
             byStation = byStation.Select(kv => new { stationId = kv.Key, receivedMoneyToman = kv.Value }).ToList(),
             byOperator = byOperator.Select(kv => new { operatorId = kv.Key, receivedMoneyToman = kv.Value }).ToList(),
             destinationCards,
+            writeOffTotalToman,
+            writeOffs,
         };
     }
 
