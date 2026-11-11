@@ -66,8 +66,8 @@ public sealed class B2BurntAfterGraceTests
     [Fact]
     public void b2_example_3_vip_110k_60m_50000()
     {
-        // VIP 60 min: 27×1833 + minute28 marginal 1833 (C(28)-C(27)) + 58×1834 burnt path.
-        // Through 28 min money = C(28)=ChargeForMinutes(110k,28)=49483? freeze: 50k consumed, grace 1833, burnt 58167.
+        // VIP 110,000/h, C(n)=round(110000*n/60). C(27)=49,500 paid; balance 500 < marginal C(28)-C(27)=1,833 -> grace 1,833;
+        // rest 32 min = C(60)-C(28) = 110,000-51,333 = 58,667, balance pays 500 -> burnt 58,167; consumed 49,500+500 = 50,000.
         var start = T.At(2026, 6, 3, 14, 0);
         var play = CustomerPlay.Settle(
             PlayPc(start, start.AddMinutes(60), PilotSeed.PcVipGroupId),
@@ -120,8 +120,8 @@ public sealed class B2BurntAfterGraceTests
     [Fact]
     public void b2_titan_28_post_grace_burnt_oracle_from_discounted_marginals()
     {
-        // PcTimeDiscount: net = gross - (gross*28)/100 trunc per minute (MoneyMath.PercentOf).
-        // Row marginals 1333,1334,1331 → net 960,961,959; wallet 1460 (=960+500).
+        // gross marginals 1333, 1334, 1333; 28% discount is applied to the running (cumulative) line total:
+        // net totals 960 / 1921 / 2880, so net marginals 960 / 961 / 959. wallet 1460 (=960+500).
         // grace 961; m3 pay 500; burnt 959-500=459; consumed 1460.
         var start = T.At(2026, 6, 3, 14, 0);
         var play = CustomerPlay.Settle(
@@ -133,5 +133,6 @@ public sealed class B2BurntAfterGraceTests
         Assert.Equal(1_460, play.Settlement.MoneyConsumedToman);
         Assert.Equal(1_460, play.ChargeInvoice!.PayableToman);
         Assert.Equal(459, play.Settlement.Alert!.AmountToman);
+        Assert.Equal(0, play.Account.PcMoneyToman);
     }
 }
