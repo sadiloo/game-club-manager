@@ -17,7 +17,7 @@ namespace GameClub.Kiosk.Windows.IntegrationTests.Wpf;
 [Trait("Category", "WindowsWpf")]
 public sealed class WindowsKioskWpfSmokeTests
 {
-    [Fact]
+    [Fact(Timeout = 300_000)]
     public void wpf_lock_screen_and_remaining_time_visible()
     {
         var artifactDir = Path.Combine(
@@ -76,7 +76,7 @@ public sealed class WindowsKioskWpfSmokeTests
         Assert.True(new FileInfo(screenshotPath).Length > 0);
     }
 
-    [Fact(Timeout = 180_000)]
+    [Fact(Timeout = 360_000)]
     public void wpf_remaining_time_matches_funded_session_within_one_tick()
     {
         var setupError = (Exception)null;

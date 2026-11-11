@@ -18,6 +18,13 @@ foreach ($trxName in @("kiosk-windows-server.trx", "kiosk-windows-guard.trx")) {
     }
 }
 
+if (Test-Path $artifactDir) {
+    Get-ChildItem -Path $artifactDir -Recurse -Filter "Sequence*.xml" -File -ErrorAction SilentlyContinue | ForEach-Object {
+        Write-Host ("--- VSTest hang sequence: {0} ---" -f $_.FullName)
+        Get-Content $_.FullName -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
+    }
+}
+
 $watchdog = Join-Path $artifactDir "watchdog.log"
 if (Test-Path $watchdog) {
     Write-Host "--- watchdog.log (full) ---"

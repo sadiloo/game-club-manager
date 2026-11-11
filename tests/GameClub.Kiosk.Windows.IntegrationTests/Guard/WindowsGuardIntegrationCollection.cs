@@ -1,4 +1,5 @@
 #if NET48
+using System;
 using System.Diagnostics;
 using Xunit;
 

@@ -22,7 +22,7 @@ public sealed class WindowsKioskServerIntegrationTests
         _backend = KioskIntegrationBackend.Create(factory);
     }
 
-    [Fact]
+    [Fact(Timeout = 180_000)]
     public async Task live_server_pair_f6_lock_and_heartbeat_rows()
     {
         await _backend.ResetAsync();
@@ -68,7 +68,7 @@ public sealed class WindowsKioskServerIntegrationTests
         await runtime.DisposeAsync();
     }
 
-    [Fact]
+    [Fact(Timeout = 180_000)]
     public async Task live_server_pairing_registers_device_on_station()
     {
         await _backend.ResetAsync();
@@ -77,7 +77,7 @@ public sealed class WindowsKioskServerIntegrationTests
         await _backend.AssertDevicePairedAsync(deviceId, "PC-PAIR");
     }
 
-    [Fact]
+    [Fact(Timeout = 180_000)]
     public async Task live_server_dead_pc_sweep_after_checkpoint_gap()
     {
         await _backend.ResetAsync();
@@ -109,7 +109,7 @@ public sealed class WindowsKioskServerIntegrationTests
         Assert.Equal(80_000, await _backend.PendingBillCollectibleAsync());
     }
 
-    [Fact]
+    [Fact(Timeout = 360_000)]
     public async Task live_server_z_disconnect_reconnect_same_session_no_double_debit()
     {
         OutOfProcessLiveServer? ownedServer = null;

@@ -36,6 +36,7 @@ jobs:
 
   windows:
     name: windows net48 and net10
+    timeout-minutes: 10
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
@@ -45,10 +46,17 @@ jobs:
       - name: build net48 kiosk and guard
         run: dotnet build src/GameClub.Kiosk/GameClub.Kiosk.csproj -c Release -f net48 --nologo && dotnet build src/GameClub.Kiosk.Guard/GameClub.Kiosk.Guard.csproj -c Release -f net48 --nologo
       - name: test every target framework except server and windows kiosk integration
-        run: dotnet test GameClub.slnx -c Release --nologo --filter "FullyQualifiedName!~GameClub.Server.Tests&FullyQualifiedName!~GameClub.Kiosk.Windows.IntegrationTests"
+        run: dotnet test GameClub.slnx -c Release --nologo --filter "FullyQualifiedName!~GameClub.Server.Tests&FullyQualifiedName!~GameClub.Kiosk.Windows.IntegrationTests" --results-directory artifacts/windows-ci --logger "trx;LogFileName=windows-ci.trx"
+      - name: upload windows ci test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-net48-net10-tests
+          path: artifacts/windows-ci/**
 
   windows-kiosk-integration:
     name: windows-2022 kiosk integration
+    timeout-minutes: 25
     runs-on: windows-2022
     env:
       GAMECLUB_DATABASE: Host=localhost;Port=5432;Database=gameclub_test;Username=postgres;Password=postgres;SSL Mode=Disable
@@ -96,3 +104,5 @@ jobs:
             artifacts/watchdog.log
             artifacts/evidence/**
             artifacts/kiosk-windows-logs/**
+            artifacts/**/*.trx
+            artifacts/**/Sequence*.xml

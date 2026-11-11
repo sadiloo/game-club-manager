@@ -18,7 +18,7 @@ namespace GameClub.Kiosk.Windows.IntegrationTests.Guard;
 [Trait("Category", "WindowsGuard")]
 public sealed class WindowsGuardRuntimeIntegrationTests
 {
-    [Fact]
+    [Fact(Timeout = 120_000)]
     public void allowlist_terminates_real_denied_process_and_preserves_allowed()
     {
         Process cmd = null;
@@ -79,7 +79,7 @@ public sealed class WindowsGuardRuntimeIntegrationTests
         }
     }
 
-    [Fact]
+    [Fact(Timeout = 120_000)]
     public void session_end_clears_launcher_cache_paths()
     {
         var downloads = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
@@ -101,7 +101,7 @@ public sealed class WindowsGuardRuntimeIntegrationTests
         }
     }
 
-    [Fact]
+    [Fact(Timeout = 180_000)]
     public void guard_watchdog_relaunches_killed_shell_logged()
     {
         var sid = Environment.GetEnvironmentVariable("CHECKPOINT_KIOSK_SID") ?? ResolveSid();
@@ -200,7 +200,7 @@ public sealed class WindowsGuardRuntimeIntegrationTests
         Assert.Fail("Guard did not log guard.restart with ISO timestamp after shell kill and a new live PID within 15s.");
     }
 
-    [Fact]
+    [Fact(Timeout = 120_000)]
     public void g2_acl_on_guard_and_supervised_shell_after_launch()
     {
         var sid = Environment.GetEnvironmentVariable("CHECKPOINT_KIOSK_SID") ?? ResolveSid();

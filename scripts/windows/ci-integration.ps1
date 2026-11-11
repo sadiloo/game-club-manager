@@ -127,14 +127,18 @@ Write-Host "Running windows server integration (net10.0, live server)..."
 dotnet test tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj `
     -c Release -f net10.0 --no-build --nologo `
     --logger "trx;LogFileName=kiosk-windows-server.trx" `
-    --results-directory $artifactDir
+    --results-directory $artifactDir `
+    --blame-hang --blame-hang-timeout 8m --blame-hang-dump-type none `
+    --logger "console;verbosity=normal"
 $serverTestExit = $LASTEXITCODE
 
 Write-Host "Running windows guard/wpf integration (net48, live server env)..."
 dotnet test tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj `
     -c Release -f net48 --no-build --nologo `
     --logger "trx;LogFileName=kiosk-windows-guard.trx" `
-    --results-directory $artifactDir
+    --results-directory $artifactDir `
+    --blame-hang --blame-hang-timeout 8m --blame-hang-dump-type none `
+    --logger "console;verbosity=normal"
 $guardTestExit = $LASTEXITCODE
 
 try { Stop-Process -Id $serverProc.Id -Force -ErrorAction SilentlyContinue } catch { }

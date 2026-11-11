@@ -13,7 +13,7 @@ namespace GameClub.Kiosk.Windows.IntegrationTests.Server;
 [Trait("Category", "WindowsServer")]
 public sealed class WindowsKioskLiveServerNet48Tests
 {
-    [Fact]
+    [Fact(Timeout = 180_000)]
     public async Task live_server_net48_transport_heartbeat_rows()
     {
         var baseUrl = Environment.GetEnvironmentVariable("CHECKPOINT_SERVER_URL")?.Trim();
