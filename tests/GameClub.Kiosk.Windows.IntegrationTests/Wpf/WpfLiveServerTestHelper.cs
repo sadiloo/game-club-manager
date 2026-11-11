@@ -2,6 +2,7 @@
 using System;
 using System.IO;
 using System.Net.Http;
+using System.Text.Json;
 using System.Threading.Tasks;
 using Npgsql;
 using Xunit;
@@ -99,20 +100,27 @@ internal static class WpfLiveServerTestHelper
         opLogin.EnsureSuccessStatusCode();
         var created = await op.PostAsJsonAsync("/api/operator/customers", new { name = loginName, mobile = $"0912{new Random().Next(1_000_000, 9_999_999)}" });
         created.EnsureSuccessStatusCode();
-        var customerId = ReadGuid(await created.Content.ReadAsStringAsync(), "id");
+        var createdJson = await created.Content.ReadAsStringAsync();
+        var customerId = ParseGuidProperty(createdJson, "id");
         await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up", new { method = "Cash", amountToman = 50_000L });
         await op.PutJsonAsync($"/api/operator/customers/{customerId}/credential", new { loginName, password });
 
         var codeResponse = await op.PostAsync($"/api/operator/stations/{stationId}/pairing-code", null);
         codeResponse.EnsureSuccessStatusCode();
         var codeJson = await codeResponse.Content.ReadAsStringAsync();
-        var pairingCode = ReadStringProperty(codeJson, "code");
+        var pairingCode = ParseStringProperty(codeJson, "code");
         var pair = await api.PostAsJsonAsync("/api/kiosk/pair", new { code = pairingCode });
         pair.EnsureSuccessStatusCode();
         var pairJson = await pair.Content.ReadAsStringAsync();
-        var deviceId = ReadGuid(pairJson, "deviceId");
-        var deviceKey = ReadStringProperty(pairJson, "deviceKey");
-        var leasePem = ReadStringProperty(pairJson, "leaseVerifyPublicKeyPem");
+        var deviceId = ParseGuidProperty(pairJson, "deviceId");
+        var deviceKey = ParseStringProperty(pairJson, "deviceKey");
+        var leasePem = ParseStringProperty(pairJson, "leaseVerifyPublicKeyPem");
+        if (string.IsNullOrWhiteSpace(leasePem) ||
+            !leasePem.StartsWith("-----BEGIN PUBLIC KEY-----", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "pair response leaseVerifyPublicKeyPem is not valid PEM after JSON parse.");
+        }
 
         WriteDeviceJson(baseUrl, stationId, deviceId, deviceKey, leasePem);
         return stationId;
@@ -138,29 +146,16 @@ internal static class WpfLiveServerTestHelper
         ?? Environment.GetEnvironmentVariable("GAMECLUB_DATABASE")
         ?? throw new InvalidOperationException("GAMECLUB_DATABASE is not set.");
 
-    private static Guid ReadGuid(string json, string prop)
+    private static Guid ParseGuidProperty(string json, string prop)
     {
-        var marker = $"\"{prop}\":\"";
-        var idx = json.IndexOf(marker, StringComparison.Ordinal);
-        if (idx >= 0)
-        {
-            idx += marker.Length;
-            var close = json.IndexOf('"', idx);
-            return Guid.Parse(json.Substring(idx, close - idx));
-        }
-
-        marker = $"\"{prop}\":";
-        idx = json.IndexOf(marker, StringComparison.Ordinal) + marker.Length;
-        var end = json.IndexOfAny(new[] { ',', '}' }, idx);
-        return Guid.Parse(json.Substring(idx, end - idx).Trim('"', ' '));
+        using var doc = JsonDocument.Parse(json);
+        return doc.RootElement.GetProperty(prop).GetGuid();
     }
 
-    private static string ReadStringProperty(string json, string prop)
+    private static string ParseStringProperty(string json, string prop)
     {
-        var marker = $"\"{prop}\":\"";
-        var idx = json.IndexOf(marker, StringComparison.Ordinal) + marker.Length;
-        var close = json.IndexOf('"', idx);
-        return json.Substring(idx, close - idx);
+        using var doc = JsonDocument.Parse(json);
+        return doc.RootElement.GetProperty(prop).GetString()!;
     }
 }
 

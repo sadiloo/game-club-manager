@@ -11,12 +11,18 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using GameClub.Billing;
+using Xunit;
 
 namespace GameClub.Kiosk.Windows.IntegrationTests.Wpf;
 
 [Trait("Category", "WindowsWpf")]
+[Collection("windows-wpf-sta")]
 public sealed class WindowsKioskWpfSmokeTests
 {
+    private readonly WpfStaApplicationFixture _wpf;
+
+    public WindowsKioskWpfSmokeTests(WpfStaApplicationFixture wpf) => _wpf = wpf;
+
     [Fact]
     public void wpf_lock_screen_and_remaining_time_visible()
     {
@@ -31,40 +37,43 @@ public sealed class WindowsKioskWpfSmokeTests
         string statusText = null;
         Exception inProcessError = null;
 
-        var sta = new Thread(() =>
+        _wpf.RunAsync(async () =>
         {
             try
             {
-                var app = new Application();
                 var window = new GameClub.Kiosk.MainWindow();
-                window.Show();
-                window.UpdateLayout();
-                var lockPanel = (FrameworkElement)GetField(window, "LockPanel");
-                var status = (System.Windows.Controls.TextBlock)GetField(window, "StatusText");
-                var playingPanel = (FrameworkElement)GetField(window, "PlayingPanel");
-                lockVisible = lockPanel.Visibility;
-                statusText = status.Text;
-                var width = (int)Math.Max(window.ActualWidth, 800);
-                var height = (int)Math.Max(window.ActualHeight, 600);
-                var rtb = new RenderTargetBitmap(width, height, 96, 96, PixelFormats.Pbgra32);
-                rtb.Render(window);
-                var encoder = new PngBitmapEncoder();
-                encoder.Frames.Add(BitmapFrame.Create(rtb));
-                using (var stream = File.Create(screenshotPath))
+                try
                 {
-                    encoder.Save(stream);
-                }
+                    window.Show();
+                    window.UpdateLayout();
+                    var lockPanel = (FrameworkElement)GetField(window, "LockPanel");
+                    var status = (System.Windows.Controls.TextBlock)GetField(window, "StatusText");
+                    var playingPanel = (FrameworkElement)GetField(window, "PlayingPanel");
+                    lockVisible = lockPanel.Visibility;
+                    statusText = status.Text;
+                    var width = (int)Math.Max(window.ActualWidth, 800);
+                    var height = (int)Math.Max(window.ActualHeight, 600);
+                    var rtb = new RenderTargetBitmap(width, height, 96, 96, PixelFormats.Pbgra32);
+                    rtb.Render(window);
+                    var encoder = new PngBitmapEncoder();
+                    encoder.Frames.Add(BitmapFrame.Create(rtb));
+                    using (var stream = File.Create(screenshotPath))
+                    {
+                        encoder.Save(stream);
+                    }
 
-                app.Shutdown();
+                    await Task.CompletedTask;
+                }
+                finally
+                {
+                    window.Close();
+                }
             }
             catch (Exception ex)
             {
                 inProcessError = ex;
             }
-        });
-        sta.SetApartmentState(ApartmentState.STA);
-        sta.Start();
-        sta.Join(TimeSpan.FromMinutes(1));
+        }, TimeSpan.FromMinutes(1));
 
         if (inProcessError is not null)
         {
@@ -109,42 +118,43 @@ public sealed class WindowsKioskWpfSmokeTests
             RemainingTimeEstimator.Estimate(account, "pc-normal", PlayMode.Offline, 1, at, card, graceMinuteEnabled: true).MoneyMinutes!.Value).TotalSeconds;
         Assert.Equal(expectedSeconds, estimatorSeconds);
 
-        var sta = new Thread(() =>
+        _wpf.RunAsync(async () =>
         {
             try
             {
-                var app = new Application();
                 var window = new GameClub.Kiosk.MainWindow();
-                window.Show();
-                window.UpdateLayout();
-                var host = GetField(window, "_host");
-                var login = host.GetType().GetMethod("LoginAsync", BindingFlags.Instance | BindingFlags.Public);
-                ((Task)login.Invoke(host, new object[] { "fund48667", "pass" })).GetAwaiter().GetResult();
-                var status = (System.Windows.Controls.TextBlock)GetField(window, "StatusText");
-                var deadline = DateTime.UtcNow.AddSeconds(90);
-                while (DateTime.UtcNow < deadline)
+                try
                 {
-                    window.Dispatcher.Invoke(() => { }, DispatcherPriority.Background);
-                    var text = status.Text ?? "";
-                    if (text.IndexOf("left", StringComparison.OrdinalIgnoreCase) >= 0)
+                    window.Show();
+                    window.UpdateLayout();
+                    var host = GetField(window, "_host");
+                    var login = host.GetType().GetMethod("LoginAsync", BindingFlags.Instance | BindingFlags.Public);
+                    await (Task)login.Invoke(host, new object[] { "fund48667", "pass" });
+                    var status = (System.Windows.Controls.TextBlock)GetField(window, "StatusText");
+                    var deadline = DateTime.UtcNow.AddSeconds(90);
+                    while (DateTime.UtcNow < deadline)
                     {
-                        capturedStatus = text;
-                        break;
+                        window.Dispatcher.Invoke(() => { }, DispatcherPriority.Background);
+                        var text = status.Text ?? "";
+                        if (text.IndexOf("left", StringComparison.OrdinalIgnoreCase) >= 0)
+                        {
+                            capturedStatus = text;
+                            break;
+                        }
+
+                        await Task.Delay(1000);
                     }
-
-                    Thread.Sleep(1000);
                 }
-
-                app.Shutdown();
+                finally
+                {
+                    window.Close();
+                }
             }
             catch (Exception ex)
             {
                 inProcessError = ex;
             }
-        });
-        sta.SetApartmentState(ApartmentState.STA);
-        sta.Start();
-        sta.Join(TimeSpan.FromMinutes(2));
+        }, TimeSpan.FromMinutes(2));
 
         if (inProcessError is not null)
         {

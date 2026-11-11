@@ -2,6 +2,7 @@
 using System;
 using System.IO;
 using System.Net.Http;
+using System.Text.Json;
 using System.Threading.Tasks;
 using GameClub.Kiosk.Core.Runtime;
 using Npgsql;
@@ -62,33 +63,19 @@ public sealed class WindowsKioskLiveServerNet48Tests
         var code = await opLogin.PostAsync($"/api/operator/stations/{stationId}/pairing-code", null);
         code.EnsureSuccessStatusCode();
         var codeText = await code.Content.ReadAsStringAsync();
-        var start = codeText.IndexOf("\"code\":", StringComparison.Ordinal) + 8;
-        var end = codeText.IndexOf('"', start);
-        var pairingCode = codeText.Substring(start, end - start);
+        string pairingCode;
+        using (var codeDoc = JsonDocument.Parse(codeText))
+        {
+            pairingCode = codeDoc.RootElement.GetProperty("code").GetString()!;
+        }
+
         var pair = await api.PostAsJsonAsync("/api/kiosk/pair", new { code = pairingCode });
         pair.EnsureSuccessStatusCode();
         var body = await pair.Content.ReadAsStringAsync();
-        var deviceId = ReadGuid(body, "deviceId");
-        var keyStart = body.IndexOf("\"deviceKey\":\"", StringComparison.Ordinal) + 13;
-        var keyEnd = body.IndexOf('"', keyStart);
-        return (deviceId, body.Substring(keyStart, keyEnd - keyStart));
-    }
-
-    private static Guid ReadGuid(string json, string prop)
-    {
-        var marker = $"\"{prop}\":\"";
-        var idx = json.IndexOf(marker, StringComparison.Ordinal);
-        if (idx < 0)
-        {
-            marker = $"\"{prop}\":";
-            idx = json.IndexOf(marker, StringComparison.Ordinal) + marker.Length;
-            var end = json.IndexOfAny(new[] { ',', '}' }, idx);
-            return Guid.Parse(json.Substring(idx, end - idx).Trim('"'));
-        }
-
-        idx += marker.Length;
-        var close = json.IndexOf('"', idx);
-        return Guid.Parse(json.Substring(idx, close - idx));
+        using var pairDoc = JsonDocument.Parse(body);
+        var deviceId = pairDoc.RootElement.GetProperty("deviceId").GetGuid();
+        var deviceKey = pairDoc.RootElement.GetProperty("deviceKey").GetString()!;
+        return (deviceId, deviceKey);
     }
 
     private static HttpClient CreateKioskClient(string baseUrl, Guid deviceId, string deviceKey)
