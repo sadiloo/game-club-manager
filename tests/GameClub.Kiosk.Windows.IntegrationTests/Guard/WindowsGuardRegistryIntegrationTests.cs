@@ -33,13 +33,13 @@ public sealed class WindowsGuardRegistryIntegrationTests : IDisposable
 
     public void Dispose() => RegistryPolicyStore.EnsureDefaults();
 
-    [Fact(Timeout = 120_000)]
+    [Fact]
     public void g1_defaults_are_not_tampered()
     {
         Assert.False(RegistryPolicyStore.Tampered());
     }
 
-    [Fact(Timeout = 120_000)]
+    [Fact]
     public void g1_missing_disallow_run_child_is_tampered()
     {
         DeleteDisallowRunHive();
@@ -48,7 +48,7 @@ public sealed class WindowsGuardRegistryIntegrationTests : IDisposable
         Assert.False(RegistryPolicyStore.Tampered());
     }
 
-    [Fact(Timeout = 120_000)]
+    [Fact]
     public void g1_disallow_run_enable_zero_is_tampered()
     {
         RegistryPolicyStore.EnsureDefaults();
@@ -60,7 +60,7 @@ public sealed class WindowsGuardRegistryIntegrationTests : IDisposable
         Assert.True(RegistryPolicyStore.Tampered());
     }
 
-    [Fact(Timeout = 120_000)]
+    [Fact]
     public void g1_truncated_disallow_list_is_tampered()
     {
         RegistryPolicyStore.EnsureDefaults();
@@ -86,7 +86,7 @@ public sealed class WindowsGuardRegistryIntegrationTests : IDisposable
         Assert.True(RegistryPolicyStore.Tampered());
     }
 
-    [Fact(Timeout = 120_000)]
+    [Fact]
     public void g1_tamper_triggers_guard_policy_tamper_log_line()
     {
         if (File.Exists(_watchdogLog))

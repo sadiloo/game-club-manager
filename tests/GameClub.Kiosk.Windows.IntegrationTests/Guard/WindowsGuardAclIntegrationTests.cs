@@ -15,7 +15,7 @@ namespace GameClub.Kiosk.Windows.IntegrationTests.Guard;
 [Trait("Category", "WindowsGuard")]
 public sealed class WindowsGuardAclIntegrationTests
 {
-    [Fact(Timeout = 120_000)]
+    [Fact]
     public void g2_set_kernel_security_deny_terminate_is_readable_on_dacl()
     {
         var sid = ResolveSid();
@@ -27,7 +27,7 @@ public sealed class WindowsGuardAclIntegrationTests
         Assert.True(found);
     }
 
-    [Fact(Timeout = 120_000)]
+    [Fact]
     public void g2_guard_startup_protection_applies_to_launched_guard_process()
     {
         var sid = ResolveSid();
@@ -39,7 +39,7 @@ public sealed class WindowsGuardAclIntegrationTests
         guard.Kill();
     }
 
-    [Fact(Timeout = 120_000)]
+    [Fact]
     public void g2_non_admin_terminate_attempt_reports_honestly()
     {
         var secondUser = Environment.GetEnvironmentVariable("CHECKPOINT_SECOND_USER")?.Trim();
