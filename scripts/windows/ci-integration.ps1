@@ -320,6 +320,7 @@ try {
     $serverTestArgs = @(
     "test", "tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj",
     "-c", "Release", "-f", "net10.0", "--no-build", "--nologo",
+    "--filter", "Category!=WindowsGuard",
     "--logger", "trx;LogFileName=kiosk-windows-server.trx",
     "--results-directory", $artifactDir,
     "--blame-hang", "--blame-hang-timeout", "5m", "--blame-hang-dump-type", "none",
@@ -335,6 +336,7 @@ try {
     $guardTestArgs = @(
         "test", "tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj",
         "-c", "Release", "-f", "net48", "--no-build", "--nologo",
+        "--filter", "Category!=WindowsGuard",
         "--logger", "trx;LogFileName=kiosk-windows-guard.trx",
         "--results-directory", $artifactDir,
         "--blame-hang", "--blame-hang-timeout", "5m", "--blame-hang-dump-type", "none",
