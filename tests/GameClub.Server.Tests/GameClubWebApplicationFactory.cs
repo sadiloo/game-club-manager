@@ -101,6 +101,7 @@ internal static class S3TestHelpers
 
     public static async Task ResetAsync(GameClubWebApplicationFactory factory)
     {
+        factory.DeadPcBackgroundSweepEnabled = false;
         using var scope = factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         await db.Database.ExecuteSqlRawAsync(TruncateSql);
