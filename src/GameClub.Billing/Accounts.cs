@@ -1462,17 +1462,31 @@ public static class AccountSettlement
             var minuteNet = NetOf(taken, 1);
             if (balance < minuteNet)
             {
-                var pay = balance;
-                var waived = minuteNet - pay;
+                var graceEndsPlay = activeSeconds <= (playedBeforeMinutes + taken + 1) * 60L;
+                if (step == 1 && graceEndsPlay)
+                {
+                    grace.Waived += minuteNet;
+                    grace.Used = true;
+                    grace.At = Instant(minuteBase + taken);
+                    grace.SegmentId = segmentId;
+                    drawnGross += CommitRange(taken, 1);
+                    taken += 1;
+                    grace.Stopped = true;
+                }
+                else
+                {
+                    var pay = balance;
+                    var waived = minuteNet - pay;
 
-                grace.Waived += waived;
-                grace.Used = true;
-                grace.At = Instant(minuteBase + taken);
-                grace.SegmentId = segmentId;
-                consumed += pay;
-                balance = 0;
-                drawnGross += CommitRange(taken, 1);
-                taken += 1;
+                    grace.Waived += waived;
+                    grace.Used = true;
+                    grace.At = Instant(minuteBase + taken);
+                    grace.SegmentId = segmentId;
+                    consumed += pay;
+                    balance = 0;
+                    drawnGross += CommitRange(taken, 1);
+                    taken += 1;
+                }
             }
         }
 
@@ -1616,8 +1630,26 @@ public static class RemainingTimeEstimator
                     : ledger.NetOf(MoneyMath.ChargeForMinutes(quote.HourlyRateToman, owned + policy.GranularityMinutes, policy.Remainder), at, groupId) - netOwned;
                 if (nextBlock > left)
                 {
-                    moneyMinutes = owned + 1;
+                    moneyMinutes = owned == 0 ? 1 : owned + 1;
                 }
+            }
+        }
+
+        if (graceMinuteEnabled && !free && quote.HourlyRateToman > 0 && moneyMinutes is long shown && shown > 0)
+        {
+            var fundedOnly = MoneyMath.MaxAffordableMinutes(quote.HourlyRateToman, account.MoneyBalanceToman, policy);
+            if (discountedRate)
+            {
+                var discountedMax = DiscountedMinutes(quote.HourlyRateToman, account.MoneyBalanceToman, policy, ledger, at, groupId);
+                if (discountedMax >= 0)
+                {
+                    fundedOnly = discountedMax;
+                }
+            }
+
+            if (shown == fundedOnly + 1 && fundedOnly > 0)
+            {
+                moneyMinutes = fundedOnly;
             }
         }
 

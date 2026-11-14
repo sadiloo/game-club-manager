@@ -50,9 +50,9 @@ public class Round3Tests
         var budget = one + next - 1;
         var start = T.At(2026, 6, 2, 10, 0);
         var plan = PrepaidPlanner.ForAmount(start, budget, "a", "st", "flat", PlayMode.Offline, 1, card);
-        Assert.Equal(1, plan.Grace!.WaivedToman);
-        Assert.Equal(next, plan.Lines.Sum(line => line.AmountToman) - one);
-        Assert.Equal(0, plan.UnusedToman);
+        Assert.Equal(next, plan.Grace!.WaivedToman);
+        Assert.Equal(one, plan.ConsumedToman);
+        Assert.Equal(budget - one, plan.UnusedToman);
 
         var played = SessionPricer.Price(new Session("x", [
             new PlaySegment("a", plan.Start, plan.End, "st", "flat", PlayMode.Offline, 1),

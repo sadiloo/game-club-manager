@@ -1,3 +1,4 @@
+using GameClub.Billing;
 using GameClub.Server.Data;
 using GameClub.Server.Data.Entities;
 using GameClub.Server.Services;
@@ -140,11 +141,25 @@ public sealed class OperatorCustomerService(AppDbContext db, IClock clock, Audit
 
     private async Task SetSessionLinkCoreAsync(Guid sessionId, Guid? customerId, CancellationToken ct)
     {
-        var session = await db.Sessions.FirstOrDefaultAsync(s => s.Id == sessionId, ct)
+        var session = await db.Sessions
+            .Include(s => s.Station)!.ThenInclude(st => st!.Group)
+            .FirstOrDefaultAsync(s => s.Id == sessionId, ct)
             ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Session not found.");
         if (session.Status == SessionStatus.Closed)
         {
             throw new ApiException(StatusCodes.Status409Conflict, "closed", "Session is closed.");
+        }
+
+        if (customerId is Guid cid
+            && session.Station?.Group?.Kind == StationKind.Pc
+            && await db.Sessions.AnyAsync(
+                s => s.Id != sessionId
+                    && s.CustomerId == cid
+                    && s.Station!.Group!.Kind == StationKind.Pc
+                    && (s.Status == SessionStatus.Open || s.Status == SessionStatus.Paused),
+                ct))
+        {
+            throw new ApiException(StatusCodes.Status409Conflict, "session_elsewhere", "Customer already has an open PC session.");
         }
 
         var before = session.CustomerId;

@@ -47,6 +47,17 @@ public static class MemberSettingsMapper
             ? floor == 0 ? DebtPolicy.None : DebtPolicy.Limited(-floor)
             : DebtPolicy.None;
 
+    public static WalletSettings LoadWalletSettings(BranchMemberSettingsEntity row)
+    {
+        var debt = LoadDebtPolicy(row);
+        return new WalletSettings(
+            WalletMode.Shared,
+            row.AllowPcWhileInDebt,
+            debt,
+            row.GraceMinuteEnabled,
+            row.ApplyDiscountsToPc);
+    }
+
     public sealed record CustomerLevelDto(string Name, long MinimumLifetimeHours, int DiscountPercent);
 
     public static JalaliDate? LoadBirthDate(CustomerMemberEntity? member)

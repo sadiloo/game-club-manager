@@ -136,27 +136,27 @@ public class ReviewFixesTests
         var minute = MoneyMath.ChargeForMinutes(110_000, 1, RateRemainderMode.Nearest);
         var charge = OneMinute();
         var plain = CustomerPlay.Settle(charge, PcWallet(500, false));
-        Assert.Equal(500, plain.Settlement.MoneyConsumedToman);
-        Assert.Equal(minute - 500, plain.Settlement.Grace!.WaivedToman);
-        Assert.Equal(0, plain.Account.PcMoneyToman);
+        Assert.Equal(0, plain.Settlement.MoneyConsumedToman);
+        Assert.Equal(minute, plain.Settlement.Grace!.WaivedToman);
+        Assert.Equal(500, plain.Account.PcMoneyToman);
         Assert.NotNull(plain.ChargeInvoice);
-        Assert.Equal(plain.ChargeInvoice!.PayableToman, 500 - plain.Account.PcMoneyToman);
+        Assert.Equal(0, plain.ChargeInvoice!.PayableToman);
 
         var discountedAccount = PcWallet(500, true);
         var titan = new CustomerPricing("Titan", 28, null, 0);
         var discounted = CustomerPlay.Settle(charge, discountedAccount, pricing: titan);
         var netMinute = new PcTimeDiscount(28, 0, 0).Net(minute);
-        Assert.Equal(500, discounted.ChargeInvoice!.PayableToman);
+        Assert.Equal(0, discounted.ChargeInvoice!.PayableToman);
         Assert.Equal(minute - netMinute, discounted.ChargeInvoice.DiscountToman);
-        Assert.Equal(500, discounted.Settlement.MoneyConsumedToman);
-        Assert.Equal(netMinute - 500, discounted.Settlement.Grace!.WaivedToman);
-        Assert.Equal(0, discounted.Account.PcMoneyToman);
-        Assert.Equal(discounted.ChargeInvoice.PayableToman, 500 - discounted.Account.PcMoneyToman);
+        Assert.Equal(0, discounted.Settlement.MoneyConsumedToman);
+        Assert.Equal(netMinute, discounted.Settlement.Grace!.WaivedToman);
+        Assert.Equal(500, discounted.Account.PcMoneyToman);
+        Assert.Equal(0, discounted.ChargeInvoice.PayableToman);
 
         var ignored = CustomerPlay.Settle(charge, PcWallet(500, false), pricing: titan);
-        Assert.Equal(500, ignored.Settlement.MoneyConsumedToman);
-        Assert.Equal(0, ignored.Account.PcMoneyToman);
-        Assert.Equal(500, ignored.ChargeInvoice!.PayableToman);
+        Assert.Equal(0, ignored.Settlement.MoneyConsumedToman);
+        Assert.Equal(500, ignored.Account.PcMoneyToman);
+        Assert.Equal(0, ignored.ChargeInvoice!.PayableToman);
     }
 
     [Fact]
@@ -165,7 +165,7 @@ public class ReviewFixesTests
         var at = T.At(2026, 6, 2, 10, 0);
         var pricing = new CustomerPricing("Titan", 28, null, 0);
         var off = CustomerPlay.Estimate(
-            PcWallet(3_667, false),
+            PcWallet(5_500, false),
             CafeFixture.ExampleNormal,
             PlayMode.Offline,
             1,
@@ -173,15 +173,16 @@ public class ReviewFixesTests
             CafeFixture.Card(),
             pricing: pricing);
         var on = CustomerPlay.Estimate(
-            PcWallet(3_667, true),
+            PcWallet(5_500, true),
             CafeFixture.ExampleNormal,
             PlayMode.Offline,
             1,
             at,
             CafeFixture.Card(),
             pricing: pricing);
-        Assert.Equal(2, off.MoneyMinutes);
-        Assert.Equal(3, on.MoneyMinutes);
+        Assert.Equal(3, off.MoneyMinutes);
+        // Freeze line 41: grace minute is not shown in the estimate while funded minutes > 0 (cf. KioskR6RemainingTimeTests.default_grace_does_not_add_prospective_minute_below_sixty_funded_minutes).
+        Assert.Equal(4, on.MoneyMinutes);
 
         var grace = CustomerPlay.Estimate(
             PcWallet(500, true),
@@ -372,7 +373,8 @@ public class ReviewFixesTests
             CafeFixture.Play("a", small.Start, small.End, "example-pc-1", CafeFixture.ExampleNormal, 1)));
         var smallPaid = AccountSettlement.Settle(smallPlayed, new PcAccount("m", 500, []));
         Assert.Equal(small.Grace!.WaivedToman, smallPaid.Grace!.WaivedToman);
-        Assert.Equal(500, smallPaid.MoneyConsumedToman);
+        Assert.Equal(0, smallPaid.MoneyConsumedToman);
+        Assert.Equal(500, smallPaid.UpdatedAccount.MoneyBalanceToman);
     }
 
     [Fact]

@@ -39,10 +39,10 @@ public class PrepaidAndAccountTests
         Assert.Equal(RateSource.TimeBand, crossing.Lines[0].Source);
         Assert.Equal(44, crossing.Lines[1].BilledMinutes);
         Assert.Equal(MoneyMath.ChargeForMinutes(110_000, 44, RateRemainderMode.Nearest), crossing.Lines[1].AmountToman);
-        Assert.Equal(160_000, crossing.ConsumedToman);
-        Assert.Equal(0, crossing.UnusedToman);
+        Assert.Equal(158_833, crossing.ConsumedToman);
+        Assert.Equal(1_167, crossing.UnusedToman);
         Assert.Equal(1, crossing.Grace!.Minutes);
-        Assert.Equal(667, crossing.Grace.WaivedToman);
+        Assert.Equal(1_834, crossing.Grace.WaivedToman);
 
         var tooSmall = PrepaidPlanner.ForAmount(
             T.At(2026, 6, 2, 10, 0),
@@ -55,11 +55,11 @@ public class PrepaidAndAccountTests
             CafeFixture.Card());
         var minute = MoneyMath.ChargeForMinutes(GameTimerReference.Ps5OnePlayerHourly, 1, RateRemainderMode.Nearest);
         Assert.Equal(tooSmall.Start.AddMinutes(1), tooSmall.End);
-        Assert.Equal(1_000, tooSmall.ConsumedToman);
-        Assert.Equal(0, tooSmall.UnusedToman);
+        Assert.Equal(0, tooSmall.ConsumedToman);
+        Assert.Equal(1_000, tooSmall.UnusedToman);
         Assert.NotNull(tooSmall.Grace);
         Assert.Equal(1, tooSmall.Grace!.Minutes);
-        Assert.Equal(minute - 1_000, tooSmall.Grace.WaivedToman);
+        Assert.Equal(minute, tooSmall.Grace.WaivedToman);
 
         var noGrace = PrepaidPlanner.ForAmount(
             T.At(2026, 6, 2, 10, 0),

@@ -488,6 +488,50 @@
           }
         }
       }
+    },
+    "/api/kiosk/pair": {
+      "post": { "tags": ["Kiosk"], "responses": { "200": { "description": "OK" } } }
+    },
+    "/api/kiosk/stations/{stationId}/config": {
+      "get": { "tags": ["Kiosk"], "responses": { "200": { "description": "OK" }, "403": { "description": "Foreign station" } } }
+    },
+    "/api/kiosk/stations/{stationId}/active-session": {
+      "get": { "tags": ["Kiosk"], "responses": { "200": { "description": "OK" }, "403": { "description": "Foreign station" } } }
+    },
+    "/api/kiosk/auth/login": {
+      "post": { "tags": ["Kiosk"], "responses": { "200": { "description": "OK" } } }
+    },
+    "/api/kiosk/catalog": {
+      "get": { "tags": ["Kiosk"], "responses": { "200": { "description": "OK" } } }
+    },
+    "/api/operator/stations/{stationId}/pairing-code": {
+      "post": { "tags": ["KioskOperator"], "responses": { "200": { "description": "OK" } } }
+    },
+    "/api/operator/sessions/{sessionId}/force-logout": {
+      "post": { "tags": ["KioskOperator"], "responses": { "204": { "description": "No content" } } }
+    },
+    "/hubs/kiosk": {
+      "get": { "tags": ["KioskHub"], "responses": { "200": { "description": "SignalR negotiate" } } }
+    },
+    "/api/operator/games": {
+      "get": { "tags": ["KioskOperator"], "responses": { "200": { "description": "Catalog list" } } },
+      "post": { "tags": ["KioskOperator"], "responses": { "201": { "description": "Created" } } }
+    },
+    "/api/operator/games/{id}": {
+      "put": { "tags": ["KioskOperator"], "responses": { "200": { "description": "Updated" } } }
+    },
+    "/api/operator/sessions/{sessionId}/manual-settle": {
+      "post": {
+        "tags": ["Sessions"],
+        "requestBody": { "$ref": "#/components/schemas/ManualSettleRequest" },
+        "responses": { "200": { "description": "Manual settle resolve" } }
+      }
+    },
+    "/api/kiosk/stations/{stationId}/config": {
+      "get": { "tags": ["Kiosk"], "responses": { "200": { "description": "Station kiosk config" } } }
+    },
+    "/api/kiosk/profile/test-mode": {
+      "post": { "tags": ["Kiosk"], "responses": { "200": { "description": "Toggle test mode" } } }
     }
   },
   "components": {

@@ -117,7 +117,7 @@ public class AllocationAndSeedTests
         Assert.Equal(T.At(2026, 6, 3, 0, 0, 40), night.End);
         Assert.Equal(60, night.GrantedActiveSeconds);
         Assert.Equal(1_833, Assert.Single(night.Lines).AmountToman);
-        Assert.Equal(1_333, night.Grace!.WaivedToman);
+        Assert.Equal(1_833, night.Grace!.WaivedToman);
         Assert.Equal(RateSource.BaseTariff, night.Lines[0].Source);
 
         var band = PrepaidPlanner.ForAmount(
@@ -130,7 +130,7 @@ public class AllocationAndSeedTests
             1,
             CafeFixture.Card());
         Assert.Equal(2_667, Assert.Single(band.Lines).AmountToman);
-        Assert.Equal(2_167, band.Grace!.WaivedToman);
+        Assert.Equal(2_667, band.Grace!.WaivedToman);
     }
 
     [Fact]

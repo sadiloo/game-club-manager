@@ -698,10 +698,13 @@ function renderBill(bill) {
     levelDisc || bdayDisc
       ? `\nتخفیف سطح ${levelDisc} · تولد ${bdayDisc}`
       : "";
+  const writeOff = bill.writeOffToman ?? 0;
+  const burnLine = writeOff > 0 ? `\nسوخت‌شده ${writeOff}` : "";
   d.textContent =
     `زمان ${bill.timeGrossToman ?? 0} · بوفه ${bill.buffetGrossToman ?? 0} · خدمات ${bill.servicesGrossToman ?? 0}\n` +
     `جمع ${bill.unroundedPayableToman} + رند ${bill.roundingToman} = ${bill.collectibleToman}` +
     discLine +
+    burnLine +
     (segText ? `\nبخش‌ها:\n${segText}` : "");
   renderBillSaleLines(bill.saleLines);
   renderCustomerChip(bill.linkedCustomer);
@@ -791,9 +794,20 @@ async function onTileClick(t) {
   } else {
     renderCustomerChip(t.linkedCustomer);
   }
-  document.getElementById("pauseBtn").classList.toggle("hidden", t.status !== "Playing");
-  document.getElementById("resumeBtn").classList.toggle("hidden", t.status !== "Paused");
-  document.getElementById("openBillBtn").classList.toggle("hidden", (t.groupId || "").startsWith("pc"));
+  const groupKind = t.groupKind ?? "";
+  const isPcStation =
+    groupKind === "Pc" ||
+    groupKind === "1" ||
+    (t.groupId || "").startsWith("pc");
+  const isPlayingPc = isPcStation && (t.status === "Playing" || t.status === "Open");
+  document.getElementById("pauseBtn").classList.toggle("hidden", !(!isPcStation && t.status === "Playing"));
+  document.getElementById("resumeBtn").classList.toggle("hidden", !(!isPcStation && t.status === "Paused"));
+  document.getElementById("prepaidDurationBtn").classList.toggle("hidden", isPlayingPc || isPcStation);
+  document.getElementById("prepaidAmountBtn").classList.toggle("hidden", isPlayingPc || isPcStation);
+  document.getElementById("playerCountBtn").classList.toggle("hidden", isPcStation);
+  document.getElementById("playerCountSelect").parentElement.classList.toggle("hidden", isPcStation);
+  document.getElementById("forceLogoutBtn").classList.toggle("hidden", !isPlayingPc);
+  document.getElementById("openBillBtn").classList.toggle("hidden", isPcStation);
   const transferVisible = t.status === "Playing" || t.status === "Paused";
   document.getElementById("transferBtn").classList.toggle("hidden", !transferVisible);
   document.getElementById("transferFaultWrap").classList.toggle("hidden", !transferVisible);
@@ -828,6 +842,13 @@ document.getElementById("transferBtn").onclick = async () => {
 
 document.getElementById("pauseBtn").onclick = async () => {
   await api(`/api/operator/sessions/${selectedSessionId}/pause`, { method: "POST" });
+  await refreshGrid();
+};
+
+document.getElementById("forceLogoutBtn").onclick = async () => {
+  if (!selectedSessionId) return;
+  await api(`/api/operator/sessions/${selectedSessionId}/force-logout`, { method: "POST" });
+  document.getElementById("sessionActions").classList.add("hidden");
   await refreshGrid();
 };
 
@@ -948,7 +969,12 @@ document.getElementById("cancelBillBtn").onclick = async () => {
 document.getElementById("loadInvoiceBtn").onclick = async () => {
   const n = document.getElementById("invoiceNumber").value;
   const inv = await api(`/api/operator/invoices/${n}`);
-  document.getElementById("invoiceDetail").textContent = JSON.stringify(inv, null, 2);
+  const writeOff = inv.writeOffToman ?? 0;
+  const burnLine = writeOff > 0 ? `\nسوخت‌شده ${writeOff}` : "";
+  document.getElementById("invoiceDetail").textContent =
+    `زمان ${inv.timeGrossToman ?? 0} · بوفه ${inv.buffetGrossToman ?? 0} · خدمات ${inv.servicesGrossToman ?? 0}\n` +
+    `جمع ${inv.unroundedPayableToman ?? 0} + رند ${inv.roundingToman ?? 0} = ${inv.collectibleToman ?? 0}` +
+    burnLine;
 };
 
 document.getElementById("voidInvoiceBtn").onclick = async () => {
@@ -1046,6 +1072,108 @@ bindClick("mgrGiftBtn", async () => {
     body: JSON.stringify({ giftToman: Number(window.prompt("هدیه", "10000")) }),
   });
   await refreshWalletBalance();
+});
+
+bindClick("mgrPairingCodeBtn", async () => {
+  const stationId = document.getElementById("mgrPairStationId").value.trim();
+  if (!stationId) return showError("شناسه ایستگاه را وارد کنید.");
+  const res = await api(`/api/operator/stations/${stationId}/pairing-code`, { method: "POST" });
+  showError(`کد جفت‌سازی: ${res.code}`);
+});
+
+function populateCatalogEditor(entry) {
+  document.getElementById("catalogEditId").value = entry ? String(entry.id) : "";
+  document.getElementById("catalogName").value = entry?.name ?? "";
+  document.getElementById("catalogCategoryId").value = String(entry?.categoryId ?? 1);
+  document.getElementById("catalogExecutable").value = entry?.executableOrUri ?? "";
+  document.getElementById("catalogArgs").value = entry?.arguments ?? "";
+  document.getElementById("catalogIcon").value = entry?.iconUrl ?? "";
+  document.getElementById("catalogOrder").value = String(entry?.sortOrder ?? 0);
+  document.getElementById("catalogEnabled").checked = entry?.enabled !== false;
+  document.getElementById("catalogGroups").value = (entry?.groupRestrictions ?? []).join(",");
+  document.getElementById("catalogAllowlist").value = (entry?.allowedProcessNames ?? []).join(",");
+}
+
+async function refreshCatalogAdminPanel() {
+  const box = document.getElementById("catalogAdminPanel");
+  if (!box) return;
+  const summary = document.getElementById("catalogAdminSummary");
+  const list = document.getElementById("catalogAdminEntries");
+  const catalog = await api("/api/operator/games");
+  const entries = catalog.entries || [];
+  box.dataset.catalogVersion = String(catalog.catalogVersion ?? 0);
+  if (summary) {
+    summary.textContent = `نسخه ${catalog.catalogVersion ?? 0} · ${entries.length} مورد`;
+  }
+  if (!list) return;
+  list.innerHTML = "";
+  entries.forEach((entry) => {
+    const row = document.createElement("div");
+    row.className = "sale-line";
+    row.style.cursor = "pointer";
+    row.textContent = `${entry.id}: ${entry.name} · ${entry.enabled ? "فعال" : "غیرفعال"} · order ${entry.sortOrder ?? 0}`;
+    row.addEventListener("click", () => populateCatalogEditor(entry));
+    list.appendChild(row);
+  });
+}
+
+bindClick("mgrCatalogAdminBtn", async () => {
+  await refreshCatalogAdminPanel();
+  const panel = document.getElementById("catalogAdminPanel");
+  if (panel) panel.classList.remove("hidden");
+});
+
+bindClick("catalogSaveBtn", async () => {
+  const name = document.getElementById("catalogName").value.trim();
+  const categoryId = Number(document.getElementById("catalogCategoryId").value || "1");
+  const executable = document.getElementById("catalogExecutable").value.trim();
+  const args = document.getElementById("catalogArgs").value.trim();
+  const icon = document.getElementById("catalogIcon").value.trim();
+  const order = Number(document.getElementById("catalogOrder").value || "0");
+  const enabled = document.getElementById("catalogEnabled").checked;
+  const allowlist = document
+    .getElementById("catalogAllowlist")
+    .value.split(",")
+    .map((v) => v.trim())
+    .filter(Boolean);
+  const groups = document
+    .getElementById("catalogGroups")
+    .value.split(",")
+    .map((v) => v.trim())
+    .filter(Boolean);
+  const editId = document.getElementById("catalogEditId").value.trim();
+  if (editId) {
+    await api(`/api/operator/games/${editId}`, {
+      method: "PUT",
+      body: JSON.stringify({
+        name,
+        categoryId,
+        enabled,
+        executableOrUri: executable,
+        arguments: args || null,
+        iconUrl: icon || null,
+        sortOrder: order,
+        groupRestrictions: groups,
+        allowedProcessNames: allowlist,
+      }),
+    });
+  } else {
+    await api("/api/operator/games", {
+      method: "POST",
+      body: JSON.stringify({
+        name,
+        categoryId,
+        executableOrUri: executable,
+        arguments: args || null,
+        iconUrl: icon || null,
+        sortOrder: order,
+        enabled,
+        groupRestrictions: groups,
+        allowedProcessNames: allowlist,
+      }),
+    });
+  }
+  await refreshCatalogAdminPanel();
 });
 
 bindClick("mgrOpeningBtn", async () => {

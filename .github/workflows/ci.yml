@@ -32,15 +32,90 @@ jobs:
         with:
           dotnet-version: 10.0.403
       - name: test net10
-        run: dotnet test GameClub.slnx -c Release -f net10.0 --nologo
+        run: dotnet test GameClub.slnx -c Release -f net10.0 --nologo -m:1
 
   windows:
     name: windows net48 and net10
-    runs-on: windows-latest
+    timeout-minutes: 10
+    runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.403
-      - name: test every target framework except server integration
-        run: dotnet test GameClub.slnx -c Release --nologo --filter "FullyQualifiedName!~GameClub.Server.Tests"
+      - name: build net48 kiosk and guard
+        run: dotnet build src/GameClub.Kiosk/GameClub.Kiosk.csproj -c Release -f net48 --nologo && dotnet build src/GameClub.Kiosk.Guard/GameClub.Kiosk.Guard.csproj -c Release -f net48 --nologo
+      - name: test every target framework except server and windows kiosk integration
+        run: dotnet test GameClub.slnx -c Release --nologo --filter "FullyQualifiedName!~GameClub.Server.Tests&FullyQualifiedName!~GameClub.Kiosk.Windows.IntegrationTests" --results-directory artifacts/windows-ci --logger "trx;LogFileName=windows-ci.trx"
+      - name: upload windows ci test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-net48-net10-tests
+          path: artifacts/windows-ci/**
+
+  windows-kiosk-integration:
+    name: windows-2022 kiosk integration
+    timeout-minutes: 40
+    runs-on: windows-2022
+    env:
+      GAMECLUB_DATABASE: Host=localhost;Port=5432;Database=gameclub_test;Username=postgres;Password=postgres;SSL Mode=Disable
+      GAMECLUB_TEST_DATABASE: Host=localhost;Port=5432;Database=gameclub_test;Username=postgres;Password=postgres;SSL Mode=Disable
+      GAMECLUB_API_KEY: ci-test-key
+      OperatorSessionSecret: ci-operator-secret-r11
+      CHECKPOINT_SERVER_URL: http://127.0.0.1:5225
+      ASPNETCORE_URLS: http://127.0.0.1:5225
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.403
+      - name: install and start postgresql
+        shell: pwsh
+        run: |
+          choco install postgresql16 --params '/Password:postgres' -y --no-progress
+          $env:PGPASSWORD = 'postgres'
+          $pgIsReady = 'C:\Program Files\PostgreSQL\16\bin\pg_isready.exe'
+          $psql = 'C:\Program Files\PostgreSQL\16\bin\psql.exe'
+          $deadline = (Get-Date).AddMinutes(5)
+          while ((Get-Date) -lt $deadline) {
+            & $pgIsReady -U postgres 2>$null
+            if ($LASTEXITCODE -eq 0) { break }
+            Start-Sleep -Seconds 3
+          }
+          if ($LASTEXITCODE -ne 0) { throw 'postgresql service not ready' }
+          $exists = & $psql -h 127.0.0.1 -U postgres -c "SELECT 1 FROM pg_database WHERE datname='gameclub_test'" -tA 2>$null
+          if (-not $exists) { & $psql -h 127.0.0.1 -U postgres -c "CREATE DATABASE gameclub_test;" }
+      - name: windows kiosk integration
+        timeout-minutes: 22
+        shell: pwsh
+        run: ./scripts/windows/ci-integration.ps1
+      - name: reset kiosk ci firewall and probe egress
+        if: always()
+        timeout-minutes: 3
+        shell: pwsh
+        run: ./scripts/windows/ci-firewall-restore.ps1 -Restore -Evidence
+      - name: print kiosk integration evidence
+        if: always()
+        shell: pwsh
+        run: ./scripts/windows/ci-integration-print.ps1
+      - name: upload kiosk integration artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kiosk-windows-integration
+          if-no-files-found: warn
+          path: |
+            artifacts/kiosk-windows-server.trx
+            artifacts/kiosk-windows-guard.trx
+            artifacts/watchdog.log
+            artifacts/evidence/**
+            artifacts/kiosk-windows-logs/**
+            artifacts/kiosk-windows-logs/ci-heartbeat.log
+            artifacts/kiosk-windows-logs/ci-firewall.log
+            artifacts/kiosk-windows-logs/firewall-initial.json
+            artifacts/kiosk-windows-logs/deadman.supervisor.log
+            artifacts/kiosk-windows-logs/vstest-diag-*.log
+            artifacts/ci-timeout-marker.log
+            artifacts/**/*.trx
+            artifacts/**/Sequence*.xml

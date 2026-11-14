@@ -304,6 +304,13 @@ public sealed class SessionCloser(
         CancellationToken ct)
     {
         var number = await NextInvoiceNumberAsync(ct);
+        var writeOffToman = amounts.Detail?.PackageSettlement?.WriteOffToman ?? 0;
+        if (writeOffToman == 0)
+        {
+            writeOffToman = amounts.Detail?.InvoicePreview.Lines
+                .Where(l => l.Kind == InvoiceLineKind.WriteOff)
+                .Sum(l => -l.AmountToman) ?? 0L;
+        }
         var invoice = new InvoiceEntity
         {
             Id = Guid.NewGuid(),
@@ -319,6 +326,7 @@ public sealed class SessionCloser(
             RoundingToman = amounts.RoundingToman,
             CollectibleToman = amounts.CollectibleToman,
             SurchargeToman = amounts.SurchargeToman,
+            WriteOffToman = writeOffToman,
             DiscountToman = amounts.DiscountToman,
             LevelDiscountToman = SplitMemberDiscounts(amounts.Detail).Level,
             BirthdayDiscountToman = SplitMemberDiscounts(amounts.Detail).Birthday,
@@ -486,6 +494,16 @@ public sealed class SessionService(
                 throw new ApiException(StatusCodes.Status409Conflict, "target_unavailable", "Station cannot accept a new session.");
             }
 
+            if (station.Group.Kind == StationKind.Pc)
+            {
+                var kioskProfile = await db.StationKioskProfiles.AsNoTracking()
+                    .FirstOrDefaultAsync(p => p.StationId == station.Id, ct);
+                if (kioskProfile?.IsTestMode == true)
+                {
+                    throw new ApiException(StatusCodes.Status409Conflict, "test_mode", "Station is in test mode.");
+                }
+            }
+
             if (await db.Sessions.AnyAsync(
                     s => s.StationId == station.Id
                         && (s.Status == SessionStatus.Open
@@ -606,6 +624,9 @@ public sealed class SessionService(
         }, ct);
 
     public Task<object> StopAsync(Guid sessionId, CancellationToken ct)
+        => StopAsync(sessionId, null, ct);
+
+    public Task<object> StopAsync(Guid sessionId, DateTime? pcEndUtc, CancellationToken ct)
         => ExecuteWithSessionWriteLockAsync(sessionId, async (session, innerCt) =>
         {
             if (session.Status == SessionStatus.ManualSettle)
@@ -620,7 +641,7 @@ public sealed class SessionService(
 
             if (session.Station!.Group!.Kind == StationKind.Pc)
             {
-                var endUtc = session.LastCheckpointUtc ?? session.StartedAtUtc;
+                var endUtc = pcEndUtc ?? session.LastCheckpointUtc ?? session.StartedAtUtc;
                 var bill = await operatorBills.CreatePcPendingBillAsync(session, endUtc, "pc_stop", "logout", innerCt);
                 await audit.AppendAsync("session.stop", new { sessionId, reason = "stop", pendingBillId = bill.Id }, innerCt);
                 return PendingStopBody(bill);
@@ -689,6 +710,49 @@ public sealed class SessionService(
             session.LastCheckpointUtc = acceptedUtc;
             session.Checkpoints.Add(new CheckpointEntity { AtUtc = acceptedUtc });
             await audit.AppendAsync("session.checkpoint", new { sessionId, atUtc = acceptedUtc }, innerCt);
+            await db.SaveChangesAsync(innerCt);
+        }, ct);
+
+    public Task RecordAcceptedCheckpointsAsync(Guid sessionId, IReadOnlyList<DateTime> acceptedUtc, CancellationToken ct)
+        => ExecuteWithSessionWriteLockAsync(sessionId, async (session, innerCt) =>
+        {
+            if (session.Station!.Group!.Kind != StationKind.Pc)
+            {
+                throw new ApiException(StatusCodes.Status400BadRequest, "not_pc", "Checkpoints are for PC sessions only.");
+            }
+
+            if (session.Status is not SessionStatus.Open and not SessionStatus.Paused)
+            {
+                if (session.Status == SessionStatus.ManualSettle)
+                {
+                    throw new ApiException(StatusCodes.Status409Conflict, "manual_settle", "Session awaits manual settlement.");
+                }
+
+                throw new ApiException(StatusCodes.Status409Conflict, "closed", "Session is closed.");
+            }
+
+            if (acceptedUtc.Count == 0)
+            {
+                return;
+            }
+
+            foreach (var at in acceptedUtc)
+            {
+                var previous = session.LastCheckpointUtc ?? session.StartedAtUtc;
+                if (at < previous)
+                {
+                    session.Status = SessionStatus.ManualSettle;
+                    session.ManualSettleReason = "rejected_checkpoint";
+                    await audit.AppendAsync("session.manual_settle", new { sessionId, reason = "rejected_checkpoint" }, innerCt);
+                    await db.SaveChangesAsync(innerCt);
+                    return;
+                }
+
+                session.LastCheckpointUtc = at;
+                session.Checkpoints.Add(new CheckpointEntity { AtUtc = at });
+                await audit.AppendAsync("session.checkpoint", new { sessionId, atUtc = at }, innerCt);
+            }
+
             await db.SaveChangesAsync(innerCt);
         }, ct);
 
@@ -771,7 +835,8 @@ public sealed class SessionService(
     {
         return await ExecuteWithSessionWriteLockAsync(sessionId, async (session, innerCt) =>
         {
-            if (session.Status != SessionStatus.ManualSettle)
+            if (session.Status != SessionStatus.ManualSettle
+                && !(session.Status == SessionStatus.AwaitingPayment && session.ManualSettleReason != null))
             {
                 throw new ApiException(StatusCodes.Status409Conflict, "not_manual_settle", "Session is not awaiting manual settlement.");
             }
@@ -797,8 +862,22 @@ public sealed class SessionService(
                 }
             }
 
-            var pending = await operatorBills.CreatePcPendingBillAsync(session, endUtc, "manual_settle", session.ManualSettleReason, innerCt);
-            await audit.AppendAsync("session.manual_settle_resolve", new { sessionId, endUtc }, innerCt);
+            var reason = session.ManualSettleReason;
+            PendingBillEntity pending;
+            if (session.PendingBill is not null
+                || await db.PendingBills.AnyAsync(b => b.SessionId == session.Id, innerCt))
+            {
+                pending = session.PendingBill
+                    ?? await db.PendingBills.FirstAsync(b => b.SessionId == session.Id, innerCt);
+            }
+            else
+            {
+                pending = await operatorBills.CreatePcPendingBillAsync(session, endUtc, "manual_settle", reason, innerCt);
+            }
+
+            session.ManualSettleReason = null;
+            await db.SaveChangesAsync(innerCt);
+            await audit.AppendAsync("session.manual_settle_resolve", new { sessionId, endUtc, reason }, innerCt);
             return pending;
         }, ct);
     }
@@ -1091,6 +1170,18 @@ public sealed class DatabaseSeed
                 var op = new OperatorUserEntity { Id = Guid.NewGuid(), Username = "operator", Role = UserRole.Operator };
                 op.PinHash = OperatorAuthService.HashPin(op, "1111");
                 db.OperatorUsers.AddRange(manager, op);
+                await db.SaveChangesAsync(ct);
+            }
+        }
+        catch (PostgresException ex) when (ex.SqlState == "42P01")
+        {
+        }
+
+        try
+        {
+            if (!await db.GameCatalogCategories.AnyAsync(ct))
+            {
+                db.GameCatalogCategories.Add(new GameCatalogCategoryEntity { Id = 1, Name = "عمومی", SortOrder = 1 });
                 await db.SaveChangesAsync(ct);
             }
         }

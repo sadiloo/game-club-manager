@@ -77,6 +77,22 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
 
     public DbSet<SessionCommandEntity> SessionCommands => Set<SessionCommandEntity>();
 
+    public DbSet<KioskDeviceEntity> KioskDevices => Set<KioskDeviceEntity>();
+
+    public DbSet<KioskPairingCodeEntity> KioskPairingCodes => Set<KioskPairingCodeEntity>();
+
+    public DbSet<CustomerCredentialEntity> CustomerCredentials => Set<CustomerCredentialEntity>();
+
+    public DbSet<GameCatalogCategoryEntity> GameCatalogCategories => Set<GameCatalogCategoryEntity>();
+
+    public DbSet<GameCatalogEntryEntity> GameCatalogEntries => Set<GameCatalogEntryEntity>();
+
+    public DbSet<StationKioskProfileEntity> StationKioskProfiles => Set<StationKioskProfileEntity>();
+
+    public DbSet<KioskHeartbeatEntity> KioskHeartbeats => Set<KioskHeartbeatEntity>();
+
+    public DbSet<KioskLeaseSigningKeyEntity> KioskLeaseSigningKeys => Set<KioskLeaseSigningKeyEntity>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<StationGroupEntity>(e =>
@@ -352,6 +368,63 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             e.HasIndex(x => x.ShiftId).IsUnique();
             e.HasOne(x => x.Shift).WithOne(x => x.CloseRecord).HasForeignKey<CloseRecordEntity>(x => x.ShiftId)
                 .IsRequired(false);
+        });
+
+        modelBuilder.Entity<KioskDeviceEntity>(e =>
+        {
+            e.ToTable("kiosk_devices");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => x.StationId).IsUnique().HasFilter("\"IsRevoked\" = false");
+            e.HasOne(x => x.Station).WithMany().HasForeignKey(x => x.StationId);
+        });
+
+        modelBuilder.Entity<KioskLeaseSigningKeyEntity>(e =>
+        {
+            e.ToTable("kiosk_lease_signing_keys");
+            e.HasKey(x => x.Id);
+        });
+
+        modelBuilder.Entity<KioskPairingCodeEntity>(e =>
+        {
+            e.ToTable("kiosk_pairing_codes");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.StationId, x.Code });
+            e.HasOne(x => x.Station).WithMany().HasForeignKey(x => x.StationId);
+        });
+
+        modelBuilder.Entity<CustomerCredentialEntity>(e =>
+        {
+            e.ToTable("customer_credentials");
+            e.HasKey(x => x.CustomerId);
+            e.HasIndex(x => x.LoginNameNormalized).IsUnique();
+            e.HasOne(x => x.Customer).WithMany().HasForeignKey(x => x.CustomerId);
+        });
+
+        modelBuilder.Entity<GameCatalogCategoryEntity>(e =>
+        {
+            e.ToTable("game_catalog_categories");
+            e.HasKey(x => x.Id);
+        });
+
+        modelBuilder.Entity<GameCatalogEntryEntity>(e =>
+        {
+            e.ToTable("game_catalog_entries");
+            e.HasKey(x => x.Id);
+            e.HasOne(x => x.Category).WithMany().HasForeignKey(x => x.CategoryId);
+        });
+
+        modelBuilder.Entity<StationKioskProfileEntity>(e =>
+        {
+            e.ToTable("station_kiosk_profiles");
+            e.HasKey(x => x.StationId);
+            e.HasOne(x => x.Station).WithMany().HasForeignKey(x => x.StationId);
+        });
+
+        modelBuilder.Entity<KioskHeartbeatEntity>(e =>
+        {
+            e.ToTable("kiosk_heartbeats");
+            e.HasKey(x => x.Id);
+            e.HasOne(x => x.Device).WithMany().HasForeignKey(x => x.DeviceId);
         });
     }
 

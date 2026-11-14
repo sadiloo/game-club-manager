@@ -90,6 +90,7 @@ internal static class S3TestHelpers
 {
     public const string TruncateSql = """
         TRUNCATE invoice_member_effects, loyalty_hour_ledger, wallet_ledger, pending_wallet_topups, customer_packages, package_products, customer_members, branch_member_settings, branch_cafe_settings, close_records, shifts, invoice_catalog_lines, open_sale_lines, open_sales, catalog_items, catalog_categories RESTART IDENTITY CASCADE;
+        TRUNCATE kiosk_heartbeats, kiosk_devices, kiosk_pairing_codes, kiosk_lease_signing_keys, customer_credentials, game_catalog_entries, game_catalog_categories, station_kiosk_profiles RESTART IDENTITY CASCADE;
         TRUNCATE session_commands, rejected_card_to_card, payment_lines, pending_bills, audit_log, checkpoints, pause_intervals, play_segments, invoices, sessions, customers, rate_card_snapshot, stations, destination_cards RESTART IDENTITY CASCADE;
         TRUNCATE operator_users RESTART IDENTITY CASCADE;
         SELECT setval('invoice_number_seq', 1, false);
@@ -100,10 +101,24 @@ internal static class S3TestHelpers
 
     public static async Task ResetAsync(GameClubWebApplicationFactory factory)
     {
+        factory.DeadPcBackgroundSweepEnabled = false;
         using var scope = factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         await db.Database.ExecuteSqlRawAsync(TruncateSql);
         await DatabaseSeed.EnsureAsync(db);
+        await EnsureCatalogCategoryTwoForTestsAsync(db);
+    }
+
+    /// <summary>Test fixture only — category id 2 for operator catalog PUT (freeze PC-5 / case 8).</summary>
+    private static async Task EnsureCatalogCategoryTwoForTestsAsync(AppDbContext db)
+    {
+        if (await db.GameCatalogCategories.AnyAsync(c => c.Id == 2))
+        {
+            return;
+        }
+
+        db.GameCatalogCategories.Add(new GameCatalogCategoryEntity { Id = 2, Name = "اختصاصی", SortOrder = 2 });
+        await db.SaveChangesAsync();
     }
 
     public static async Task FinishPcPaymentAsync(GameClubWebApplicationFactory factory, Guid sessionId, long amountToman)

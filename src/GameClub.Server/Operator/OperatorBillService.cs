@@ -100,6 +100,8 @@ public sealed class BillCalculator(
             (_, packages) = await memberContext.LoadMemberStateAsync(cid, ct);
         }
 
+        var applyPricing = session.Station?.Group?.Kind != StationKind.Pc || settings.ApplyDiscountsToPc;
+        var stationKind = session.Station?.Group?.Kind ?? StationKind.Console;
         return MemberBillComposer.Compute(
             charge,
             snapshot,
@@ -110,7 +112,9 @@ public sealed class BillCalculator(
             member,
             settings,
             packages,
-            previewTenders.Count > 0 ? previewTenders : null);
+            stationKind,
+            previewTenders.Count > 0 ? previewTenders : null,
+            applyPricing);
     }
 
     private static BillAmounts ToBillAmounts(MemberBillResult result)
@@ -346,6 +350,14 @@ public sealed class OperatorBillService(
     {
         await WithSessionBillLockAsync(sessionId, async (session, innerCt) =>
         {
+            var isPc = session.Station?.Group?.Kind == StationKind.Pc;
+            if (isPc && session.Status == SessionStatus.AwaitingPayment)
+            {
+                // L7: dismiss payment UI; station stays occupied until confirm — no resume/unlock.
+                await audit.AppendAsync("bill.cancel", new { sessionId, pcAwaitingPayment = true }, innerCt);
+                return;
+            }
+
             if (session.Status != SessionStatus.BillOpen || session.PendingBill is null)
             {
                 throw new ApiException(StatusCodes.Status409Conflict, "no_bill", "No open bill to cancel.");
@@ -536,9 +548,23 @@ public sealed class OperatorBillService(
         string? stopReason,
         CancellationToken ct)
     {
+        var existing = session.PendingBill
+            ?? await db.PendingBills.FirstOrDefaultAsync(b => b.SessionId == session.Id, ct);
+        if (existing is not null)
+        {
+            session.PendingBill = existing;
+            session.Status = SessionStatus.AwaitingPayment;
+            return existing;
+        }
+
         ApplyPlayEnd(session, endUtc);
         var saleLines = await LoadSaleLinesAsync(session.Id, ct);
         var amounts = await calculator.ComputeAsync(session, endUtc, 0, saleLines, ct);
+        if (amounts.Detail?.OvershootAlert is { } alert)
+        {
+            await audit.AppendAsync("pc_overshoot", new { sessionId = session.Id, alert.Code, alert.AmountToman, alert.Message }, ct);
+        }
+
         var bill = new PendingBillEntity
         {
             Id = Guid.NewGuid(),
@@ -636,6 +662,12 @@ public sealed class OperatorBillService(
             .Include(o => o.Lines).ThenInclude(l => l.CatalogItem)
             .FirstOrDefaultAsync(o => o.SessionId == sessionId, ct);
         var (levelDiscountToman, birthdayDiscountToman) = SplitMemberDiscounts(amounts.Detail);
+        var writeOffToman = amounts.Detail?.InvoicePreview.Lines
+            .Where(l => l.Kind == InvoiceLineKind.WriteOff)
+            .Sum(l => -l.AmountToman) ?? 0L;
+        var overshootAlert = amounts.Detail?.OvershootAlert is { } alert
+            ? new { alert.Code, alert.AmountToman, alert.Message }
+            : null;
         return new
         {
             bill.SessionId,
@@ -650,6 +682,8 @@ public sealed class OperatorBillService(
             servicesGrossToman = amounts.ServicesGrossToman,
             levelDiscountToman,
             birthdayDiscountToman,
+            writeOffToman,
+            overshootAlert,
             saleLines = sale is null ? Array.Empty<SaleLineDto>() : OpenSaleMapper.ToDtos(sale.Lines),
             frozenAtUtc = bill.FrozenAtUtc,
             source = bill.Source,
@@ -692,6 +726,12 @@ public sealed class OperatorBillService(
         var saleLines = sale?.Lines.ToList() ?? [];
         var amounts = await calculator.ComputeAsync(session, bill.FrozenAtUtc, bill.SurchargeToman, saleLines, ct);
         var (levelDiscountToman, birthdayDiscountToman) = SplitMemberDiscounts(amounts.Detail);
+        var writeOffToman = amounts.Detail?.InvoicePreview.Lines
+            .Where(l => l.Kind == InvoiceLineKind.WriteOff)
+            .Sum(l => -l.AmountToman) ?? 0L;
+        var overshootAlert = amounts.Detail?.OvershootAlert is { } alert
+            ? new { alert.Code, alert.AmountToman, alert.Message }
+            : null;
         return new
         {
             bill.SessionId,
@@ -706,6 +746,8 @@ public sealed class OperatorBillService(
             servicesGrossToman = bill.ServicesGrossToman,
             levelDiscountToman,
             birthdayDiscountToman,
+            writeOffToman,
+            overshootAlert,
             saleLines = sale is null ? Array.Empty<SaleLineDto>() : OpenSaleMapper.ToDtos(sale.Lines),
             frozenAtUtc = bill.FrozenAtUtc,
             source = bill.Source,
@@ -883,6 +925,7 @@ public sealed class OperatorGridService(AppDbContext db, SessionService sessions
                     station.Id,
                     station.Name,
                     station.GroupId,
+                    groupKind = station.Group?.Kind.ToString(),
                     station.DefaultPlayerCount,
                     mode = station.DefaultPlayMode.ToString(),
                     operationalState = station.OperationalState.ToString(),
@@ -923,6 +966,7 @@ public sealed class OperatorGridService(AppDbContext db, SessionService sessions
                 station.Id,
                 station.Name,
                 station.GroupId,
+                groupKind = station.Group?.Kind.ToString(),
                 station.DefaultPlayerCount,
                 mode = station.DefaultPlayMode.ToString(),
                 operationalState = station.OperationalState.ToString(),
@@ -1143,7 +1187,8 @@ public sealed class ManualSettleQueueService(AppDbContext db, OperatorPolicies p
     {
         var rows = await db.Sessions.AsNoTracking()
             .Include(s => s.Station)
-            .Where(s => s.Status == SessionStatus.ManualSettle)
+            .Where(s => s.Status == SessionStatus.ManualSettle
+                || (s.Status == SessionStatus.AwaitingPayment && s.ManualSettleReason != null))
             .OrderBy(s => s.StartedAtUtc)
             .Select(s => new
             {

@@ -83,12 +83,11 @@ public class ReReview2Tests
             1,
             CafeFixture.Card());
         Assert.Equal(T.At(2026, 6, 2, 10, 2), plan.End);
-        Assert.Equal(1, plan.Grace!.WaivedToman);
-        Assert.Equal(3_666, plan.ConsumedToman);
-        Assert.Equal(0, plan.UnusedToman);
-        var marginal = MoneyMath.ChargeForMinutes(110_000, 2, RateRemainderMode.Nearest)
-            - MoneyMath.ChargeForMinutes(110_000, 1, RateRemainderMode.Nearest);
-        Assert.Equal(marginal - (3_666 - MoneyMath.ChargeForMinutes(110_000, 1, RateRemainderMode.Nearest)), plan.Grace.WaivedToman);
+        var firstMinute = MoneyMath.ChargeForMinutes(110_000, 1, RateRemainderMode.Nearest);
+        var marginal = MoneyMath.ChargeForMinutes(110_000, 2, RateRemainderMode.Nearest) - firstMinute;
+        Assert.Equal(marginal, plan.Grace!.WaivedToman);
+        Assert.Equal(firstMinute, plan.ConsumedToman);
+        Assert.Equal(3_666 - firstMinute, plan.UnusedToman);
 
         var mismatches = 0;
         var sample = "";
@@ -218,7 +217,7 @@ public class ReReview2Tests
             RoundingPolicy.Off,
             T.At(2026, 6, 2, 10, 1),
             settled.Grace));
-        Assert.Equal(500, invoice.PayableToman);
+        Assert.Equal(0, invoice.PayableToman);
     }
 
     [Fact]

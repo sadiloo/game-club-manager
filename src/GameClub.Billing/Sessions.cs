@@ -929,11 +929,19 @@ public static class PrepaidPlanner
             }
             else if (marginal > unused)
             {
-                grace = new GraceLine(1, marginal - unused, minuteStart, segmentId);
+                if (step == 1)
+                {
+                    grace = new GraceLine(1, marginal, minuteStart, segmentId);
+                }
+                else
+                {
+                    grace = new GraceLine(1, marginal - unused, minuteStart, segmentId);
+                    consumed = amountToman;
+                    unused = 0;
+                }
+
                 lines = minuteLines;
                 end = TehranTime.AddSeconds(minuteStart, 60);
-                consumed = amountToman;
-                unused = 0;
             }
         }
 
