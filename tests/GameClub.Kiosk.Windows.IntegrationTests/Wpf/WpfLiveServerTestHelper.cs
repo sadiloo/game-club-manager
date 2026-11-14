@@ -102,7 +102,7 @@ internal static class WpfLiveServerTestHelper
         created.EnsureSuccessStatusCode();
         var createdJson = await created.Content.ReadAsStringAsync();
         var customerId = ParseGuidProperty(createdJson, "id");
-        await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up", new { method = "Cash", amountToman = 50_000L });
+        await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up", new { method = "Cash", amountToman = 48_667L });
         await op.PutJsonAsync($"/api/operator/customers/{customerId}/credential", new { loginName, password });
 
         var codeResponse = await op.PostAsync($"/api/operator/stations/{stationId}/pairing-code", null);
