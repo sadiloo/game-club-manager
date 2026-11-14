@@ -493,6 +493,14 @@ public static class AccountSettlement
             }
         }
 
+        if (grace.PerMinuteElseGrace && grace.PerMinuteElseGraceNet > 0 && money > 0)
+        {
+            var spend = Math.Min(money, grace.PerMinuteElseGraceNet);
+            grace.Waived -= spend;
+            moneyConsumed += spend;
+            money -= spend;
+        }
+
         var updatedPackages = account.Packages
             .Select(package => package with { RemainingMinutes = remaining[package.Id] })
             .ToArray();
@@ -1166,6 +1174,8 @@ public static class AccountSettlement
         public bool Stopped;
         public bool UncoveredShortfall;
         public long Waived;
+        public bool PerMinuteElseGrace;
+        public long PerMinuteElseGraceNet;
         public DateTimeOffset At;
         public string? SegmentId;
     }
@@ -1475,15 +1485,12 @@ public static class AccountSettlement
                 }
                 else
                 {
-                    var pay = balance;
-                    var waived = minuteNet - pay;
-
-                    grace.Waived += waived;
+                    grace.PerMinuteElseGrace = true;
+                    grace.PerMinuteElseGraceNet = minuteNet;
+                    grace.Waived += minuteNet;
                     grace.Used = true;
                     grace.At = Instant(minuteBase + taken);
                     grace.SegmentId = segmentId;
-                    consumed += pay;
-                    balance = 0;
                     drawnGross += CommitRange(taken, 1);
                     taken += 1;
                 }

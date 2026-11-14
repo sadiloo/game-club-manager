@@ -109,7 +109,8 @@ public sealed class Round8Tests
             discount: new SessionDiscount(CodePercent: 50, ValidFrom: T.At(2026, 6, 2, 22, 40)));
         Assert.Equal(charge.TotalAmountToman, SettlementSum(st));
         Assert.Equal(T.At(2026, 6, 2, 22, 41), st.Grace?.At);
-        Assert.Equal(834, st.Grace!.WaivedToman);
+        // B2: full discounted net of grace minute — gross marginal 1833 at min 42, 50% → 1833-916=917.
+        Assert.Equal(917, st.Grace!.WaivedToman);
     }
 
     [Fact]
