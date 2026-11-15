@@ -110,6 +110,8 @@ public sealed class WindowsKioskWpfSmokeTests
         const int expectedSeconds = 2_160;
         const long startWalletToman = 48_667;
         string capturedStatus = null;
+        string lastPollStatusText = null;
+        string pollFailureDiagnostics = null;
         Exception inProcessError = null;
         var at = DateTime.SpecifyKind(new DateTime(2026, 6, 3, 14, 0, 0), DateTimeKind.Unspecified);
         var card = new RateCardBuilder().AddBase("pc-normal", PlayMode.Offline, 1, 80_000).Build();
@@ -131,11 +133,13 @@ public sealed class WindowsKioskWpfSmokeTests
                     var login = host.GetType().GetMethod("LoginAsync", BindingFlags.Instance | BindingFlags.Public);
                     await (Task)login.Invoke(host, new object[] { "fund48667", "pass" });
                     var status = (System.Windows.Controls.TextBlock)GetField(window, "StatusText");
+                    var pollStartedUtc = DateTime.UtcNow;
                     var deadline = DateTime.UtcNow.AddSeconds(90);
                     while (DateTime.UtcNow < deadline)
                     {
                         window.Dispatcher.Invoke(() => { }, DispatcherPriority.Background);
                         var text = status.Text ?? "";
+                        lastPollStatusText = text;
                         if (text.IndexOf("left", StringComparison.OrdinalIgnoreCase) >= 0)
                         {
                             capturedStatus = text;
@@ -144,6 +148,15 @@ public sealed class WindowsKioskWpfSmokeTests
 
                         await Task.Delay(1000);
                     }
+
+                    var elapsedPollingSec = (DateTime.UtcNow - pollStartedUtc).TotalSeconds;
+                    window.Dispatcher.Invoke(() =>
+                    {
+                        pollFailureDiagnostics = BuildRemainingTimePollDiagnostics(
+                            window,
+                            lastPollStatusText,
+                            elapsedPollingSec);
+                    }, DispatcherPriority.Send);
                 }
                 finally
                 {
@@ -161,7 +174,13 @@ public sealed class WindowsKioskWpfSmokeTests
             Assert.Fail(inProcessError.ToString());
         }
 
-        Assert.False(string.IsNullOrWhiteSpace(capturedStatus), "StatusText must show server-driven remaining time (not test-written).");
+        var statusAssertMessage = "StatusText must show server-driven remaining time (not test-written).";
+        if (!string.IsNullOrEmpty(pollFailureDiagnostics))
+        {
+            statusAssertMessage += " " + pollFailureDiagnostics;
+        }
+
+        Assert.False(string.IsNullOrWhiteSpace(capturedStatus), statusAssertMessage);
         var match = Regex.Match(capturedStatus, @"~(\d{2}):(\d{2}):(\d{2})\s+left", RegexOptions.IgnoreCase);
         Assert.True(match.Success, $"StatusText must match hh:mm:ss left pattern; got '{capturedStatus}'.");
         var displayedSeconds = (int)new TimeSpan(
@@ -173,5 +192,89 @@ public sealed class WindowsKioskWpfSmokeTests
 
     private static object GetField(object target, string name) =>
         target.GetType().GetField(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)!.GetValue(target)!;
+
+    private static string BuildRemainingTimePollDiagnostics(
+        GameClub.Kiosk.MainWindow window,
+        string lastStatusText,
+        double elapsedPollingSec)
+    {
+        object host = null;
+        try
+        {
+            host = GetField(window, "_host");
+        }
+        catch
+        {
+            host = null;
+        }
+
+        var runtime = ReflectField(host, "_runtime");
+        var orchestrator = ReflectField(host, "_orchestrator");
+        var hub = ReflectField(runtime, "_hub");
+        var hubState = hub is null ? "n/a" : ReflectProperty(hub, "State");
+        var topUpHttp = WpfLiveServerTestHelper.LastTopUpStatus.HasValue
+            ? WpfLiveServerTestHelper.LastTopUpStatus.Value.ToString(CultureInfo.InvariantCulture)
+            : "n/a";
+        var credentialHttp = WpfLiveServerTestHelper.LastCredentialStatus.HasValue
+            ? WpfLiveServerTestHelper.LastCredentialStatus.Value.ToString(CultureInfo.InvariantCulture)
+            : "n/a";
+
+        return string.Format(
+            CultureInfo.InvariantCulture,
+            "Diagnostics: lastStatusText='{0}'; elapsedPollingSec={1:F1}; IsTransportConnected={2}; hubState={3}; runtimeState={4}; shellPhase={5}; hostSessionId={6}; runtimeSessionId={7}; walletTopUpHttp={8}; credentialPutHttp={9}",
+            lastStatusText ?? "",
+            elapsedPollingSec,
+            ReflectProperty(runtime, "IsTransportConnected"),
+            hubState,
+            ReflectProperty(runtime, "State"),
+            ReflectProperty(orchestrator, "Phase"),
+            ReflectFieldText(host, "_sessionId"),
+            ReflectFieldText(runtime, "_sessionId"),
+            topUpHttp,
+            credentialHttp);
+    }
+
+    private static object ReflectField(object target, string name)
+    {
+        if (target is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            var field = target.GetType().GetField(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            return field?.GetValue(target);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static string ReflectFieldText(object target, string name)
+    {
+        var value = ReflectField(target, name);
+        return value?.ToString() ?? "n/a";
+    }
+
+    private static string ReflectProperty(object target, string name)
+    {
+        if (target is null)
+        {
+            return "n/a";
+        }
+
+        try
+        {
+            var property = target.GetType().GetProperty(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            var value = property?.GetValue(target);
+            return value?.ToString() ?? "n/a";
+        }
+        catch
+        {
+            return "n/a";
+        }
+    }
 }
 #endif

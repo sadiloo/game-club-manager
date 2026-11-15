@@ -224,12 +224,11 @@ public class PrepaidAndAccountTests
 
         var moneyOnly = new PcAccount("member-2", 50_000, []);
         var stopped = SettlePc(moneyOnly, T.At(2026, 6, 2, 10, 0), T.At(2026, 6, 2, 11, 0));
-        var through = MoneyMath.ChargeForMinutes(CafeFixture.ExampleNormalOnePlayerHourly, 28, RateRemainderMode.Nearest);
         Assert.Equal(50_000, stopped.MoneyConsumedToman);
-        Assert.Equal(through - 50_000, stopped.Grace!.WaivedToman);
+        Assert.Equal(1_833, stopped.Grace!.WaivedToman);
         Assert.Equal(1, stopped.Grace.Minutes);
         Assert.Equal(0, stopped.UncoveredToman);
-        Assert.Equal(110_000 - through, stopped.WriteOffToman);
+        Assert.Equal(58_167, stopped.WriteOffToman);
         Assert.Equal("pc_overshoot", stopped.Alert!.Code);
         Assert.Equal("write_off", stopped.ReportEntry!.Kind);
         Assert.Equal(0, stopped.UpdatedAccount.MoneyBalanceToman);

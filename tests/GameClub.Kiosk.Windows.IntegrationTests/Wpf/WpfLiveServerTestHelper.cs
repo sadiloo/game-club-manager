@@ -11,6 +11,10 @@ namespace GameClub.Kiosk.Windows.IntegrationTests.Wpf;
 
 internal static class WpfLiveServerTestHelper
 {
+    public static int? LastTopUpStatus { get; private set; }
+
+    public static int? LastCredentialStatus { get; private set; }
+
     public static string RequireServerUrl()
     {
         var url = Environment.GetEnvironmentVariable("CHECKPOINT_SERVER_URL")?.Trim();
@@ -102,8 +106,10 @@ internal static class WpfLiveServerTestHelper
         created.EnsureSuccessStatusCode();
         var createdJson = await created.Content.ReadAsStringAsync();
         var customerId = ParseGuidProperty(createdJson, "id");
-        await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up", new { method = "Cash", amountToman = 48_667L });
-        await op.PutJsonAsync($"/api/operator/customers/{customerId}/credential", new { loginName, password });
+        var topUp = await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up", new { method = "Cash", amountToman = 48_667L });
+        LastTopUpStatus = (int)topUp.StatusCode;
+        var credential = await op.PutJsonAsync($"/api/operator/customers/{customerId}/credential", new { loginName, password });
+        LastCredentialStatus = (int)credential.StatusCode;
 
         var codeResponse = await op.PostAsync($"/api/operator/stations/{stationId}/pairing-code", null);
         codeResponse.EnsureSuccessStatusCode();
