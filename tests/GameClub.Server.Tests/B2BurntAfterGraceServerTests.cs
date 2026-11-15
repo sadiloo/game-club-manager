@@ -63,7 +63,17 @@ public sealed class B2BurntAfterGraceServerTests(GameClubWebApplicationFactory f
         var invoice = await DbAsync(db => db.Invoices.Include(i => i.Session).SingleAsync(i => i.SessionId == sessionId));
         var playBefore = invoice.TimeGrossToman;
 
-        var daily = await op.GetFromJsonAsync<JsonElement>("/api/operator/reports/income/daily?year=2026&month=6&day=3");
+        var preview = await op.GetFromJsonAsync<JsonElement>("/api/operator/shift/close/preview");
+        Assert.Equal(833, preview.GetProperty("writeOffTotalToman").GetInt64());
+        Assert.Equal(833, preview.GetProperty("writeOffs")[0].GetProperty("writeOffToman").GetInt64());
+        (await op.PostAsJsonAsync("/api/operator/shift/close", new
+        {
+            workingDay = new { year = 2026, month = 6, day = 3 },
+            actualCashToman = 0L,
+            actualCardReaderToman = 0L,
+        })).EnsureSuccessStatusCode();
+        var mgr = await factory.CreateOperatorClientAsync("manager", "1234");
+        var daily = await mgr.GetFromJsonAsync<JsonElement>("/api/operator/reports/income/daily?year=2026&month=6&day=3");
         Assert.Equal(833, daily.GetProperty("writeOffTotalToman").GetInt64());
         Assert.Equal(833, daily.GetProperty("writeOffs")[0].GetProperty("writeOffToman").GetInt64());
         Assert.Equal(invoice.Number, daily.GetProperty("writeOffs")[0].GetProperty("invoiceNumber").GetInt64());
@@ -71,13 +81,10 @@ public sealed class B2BurntAfterGraceServerTests(GameClubWebApplicationFactory f
 
         var from = invoice.IssuedAtUtc.AddHours(-1);
         var to = invoice.IssuedAtUtc.AddHours(1);
-        var usage = await op.GetFromJsonAsync<JsonElement>($"/api/operator/reports/usage?fromUtc={from:o}&toUtc={to:o}");
+        var usage = await mgr.GetFromJsonAsync<JsonElement>($"/api/operator/reports/usage?fromUtc={from:o}&toUtc={to:o}");
         Assert.Equal(833, usage.GetProperty("writeOffTotalToman").GetInt64());
         Assert.Single(usage.GetProperty("writeOffs").EnumerateArray());
 
-        var preview = await op.GetFromJsonAsync<JsonElement>("/api/operator/shift/close/preview");
-        Assert.Equal(833, preview.GetProperty("writeOffTotalToman").GetInt64());
-        Assert.Equal(833, preview.GetProperty("writeOffs")[0].GetProperty("writeOffToman").GetInt64());
     }
 
     private async Task<Guid> SeedExample1SessionAsync()
@@ -103,11 +110,10 @@ public sealed class B2BurntAfterGraceServerTests(GameClubWebApplicationFactory f
             new { loginName = "b2ex1", password = "pass", stationId = "PC-B2" }).ContinueWith(t => t.Result.EnsureSuccessStatusCode());
         var sessionId = await DbAsync(db => db.Sessions.Select(s => s.Id).SingleAsync());
         factory.Clock.SetTehran(2026, 6, 3, 14, 3);
-        await using (var scope2 = factory.Services.CreateAsyncScope())
-        {
-            await scope2.ServiceProvider.GetRequiredService<KioskCheckpointCoordinator>()
-                .OnHeartbeatAsync(deviceId, sessionId, 180_000, default);
-        }
+        var payload = JsonSerializer.Serialize(new { sessionId, powered = true, segmentEndUtc = factory.Clock.UtcNow.UtcDateTime.ToString("O") });
+        var ev = new GameClub.Kiosk.Core.Protocol.KioskOutboundEvent { EventId = Guid.NewGuid(), Type = "offline_play_segment", PayloadJson = payload, CreatedUtc = factory.Clock.UtcNow.UtcDateTime };
+        (await CreateKioskClient(deviceId, deviceKey).PostAsJsonAsync("/api/kiosk/devices/events", new[] { ev })).EnsureSuccessStatusCode();
+        (await (await factory.CreateOperatorClientAsync()).PostAsync($"/api/operator/sessions/{sessionId}/force-logout", null)).EnsureSuccessStatusCode();
 
         return sessionId;
     }
