@@ -16,7 +16,7 @@ let walletTopUpInFlight = false;
 let walletTopUpDraftKey = null;
 let walletCorrectDraftKey = null;
 
-function walletTopUpDraftKey(linkedId, method, amountToman, giftToman, destinationCardId) {
+function buildWalletTopUpDraftKey(linkedId, method, amountToman, giftToman, destinationCardId) {
   return JSON.stringify({
     customerId: linkedId,
     method,
@@ -370,7 +370,7 @@ async function walletTopUp(method) {
       return;
     }
   }
-  const draftKey = walletTopUpDraftKey(linked.id, method, amountToman, giftToman, destinationCardId);
+  const draftKey = buildWalletTopUpDraftKey(linked.id, method, amountToman, giftToman, destinationCardId);
   ensureWalletTopUpCommandIdForDraft(draftKey);
   const commandId = method === "CardToCard"
     ? (walletC2cCommandId ||= walletTopUpCommandId)
