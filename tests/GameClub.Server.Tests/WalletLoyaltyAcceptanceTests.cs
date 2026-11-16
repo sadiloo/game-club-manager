@@ -121,47 +121,6 @@ public sealed class WalletLoyaltyAcceptanceTests(GameClubWebApplicationFactory f
     }
 
     [Fact]
-    public async Task wl_scenario_14_package_minutes_decrease_after_play()
-    {
-        await S3TestHelpers.ResetAsync(factory);
-        var mgr = await OpAsync("manager");
-        var customer = await CreateCustomerAsync(mgr, "09124444444");
-        var customerId = customer.GetProperty("id").GetGuid();
-        using (var scope = factory.Services.CreateScope())
-        {
-            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            db.CustomerMembers.Add(new CustomerMemberEntity { CustomerId = customerId });
-            db.PackageProducts.Add(new PackageProductEntity { Id = "pkg120", Name = "۲ ساعت", PriceToman = 220_000, Minutes = 120, IsActive = true });
-            db.CustomerPackages.Add(new CustomerPackageEntity
-            {
-                Id = Guid.NewGuid(),
-                CustomerId = customerId,
-                Name = "۲ ساعت",
-                RemainingMinutes = 120,
-                FaceValueToman = 220_000,
-            });
-            await db.SaveChangesAsync();
-        }
-
-        await S3TestHelpers.RegisterConsole(_api, mgr, "PS5-PKG", 1);
-        factory.Clock.SetTehran(2026, 6, 3, 14, 0);
-        var sessionId = await S3TestHelpers.StartSession(_api, "PS5-PKG", 1);
-        await mgr.PutAsJsonAsync($"/api/operator/sessions/{sessionId}/customer", new { customerId });
-        factory.Clock.SetTehran(2026, 6, 3, 14, 30);
-        await mgr.PostAsync($"/api/operator/sessions/{sessionId}/bill/open", null);
-        var bill = await mgr.GetFromJsonAsync<JsonElement>($"/api/operator/sessions/{sessionId}/bill");
-        var collectible = bill.GetProperty("collectibleToman").GetInt64();
-        Assert.Equal(0, collectible);
-        await mgr.PostAsJsonAsync($"/api/operator/sessions/{sessionId}/bill/confirm", new { payments = Array.Empty<object>() });
-        using (var scope = factory.Services.CreateScope())
-        {
-            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            var remain = await db.CustomerPackages.Where(p => p.CustomerId == customerId).Select(p => p.RemainingMinutes).SingleAsync();
-            Assert.Equal(90, remain);
-        }
-    }
-
-    [Fact]
     public async Task wl_scenario_15_opening_balance_labeled_and_manager_only_for_gift()
     {
         await S3TestHelpers.ResetAsync(factory);

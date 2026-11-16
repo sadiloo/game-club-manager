@@ -106,37 +106,6 @@ public sealed class WalletLoyaltyFixRound1Tests(GameClubWebApplicationFactory fa
     }
 
     [Fact]
-    public async Task round1_a3_package_covers_time_with_zero_cash_collectible()
-    {
-        await S3TestHelpers.ResetAsync(factory);
-        var mgr = await MgrAsync();
-        var customerId = await CreateCustomerAsync(mgr, "09121110005");
-        using (var scope = factory.Services.CreateScope())
-        {
-            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            db.CustomerMembers.Add(new CustomerMemberEntity { CustomerId = customerId });
-            db.CustomerPackages.Add(new CustomerPackageEntity
-            {
-                Id = Guid.NewGuid(),
-                CustomerId = customerId,
-                Name = "pkg",
-                RemainingMinutes = 120,
-                FaceValueToman = 1,
-            });
-            await db.SaveChangesAsync();
-        }
-
-        await S3TestHelpers.RegisterConsole(_api, mgr, "PS5-PKG-R1", 1);
-        factory.Clock.SetTehran(2026, 6, 3, 14, 0);
-        var sessionId = await S3TestHelpers.StartSession(_api, "PS5-PKG-R1", 1);
-        await mgr.PutAsJsonAsync($"/api/operator/sessions/{sessionId}/customer", new { customerId });
-        factory.Clock.SetTehran(2026, 6, 3, 14, 30);
-        await mgr.PostAsync($"/api/operator/sessions/{sessionId}/bill/open", null);
-        var bill = await mgr.GetFromJsonAsync<System.Text.Json.JsonElement>($"/api/operator/sessions/{sessionId}/bill");
-        Assert.Equal(0, bill.GetProperty("collectibleToman").GetInt64());
-    }
-
-    [Fact]
     public async Task round1_c1_birthday_routes_return_204()
     {
         await S3TestHelpers.ResetAsync(factory);

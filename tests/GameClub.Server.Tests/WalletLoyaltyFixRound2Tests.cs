@@ -201,37 +201,6 @@ public sealed class WalletLoyaltyFixRound2Tests(GameClubWebApplicationFactory fa
     }
 
     [Fact]
-    public async Task round2_c3_operator_package_put_forbidden()
-    {
-        await S3TestHelpers.ResetAsync(factory);
-        var op = await OpAsync();
-        var put = await op.PutAsJsonAsync("/api/operator/members/packages/pkg-test",
-            new { name = "t", priceToman = 1L, minutes = 120L });
-        Assert.Equal(HttpStatusCode.Forbidden, put.StatusCode);
-    }
-
-    [Fact]
-    public async Task round2_c3_cash_package_sale_writes_invoice_and_payment()
-    {
-        await S3TestHelpers.ResetAsync(factory);
-        var mgr = await MgrAsync();
-        var op = await OpAsync();
-        var customerId = await CreateCustomerAsync(op, "09122110005");
-        await mgr.PutAsJsonAsync("/api/operator/members/packages/pkg-cash",
-            new { name = "بسته", priceToman = 50_000L, minutes = 60L });
-        await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/packages/sell",
-            new { productId = "pkg-cash", payments = new[] { new { method = "Cash", amountToman = 50_000L } } });
-        using var scope = factory.Services.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        var invoice = await db.Invoices.Include(i => i.PaymentLines).SingleAsync(i => i.CustomerId == customerId);
-        Assert.Equal(50_000, invoice.CollectibleToman);
-        Assert.Equal(0, invoice.BuffetGrossToman);
-        Assert.Contains(invoice.PaymentLines, p => p.Method == PaymentMethod.Cash && p.AmountToman == 50_000);
-        Assert.True(await db.WalletLedger.AnyAsync(e =>
-            e.CustomerId == customerId && e.Kind == WalletLedgerKind.PackagePurchase && e.InvoiceId == invoice.Id));
-    }
-
-    [Fact]
     public async Task round2_c2_discount_cap_route_configurable()
     {
         await S3TestHelpers.ResetAsync(factory);

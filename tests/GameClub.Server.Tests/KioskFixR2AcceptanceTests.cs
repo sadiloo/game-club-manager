@@ -245,52 +245,6 @@ public sealed class KioskFixR2AcceptanceTests(GameClubWebApplicationFactory fact
     }
 
     [Fact]
-    public async Task package_sixty_after_checkpoint_stays_sixty_on_next_heartbeat()
-    {
-        await S3TestHelpers.ResetAsync(factory);
-        await S3TestHelpers.RegisterPc(factory.CreateClientWithKey(), "PC-1", PilotSeed.PcNormalGroupId);
-        await using (var scope = factory.Services.CreateAsyncScope())
-        {
-            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            var customer = new CustomerEntity { Id = Guid.NewGuid(), Name = "Pkg2", Mobile = "09129999999", CreatedAtUtc = DateTime.UtcNow };
-            db.Customers.Add(customer);
-            db.CustomerMembers.Add(new CustomerMemberEntity { CustomerId = customer.Id, RealToman = 0 });
-            db.CustomerPackages.Add(new CustomerPackageEntity { Id = Guid.NewGuid(), CustomerId = customer.Id, Name = "Pkg", RemainingMinutes = 120, FaceValueToman = 0 });
-            await db.SaveChangesAsync();
-            await scope.ServiceProvider.GetRequiredService<KioskCustomerAuthService>().SetCredentialAsync(customer.Id, "pkg2", "pass", default);
-        }
-
-        factory.Clock.SetTehran(2026, 6, 3, 14, 0);
-        var (deviceId, deviceKey, _) = await PairDeviceAsync("PC-1");
-        var login = await CreateKioskClient(deviceId, deviceKey).PostAsJsonAsync("/api/kiosk/auth/login", new { loginName = "pkg2", password = "pass", stationId = "PC-1" });
-        login.EnsureSuccessStatusCode();
-        Guid sessionId;
-        await using (var lookup = factory.Services.CreateAsyncScope())
-        {
-            sessionId = await lookup.ServiceProvider.GetRequiredService<AppDbContext>().Sessions.Select(s => s.Id).SingleAsync();
-        }
-
-        factory.Clock.SetTehran(2026, 6, 3, 15, 0);
-        await using (var hb = factory.Services.CreateAsyncScope())
-        {
-            var coordinator = hb.ServiceProvider.GetRequiredService<KioskCheckpointCoordinator>();
-            await coordinator.OnHeartbeatAsync(deviceId, sessionId, 3_600_000, default);
-        }
-
-        await using (var displayScope = factory.Services.CreateAsyncScope())
-        {
-            var db = displayScope.ServiceProvider.GetRequiredService<AppDbContext>();
-            var session = await db.Sessions
-                .Include(s => s.Station)!.ThenInclude(st => st!.Group)
-                .Include(s => s.Segments)
-                .Include(s => s.Pauses)
-                .FirstAsync(s => s.Id == sessionId);
-            var display = await displayScope.ServiceProvider.GetRequiredService<KioskDisplayService>().BuildAsync(session, default);
-            Assert.NotNull(display);
-        }
-    }
-
-    [Fact]
     public async Task prepaid_hub_display_not_elapsed_only_open_guest_stays_elapsed_only()
     {
         await S3TestHelpers.ResetAsync(factory);
@@ -386,33 +340,6 @@ public sealed class KioskFixR2AcceptanceTests(GameClubWebApplicationFactory fact
     }
 
     [Fact]
-    public async Task debt_with_eligible_package_not_authorized_after_package_exhausted()
-    {
-        await S3TestHelpers.ResetAsync(factory);
-        await S3TestHelpers.RegisterPc(factory.CreateClientWithKey(), "PC-1", PilotSeed.PcNormalGroupId);
-        using var scope = factory.Services.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        var settings = await db.BranchMemberSettings.SingleAsync();
-        settings.AllowPcWhileInDebt = true;
-        var customer = new CustomerEntity { Id = Guid.NewGuid(), Name = "Debt", Mobile = "09130000001", CreatedAtUtc = DateTime.UtcNow };
-        db.Customers.Add(customer);
-        db.CustomerMembers.Add(new CustomerMemberEntity { CustomerId = customer.Id, RealToman = -10_000 });
-        db.CustomerPackages.Add(new CustomerPackageEntity { Id = Guid.NewGuid(), CustomerId = customer.Id, Name = "Pkg", RemainingMinutes = 60, FaceValueToman = 0 });
-        await db.SaveChangesAsync();
-        await scope.ServiceProvider.GetRequiredService<KioskCustomerAuthService>().SetCredentialAsync(customer.Id, "debt", "pass", default);
-        factory.Clock.SetTehran(2026, 6, 3, 14, 0);
-        var (deviceId, deviceKey, _) = await PairDeviceAsync("PC-1");
-        var login = await CreateKioskClient(deviceId, deviceKey).PostAsJsonAsync("/api/kiosk/auth/login", new { loginName = "debt", password = "pass", stationId = "PC-1" });
-        login.EnsureSuccessStatusCode();
-        var sessionId = await db.Sessions.Select(s => s.Id).SingleAsync();
-        factory.Clock.SetTehran(2026, 6, 3, 15, 0);
-        var coordinator = scope.ServiceProvider.GetRequiredService<KioskCheckpointCoordinator>();
-        await coordinator.OnHeartbeatAsync(deviceId, sessionId, 3_600_000, default);
-        var display = await scope.ServiceProvider.GetRequiredService<KioskDisplayService>().BuildAsync(await db.Sessions.Include(s => s.Station)!.ThenInclude(st => st!.Group).FirstAsync(s => s.Id == sessionId), default);
-        Assert.True(display!.BlockedByDebt);
-    }
-
-    [Fact]
     public void band_boundary_0829_to_0830_remaining_73_minutes_4380_seconds()
     {
         var policy = BillingPolicy.Default;
@@ -466,7 +393,7 @@ public sealed class KioskFixR2AcceptanceTests(GameClubWebApplicationFactory fact
         var settings = await db.BranchMemberSettings.SingleAsync();
         var wallet = MemberSettingsMapper.LoadWalletSettings(settings);
         var member = await db.CustomerMembers.SingleAsync(m => m.CustomerId == customer.Id);
-        var account = KioskPlayEstimate.BuildAccount(member, wallet, []);
+        var account = KioskPlayEstimate.BuildAccount(member, wallet);
         await db.Database.ExecuteSqlRawAsync("UPDATE rate_lines SET \"HourlyToman\" = 0 WHERE \"GroupId\" = 'pc-normal' AND \"PlayerCount\" = 1");
         var reloaded = await scope.ServiceProvider.GetRequiredService<RateConfigService>().LoadAsync(default);
         var text = KioskPlayEstimate.FormatFreeBandText(reloaded.Card, account, session.Station!.GroupId!, session, factory.Clock.UtcNow);
