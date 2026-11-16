@@ -76,7 +76,7 @@ public sealed class OperatorMemberContext(AppDbContext db)
     }
 }
 
-public sealed class OperatorMemberWalletService(
+public sealed partial class OperatorMemberWalletService(
     AppDbContext db,
     IClock clock,
     AuditService audit,
@@ -107,6 +107,7 @@ public sealed class OperatorMemberWalletService(
         Guid customerId,
         string methodRaw,
         long amountToman,
+        long giftToman,
         string? destinationCardId,
         string? reference,
         CancellationToken ct)
@@ -115,6 +116,9 @@ public sealed class OperatorMemberWalletService(
         {
             throw new ApiException(StatusCodes.Status400BadRequest, "invalid_amount", "Amount must be positive.");
         }
+
+        var memberSettings = await members.LoadSettingsAsync(ct);
+        WalletGiftCapMath.ValidateOperatorGiftOrThrow(op.Role ?? UserRole.Operator, amountToman, giftToman, memberSettings);
 
         var method = OperatorPaymentMethods.Parse(methodRaw);
         if (method == PaymentMethod.Wallet)
@@ -131,6 +135,7 @@ public sealed class OperatorMemberWalletService(
             {
                 CustomerId = customerId,
                 AmountToman = amountToman,
+                GiftToman = giftToman,
                 Method = method,
                 DestinationCardId = destinationCardId,
                 Reference = reference,
@@ -139,7 +144,7 @@ public sealed class OperatorMemberWalletService(
                 ActorUserId = op.UserId,
                 ShiftId = c2cShiftId,
             });
-            await audit.AppendAsync("wallet.topup.pending", new { customerId, amountToman, method = method.ToString() }, ct);
+            await audit.AppendAsync("wallet.topup.pending", new { customerId, amountToman, giftToman, method = method.ToString() }, ct);
             await db.SaveChangesAsync(ct);
             return;
         }
@@ -169,24 +174,19 @@ public sealed class OperatorMemberWalletService(
             await db.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock({0})", 884_2002);
         }
 
+        var topUpGroupId = Guid.NewGuid();
         await WithMemberWriteLockAsync(customerId, async (_, member, innerCt) =>
         {
             var pocket = MemberWalletMapper.ToPocket(member);
             pocket = MemberWalletMapper.ApplyRealTopUp(pocket, amountToman);
-            MemberWalletMapper.ApplyPocket(member, pocket);
-            db.WalletLedger.Add(new WalletLedgerEntryEntity
+            if (giftToman > 0)
             {
-                CustomerId = customerId,
-                AtUtc = clock.UtcNow.UtcDateTime,
-                Kind = WalletLedgerKind.TopUpReal,
-                RealDeltaToman = amountToman,
-                Method = method,
-                Reference = reference,
-                Label = method.ToString(),
-                ActorUserId = op.UserId,
-                ShiftId = shiftId,
-            });
-            await audit.AppendAsync("wallet.topup", new { customerId, amountToman, method = method.ToString() }, innerCt);
+                pocket = MemberWalletMapper.ApplyGiftTopUp(pocket, giftToman);
+            }
+
+            MemberWalletMapper.ApplyPocket(member, pocket);
+            WriteTopUpLedgerPair(customerId, amountToman, giftToman, method, null, reference, topUpGroupId, shiftId);
+            await audit.AppendAsync("wallet.topup", new { customerId, amountToman, giftToman, method = method.ToString() }, innerCt);
         }, ct, tx);
         if (settings.ShiftsEnabled && shiftId is Guid sid)
         {
@@ -216,27 +216,36 @@ public sealed class OperatorMemberWalletService(
         }
 
         var pending = await db.PendingWalletTopUps.AsNoTracking().FirstAsync(p => p.Id == pendingId, ct);
+        var groupId = Guid.NewGuid();
         await WithMemberWriteLockAsync(pending.CustomerId, async (_, member, innerCt) =>
         {
             var before = new { member.RealToman, member.GiftToman };
             var pocket = MemberWalletMapper.ToPocket(member);
             pocket = MemberWalletMapper.ApplyRealTopUp(pocket, pending.AmountToman);
-            MemberWalletMapper.ApplyPocket(member, pocket);
-            var ledger = new WalletLedgerEntryEntity
+            if (pending.GiftToman > 0)
             {
-                CustomerId = pending.CustomerId,
-                AtUtc = clock.UtcNow.UtcDateTime,
-                Kind = WalletLedgerKind.TopUpReal,
-                RealDeltaToman = pending.AmountToman,
-                Method = pending.Method,
-                DestinationCardId = pending.DestinationCardId,
-                Reference = pending.Reference,
-                Label = "card_to_card_confirmed",
-                ActorUserId = op.UserId,
-                ShiftId = pending.ShiftId,
-            };
-            await ApplyWalletTopUpOriginatingWorkingDayAsync(ledger, pending.ShiftId, pending.CreatedAtUtc, innerCt);
-            db.WalletLedger.Add(ledger);
+                pocket = MemberWalletMapper.ApplyGiftTopUp(pocket, pending.GiftToman);
+            }
+
+            MemberWalletMapper.ApplyPocket(member, pocket);
+            WriteTopUpLedgerPair(
+                pending.CustomerId,
+                pending.AmountToman,
+                pending.GiftToman,
+                pending.Method,
+                pending.DestinationCardId,
+                pending.Reference,
+                groupId,
+                pending.ShiftId);
+            var ledgers = db.ChangeTracker.Entries<WalletLedgerEntryEntity>()
+                .Where(e => e.State == EntityState.Added && e.Entity.TopUpGroupId == groupId)
+                .Select(e => e.Entity)
+                .ToList();
+            foreach (var ledger in ledgers)
+            {
+                await ApplyWalletTopUpOriginatingWorkingDayAsync(ledger, pending.ShiftId, pending.CreatedAtUtc, innerCt);
+            }
+
             await audit.AppendAsync("wallet.topup.confirmed", new { pendingId, before, after = new { member.RealToman, member.GiftToman } }, innerCt);
         }, ct, tx);
         await tx.CommitAsync(ct);
@@ -283,6 +292,13 @@ public sealed class OperatorMemberWalletService(
         }
 
         _ = await members.EnsureMemberAsync(customerId, ct);
+        Guid? shiftId = null;
+        var settings = await shiftGate.LoadSettingsAsync(ct);
+        if (settings.ShiftsEnabled)
+        {
+            shiftId = (await shiftGate.GetOpenShiftForUpdateAsync(ct))?.Id;
+        }
+
         await WithMemberWriteLockAsync(customerId, async (_, member, innerCt) =>
         {
             var pocket = MemberWalletMapper.ToPocket(member);
@@ -296,6 +312,7 @@ public sealed class OperatorMemberWalletService(
                 GiftDeltaToman = giftToman,
                 Label = "gift",
                 ActorUserId = op.UserId,
+                ShiftId = shiftId,
             });
             await audit.AppendAsync("wallet.gift", new { customerId, giftToman }, innerCt);
         }, ct);
@@ -547,6 +564,7 @@ public sealed class OperatorMemberWalletService(
             p.Id,
             p.CustomerId,
             amountToman = p.AmountToman,
+            giftToman = p.GiftToman,
             method = p.Method.ToString(),
             p.DestinationCardId,
             p.Reference,

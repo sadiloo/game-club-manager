@@ -15,14 +15,47 @@ public sealed class OperatorMemberController(
     public async Task<IActionResult> GetWallet(Guid customerId, CancellationToken ct)
         => Ok(await wallet.GetWalletAsync(customerId, ct));
 
-    public sealed record TopUpRequest(string Method, long AmountToman, string? DestinationCardId, string? Reference);
+    public sealed record TopUpRequest(string Method, long AmountToman, long GiftToman = 0, string? DestinationCardId = null, string? Reference = null);
 
     [HttpPost("customers/{customerId:guid}/wallet/top-up")]
     public async Task<IActionResult> TopUp(Guid customerId, TopUpRequest body, CancellationToken ct)
     {
-        await wallet.TopUpAsync(customerId, body.Method, body.AmountToman, body.DestinationCardId, body.Reference, ct);
+        await wallet.TopUpAsync(customerId, body.Method, body.AmountToman, body.GiftToman, body.DestinationCardId, body.Reference, ct);
         return Ok(await wallet.GetWalletAsync(customerId, ct));
     }
+
+    public sealed record OperatorGiftCapRequest(long MaxToman, int MaxPercent);
+
+    [HttpGet("settings/operator-gift-cap")]
+    public async Task<IActionResult> GetOperatorGiftCap(CancellationToken ct)
+        => Ok(await wallet.GetOperatorGiftCapAsync(ct));
+
+    [HttpPut("settings/operator-gift-cap")]
+    public async Task<IActionResult> SetOperatorGiftCap(OperatorGiftCapRequest body, CancellationToken ct)
+    {
+        await wallet.SetOperatorGiftCapAsync(body.MaxToman, body.MaxPercent, ct);
+        return NoContent();
+    }
+
+    [HttpGet("customers/{customerId:guid}/wallet/top-ups")]
+    public async Task<IActionResult> ListCorrectableTopUps(Guid customerId, CancellationToken ct)
+        => Ok(await wallet.ListCorrectableTopUpsAsync(customerId, ct));
+
+  public sealed record CorrectTopUpBody(long NewAmountToman, long NewGiftToman, string Description, Guid? CommandId);
+
+    [HttpPost("wallet/top-ups/{topUpGroupId:guid}/correct")]
+    public async Task<IActionResult> CorrectTopUp(Guid topUpGroupId, CorrectTopUpBody body, CancellationToken ct)
+    {
+        var result = await wallet.CorrectTopUpAsync(
+            topUpGroupId,
+            new OperatorMemberWalletService.CorrectTopUpRequest(body.NewAmountToman, body.NewGiftToman, body.Description, body.CommandId),
+            ct);
+        return Ok(result);
+    }
+
+    [HttpGet("wallet/corrections")]
+    public async Task<IActionResult> ListCorrections(DateTime? from, DateTime? to, CancellationToken ct)
+        => Ok(await wallet.ListTopUpCorrectionsAsync(from, to, ct));
 
     [HttpPost("wallet/pending/{pendingId:long}/confirm")]
     public async Task<IActionResult> ConfirmTopUp(long pendingId, CancellationToken ct)
