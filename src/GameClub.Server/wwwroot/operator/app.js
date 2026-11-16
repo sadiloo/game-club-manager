@@ -9,6 +9,10 @@ let buffetMode = "session";
 let billTarget = null;
 let customerSearchTimer = null;
 let displayedLinkedCustomer = null;
+let walletTopUpCommandId = null;
+let walletC2cCommandId = null;
+let walletCorrectCommandId = null;
+let walletTopUpInFlight = false;
 
 function resetBuffetOnlyContext() {
   buffetMode = "session";
@@ -302,6 +306,9 @@ async function walletTopUp(method) {
     showError("عضوی پیوسته نیست.");
     return;
   }
+  if (!walletTopUpCommandId) {
+    walletTopUpCommandId = crypto.randomUUID();
+  }
   const raw = window.prompt("مبلغ شارژ (تومان)", "50000");
   if (!raw) return;
   const amountToman = Number(String(raw).replace(/,/g, ""));
@@ -315,24 +322,74 @@ async function walletTopUp(method) {
     showError("هدیه نامعتبر است.");
     return;
   }
-  const body = { method, amountToman, giftToman };
+  const body = {
+    method,
+    amountToman,
+    giftToman,
+    commandId: method === "CardToCard" ? walletC2cCommandId || walletTopUpCommandId : walletTopUpCommandId,
+  };
   if (method === "CardToCard") {
+    if (!walletC2cCommandId) {
+      walletC2cCommandId = walletTopUpCommandId;
+    }
     body.destinationCardId = window.prompt("کارت مقصد", destinationCards[0]?.id || "") || undefined;
     body.reference = window.prompt("ارجاع", "") || undefined;
+    if (!body.destinationCardId) {
+      return;
+    }
   }
-  await api(`/api/operator/members/customers/${linked.id}/wallet/top-up`, {
-    method: "POST",
-    body: JSON.stringify(body),
-  });
-  renderCustomerChip(linked);
+  if (walletTopUpInFlight) {
+    return;
+  }
+  walletTopUpInFlight = true;
+  setWalletTopUpButtonsDisabled(true);
+  try {
+    await api(`/api/operator/members/customers/${linked.id}/wallet/top-up`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+    renderCustomerChip(linked);
+    walletTopUpCommandId = crypto.randomUUID();
+    if (method === "CardToCard") {
+      walletC2cCommandId = walletTopUpCommandId;
+    }
+  } finally {
+    walletTopUpInFlight = false;
+    setWalletTopUpButtonsDisabled(false);
+  }
+}
+
+function setWalletTopUpButtonsDisabled(disabled) {
+  for (const id of ["walletTopUpCash", "walletTopUpCard", "walletTopUpC2c"]) {
+    const el = document.getElementById(id);
+    if (el) {
+      el.disabled = disabled;
+    }
+  }
 }
 
 const walletTopUpCashBtn = document.getElementById("walletTopUpCash");
-if (walletTopUpCashBtn) walletTopUpCashBtn.onclick = () => walletTopUp("Cash").catch(() => {});
+if (walletTopUpCashBtn) {
+  walletTopUpCashBtn.onclick = () => {
+    walletTopUpCommandId = crypto.randomUUID();
+    walletTopUp("Cash").catch(() => {});
+  };
+}
 const walletTopUpCardBtn = document.getElementById("walletTopUpCard");
-if (walletTopUpCardBtn) walletTopUpCardBtn.onclick = () => walletTopUp("CardReader").catch(() => {});
+if (walletTopUpCardBtn) {
+  walletTopUpCardBtn.onclick = () => {
+    walletTopUpCommandId = crypto.randomUUID();
+    walletTopUp("CardReader").catch(() => {});
+  };
+}
 const walletTopUpC2cBtn = document.getElementById("walletTopUpC2c");
-if (walletTopUpC2cBtn) walletTopUpC2cBtn.onclick = () => walletTopUp("CardToCard").catch(() => {});
+if (walletTopUpC2cBtn) {
+  walletTopUpC2cBtn.onclick = () => {
+    walletTopUpCommandId = crypto.randomUUID();
+    walletC2cCommandId = walletTopUpCommandId;
+    walletTopUp("CardToCard").catch(() => {});
+  };
+}
 
 async function walletCorrectTopUp() {
   const linked = await resolveLinkedCustomerForWallet();
@@ -366,21 +423,40 @@ async function walletCorrectTopUp() {
     showError("توضیح الزامی است.");
     return;
   }
-  await api(`/api/operator/members/wallet/top-ups/${row.topUpGroupId}/correct`, {
-    method: "POST",
-    body: JSON.stringify({
-      newAmountToman: Number(String(amountRaw).replace(/,/g, "")),
-      newGiftToman: Number(String(giftRaw).replace(/,/g, "")),
-      description: description.trim(),
-      commandId: crypto.randomUUID(),
-    }),
-  });
-  renderCustomerChip(linked);
-  window.alert("اصلاح ثبت شد (موقت)");
+  if (!walletCorrectCommandId) {
+    walletCorrectCommandId = crypto.randomUUID();
+  }
+  const correctBtn = document.getElementById("walletCorrectBtn");
+  if (correctBtn) {
+    correctBtn.disabled = true;
+  }
+  try {
+    await api(`/api/operator/members/wallet/top-ups/${row.topUpGroupId}/correct`, {
+      method: "POST",
+      body: JSON.stringify({
+        newAmountToman: Number(String(amountRaw).replace(/,/g, "")),
+        newGiftToman: Number(String(giftRaw).replace(/,/g, "")),
+        description: description.trim(),
+        commandId: walletCorrectCommandId,
+      }),
+    });
+    renderCustomerChip(linked);
+    window.alert("اصلاح ثبت شد (موقت)");
+    walletCorrectCommandId = crypto.randomUUID();
+  } finally {
+    if (correctBtn) {
+      correctBtn.disabled = false;
+    }
+  }
 }
 
 const walletCorrectBtn = document.getElementById("walletCorrectBtn");
-if (walletCorrectBtn) walletCorrectBtn.onclick = () => walletCorrectTopUp().catch(() => {});
+if (walletCorrectBtn) {
+  walletCorrectBtn.onclick = () => {
+    walletCorrectCommandId = crypto.randomUUID();
+    walletCorrectTopUp().catch(() => {});
+  };
+}
 
 async function linkCustomer(customerId) {
   const ctx = customerLinkContext();

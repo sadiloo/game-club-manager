@@ -29,7 +29,7 @@ public sealed class PackageRemovalRoundTests(GameClubWebApplicationFactory facto
             new { maxToman = 50_000L, maxPercent = 10 });
         var customerId = await CreateCustomerAsync(op, "09128000001");
         await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up",
-            new { method = "Cash", amountToman = 300_000L, giftToman = 30_000L });
+            new { method = "Cash", amountToman = 300_000L, giftToman = 30_000L, commandId = Guid.NewGuid()});
         var wallet = await op.GetFromJsonAsync<JsonElement>($"/api/operator/members/customers/{customerId}/wallet");
         Assert.Equal(300_000, wallet.GetProperty("realToman").GetInt64());
         Assert.Equal(30_000, wallet.GetProperty("giftToman").GetInt64());
@@ -46,7 +46,7 @@ public sealed class PackageRemovalRoundTests(GameClubWebApplicationFactory facto
             new { maxToman = 50_000L, maxPercent = 10 });
         var customerId = await CreateCustomerAsync(op, "09128000002");
         var resp = await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up",
-            new { method = "Cash", amountToman = 300_000L, giftToman = 31_000L });
+            new { method = "Cash", amountToman = 300_000L, giftToman = 31_000L, commandId = Guid.NewGuid()});
         Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
         using var scope = factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();

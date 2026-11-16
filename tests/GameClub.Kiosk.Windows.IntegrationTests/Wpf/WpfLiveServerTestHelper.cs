@@ -125,7 +125,7 @@ internal static class WpfLiveServerTestHelper
         created.EnsureSuccessStatusCode();
         var createdJson = await created.Content.ReadAsStringAsync();
         var customerId = ParseGuidProperty(createdJson, "id");
-        var topUp = await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up", new { method = "Cash", amountToman = 48_667L });
+        var topUp = await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up", new { method = "Cash", amountToman = 48_667L , commandId = Guid.NewGuid() });
         LastTopUpStatus = (int)topUp.StatusCode;
         var credential = await op.PutJsonAsync($"/api/operator/customers/{customerId}/credential", new { loginName, password });
         LastCredentialStatus = (int)credential.StatusCode;

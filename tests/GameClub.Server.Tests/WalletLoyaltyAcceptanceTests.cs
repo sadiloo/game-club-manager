@@ -43,12 +43,12 @@ public sealed class WalletLoyaltyAcceptanceTests(GameClubWebApplicationFactory f
         var customerId = customer.GetProperty("id").GetGuid();
 
         await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up",
-            new { method = "Cash", amountToman = 50_000L });
+            new { method = "Cash", amountToman = 50_000L, commandId = Guid.NewGuid()});
         var afterCash = await op.GetFromJsonAsync<JsonElement>($"/api/operator/members/customers/{customerId}/wallet");
         Assert.Equal(50_000, afterCash.GetProperty("spendableToman").GetInt64());
 
         await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up",
-            new { method = "CardToCard", amountToman = 30_000L, destinationCardId = "card-a", reference = "99" });
+            new { method = "CardToCard", amountToman = 30_000L, destinationCardId = "card-a", reference = "99", commandId = Guid.NewGuid()});
         var afterPending = await op.GetFromJsonAsync<JsonElement>($"/api/operator/members/customers/{customerId}/wallet");
         Assert.Equal(50_000, afterPending.GetProperty("spendableToman").GetInt64());
 
@@ -101,7 +101,7 @@ public sealed class WalletLoyaltyAcceptanceTests(GameClubWebApplicationFactory f
         await mgr.PutAsJsonAsync("/api/operator/members/settings/debt-floor", new { floorToman = -50_000L });
         var customer = await CreateCustomerAsync(mgr, "09123333333");
         var customerId = customer.GetProperty("id").GetGuid();
-        await mgr.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up", new { method = "Cash", amountToman = 200_000L });
+        await mgr.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up", new { method = "Cash", amountToman = 200_000L , commandId = Guid.NewGuid() });
         var op = await OpAsync();
         await S3TestHelpers.RegisterConsole(_api, op, "PS5-B8", 1);
         factory.Clock.SetTehran(2026, 6, 3, 14, 0);

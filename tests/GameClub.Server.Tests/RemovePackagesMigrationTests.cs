@@ -92,7 +92,7 @@ public sealed class RemovePackagesMigrationLiveTests(GameClubWebApplicationFacto
         var customerJson = await customerId.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>();
         var cid = customerJson.GetProperty("id").GetGuid();
         await op.PostAsJsonAsync($"/api/operator/members/customers/{cid}/wallet/top-up",
-            new { method = "CardToCard", amountToman = 10_000L, destinationCardId = "card-a", reference = "mig" });
+            new { method = "CardToCard", amountToman = 10_000L, destinationCardId = "card-a", reference = "mig", commandId = Guid.NewGuid()});
         using var scope = factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         var beforeSessions = await db.Sessions.CountAsync();

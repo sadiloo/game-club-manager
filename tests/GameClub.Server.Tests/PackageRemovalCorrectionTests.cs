@@ -28,7 +28,7 @@ public sealed class PackageRemovalCorrectionTests(GameClubWebApplicationFactory 
     async Task<Guid> CashTopUpAsync(HttpClient client, Guid customerId, long amount, long gift = 0)
     {
         var resp = await client.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up",
-            new { method = "Cash", amountToman = amount, giftToman = gift });
+            new { method = "Cash", amountToman = amount, giftToman = gift, commandId = Guid.NewGuid()});
         resp.EnsureSuccessStatusCode();
         using var scope = factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
@@ -92,7 +92,7 @@ public sealed class PackageRemovalCorrectionTests(GameClubWebApplicationFactory 
         await S3TestHelpers.OpenShiftAsync(op, 0);
         var customerId = await CreateCustomerAsync(op, "09128200008");
         var resp = await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up",
-            new { method = "CardReader", amountToman = 50_000L });
+            new { method = "CardReader", amountToman = 50_000L, commandId = Guid.NewGuid()});
         resp.EnsureSuccessStatusCode();
         var groupId = (await op.GetFromJsonAsync<JsonElement[]>($"/api/operator/members/customers/{customerId}/wallet/top-ups"))![0]
             .GetProperty("topUpGroupId").GetGuid();
@@ -192,7 +192,7 @@ public sealed class PackageRemovalCorrectionTests(GameClubWebApplicationFactory 
         await S3TestHelpers.OpenShiftAsync(op, 0);
         var customerId = await CreateCustomerAsync(op, "09128200013");
         var resp = await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up",
-            new { method = "CardReader", amountToman = 50_000L });
+            new { method = "CardReader", amountToman = 50_000L, commandId = Guid.NewGuid()});
         resp.EnsureSuccessStatusCode();
         var groupId = (await op.GetFromJsonAsync<JsonElement[]>($"/api/operator/members/customers/{customerId}/wallet/top-ups"))![0]
             .GetProperty("topUpGroupId").GetGuid();
@@ -258,7 +258,7 @@ public sealed class PackageRemovalCorrectionTests(GameClubWebApplicationFactory 
         await SetGiftCapAsync(mgr, 50_000, 10);
         var customerId = await CreateCustomerAsync(op, "09128200030");
         (await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up",
-            new { method = "CardToCard", amountToman = 200_000L, giftToman = 20_000L, destinationCardId = "card-a", reference = "p7" }))
+            new { method = "CardToCard", amountToman = 200_000L, giftToman = 20_000L, destinationCardId = "card-a", reference = "p7", commandId = Guid.NewGuid()}))
             .EnsureSuccessStatusCode();
         var listed = await op.GetFromJsonAsync<JsonElement[]>($"/api/operator/members/customers/{customerId}/wallet/top-ups");
         Assert.Empty(listed!);

@@ -103,15 +103,19 @@ public sealed partial class OperatorMemberWalletService(
         };
     }
 
-    public async Task TopUpAsync(
+    public async Task<object> TopUpAsync(
         Guid customerId,
         string methodRaw,
         long amountToman,
         long giftToman,
         string? destinationCardId,
         string? reference,
+        Guid? commandId,
         CancellationToken ct)
     {
+        WalletCommandSupport.EnsureCommandIdPresent(commandId);
+        var cmdId = commandId!.Value;
+
         if (amountToman <= 0)
         {
             throw new ApiException(StatusCodes.Status400BadRequest, "invalid_amount", "Amount must be positive.");
@@ -126,27 +130,80 @@ public sealed partial class OperatorMemberWalletService(
             throw new ApiException(StatusCodes.Status400BadRequest, "invalid_method", "Invalid top-up method.");
         }
 
+        var methodName = method.ToString();
+        var fingerprint = WalletCommandSupport.BuildTopUpFingerprint(customerId, methodName, amountToman, giftToman);
+        var replay = await WalletCommandSupport.TryReplayOrThrowReuseAsync(db, cmdId, fingerprint, ct);
+        if (replay is not null)
+        {
+            return replay;
+        }
+
         await members.EnsureMemberAsync(customerId, ct);
         if (method == PaymentMethod.CardToCard)
         {
             await shiftGate.EnsureMoneyRecordingAllowedAsync(ct);
             var c2cShiftId = await shiftGate.RequireOpenShiftIdAsync(ct);
-            db.PendingWalletTopUps.Add(new PendingWalletTopUpEntity
+            await using var pendingTx = await db.Database.BeginTransactionAsync(ct);
+            try
             {
-                CustomerId = customerId,
-                AmountToman = amountToman,
-                GiftToman = giftToman,
-                Method = method,
-                DestinationCardId = destinationCardId,
-                Reference = reference,
-                Status = PendingWalletTopUpStatus.Pending,
-                CreatedAtUtc = clock.UtcNow.UtcDateTime,
-                ActorUserId = op.UserId,
-                ShiftId = c2cShiftId,
-            });
-            await audit.AppendAsync("wallet.topup.pending", new { customerId, amountToman, giftToman, method = method.ToString() }, ct);
-            await db.SaveChangesAsync(ct);
-            return;
+                await WithMemberWriteLockAsync(customerId, async (_, member, innerCt) =>
+                {
+                    var pendingReplay = await WalletCommandSupport.TryReplayOrThrowReuseAsync(db, cmdId, fingerprint, innerCt);
+                    if (pendingReplay is not null)
+                    {
+                        throw new WalletCommandReplayException(pendingReplay);
+                    }
+
+                    WalletGiftCapMath.ValidateGiftNotBlockedByDebt(member.RealToman, amountToman, giftToman);
+                    db.PendingWalletTopUps.Add(new PendingWalletTopUpEntity
+                    {
+                        CustomerId = customerId,
+                        AmountToman = amountToman,
+                        GiftToman = giftToman,
+                        Method = method,
+                        DestinationCardId = destinationCardId,
+                        Reference = reference,
+                        Status = PendingWalletTopUpStatus.Pending,
+                        CreatedAtUtc = clock.UtcNow.UtcDateTime,
+                        ActorUserId = op.UserId,
+                        ShiftId = c2cShiftId,
+                    });
+                    await audit.AppendAsync("wallet.topup.pending", new { customerId, amountToman, giftToman, method = methodName }, innerCt);
+                    var walletJson = JsonSerializer.Serialize(await BuildWalletSnapshotAsync(customerId, innerCt));
+                    WalletCommandSupport.RecordWalletCommand(
+                        db,
+                        clock,
+                        cmdId,
+                        WalletCommandTypes.TopUpPending,
+                        customerId,
+                        fingerprint,
+                        walletJson);
+                    try
+                    {
+                        await db.SaveChangesAsync(innerCt);
+                    }
+                    catch (DbUpdateException ex) when (PostgresErrors.IsWalletCommandUniqueViolation(ex))
+                    {
+                        var dup = await WalletCommandSupport.HandleUniqueViolationAsync(db, cmdId, fingerprint, innerCt);
+                        throw new WalletCommandReplayException(dup);
+                    }
+
+                    var pending = db.PendingWalletTopUps.Local.OrderByDescending(p => p.Id).First();
+                    var cmd = db.WalletCommands.Local.Single(c => c.CommandId == cmdId);
+                    cmd.PendingWalletTopUpId = pending.Id;
+                    await db.SaveChangesAsync(innerCt);
+                }, ct, pendingTx);
+
+                await pendingTx.CommitAsync(ct);
+            }
+            catch (WalletCommandReplayException replayEx)
+            {
+                await pendingTx.RollbackAsync(ct);
+                return replayEx.Body;
+            }
+
+            var storedPending = await WalletCommandSupport.TryReplayAsync(db, cmdId, ct);
+            return storedPending ?? await GetWalletAsync(customerId, ct);
         }
 
         await using var tx = await db.Database.BeginTransactionAsync(ct);
@@ -175,19 +232,61 @@ public sealed partial class OperatorMemberWalletService(
         }
 
         var topUpGroupId = Guid.NewGuid();
-        await WithMemberWriteLockAsync(customerId, async (_, member, innerCt) =>
+        object? result = null;
+        try
         {
-            var pocket = MemberWalletMapper.ToPocket(member);
-            pocket = MemberWalletMapper.ApplyRealTopUp(pocket, amountToman);
-            if (giftToman > 0)
+            await WithMemberWriteLockAsync(customerId, async (_, member, innerCt) =>
             {
-                pocket = MemberWalletMapper.ApplyGiftTopUp(pocket, giftToman);
-            }
+                var topUpReplay = await WalletCommandSupport.TryReplayOrThrowReuseAsync(db, cmdId, fingerprint, innerCt);
+                if (topUpReplay is not null)
+                {
+                    result = topUpReplay;
+                    return;
+                }
 
-            MemberWalletMapper.ApplyPocket(member, pocket);
-            WriteTopUpLedgerPair(customerId, amountToman, giftToman, method, null, reference, topUpGroupId, shiftId);
-            await audit.AppendAsync("wallet.topup", new { customerId, amountToman, giftToman, method = method.ToString() }, innerCt);
-        }, ct, tx);
+                WalletGiftCapMath.ValidateGiftNotBlockedByDebt(member.RealToman, amountToman, giftToman);
+                var pocket = MemberWalletMapper.ToPocket(member);
+                pocket = MemberWalletMapper.ApplyRealTopUp(pocket, amountToman);
+                if (giftToman > 0)
+                {
+                    pocket = MemberWalletMapper.ApplyGiftTopUp(pocket, giftToman);
+                }
+
+                MemberWalletMapper.ApplyPocket(member, pocket);
+                WriteTopUpLedgerPair(customerId, amountToman, giftToman, method, null, reference, topUpGroupId, shiftId);
+                await audit.AppendAsync("wallet.topup", new { customerId, amountToman, giftToman, method = methodName }, innerCt);
+                var walletJson = JsonSerializer.Serialize(await BuildWalletSnapshotAsync(customerId, innerCt));
+                WalletCommandSupport.RecordWalletCommand(
+                    db,
+                    clock,
+                    cmdId,
+                    WalletCommandTypes.TopUp,
+                    customerId,
+                    fingerprint,
+                    walletJson,
+                    topUpGroupId);
+                try
+                {
+                    await db.SaveChangesAsync(innerCt);
+                }
+                catch (DbUpdateException ex) when (PostgresErrors.IsWalletCommandUniqueViolation(ex))
+                {
+                    result = await WalletCommandSupport.HandleUniqueViolationAsync(db, cmdId, fingerprint, innerCt);
+                }
+            }, ct, tx);
+        }
+        catch (WalletCommandReplayException replayEx)
+        {
+            await tx.RollbackAsync(ct);
+            return replayEx.Body;
+        }
+
+        if (result is not null)
+        {
+            await tx.RollbackAsync(ct);
+            return result;
+        }
+
         if (settings.ShiftsEnabled && shiftId is Guid sid)
         {
             var shift = await db.Shifts.AsNoTracking().FirstOrDefaultAsync(s => s.Id == sid, ct);
@@ -198,52 +297,61 @@ public sealed partial class OperatorMemberWalletService(
         }
 
         await tx.CommitAsync(ct);
+        var stored = await WalletCommandSupport.TryReplayAsync(db, cmdId, ct);
+        return stored ?? await GetWalletAsync(customerId, ct);
     }
+
+    private sealed class WalletCommandReplayException(object body) : Exception
+    {
+        public object Body { get; } = body;
+    }
+
+    private async Task<object> BuildWalletSnapshotAsync(Guid customerId, CancellationToken ct)
+        => await GetWalletAsync(customerId, ct);
 
     public async Task ConfirmPendingTopUpAsync(long pendingId, CancellationToken ct)
     {
-        var pendingExists = await db.PendingWalletTopUps.AsNoTracking().FirstOrDefaultAsync(p => p.Id == pendingId, ct)
+        _ = await db.PendingWalletTopUps.AsNoTracking().FirstOrDefaultAsync(p => p.Id == pendingId, ct)
             ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Pending top-up not found.");
         await using var tx = await db.Database.BeginTransactionAsync(ct);
-        var updated = await db.PendingWalletTopUps
-            .Where(p => p.Id == pendingId && p.Status == PendingWalletTopUpStatus.Pending)
-            .ExecuteUpdateAsync(
-                s => s.SetProperty(p => p.Status, PendingWalletTopUpStatus.Confirmed),
-                ct);
-        if (updated == 0)
+        await db.Database.ExecuteSqlRawAsync(
+            """SELECT "Id" FROM pending_wallet_topups WHERE "Id" = {0} FOR UPDATE""",
+            pendingId);
+        var locked = await db.PendingWalletTopUps.FirstAsync(p => p.Id == pendingId, ct);
+        if (locked.Status != PendingWalletTopUpStatus.Pending)
         {
             throw new ApiException(StatusCodes.Status409Conflict, "not_pending", "Top-up is not pending.");
         }
 
-        var pending = await db.PendingWalletTopUps.AsNoTracking().FirstAsync(p => p.Id == pendingId, ct);
+        locked.Status = PendingWalletTopUpStatus.Confirmed;
         var groupId = Guid.NewGuid();
-        await WithMemberWriteLockAsync(pending.CustomerId, async (_, member, innerCt) =>
+        await WithMemberWriteLockAsync(locked.CustomerId, async (_, member, innerCt) =>
         {
             var before = new { member.RealToman, member.GiftToman };
             var pocket = MemberWalletMapper.ToPocket(member);
-            pocket = MemberWalletMapper.ApplyRealTopUp(pocket, pending.AmountToman);
-            if (pending.GiftToman > 0)
+            pocket = MemberWalletMapper.ApplyRealTopUp(pocket, locked.AmountToman);
+            if (locked.GiftToman > 0)
             {
-                pocket = MemberWalletMapper.ApplyGiftTopUp(pocket, pending.GiftToman);
+                pocket = MemberWalletMapper.ApplyGiftTopUp(pocket, locked.GiftToman);
             }
 
             MemberWalletMapper.ApplyPocket(member, pocket);
             WriteTopUpLedgerPair(
-                pending.CustomerId,
-                pending.AmountToman,
-                pending.GiftToman,
-                pending.Method,
-                pending.DestinationCardId,
-                pending.Reference,
+                locked.CustomerId,
+                locked.AmountToman,
+                locked.GiftToman,
+                locked.Method,
+                locked.DestinationCardId,
+                locked.Reference,
                 groupId,
-                pending.ShiftId);
+                locked.ShiftId);
             var ledgers = db.ChangeTracker.Entries<WalletLedgerEntryEntity>()
                 .Where(e => e.State == EntityState.Added && e.Entity.TopUpGroupId == groupId)
                 .Select(e => e.Entity)
                 .ToList();
             foreach (var ledger in ledgers)
             {
-                await ApplyWalletTopUpOriginatingWorkingDayAsync(ledger, pending.ShiftId, pending.CreatedAtUtc, innerCt);
+                await ApplyWalletTopUpOriginatingWorkingDayAsync(ledger, locked.ShiftId, locked.CreatedAtUtc, innerCt);
             }
 
             await audit.AppendAsync("wallet.topup.confirmed", new { pendingId, before, after = new { member.RealToman, member.GiftToman } }, innerCt);
@@ -292,12 +400,8 @@ public sealed partial class OperatorMemberWalletService(
         }
 
         _ = await members.EnsureMemberAsync(customerId, ct);
-        Guid? shiftId = null;
-        var settings = await shiftGate.LoadSettingsAsync(ct);
-        if (settings.ShiftsEnabled)
-        {
-            shiftId = (await shiftGate.GetOpenShiftForUpdateAsync(ct))?.Id;
-        }
+        var (shiftId, workingDayYear, workingDayMonth, workingDayDay) =
+            await ResolveManagerGiftLedgerContextAsync(ct);
 
         await WithMemberWriteLockAsync(customerId, async (_, member, innerCt) =>
         {
@@ -313,9 +417,39 @@ public sealed partial class OperatorMemberWalletService(
                 Label = "gift",
                 ActorUserId = op.UserId,
                 ShiftId = shiftId,
+                WorkingDayYear = workingDayYear,
+                WorkingDayMonth = workingDayMonth,
+                WorkingDayDay = workingDayDay,
             });
             await audit.AppendAsync("wallet.gift", new { customerId, giftToman }, innerCt);
         }, ct);
+    }
+
+    private async Task<(Guid? ShiftId, int? WorkingDayYear, int? WorkingDayMonth, int? WorkingDayDay)> ResolveManagerGiftLedgerContextAsync(
+        CancellationToken ct)
+    {
+        var settings = await shiftGate.LoadSettingsAsync(ct);
+        if (!settings.ShiftsEnabled)
+        {
+            return (null, null, null, null);
+        }
+
+        var openShift = await shiftGate.GetOpenShiftForUpdateAsync(ct);
+        if (openShift is not null)
+        {
+            return (openShift.Id, null, null, null);
+        }
+
+        var lastClose = await db.CloseRecords.AsNoTracking()
+            .Where(c => c.ShiftId != null)
+            .OrderByDescending(c => c.ClosedAtUtc)
+            .FirstOrDefaultAsync(ct);
+        if (lastClose is null)
+        {
+            throw new ApiException(StatusCodes.Status409Conflict, "no_open_shift", "No shift is open.");
+        }
+
+        return (null, lastClose.WorkingDayYear, lastClose.WorkingDayMonth, lastClose.WorkingDayDay);
     }
 
     public sealed record OpeningBalanceRequest(

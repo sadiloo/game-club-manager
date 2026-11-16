@@ -1415,6 +1415,49 @@ namespace GameClub.Server.Data.Migrations
                     b.ToTable("station_kiosk_profiles", (string)null);
                 });
 
+            modelBuilder.Entity("GameClub.Server.Data.Entities.WalletCommandEntity", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
+                    b.Property<DateTime>("AppliedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("CommandId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("CommandType")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<Guid>("CustomerId")
+                        .HasColumnType("uuid");
+
+                    b.Property<long?>("PendingWalletTopUpId")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("RequestFingerprint")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("ResultJson")
+                        .HasColumnType("text");
+
+                    b.Property<Guid?>("TopUpGroupId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CommandId")
+                        .IsUnique()
+                        .HasDatabaseName("UX_wallet_commands_CommandId");
+
+                    b.ToTable("wallet_commands", (string)null);
+                });
+
             modelBuilder.Entity("GameClub.Server.Data.Entities.WalletLedgerEntryEntity", b =>
                 {
                     b.Property<long>("Id")
@@ -1508,6 +1551,9 @@ namespace GameClub.Server.Data.Migrations
                     b.Property<long>("BeforeGiftToman")
                         .HasColumnType("bigint");
 
+                    b.Property<Guid?>("CommandId")
+                        .HasColumnType("uuid");
+
                     b.Property<long>("CorrectionLedgerEntryId")
                         .HasColumnType("bigint");
 
@@ -1537,6 +1583,11 @@ namespace GameClub.Server.Data.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("AtUtc");
+
+                    b.HasIndex("CommandId")
+                        .IsUnique()
+                        .HasDatabaseName("UX_wallet_topup_corrections_CommandId")
+                        .HasFilter("\"CommandId\" IS NOT NULL");
 
                     b.HasIndex("TopUpGroupId");
 

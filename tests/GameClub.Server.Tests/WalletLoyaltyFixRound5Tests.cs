@@ -50,7 +50,7 @@ public sealed class WalletLoyaltyFixRound5Tests(GameClubWebApplicationFactory fa
     private async Task<long> SeedWalletPlayInvoiceAsync(HttpClient op, Guid customerId, int attempt)
     {
         await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up",
-            new { method = "Cash", amountToman = 300_000L });
+            new { method = "Cash", amountToman = 300_000L, commandId = Guid.NewGuid()});
         var station = $"PS5-R5-{attempt:D4}";
         await S3TestHelpers.RegisterConsole(_api, op, station, 1);
         factory.Clock.SetTehran(2026, 6, 3, 14, 0);
@@ -83,7 +83,7 @@ public sealed class WalletLoyaltyFixRound5Tests(GameClubWebApplicationFactory fa
             var responses = await RaceAsync(
                 () => mgr.PostAsJsonAsync($"/api/operator/invoices/{invoiceNumber}/void", new { reason = "اشتباه" }),
                 () => op2.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up",
-                    new { method = "Cash", amountToman = 10_000L }));
+                    new { method = "Cash", amountToman = 10_000L, commandId = Guid.NewGuid()}));
             Assert.All(responses, r => Assert.True(r.StatusCode is HttpStatusCode.NoContent or HttpStatusCode.OK));
 
             var (_, _, spendable, ledger) = await WalletStateAsync(factory, customerId);

@@ -1,3 +1,4 @@
+using System.Text.Json;
 using GameClub.Billing;
 using GameClub.Server.Data;
 using GameClub.Server.Data.Entities;
@@ -49,6 +50,23 @@ public static class WalletGiftCapMath
             {
                 Extras = new Dictionary<string, object> { ["maxAllowedGiftToman"] = maxGift },
             };
+        }
+    }
+
+    public static void ValidateGiftNotBlockedByDebt(long realToman, long amountToman, long giftToman)
+    {
+        if (giftToman <= 0)
+        {
+            return;
+        }
+
+        var projectedReal = MoneyMath.CheckedAdd(realToman, amountToman);
+        if (projectedReal < 0)
+        {
+            throw new ApiException(
+                StatusCodes.Status409Conflict,
+                "gift_not_allowed_with_debt",
+                "مشتری بدهی دارد و این شارژ بدهی را کامل صاف نمی‌کند؛ بدون هدیه دوباره ثبت کنید.");
         }
     }
 }
@@ -201,31 +219,21 @@ public sealed partial class OperatorMemberWalletService
             .FirstOrDefaultAsync(ct)
             ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Top-up group not found.");
 
-        if (body.CommandId is Guid cmdId)
+        var customerId = original.CustomerId;
+        string? fingerprint = null;
+        if (body.CommandId is Guid cmdId && cmdId != Guid.Empty)
         {
-            var cmd = cmdId.ToString();
-            var alreadyApplied = await db.AuditLog.AsNoTracking()
-                .AnyAsync(
-                    a => a.Action == "wallet.topup.correction" && a.DetailsJson.Contains(cmd),
-                    ct);
-            if (alreadyApplied)
+            fingerprint = WalletCommandSupport.BuildCorrectionFingerprint(topUpGroupId, body.NewAmountToman, body.NewGiftToman);
+            var replay = await WalletCommandSupport.TryReplayOrThrowReuseAsync(db, cmdId, fingerprint, ct);
+            if (replay is not null)
             {
-                return await GetWalletAsync(original.CustomerId, ct);
+                return replay;
             }
-        }
-
-        var rows = await db.WalletLedger.AsNoTracking().Where(w => w.TopUpGroupId == topUpGroupId).ToListAsync(ct);
-        var currentAmount = rows.Where(r => r.Kind is WalletLedgerKind.TopUpReal or WalletLedgerKind.Correction).Sum(r => r.RealDeltaToman);
-        var currentGift = rows.Where(r => r.Kind is WalletLedgerKind.TopUpGift or WalletLedgerKind.Correction).Sum(r => r.GiftDeltaToman);
-        if (currentAmount == body.NewAmountToman && currentGift == body.NewGiftToman)
-        {
-            throw new ApiException(StatusCodes.Status400BadRequest, "no_change", "No change from current amounts.");
         }
 
         var settings = await members.LoadSettingsAsync(ct);
         WalletGiftCapMath.ValidateOperatorGiftOrThrow(op.Role ?? UserRole.Operator, body.NewAmountToman, body.NewGiftToman, settings);
 
-        var customerId = original.CustomerId;
         var isWindowOpen = await IsTopUpCorrectionWindowOpenAsync(original, settings, ct);
         if (!isWindowOpen && op.Role == UserRole.Operator)
         {
@@ -235,8 +243,6 @@ public sealed partial class OperatorMemberWalletService
                 "شیفت این شارژ بسته شده؛ فقط مدیر می‌تواند اصلاحش کند.");
         }
 
-        var realDelta = body.NewAmountToman - currentAmount;
-        var giftDelta = body.NewGiftToman - currentGift;
         var postClose = !isWindowOpen;
         Guid? correctionShiftId = original.ShiftId;
         if (postClose)
@@ -245,8 +251,29 @@ public sealed partial class OperatorMemberWalletService
         }
 
         await using var tx = await db.Database.BeginTransactionAsync(ct);
+        object? replayResult = null;
         await WithMemberWriteLockAsync(customerId, async (_, member, innerCt) =>
         {
+            if (body.CommandId is Guid cmdInLock && fingerprint is not null)
+            {
+                var correctionReplay = await WalletCommandSupport.TryReplayOrThrowReuseAsync(db, cmdInLock, fingerprint, innerCt);
+                if (correctionReplay is not null)
+                {
+                    replayResult = correctionReplay;
+                    return;
+                }
+            }
+
+            var rows = await db.WalletLedger.AsNoTracking().Where(w => w.TopUpGroupId == topUpGroupId).ToListAsync(innerCt);
+            var currentAmount = rows.Where(r => r.Kind is WalletLedgerKind.TopUpReal or WalletLedgerKind.Correction).Sum(r => r.RealDeltaToman);
+            var currentGift = rows.Where(r => r.Kind is WalletLedgerKind.TopUpGift or WalletLedgerKind.Correction).Sum(r => r.GiftDeltaToman);
+            if (currentAmount == body.NewAmountToman && currentGift == body.NewGiftToman)
+            {
+                throw new ApiException(StatusCodes.Status400BadRequest, "no_change", "No change from current amounts.");
+            }
+
+            var realDelta = body.NewAmountToman - currentAmount;
+            var giftDelta = body.NewGiftToman - currentGift;
             var pocket = MemberWalletMapper.ToPocket(member);
             if (realDelta < 0)
             {
@@ -286,6 +313,7 @@ public sealed partial class OperatorMemberWalletService
             }
 
             MemberWalletMapper.ApplyPocket(member, pocket);
+
             var ledger = new WalletLedgerEntryEntity
             {
                 CustomerId = customerId,
@@ -305,6 +333,7 @@ public sealed partial class OperatorMemberWalletService
             await db.SaveChangesAsync(innerCt);
             db.WalletTopUpCorrections.Add(new WalletTopUpCorrectionEntity
             {
+                CommandId = body.CommandId,
                 TopUpGroupId = topUpGroupId,
                 CorrectionLedgerEntryId = ledger.Id,
                 CustomerId = customerId,
@@ -334,8 +363,56 @@ public sealed partial class OperatorMemberWalletService
                     postClose,
                 },
                 innerCt);
+
+            if (body.CommandId is Guid commandId && fingerprint is not null)
+            {
+                var walletJson = JsonSerializer.Serialize(await GetWalletAsync(customerId, innerCt));
+                WalletCommandSupport.RecordWalletCommand(
+                    db,
+                    clock,
+                    commandId,
+                    WalletCommandTypes.Correction,
+                    customerId,
+                    fingerprint,
+                    walletJson,
+                    topUpGroupId);
+            }
+
+            try
+            {
+                await db.SaveChangesAsync(innerCt);
+            }
+            catch (DbUpdateException ex) when (
+                PostgresErrors.IsWalletCommandUniqueViolation(ex)
+                || PostgresErrors.IsWalletTopUpCorrectionCommandUniqueViolation(ex))
+            {
+                if (body.CommandId is Guid cmd && fingerprint is not null)
+                {
+                    replayResult = await WalletCommandSupport.HandleUniqueViolationAsync(db, cmd, fingerprint, innerCt);
+                }
+                else
+                {
+                    throw;
+                }
+            }
         }, ct, tx);
+
+        if (replayResult is not null)
+        {
+            await tx.RollbackAsync(ct);
+            return replayResult;
+        }
+
         await tx.CommitAsync(ct);
+        if (body.CommandId is Guid replayCmd && fingerprint is not null)
+        {
+            var stored = await WalletCommandSupport.TryReplayAsync(db, replayCmd, ct);
+            if (stored is not null)
+            {
+                return stored;
+            }
+        }
+
         return await GetWalletAsync(customerId, ct);
     }
 

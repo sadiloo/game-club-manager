@@ -29,7 +29,7 @@ public sealed class PackageRemovalCloseDayIncomeTests(GameClubWebApplicationFact
     static async Task<Guid> CashTopUpGroupAsync(GameClubWebApplicationFactory factory, HttpClient op, Guid customerId, long amount)
     {
         (await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up",
-            new { method = "Cash", amountToman = amount })).EnsureSuccessStatusCode();
+            new { method = "Cash", amountToman = amount, commandId = Guid.NewGuid()})).EnsureSuccessStatusCode();
         using var scope = factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         return await db.WalletLedger.AsNoTracking()
@@ -42,7 +42,7 @@ public sealed class PackageRemovalCloseDayIncomeTests(GameClubWebApplicationFact
     static async Task CardReaderTopUpGroupAsync(HttpClient op, Guid customerId, long amount)
     {
         (await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up",
-            new { method = "CardReader", amountToman = amount })).EnsureSuccessStatusCode();
+            new { method = "CardReader", amountToman = amount, commandId = Guid.NewGuid()})).EnsureSuccessStatusCode();
     }
 
     static async Task<Guid> LastTopUpGroupAsync(GameClubWebApplicationFactory factory, Guid customerId)
@@ -265,7 +265,8 @@ public sealed class PackageRemovalCloseDayIncomeTests(GameClubWebApplicationFact
                 amountToman = 100_000L,
                 destinationCardId = "br-corr",
                 reference = "corr-dest",
-            })).EnsureSuccessStatusCode();
+                commandId = Guid.NewGuid(),
+                })).EnsureSuccessStatusCode();
         using var scope = factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         var pendingId = await db.PendingWalletTopUps.MaxAsync(p => p.Id);

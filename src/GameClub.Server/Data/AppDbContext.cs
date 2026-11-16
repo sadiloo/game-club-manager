@@ -1,4 +1,5 @@
 using GameClub.Server.Data.Entities;
+using GameClub.Server.Services;
 using Microsoft.EntityFrameworkCore;
 
 namespace GameClub.Server.Data;
@@ -62,6 +63,8 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
     public DbSet<PendingWalletTopUpEntity> PendingWalletTopUps => Set<PendingWalletTopUpEntity>();
 
     public DbSet<WalletTopUpCorrectionEntity> WalletTopUpCorrections => Set<WalletTopUpCorrectionEntity>();
+
+    public DbSet<WalletCommandEntity> WalletCommands => Set<WalletCommandEntity>();
 
     public DbSet<LoyaltyHourLedgerEntity> LoyaltyHourLedger => Set<LoyaltyHourLedgerEntity>();
 
@@ -317,6 +320,13 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             e.HasOne(x => x.Member).WithMany().HasForeignKey(x => x.CustomerId);
         });
 
+        modelBuilder.Entity<WalletCommandEntity>(e =>
+        {
+            e.ToTable("wallet_commands");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => x.CommandId).IsUnique().HasDatabaseName(PostgresErrors.WalletCommandIndexName);
+        });
+
         modelBuilder.Entity<WalletTopUpCorrectionEntity>(e =>
         {
             e.ToTable("wallet_topup_corrections");
@@ -324,6 +334,10 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             e.Property(x => x.Method).HasConversion<string>();
             e.HasIndex(x => x.AtUtc);
             e.HasIndex(x => x.TopUpGroupId);
+            e.HasIndex(x => x.CommandId)
+                .IsUnique()
+                .HasDatabaseName(PostgresErrors.WalletTopUpCorrectionCommandIndexName)
+                .HasFilter("\"CommandId\" IS NOT NULL");
         });
 
         modelBuilder.Entity<LoyaltyHourLedgerEntity>(e =>

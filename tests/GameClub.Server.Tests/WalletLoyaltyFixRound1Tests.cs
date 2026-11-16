@@ -31,7 +31,7 @@ public sealed class WalletLoyaltyFixRound1Tests(GameClubWebApplicationFactory fa
         var mgr = await MgrAsync();
         var customerId = await CreateCustomerAsync(op, "09121110001");
         await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up",
-            new { method = "Cash", amountToman = 80_000L });
+            new { method = "Cash", amountToman = 80_000L, commandId = Guid.NewGuid()});
         await mgr.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/gift",
             new { giftToman = 20_000L });
         var bo = (await op.PostAsync("/api/operator/buffet-only/start", null)).EnsureSuccessStatusCode();
@@ -91,7 +91,7 @@ public sealed class WalletLoyaltyFixRound1Tests(GameClubWebApplicationFactory fa
         var op = await OpAsync();
         var customerId = await CreateCustomerAsync(op, "09121110004");
         await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up",
-            new { method = "Cash", amountToman = 100_000L });
+            new { method = "Cash", amountToman = 100_000L, commandId = Guid.NewGuid()});
         await S3TestHelpers.RegisterConsole(_api, op, "PS5-R1", 1);
         factory.Clock.SetTehran(2026, 6, 3, 14, 0);
         var sessionId = await S3TestHelpers.StartSession(_api, "PS5-R1", 1);

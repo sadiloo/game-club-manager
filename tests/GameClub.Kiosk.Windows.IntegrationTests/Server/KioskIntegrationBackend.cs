@@ -286,7 +286,7 @@ internal sealed class KioskIntegrationBackend
         var customerId = (await created.Content.ReadFromJsonAsync<JsonElement>())!.GetProperty("id").GetGuid();
         await op.PostAsJsonAsync(
             $"/api/operator/members/customers/{customerId}/wallet/top-up",
-            new { method = "Cash", amountToman = walletToman });
+            new { method = "Cash", amountToman = walletToman, commandId = Guid.NewGuid()});
         await op.PutAsJsonAsync($"/api/operator/customers/{customerId}/credential", new { loginName = login, password });
         return customerId;
     }

@@ -64,7 +64,7 @@ public sealed class WalletLoyaltyFixRound3Tests(GameClubWebApplicationFactory fa
         });
         var customerId = await CreateCustomerAsync(op, "09123130001");
         await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up",
-            new { method = "Cash", amountToman = 80_000L });
+            new { method = "Cash", amountToman = 80_000L, commandId = Guid.NewGuid()});
         await mgr.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/gift",
             new { giftToman = 20_000L });
         for (var i = 0; i < 10; i++)
@@ -103,7 +103,7 @@ public sealed class WalletLoyaltyFixRound3Tests(GameClubWebApplicationFactory fa
 
         var priorCashId = await CreateCustomerAsync(op, "09123130003");
         await op.PostAsJsonAsync($"/api/operator/members/customers/{priorCashId}/wallet/top-up",
-            new { method = "Cash", amountToman = 50_000L });
+            new { method = "Cash", amountToman = 50_000L, commandId = Guid.NewGuid()});
         await mgr.PostAsJsonAsync($"/api/operator/members/customers/{priorCashId}/opening-balance",
             new { debtToman = 10_000L });
         var (r1, _, s1, l1) = await WalletStateAsync(factory, priorCashId);
@@ -125,7 +125,7 @@ public sealed class WalletLoyaltyFixRound3Tests(GameClubWebApplicationFactory fa
         await mgr.PutAsJsonAsync($"/api/operator/members/customers/{customerId}/birthday",
             new { year = 1380, month = 3, day = 13 });
         await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up",
-            new { method = "Cash", amountToman = 500_000L });
+            new { method = "Cash", amountToman = 500_000L, commandId = Guid.NewGuid()});
         await S3TestHelpers.RegisterConsole(_api, op, "PS5-C2R3", 1);
         var sessionId = await S3TestHelpers.StartSession(_api, "PS5-C2R3", 1);
         await op.PutAsJsonAsync($"/api/operator/sessions/{sessionId}/customer", new { customerId });

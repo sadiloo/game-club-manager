@@ -50,7 +50,7 @@ public sealed class PackageRemovalBriefAcceptanceTests(GameClubWebApplicationFac
         await SetGiftCapAsync(mgr, 50_000, 10);
         var customerId = await CreateCustomerAsync(op, "09128100001");
         (await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up",
-            new { method = "Cash", amountToman = 300_000L, giftToman = 30_000L })).EnsureSuccessStatusCode();
+            new { method = "Cash", amountToman = 300_000L, giftToman = 30_000L, commandId = Guid.NewGuid()})).EnsureSuccessStatusCode();
         var preview = await ShiftPreviewAsync(op);
         AssertCloseMoney(preview, 300_000, 300_000, 30_000);
     }
@@ -64,7 +64,7 @@ public sealed class PackageRemovalBriefAcceptanceTests(GameClubWebApplicationFac
         await SetGiftCapAsync(mgr, 50_000, 10);
         var customerId = await CreateCustomerAsync(op, "09128100002");
         var resp = await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up",
-            new { method = "Cash", amountToman = 300_000L, giftToman = 31_000L });
+            new { method = "Cash", amountToman = 300_000L, giftToman = 31_000L, commandId = Guid.NewGuid()});
         Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
         var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
         Assert.Equal(30_000, body.GetProperty("maxAllowedGiftToman").GetInt64());
@@ -79,10 +79,10 @@ public sealed class PackageRemovalBriefAcceptanceTests(GameClubWebApplicationFac
         await SetGiftCapAsync(mgr, 50_000, 10);
         var customerId = await CreateCustomerAsync(op, "09128100003");
         var bad = await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up",
-            new { method = "Cash", amountToman = 1_000_000L, giftToman = 60_000L });
+            new { method = "Cash", amountToman = 1_000_000L, giftToman = 60_000L, commandId = Guid.NewGuid()});
         Assert.Equal(HttpStatusCode.BadRequest, bad.StatusCode);
         (await mgr.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up",
-            new { method = "Cash", amountToman = 1_000_000L, giftToman = 60_000L })).EnsureSuccessStatusCode();
+            new { method = "Cash", amountToman = 1_000_000L, giftToman = 60_000L, commandId = Guid.NewGuid()})).EnsureSuccessStatusCode();
     }
 
     [Fact]
@@ -92,10 +92,12 @@ public sealed class PackageRemovalBriefAcceptanceTests(GameClubWebApplicationFac
         var op = await factory.CreateOperatorClientAsync();
         var customerId = await CreateCustomerAsync(op, "09128100004");
         var resp = await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up",
-            new { method = "Cash", amountToman = 10_000L, giftToman = 1L });
+            new { method = "Cash", amountToman = 10_000L, giftToman = 1L,
+            commandId = Guid.NewGuid(),
+});
         Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
         (await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up",
-            new { method = "Cash", amountToman = 10_000L })).EnsureSuccessStatusCode();
+            new { method = "Cash", amountToman = 10_000L, commandId = Guid.NewGuid()})).EnsureSuccessStatusCode();
     }
 
     [Fact]
@@ -109,7 +111,7 @@ public sealed class PackageRemovalBriefAcceptanceTests(GameClubWebApplicationFac
         await mgr.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/opening-balance",
             new { debtToman = 40_000L });
         (await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up",
-            new { method = "Cash", amountToman = 100_000L, giftToman = 10_000L })).EnsureSuccessStatusCode();
+            new { method = "Cash", amountToman = 100_000L, giftToman = 10_000L, commandId = Guid.NewGuid()})).EnsureSuccessStatusCode();
         var wallet = await op.GetFromJsonAsync<JsonElement>($"/api/operator/members/customers/{customerId}/wallet");
         Assert.Equal(60_000, wallet.GetProperty("realToman").GetInt64());
         Assert.Equal(10_000, wallet.GetProperty("giftToman").GetInt64());
@@ -117,7 +119,7 @@ public sealed class PackageRemovalBriefAcceptanceTests(GameClubWebApplicationFac
     }
 
     [Fact]
-    public async Task example_5b_gift_does_not_clear_debt()
+    public async Task example_5b_gift_not_allowed_with_debt()
     {
         await S3TestHelpers.ResetAsync(factory);
         var mgr = await factory.CreateOperatorClientAsync("manager", "1234");
@@ -126,11 +128,19 @@ public sealed class PackageRemovalBriefAcceptanceTests(GameClubWebApplicationFac
         var customerId = await CreateCustomerAsync(op, "09128100005");
         await mgr.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/opening-balance",
             new { debtToman = 40_000L });
-        await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up",
-            new { method = "Cash", amountToman = 30_000L, giftToman = 3_000L });
+        var resp = await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up",
+            new { method = "Cash", amountToman = 30_000L, giftToman = 3_000L, commandId = Guid.NewGuid() });
+        Assert.Equal(HttpStatusCode.Conflict, resp.StatusCode);
+        var err = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("gift_not_allowed_with_debt", err.GetProperty("code").GetString());
         var wallet = await op.GetFromJsonAsync<JsonElement>($"/api/operator/members/customers/{customerId}/wallet");
-        Assert.Equal(-10_000, wallet.GetProperty("realToman").GetInt64());
-        Assert.Equal(3_000, wallet.GetProperty("giftToman").GetInt64());
+        Assert.Equal(-40_000, wallet.GetProperty("realToman").GetInt64());
+        Assert.Equal(0, wallet.GetProperty("giftToman").GetInt64());
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        Assert.Equal(0, await db.WalletLedger.CountAsync(w =>
+            w.CustomerId == customerId
+            && (w.Kind == WalletLedgerKind.TopUpReal || w.Kind == WalletLedgerKind.TopUpGift)));
     }
 
     [Fact]
@@ -144,7 +154,7 @@ public sealed class PackageRemovalBriefAcceptanceTests(GameClubWebApplicationFac
         await SetGiftCapAsync(mgr, 50_000, 10);
         var customerId = await CreateCustomerAsync(op, "09128100006");
         var topUp = await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up",
-            new { method = "CardToCard", amountToman = 200_000L, giftToman = 20_000L, destinationCardId = "card-a", reference = "c2c6" });
+            new { method = "CardToCard", amountToman = 200_000L, giftToman = 20_000L, destinationCardId = "card-a", reference = "c2c6", commandId = Guid.NewGuid()});
         topUp.EnsureSuccessStatusCode();
         long pendingId;
         using (var scope = factory.Services.CreateScope())
@@ -161,7 +171,7 @@ public sealed class PackageRemovalBriefAcceptanceTests(GameClubWebApplicationFac
         Assert.Equal(20_000, preview.GetProperty("giftIssuedToman").GetInt64());
         var customerId2 = await CreateCustomerAsync(op, "09128100066");
         await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId2}/wallet/top-up",
-            new { method = "CardToCard", amountToman = 50_000L, giftToman = 5_000L, destinationCardId = "card-a", reference = "rej" });
+            new { method = "CardToCard", amountToman = 50_000L, giftToman = 5_000L, destinationCardId = "card-a", reference = "rej", commandId = Guid.NewGuid()});
         long pendingId2;
         using (var scope2 = factory.Services.CreateScope())
         {
@@ -185,7 +195,7 @@ public sealed class PackageRemovalBriefAcceptanceTests(GameClubWebApplicationFac
         await SetGiftCapAsync(mgr, 500_000, 100);
         var customerId = await CreateCustomerAsync(op, "09128100011");
         (await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up",
-            new { method = "Cash", amountToman = 60_000L, giftToman = 10_000L })).EnsureSuccessStatusCode();
+            new { method = "Cash", amountToman = 60_000L, giftToman = 10_000L, commandId = Guid.NewGuid()})).EnsureSuccessStatusCode();
         await WalletSpendHelper.SpendAsync(op, customerId, 35_000);
         var wallet = await op.GetFromJsonAsync<JsonElement>($"/api/operator/members/customers/{customerId}/wallet");
         Assert.Equal(30_000, wallet.GetProperty("realToman").GetInt64());
@@ -204,12 +214,12 @@ public sealed class PackageRemovalBriefAcceptanceTests(GameClubWebApplicationFac
         await SetGiftCapAsync(mgr, 50_000, 0);
         var customerId = await CreateCustomerAsync(op, "09128100071");
         var resp = await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up",
-            new { method = "Cash", amountToman = 300_000L, giftToman = 1L });
+            new { method = "Cash", amountToman = 300_000L, giftToman = 1L, commandId = Guid.NewGuid()});
         Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
         var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
         Assert.Equal(0, body.GetProperty("maxAllowedGiftToman").GetInt64());
         (await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up",
-            new { method = "Cash", amountToman = 300_000L })).EnsureSuccessStatusCode();
+            new { method = "Cash", amountToman = 300_000L, commandId = Guid.NewGuid()})).EnsureSuccessStatusCode();
     }
 
     [Fact]
@@ -221,10 +231,10 @@ public sealed class PackageRemovalBriefAcceptanceTests(GameClubWebApplicationFac
         await SetGiftCapAsync(mgr, 10_000_000, 100);
         var customerId = await CreateCustomerAsync(op, "09128100072");
         (await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up",
-            new { method = "Cash", amountToman = 40_000L, giftToman = 40_000L })).EnsureSuccessStatusCode();
+            new { method = "Cash", amountToman = 40_000L, giftToman = 40_000L, commandId = Guid.NewGuid()})).EnsureSuccessStatusCode();
         Assert.Equal(HttpStatusCode.BadRequest,
             (await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up",
-                new { method = "Cash", amountToman = 40_000L, giftToman = 40_001L })).StatusCode);
+                new { method = "Cash", amountToman = 40_000L, giftToman = 40_001L, commandId = Guid.NewGuid()})).StatusCode);
     }
 
     [Fact]
@@ -236,10 +246,10 @@ public sealed class PackageRemovalBriefAcceptanceTests(GameClubWebApplicationFac
         await SetGiftCapAsync(mgr, 30_000, 10);
         var customerId = await CreateCustomerAsync(op, "09128100070");
         (await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up",
-            new { method = "Cash", amountToman = 300_000L, giftToman = 30_000L })).EnsureSuccessStatusCode();
+            new { method = "Cash", amountToman = 300_000L, giftToman = 30_000L, commandId = Guid.NewGuid()})).EnsureSuccessStatusCode();
         Assert.Equal(HttpStatusCode.BadRequest,
             (await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up",
-                new { method = "Cash", amountToman = 300_000L, giftToman = 30_001L })).StatusCode);
+                new { method = "Cash", amountToman = 300_000L, giftToman = 30_001L, commandId = Guid.NewGuid()})).StatusCode);
     }
 
     [Fact]
@@ -295,7 +305,7 @@ public sealed class PackageRemovalBriefAcceptanceTests(GameClubWebApplicationFac
         await mgr.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/opening-balance",
             new { giftToman = 9_999L });
         await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up",
-            new { method = "Cash", amountToman = 100_000L, giftToman = 10_000L });
+            new { method = "Cash", amountToman = 100_000L, giftToman = 10_000L, commandId = Guid.NewGuid()});
         await mgr.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/gift", new { giftToman = 5_000L });
         var topUps = await op.GetFromJsonAsync<JsonElement[]>($"/api/operator/members/customers/{customerId}/wallet/top-ups");
         var groupId = topUps![0].GetProperty("topUpGroupId").GetGuid();

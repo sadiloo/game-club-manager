@@ -97,7 +97,7 @@ public sealed class ShiftReportsAcceptanceTests(GameClubWebApplicationFactory fa
         await S3TestHelpers.FinishPcPaymentAsync(factory, sessionId, 80_000);
         var customer = await op.PostAsJsonAsync("/api/operator/customers", new { name = "a", mobile = "09123334444" });
         var customerId = (await customer.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetGuid();
-        await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up", new { method = "Cash", amountToman = 20_000L });
+        await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up", new { method = "Cash", amountToman = 20_000L , commandId = Guid.NewGuid() });
         var preview = await op.GetFromJsonAsync<JsonElement>("/api/operator/shift/close/preview");
         Assert.Equal(600_000, preview.GetProperty("expected").GetProperty("cashExpected").GetInt64());
         var close = await op.PostAsJsonAsync("/api/operator/shift/close", new
@@ -281,7 +281,7 @@ public sealed class ShiftReportsAcceptanceTests(GameClubWebApplicationFactory fa
         await S3TestHelpers.RegisterConsole(_api, op, "PS5-S9", 1);
         var customer = (await op.PostAsJsonAsync("/api/operator/customers", new { name = "w", mobile = "09125556677" })).EnsureSuccessStatusCode();
         var customerId = (await customer.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetGuid();
-        await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up", new { method = "Cash", amountToman = 100_000L });
+        await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up", new { method = "Cash", amountToman = 100_000L , commandId = Guid.NewGuid() });
         await op.PostAsJsonAsync("/api/operator/shift/close", new
         {
             workingDay = new { year = 2026, month = 6, day = 3 },

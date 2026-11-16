@@ -50,7 +50,7 @@ public sealed class ShiftReportsFixRound4Tests(GameClubWebApplicationFactory fac
             .EnsureSuccessStatusCode();
         var customerId = (await customer.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetGuid();
 
-        (await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up", new { method = "Cash", amountToman = 20_000L }))
+        (await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up", new { method = "Cash", amountToman = 20_000L , commandId = Guid.NewGuid() }))
             .EnsureSuccessStatusCode();
         factory.Clock.SetTehran(2026, 11, 20, 14, 5);
         var close1 = await op.PostAsJsonAsync("/api/operator/shift/close", new
@@ -63,7 +63,7 @@ public sealed class ShiftReportsFixRound4Tests(GameClubWebApplicationFactory fac
         var close1Id = (await close1.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("closeRecordId").GetGuid();
 
         factory.Clock.SetTehran(2026, 11, 20, 16, 0);
-        (await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up", new { method = "Cash", amountToman = 30_000L }))
+        (await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up", new { method = "Cash", amountToman = 30_000L , commandId = Guid.NewGuid() }))
             .EnsureSuccessStatusCode();
         factory.Clock.SetTehran(2026, 11, 20, 16, 5);
         var close2 = await op.PostAsJsonAsync("/api/operator/shift/close", new
@@ -100,6 +100,7 @@ public sealed class ShiftReportsFixRound4Tests(GameClubWebApplicationFactory fac
             method = "CardToCard",
             amountToman = 30_000L,
             destinationCardId = "qa-card-a",
+        commandId = Guid.NewGuid(),
         })).EnsureSuccessStatusCode();
 
         long pendingId;
@@ -126,7 +127,7 @@ public sealed class ShiftReportsFixRound4Tests(GameClubWebApplicationFactory fac
             .EnsureSuccessStatusCode();
         var customer2Id = (await customer2.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetGuid();
         factory.Clock.SetTehran(2026, 12, 4, 16, 0);
-        (await op.PostAsJsonAsync($"/api/operator/members/customers/{customer2Id}/wallet/top-up", new { method = "Cash", amountToman = 20_000L }))
+        (await op.PostAsJsonAsync($"/api/operator/members/customers/{customer2Id}/wallet/top-up", new { method = "Cash", amountToman = 20_000L , commandId = Guid.NewGuid() }))
             .EnsureSuccessStatusCode();
 
         factory.Clock.SetTehran(2026, 12, 4, 16, 5);
@@ -166,6 +167,7 @@ public sealed class ShiftReportsFixRound4Tests(GameClubWebApplicationFactory fac
             method = "CardToCard",
             amountToman = 80_000L,
             destinationCardId = "qa-card-a",
+        commandId = Guid.NewGuid(),
         })).EnsureSuccessStatusCode();
         long pendingId;
         using (var scope = factory.Services.CreateScope())

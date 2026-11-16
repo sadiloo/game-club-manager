@@ -157,9 +157,32 @@ public sealed class PendingWalletTopUpEntity
     public Guid? ShiftId { get; set; }
 }
 
+public sealed class WalletCommandEntity
+{
+    public long Id { get; set; }
+
+    public Guid CommandId { get; set; }
+
+    public string CommandType { get; set; } = string.Empty;
+
+    public Guid CustomerId { get; set; }
+
+    public string RequestFingerprint { get; set; } = string.Empty;
+
+    public Guid? TopUpGroupId { get; set; }
+
+    public long? PendingWalletTopUpId { get; set; }
+
+    public string? ResultJson { get; set; }
+
+    public DateTime AppliedAtUtc { get; set; }
+}
+
 public sealed class WalletTopUpCorrectionEntity
 {
     public long Id { get; set; }
+
+    public Guid? CommandId { get; set; }
 
     public Guid TopUpGroupId { get; set; }
 
