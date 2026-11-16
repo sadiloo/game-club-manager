@@ -15,7 +15,6 @@ public partial class MainWindow : Window
             this,
             StatusText,
             DisplayBalance,
-            DisplayPackage,
             DisplayElapsed,
             DisplayFreeBand,
             LockPanel,

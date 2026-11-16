@@ -65,7 +65,21 @@ public sealed class ApiExceptionMiddleware(RequestDelegate next)
         {
             context.Response.StatusCode = ex.Status;
             context.Response.ContentType = "application/json";
-            await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = ex.Code, code = ex.Code, message = ex.Message }));
+            var payload = new Dictionary<string, object?>
+            {
+                ["error"] = ex.Code,
+                ["code"] = ex.Code,
+                ["message"] = ex.Message,
+            };
+            if (ex.Extras is not null)
+            {
+                foreach (var (key, value) in ex.Extras)
+                {
+                    payload[key] = value;
+                }
+            }
+
+            await context.Response.WriteAsync(JsonSerializer.Serialize(payload));
         }
         catch (DbUpdateException ex) when (PostgresErrors.IsActiveSessionUniqueViolation(ex))
         {

@@ -15,6 +15,8 @@ public sealed record IncomeBreakdown(
     long GiftIssuedToman,
     MethodTotals Received);
 
+public sealed record PostCloseCorrectionsTotals(long Cash, long Card, long C2c, long Gift);
+
 public static class ShiftIncomeMath
 {
     public static bool IsReceivedPaymentLine(PaymentLineEntity line)
@@ -75,6 +77,32 @@ public static class ShiftIncomeMath
     public static MethodTotals SumWalletTopUpExpected(IEnumerable<WalletLedgerEntryEntity> topUps)
     {
         return SumWalletTopUpReceived(topUps.Where(t => !t.IsPostCloseAdjustment));
+    }
+
+    public static PostCloseCorrectionsTotals SumPostCloseCorrections(IEnumerable<WalletLedgerEntryEntity> rows)
+    {
+        long cash = 0;
+        long card = 0;
+        long c2c = 0;
+        long gift = 0;
+        foreach (var row in rows.Where(r => r.Kind == WalletLedgerKind.Correction && r.IsPostCloseAdjustment))
+        {
+            gift = MoneyMath.CheckedAdd(gift, row.GiftDeltaToman);
+            switch (row.Method)
+            {
+                case PaymentMethod.Cash:
+                    cash = MoneyMath.CheckedAdd(cash, row.RealDeltaToman);
+                    break;
+                case PaymentMethod.CardReader:
+                    card = MoneyMath.CheckedAdd(card, row.RealDeltaToman);
+                    break;
+                case PaymentMethod.CardToCard:
+                    c2c = MoneyMath.CheckedAdd(c2c, row.RealDeltaToman);
+                    break;
+            }
+        }
+
+        return new PostCloseCorrectionsTotals(cash, card, c2c, gift);
     }
 
     public static IncomeBreakdown BuildInvoiceIncome(InvoiceEntity invoice, IReadOnlyList<WalletLedgerEntryEntity> walletTopUpsForShift)

@@ -1063,6 +1063,8 @@ public sealed class ApiException(int status, string code, string message) : Exce
     public int Status { get; } = status;
 
     public string Code { get; } = code;
+
+  public IReadOnlyDictionary<string, object>? Extras { get; init; }
 }
 
 public sealed class DatabaseSeed

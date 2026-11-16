@@ -15,7 +15,7 @@ public sealed class Round8MoneyOnlyRegressionTests
             + (st.Grace?.WaivedToman ?? 0) + st.WriteOffToman + st.UncoveredToman + st.OmittedToman;
 
     [Fact]
-    public void rc_206_tail_uses_real_minute_grace_917()
+    public void rc_206_tail_grace_waived_toman_1833_money_only()
     {
         var start = T.At(2026, 6, 2, 22, 0);
         var charge = SessionPricer.Price(

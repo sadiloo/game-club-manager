@@ -276,6 +276,15 @@ public sealed class OperatorReportingService(AppDbContext db, OperatorContext op
             .ToListAsync(ct);
         var giftIssued = OperatorMemberWalletService.SumGiftIssuedToman(giftRows);
 
+        var postCloseRows = await db.WalletLedger.AsNoTracking()
+            .Where(w => w.Kind == WalletLedgerKind.Correction
+                        && w.IsPostCloseAdjustment
+                        && w.WorkingDayYear == year
+                        && w.WorkingDayMonth == month
+                        && w.WorkingDayDay == day)
+            .ToListAsync(ct);
+        var postClose = ShiftIncomeMath.SumPostCloseCorrections(postCloseRows);
+
         long walletTopUp = topUps.Sum(w => w.RealDeltaToman);
         var walletMethods = ShiftIncomeMath.SumWalletTopUpReceived(topUps);
         received = new MethodTotals(
@@ -319,6 +328,7 @@ public sealed class OperatorReportingService(AppDbContext db, OperatorContext op
             roundingToman = rounding,
             surchargeToman = surcharge,
             giftIssuedToman = giftIssued,
+            postCloseCorrections = new { cash = postClose.Cash, card = postClose.Card, c2c = postClose.C2c, gift = postClose.Gift },
             walletTopUpToman = walletTopUp,
             receivedCashToman = received.Cash,
             receivedCardReaderToman = received.CardReader,
@@ -356,6 +366,13 @@ public sealed class OperatorReportingService(AppDbContext db, OperatorContext op
             roundingToman = SumLong(r => r.roundingToman),
             surchargeToman = SumLong(r => r.surchargeToman),
             giftIssuedToman = SumLong(r => r.giftIssuedToman),
+            postCloseCorrections = new
+            {
+                cash = SumLong(r => r.postCloseCorrections.cash),
+                card = SumLong(r => r.postCloseCorrections.card),
+                c2c = SumLong(r => r.postCloseCorrections.c2c),
+                gift = SumLong(r => r.postCloseCorrections.gift),
+            },
             walletTopUpToman = SumLong(r => r.walletTopUpToman),
             receivedCashToman = SumLong(r => r.receivedCashToman),
             receivedCardReaderToman = SumLong(r => r.receivedCardReaderToman),

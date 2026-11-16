@@ -9,6 +9,7 @@ using Microsoft.Extensions.DependencyInjection;
 namespace GameClub.Server.Tests;
 
 /// <summary>Examples from step-package-removal-develop-brief (wallet gift on top-up).</summary>
+[Collection("server")]
 public sealed class PackageRemovalRoundTests(GameClubWebApplicationFactory factory) : IClassFixture<GameClubWebApplicationFactory>
 {
     static async Task<Guid> CreateCustomerAsync(HttpClient op, string mobile)

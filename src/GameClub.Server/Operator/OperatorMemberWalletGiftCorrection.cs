@@ -45,7 +45,10 @@ public static class WalletGiftCapMath
             throw new ApiException(
                 StatusCodes.Status400BadRequest,
                 "gift_cap_exceeded",
-                $"Gift exceeds operator cap (max {maxGift} toman for this amount).");
+                $"Gift exceeds operator cap (max {maxGift} toman for this amount).")
+            {
+                Extras = new Dictionary<string, object> { ["maxAllowedGiftToman"] = maxGift },
+            };
         }
     }
 }
@@ -200,11 +203,14 @@ public sealed partial class OperatorMemberWalletService
 
         if (body.CommandId is Guid cmdId)
         {
-            var existing = await db.WalletTopUpCorrections.AsNoTracking()
-                .FirstOrDefaultAsync(c => c.TopUpGroupId == topUpGroupId && c.Description == body.Description.Trim(), ct);
-            if (existing is not null)
+            var cmd = cmdId.ToString();
+            var alreadyApplied = await db.AuditLog.AsNoTracking()
+                .AnyAsync(
+                    a => a.Action == "wallet.topup.correction" && a.DetailsJson.Contains(cmd),
+                    ct);
+            if (alreadyApplied)
             {
-                return new { ok = true, duplicate = true };
+                return await GetWalletAsync(original.CustomerId, ct);
             }
         }
 

@@ -334,6 +334,54 @@ if (walletTopUpCardBtn) walletTopUpCardBtn.onclick = () => walletTopUp("CardRead
 const walletTopUpC2cBtn = document.getElementById("walletTopUpC2c");
 if (walletTopUpC2cBtn) walletTopUpC2cBtn.onclick = () => walletTopUp("CardToCard").catch(() => {});
 
+async function walletCorrectTopUp() {
+  const linked = await resolveLinkedCustomerForWallet();
+  if (!linked) {
+    showError("عضوی پیوسته نیست.");
+    return;
+  }
+  const list = await api(`/api/operator/members/customers/${linked.id}/wallet/top-ups`);
+  if (!list?.length) {
+    window.alert("شارژ قابل اصلاحی نیست (موقت)");
+    return;
+  }
+  const lines = list.map(
+    (t, i) =>
+      `${i + 1}: ${t.method} ${t.currentAmountToman} + هدیه ${t.currentGiftToman ?? 0} (${t.topUpGroupId})`,
+  );
+  const pick = window.prompt(`شماره شارژ برای اصلاح (موقت):\n${lines.join("\n")}`, "1");
+  if (!pick) return;
+  const idx = Number(pick) - 1;
+  if (!Number.isFinite(idx) || idx < 0 || idx >= list.length) {
+    showError("انتخاب نامعتبر");
+    return;
+  }
+  const row = list[idx];
+  const amountRaw = window.prompt("مبلغ پرداختی درست (تومان)", String(row.currentAmountToman));
+  if (amountRaw == null) return;
+  const giftRaw = window.prompt("هدیه درست (تومان)", String(row.currentGiftToman ?? 0));
+  if (giftRaw == null) return;
+  const description = window.prompt("توضیح (اجباری)", "");
+  if (!description?.trim()) {
+    showError("توضیح الزامی است.");
+    return;
+  }
+  await api(`/api/operator/members/wallet/top-ups/${row.topUpGroupId}/correct`, {
+    method: "POST",
+    body: JSON.stringify({
+      newAmountToman: Number(String(amountRaw).replace(/,/g, "")),
+      newGiftToman: Number(String(giftRaw).replace(/,/g, "")),
+      description: description.trim(),
+      commandId: crypto.randomUUID(),
+    }),
+  });
+  renderCustomerChip(linked);
+  window.alert("اصلاح ثبت شد (موقت)");
+}
+
+const walletCorrectBtn = document.getElementById("walletCorrectBtn");
+if (walletCorrectBtn) walletCorrectBtn.onclick = () => walletCorrectTopUp().catch(() => {});
+
 async function linkCustomer(customerId) {
   const ctx = customerLinkContext();
   if (!ctx) {
@@ -1299,8 +1347,11 @@ function refreshClosePreviewSummary() {
     .map((p) => `کیف → ${p.destinationCardId ?? "—"} ${p.amountToman}`)
     .join("؛ ");
   const pendParts = [pendInv, pendWal].filter(Boolean).join(" | ");
+  const recv = closePreviewMeta.received || {};
+  const post = closePreviewMeta.postCloseCorrections || {};
+  const giftIssued = closePreviewMeta.giftIssuedToman ?? 0;
   el.textContent =
-    `مورد انتظار: نقد ${cashExpected} | کارتخوان ${e.cardReaderExpected ?? 0} | کارت‌به‌کارت تأییدشده ${e.cardToCardConfirmedExpected ?? 0} | معلق ${e.cardToCardPending ?? 0} | مقصد: ${dest || "—"} | C2C معلق: ${pendParts || "—"}`;
+    `مورد انتظار: نقد ${cashExpected} | کارتخوان ${e.cardReaderExpected ?? 0} | کارت‌به‌کارت تأییدشده ${e.cardToCardConfirmedExpected ?? 0} | معلق ${e.cardToCardPending ?? 0} | دریافتی: نقد ${recv.cashReceived ?? "—"} | کارتخوان ${recv.cardReaderReceived ?? "—"} | هدیه داده‌شده ${giftIssued} | تعدیل اصلاح شارژ (موقت): نقد ${post.cash ?? 0} کارت ${post.card ?? 0} C2C ${post.c2c ?? 0} هدیه ${post.gift ?? 0} | مقصد: ${dest || "—"} | C2C معلق: ${pendParts || "—"}`;
 }
 
 function recalcCloseExpectedCash() {

@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 
 namespace GameClub.Server.Tests;
 
+[Collection("server")]
 public sealed class PackageEndpointsGoneTests(GameClubWebApplicationFactory factory) : IClassFixture<GameClubWebApplicationFactory>
 {
     [Fact]
