@@ -8,10 +8,10 @@ namespace GameClub.Server.Kiosk;
 
 internal static class KioskPlayEstimate
 {
-    internal static CustomerAccount BuildAccount(CustomerMemberEntity member, WalletSettings wallet, IReadOnlyList<TimePackage> packages)
+    internal static CustomerAccount BuildAccount(CustomerMemberEntity member, WalletSettings wallet)
     {
         var pocket = MemberWalletMapper.ToPocket(member);
-        return new CustomerAccount(member.CustomerId.ToString(), wallet, pocket, new WalletPocket(0, 0), packages);
+        return new CustomerAccount(member.CustomerId.ToString(), wallet, pocket, new WalletPocket(0, 0));
     }
 
     internal static (PcPlayResult Settled, RemainingTimeEstimate Estimate) AfterAcceptedPlay(

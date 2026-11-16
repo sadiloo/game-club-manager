@@ -17,7 +17,7 @@ public sealed record MemberBillResult(
     DateTime BilledToUtc,
     Invoice InvoicePreview,
     AllocationResult? Allocation,
-    Settlement? PackageSettlement,
+    Settlement? PlaySettlement,
     CustomerPricing? PricingUsed,
     OperatorAlert? OvershootAlert = null);
 
@@ -32,7 +32,6 @@ public sealed class MemberBillComposer
         Guid? customerId,
         CustomerMemberEntity? member,
         BranchMemberSettingsEntity settings,
-        IReadOnlyList<TimePackage> packages,
         StationKind stationKind,
         IReadOnlyList<Tender>? previewTenders = null,
         bool applyMemberPricing = true)
@@ -42,9 +41,8 @@ public sealed class MemberBillComposer
             ? null
             : MemberSettingsMapper.BuildPricing(member, settings, ladder);
         var discountPolicy = MemberSettingsMapper.LoadDiscountPolicy(settings);
-        var accountPolicy = MemberSettingsMapper.LoadAccountPolicy(settings);
 
-        Settlement? packageSettlement = null;
+        Settlement? playSettlement = null;
         OperatorAlert? overshootAlert = null;
         Invoice? pcChargeInvoice = null;
         IReadOnlyList<TimeChargeLine> timeLines;
@@ -55,30 +53,18 @@ public sealed class MemberBillComposer
         {
             var wallet = MemberSettingsMapper.LoadWalletSettings(settings);
             var pocket = MemberWalletMapper.ToPocket(member);
-            var account = new CustomerAccount(member.CustomerId.ToString(), wallet, pocket, new WalletPocket(0, 0), packages);
+            var account = new CustomerAccount(member.CustomerId.ToString(), wallet, pocket, new WalletPocket(0, 0));
             var play = CustomerPlay.Settle(
                 charge,
                 account,
-                accountPolicy,
                 BillingPolicy.Default,
                 pricing,
                 discounts: discountPolicy,
                 issuedAt: TimeMapping.ToTehran(billedToUtc));
-            packageSettlement = play.Settlement;
+            playSettlement = play.Settlement;
             overshootAlert = play.Settlement.Alert;
             pcChargeInvoice = play.ChargeInvoice;
             timeLines = play.Settlement.MoneyTimeLines();
-        }
-        else if (member is not null && packages.Count > 0 && charge.TotalBilledMinutes > 0)
-        {
-            var pcAccount = new PcAccount(member.CustomerId.ToString(), charge.TotalAmountToman, packages);
-            packageSettlement = AccountSettlement.Settle(
-                charge,
-                pcAccount,
-                accountPolicy,
-                BillingPolicy.Default,
-                graceMinuteEnabled: false);
-            timeLines = packageSettlement.MoneyTimeLines();
         }
         else
         {
@@ -165,7 +151,7 @@ public sealed class MemberBillComposer
             billedToUtc,
             invoice,
             allocation,
-            packageSettlement,
+            playSettlement,
             pricing,
             overshootAlert);
     }

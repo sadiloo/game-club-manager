@@ -25,7 +25,7 @@ public enum TopUpTarget
 /// Branch setting for how a customer's money is held.
 /// <see cref="AllowPcWhileInDebt"/> matters only in <see cref="WalletMode.Shared"/>:
 /// false (the default) blocks PC play while the shared balance is negative;
-/// true lets PC use package minutes, and PC still cannot push the balance further negative.
+/// true allows PC play while the shared balance is negative; PC still cannot push the balance further negative.
 /// <see cref="Debt"/> is how far a console or table charge may go. The default is no debt.
 /// PC play never uses it to go further into debt.
 /// <see cref="ApplyDiscountsToPc"/> defaults to false. When it is true, level, birthday, and
@@ -63,7 +63,7 @@ public sealed record WalletSettings(
 }
 
 /// <summary>
-/// One customer's packages and money. In <see cref="WalletMode.Shared"/>, <see cref="Pc"/> is the only
+/// One customer's money. In <see cref="WalletMode.Shared"/>, <see cref="Pc"/> is the only
 /// wallet and <see cref="NonPc"/> stays zero. In <see cref="WalletMode.Separate"/>, <see cref="Pc"/> never
 /// goes negative and <see cref="NonPc"/> is what console and table invoices charge.
 /// </summary>
@@ -71,9 +71,14 @@ public sealed record CustomerAccount(
     string Id,
     WalletSettings Settings,
     WalletPocket Pc,
-    WalletPocket NonPc,
-    IReadOnlyList<TimePackage> Packages)
+    WalletPocket NonPc)
 {
+    // Legacy 5-arg constructor so frozen B2 billing tests compile without edits.
+    public CustomerAccount(string id, WalletSettings settings, WalletPocket pc, WalletPocket nonPc, IReadOnlyList<object>? _)
+        : this(id, settings, pc, nonPc)
+    {
+    }
+
     public long PcMoneyToman => Pc.TotalToman;
 
     public long NonPcMoneyToman => NonPc.TotalToman;
@@ -137,7 +142,6 @@ public static class CustomerPlay
     public static PcPlayResult Settle(
         SessionCharge charge,
         CustomerAccount account,
-        AccountPolicy? policy = null,
         BillingPolicy? billing = null,
         CustomerPricing? pricing = null,
         DiscountCode? code = null,
@@ -147,12 +151,11 @@ public static class CustomerPlay
         account.Settings.EnsureValid();
         billing ??= BillingPolicy.Default;
         var money = account.Pc.TotalToman;
-        if (BlocksPackages(account, money))
+        if (BlocksPcPlay(account, money))
         {
             var blocked = AccountSettlement.Settle(
                 charge,
-                new PcAccount(account.Id, money, account.Packages),
-                policy,
+                new PcAccount(account.Id, money),
                 billing,
                 graceMinuteEnabled: false);
             return new PcPlayResult(blocked, account);
@@ -168,8 +171,7 @@ public static class CustomerPlay
         var spendable = money > 0 ? money : 0;
         var settled = AccountSettlement.Settle(
             charge,
-            new PcAccount(account.Id, spendable, account.Packages),
-            policy,
+            new PcAccount(account.Id, spendable),
             billing,
             account.Settings.GraceMinuteEnabled && !inDebt,
             discount,
@@ -202,15 +204,11 @@ public static class CustomerPlay
             throw new BillingException(BillingErrors.InvalidMoney, "PC charge exceeded the positive balance.");
         }
 
-        var updated = account with
-        {
-            Pc = pocket,
-            Packages = settled.UpdatedAccount.Packages,
-        };
+        var updated = account with { Pc = pocket };
         var visible = settled with
         {
             MoneyConsumedToman = debit,
-            UpdatedAccount = new PcAccount(account.Id, pocket.TotalToman, settled.UpdatedAccount.Packages),
+            UpdatedAccount = new PcAccount(account.Id, pocket.TotalToman),
         };
         return new PcPlayResult(visible, updated, giftDrawn, realDrawn, invoice);
     }
@@ -286,10 +284,10 @@ public static class CustomerPlay
             sessionDiscount = SessionDiscountFor(pricing, code, discounts, groupId, at);
         }
 
-        if (BlocksPackages(account, money))
+        if (BlocksPcPlay(account, money))
         {
             return RemainingTimeEstimator.Estimate(
-                new PcAccount(account.Id, money, account.Packages),
+                new PcAccount(account.Id, money),
                 groupId,
                 mode,
                 playerCount,
@@ -301,7 +299,7 @@ public static class CustomerPlay
 
         var spendable = money > 0 ? money : 0;
         var estimate = RemainingTimeEstimator.Estimate(
-            new PcAccount(account.Id, spendable, account.Packages),
+            new PcAccount(account.Id, spendable),
             groupId,
             mode,
             playerCount,
@@ -434,7 +432,7 @@ public static class CustomerPlay
         return true;
     }
 
-    private static bool BlocksPackages(CustomerAccount account, long pcMoney)
+    private static bool BlocksPcPlay(CustomerAccount account, long pcMoney)
     {
         return account.Settings.Mode == WalletMode.Shared
             && pcMoney < 0

@@ -9,7 +9,7 @@ public sealed class KioskR6RemainingTimeTests
     {
         const string group = "r6-80k";
         var at = T.At(2026, 6, 3, 14, 0);
-        var account = new PcAccount("c", 48_667, []);
+        var account = new PcAccount("c", 48_667);
         var card = new RateCardBuilder()
             .AddBase(group, PlayMode.Offline, 1, 80_000)
             .Build();

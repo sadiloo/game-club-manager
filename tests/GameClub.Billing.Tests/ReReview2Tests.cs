@@ -101,7 +101,7 @@ public class ReReview2Tests
             var played = SessionPricer.Price(new Session("x", [
                 new PlaySegment("a", priced.Start, priced.End, "st", CafeFixture.Ps5, PlayMode.Offline, 1),
             ]), CafeFixture.Card());
-            var settled = AccountSettlement.Settle(played, new PcAccount("m", budget, []));
+            var settled = AccountSettlement.Settle(played, new PcAccount("m", budget));
             if (settled.MoneyConsumedToman != priced.ConsumedToman
                 || settled.UncoveredToman != 0
                 || (settled.Grace?.WaivedToman ?? 0) != (priced.Grace?.WaivedToman ?? 0))
@@ -204,7 +204,7 @@ public class ReReview2Tests
     public void R2_8_money_time_lines_are_gross_so_grace_is_waived_once()
     {
         var minute = MoneyMath.ChargeForMinutes(110_000, 1, RateRemainderMode.Nearest);
-        var settled = AccountSettlement.Settle(OneMinute(), new PcAccount("m", 500, []));
+        var settled = AccountSettlement.Settle(OneMinute(), new PcAccount("m", 500));
         var lines = settled.MoneyTimeLines();
         Assert.Equal(minute, lines.Sum(line => line.AmountToman));
         var invoice = InvoiceCalculator.Calculate(new InvoiceRequest(
@@ -385,7 +385,7 @@ public class ReReview2Tests
     }
 
     private static CustomerAccount Wallet(long balance)
-        => new("m", WalletSettings.Shared with { ApplyDiscountsToPc = true }, new WalletPocket(balance, 0), new WalletPocket(0, 0), []);
+        => new("m", WalletSettings.Shared with { ApplyDiscountsToPc = true }, new WalletPocket(balance, 0), new WalletPocket(0, 0));
 
     private static SessionCharge Hour(DateTimeOffset start)
         => CafeFixture.Price(CafeFixture.Session(

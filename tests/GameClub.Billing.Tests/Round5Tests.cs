@@ -49,7 +49,7 @@ public class Round5Tests
         Assert.Equal(-1_000, updated.RealToman);
         Assert.Equal(3_000, updated.GiftToman);
 
-        var account = new CustomerAccount("m", WalletSettings.Shared, new WalletPocket(-1_000, 5_000), new WalletPocket(0, 0), []);
+        var account = new CustomerAccount("m", WalletSettings.Shared, new WalletPocket(-1_000, 5_000), new WalletPocket(0, 0));
         var start = T.At(2026, 6, 2, 10, 0);
         var play = CustomerPlay.Settle(
             Play(PilotSeed.CreateCard(), PilotSeed.PcNormalGroupId, start, start.AddMinutes(1)),
@@ -68,7 +68,7 @@ public class Round5Tests
         var played = SessionPricer.Price(new Session("s", [
             new PlaySegment("a", start, start.AddMinutes(8), "pc-1", PilotSeed.PcNormalGroupId, PlayMode.Offline, 1, StationKind.Pc),
         ]), PilotSeed.CreateCard(), policy: policy);
-        var account = new CustomerAccount("m", WalletSettings.Shared, new WalletPocket(5_000, 0), new WalletPocket(0, 0), []);
+        var account = new CustomerAccount("m", WalletSettings.Shared, new WalletPocket(5_000, 0), new WalletPocket(0, 0));
         var play = CustomerPlay.Settle(played, account, billing: policy);
         Assert.Equal(5_000, play.Settlement.MoneyConsumedToman);
         Assert.Equal(0, play.Account.PcMoneyToman);
@@ -86,7 +86,7 @@ public class Round5Tests
         var played = SessionPricer.Price(new Session("s", [
             new PlaySegment("a", start, start.AddMinutes(5), "pc-1", PilotSeed.PcNormalGroupId, PlayMode.Offline, 1, StationKind.Pc),
         ]), PilotSeed.CreateCard(), policy: policy);
-        var settled = AccountSettlement.Settle(played, new PcAccount("m", 0, []), billing: policy);
+        var settled = AccountSettlement.Settle(played, new PcAccount("m", 0), billing: policy);
         Assert.Null(settled.Grace);
         Assert.Equal(0, settled.MoneyConsumedToman);
         Assert.True(settled.WriteOffToman > 0);
@@ -127,7 +127,7 @@ public class Round5Tests
     }
 
     private static CustomerAccount Account()
-        => new("m", WalletSettings.Shared with { ApplyDiscountsToPc = true }, new WalletPocket(1_000_000, 0), new WalletPocket(0, 0), []);
+        => new("m", WalletSettings.Shared with { ApplyDiscountsToPc = true }, new WalletPocket(1_000_000, 0), new WalletPocket(0, 0));
 
     private static SessionCharge Play(RateCard card, string group, DateTimeOffset start, DateTimeOffset end)
         => SessionPricer.Price(new Session("s", [

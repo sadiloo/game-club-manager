@@ -304,7 +304,7 @@ public sealed class SessionCloser(
         CancellationToken ct)
     {
         var number = await NextInvoiceNumberAsync(ct);
-        var writeOffToman = amounts.Detail?.PackageSettlement?.WriteOffToman ?? 0;
+        var writeOffToman = amounts.Detail?.PlaySettlement?.WriteOffToman ?? 0;
         if (writeOffToman == 0)
         {
             writeOffToman = amounts.Detail?.InvoicePreview.Lines

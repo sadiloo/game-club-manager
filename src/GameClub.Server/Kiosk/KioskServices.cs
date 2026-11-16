@@ -220,7 +220,6 @@ public sealed class KioskLeaseService(
 
         var lastCheckpoint = session.LastCheckpointUtc ?? session.StartedAtUtc;
         DateTime authorizedUntil;
-        long packageMinutes = 0;
         var walletDigest = session.CustomerId?.ToString() ?? "guest";
         if (session.CustomerId is null)
         {
@@ -232,20 +231,19 @@ public sealed class KioskLeaseService(
         {
             var settings = await members.LoadSettingsAsync(ct);
             var wallet = MemberSettingsMapper.LoadWalletSettings(settings);
-            var (member, packages) = await members.LoadMemberStateAsync(session.CustomerId.Value, ct);
+            var member = await members.LoadMemberAsync(session.CustomerId.Value, ct);
             if (member is null)
             {
                 return null;
             }
 
-            var account = KioskPlayEstimate.BuildAccount(member, wallet, packages);
+            var account = KioskPlayEstimate.BuildAccount(member, wallet);
             var snapshot = await rates.LoadSnapshotAsync(session.RateCardSnapshotId, ct);
             var groupId = session.Station?.GroupId ?? PilotSeed.PcNormalGroupId;
             var at = clock.UtcNow;
             var endUtc = session.LastCheckpointUtc ?? clock.UtcNow.UtcDateTime;
             var charge = billing.BuildCharge(session, endUtc, snapshot);
             var (settled, estimate) = KioskPlayEstimate.AfterAcceptedPlay(session, member, account, charge, groupId, settings, snapshot.Card, at);
-            packageMinutes = settled.Account.Packages.Sum(p => p.RemainingMinutes);
             var moneyMinutes = estimate.MoneyMinutes ?? 0;
             var debtPlay = wallet.AllowPcWhileInDebt && account.Pc.TotalToman < 0;
             var grace = settled.Settlement.Grace;
@@ -253,11 +251,11 @@ public sealed class KioskLeaseService(
             {
                 authorizedUntil = grace.At.UtcDateTime.AddMinutes(1);
             }
-            else if (debtPlay && packageMinutes <= 0)
+            else if (debtPlay && moneyMinutes <= 0)
             {
                 authorizedUntil = lastCheckpoint;
             }
-            else if (moneyMinutes <= 0 && packageMinutes <= 0)
+            else if (moneyMinutes <= 0)
             {
                 authorizedUntil = lastCheckpoint;
             }
@@ -267,10 +265,7 @@ public sealed class KioskLeaseService(
             }
             else
             {
-                var playableMinutes = debtPlay && moneyMinutes <= 0
-                    ? packageMinutes
-                    : Math.Max(0, moneyMinutes) + packageMinutes;
-                authorizedUntil = lastCheckpoint.AddMinutes(Math.Max(1, playableMinutes));
+                authorizedUntil = lastCheckpoint.AddMinutes(Math.Max(1, Math.Max(0, moneyMinutes)));
             }
         }
 
@@ -285,7 +280,6 @@ public sealed class KioskLeaseService(
             AuthorizedUntilUtc = authorizedUntil,
             MaxBillableCheckpointUtc = lastCheckpoint,
             WalletDigest = walletDigest,
-            PackageMinutesTotal = packageMinutes,
             CatalogVersion = catalogVersion,
             IssuedAtUtc = clock.UtcNow.UtcDateTime,
             LeaseVersion = 1,
@@ -330,7 +324,7 @@ public sealed class KioskDisplayService(
 
         var settings = await members.LoadSettingsAsync(ct);
         var wallet = MemberSettingsMapper.LoadWalletSettings(settings);
-        var (member, packages) = await members.LoadMemberStateAsync(session.CustomerId, ct);
+        var member = await members.LoadMemberAsync(session.CustomerId, ct);
         if (member is null)
         {
             return null;
@@ -339,11 +333,10 @@ public sealed class KioskDisplayService(
         var snapshot = await rates.LoadSnapshotAsync(session.RateCardSnapshotId, ct);
         var endUtc = session.LastCheckpointUtc ?? clock.UtcNow.UtcDateTime;
         var charge = billing.BuildCharge(session, endUtc, snapshot);
-        var account = KioskPlayEstimate.BuildAccount(member, wallet, packages);
+        var account = KioskPlayEstimate.BuildAccount(member, wallet);
         var groupId = session.Station?.GroupId ?? PilotSeed.PcNormalGroupId;
         var at = clock.UtcNow;
         var (settled, estimate) = KioskPlayEstimate.AfterAcceptedPlay(session, member, account, charge, groupId, settings, snapshot.Card, at);
-        var packageRemaining = settled.Account.Packages.Select(p => (int)p.RemainingMinutes).ToList();
         var memberPocket = MemberWalletMapper.ToPocket(member);
         var elapsed = (long)Elapsed(session).TotalSeconds;
         var moneyMinutes = estimate.MoneyMinutes ?? 0;
@@ -354,7 +347,7 @@ public sealed class KioskDisplayService(
         }
 
         int? warning = null;
-        var minutesLeft = (int)(estimate.MoneyMinutes ?? 0) + estimate.EligiblePackageMinutes;
+        var minutesLeft = (int)(estimate.MoneyMinutes ?? 0);
         if (minutesLeft > 0)
         {
             warning = thresholds.Where(t => minutesLeft <= t).OrderBy(t => t).FirstOrDefault();
@@ -379,9 +372,7 @@ public sealed class KioskDisplayService(
             ? 0
             : debtOnly
             ? 0
-            : estimate.EligiblePackageMinutes > 0
-                ? Math.Max(0, (estimate.MoneyMinutes ?? 0) * 60L)
-                : Math.Max(0, estimate.TotalMinutes * 60L);
+            : Math.Max(0, estimate.TotalMinutes * 60L);
         var walletToman = graceActive
             || session.Status == SessionStatus.AwaitingPayment && settled.Settlement.Grace is { WaivedToman: > 0 }
             ? memberPocket.TotalToman
@@ -390,13 +381,12 @@ public sealed class KioskDisplayService(
         {
             WalletBalanceToman = walletToman,
             GiftBalanceToman = memberPocket.GiftToman,
-            PackageMinutesRemaining = packageRemaining,
             EstimatedRemainingSeconds = moneyOnlySeconds,
             ElapsedDisplaySeconds = elapsed,
             OpenGuestElapsedOnly = false,
             FreeBandText = freeBand,
             GraceActive = graceActive,
-            BlockedByDebt = estimate.BlockedByDebt || (debtOnly && estimate.EligiblePackageMinutes <= 0),
+            BlockedByDebt = estimate.BlockedByDebt || debtOnly,
             NearEndMinutesThresholds = thresholds,
             WarningRemainingMinutes = warning,
         };
@@ -416,7 +406,7 @@ public sealed class KioskDisplayService(
 
         var settings = await members.LoadSettingsAsync(ct);
         var wallet = MemberSettingsMapper.LoadWalletSettings(settings);
-        var (member, packages) = await members.LoadMemberStateAsync(session.CustomerId.Value, ct);
+        var member = await members.LoadMemberAsync(session.CustomerId.Value, ct);
         if (member is null)
         {
             return false;
@@ -425,7 +415,7 @@ public sealed class KioskDisplayService(
         var snapshot = await rates.LoadSnapshotAsync(session.RateCardSnapshotId, ct);
         var endUtc = session.LastCheckpointUtc ?? clock.UtcNow.UtcDateTime;
         var charge = billing.BuildCharge(session, endUtc, snapshot);
-        var account = KioskPlayEstimate.BuildAccount(member, wallet, packages);
+        var account = KioskPlayEstimate.BuildAccount(member, wallet);
         var groupId = session.Station?.GroupId ?? PilotSeed.PcNormalGroupId;
         var (settled, estimate) = KioskPlayEstimate.AfterAcceptedPlay(
             session,
@@ -459,7 +449,7 @@ public sealed class KioskDisplayService(
 
         var settings = await members.LoadSettingsAsync(ct);
         var wallet = MemberSettingsMapper.LoadWalletSettings(settings);
-        var (member, packages) = await members.LoadMemberStateAsync(session.CustomerId.Value, ct);
+        var member = await members.LoadMemberAsync(session.CustomerId.Value, ct);
         if (member is null)
         {
             return null;
@@ -468,7 +458,7 @@ public sealed class KioskDisplayService(
         var snapshot = await rates.LoadSnapshotAsync(session.RateCardSnapshotId, ct);
         var endUtc = session.LastCheckpointUtc ?? clock.UtcNow.UtcDateTime;
         var charge = billing.BuildCharge(session, endUtc, snapshot);
-        var account = KioskPlayEstimate.BuildAccount(member, wallet, packages);
+        var account = KioskPlayEstimate.BuildAccount(member, wallet);
         var groupId = session.Station?.GroupId ?? PilotSeed.PcNormalGroupId;
         var (settled, _) = KioskPlayEstimate.AfterAcceptedPlay(
             session,
@@ -497,7 +487,7 @@ public sealed class KioskDisplayService(
 
         var settings = await members.LoadSettingsAsync(ct);
         var wallet = MemberSettingsMapper.LoadWalletSettings(settings);
-        var (member, packages) = await members.LoadMemberStateAsync(session.CustomerId.Value, ct);
+        var member = await members.LoadMemberAsync(session.CustomerId.Value, ct);
         if (member is null)
         {
             return false;
@@ -506,7 +496,7 @@ public sealed class KioskDisplayService(
         var snapshot = await rates.LoadSnapshotAsync(session.RateCardSnapshotId, ct);
         var endUtc = session.LastCheckpointUtc ?? clock.UtcNow.UtcDateTime;
         var charge = billing.BuildCharge(session, endUtc, snapshot);
-        var account = KioskPlayEstimate.BuildAccount(member, wallet, packages);
+        var account = KioskPlayEstimate.BuildAccount(member, wallet);
         var groupId = session.Station?.GroupId ?? PilotSeed.PcNormalGroupId;
         var (settled, _) = KioskPlayEstimate.AfterAcceptedPlay(
             session,

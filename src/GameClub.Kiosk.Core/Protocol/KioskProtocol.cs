@@ -10,7 +10,6 @@ public sealed class SessionLeasePayload
     public DateTime AuthorizedUntilUtc { get; init; }
     public DateTime MaxBillableCheckpointUtc { get; init; }
     public string WalletDigest { get; init; } = "";
-    public long PackageMinutesTotal { get; init; }
     public long CatalogVersion { get; init; }
     public DateTime IssuedAtUtc { get; init; }
     public int LeaseVersion { get; init; }
@@ -43,7 +42,6 @@ public sealed class KioskDisplayDto
 {
     public long? WalletBalanceToman { get; init; }
     public long? GiftBalanceToman { get; init; }
-    public IReadOnlyList<int>? PackageMinutesRemaining { get; init; }
     public long? EstimatedRemainingSeconds { get; init; }
     public long? ElapsedDisplaySeconds { get; init; }
     public string? FreeBandText { get; init; }

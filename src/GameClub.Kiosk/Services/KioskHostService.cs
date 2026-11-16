@@ -560,9 +560,7 @@ public sealed class KioskHostService : IAsyncDisposable
         _balance.Text = _lastDisplay.WalletBalanceToman is long w
             ? $"Wallet: {w:N0} تومان"
             : "";
-        _package.Text = _lastDisplay.PackageMinutesRemaining is { Count: > 0 } pk
-            ? $"Package minutes: {string.Join(", ", pk)}"
-            : "";
+        _package.Text = "";
         _elapsed.Text = _lastDisplay.ElapsedDisplaySeconds is long e
             ? $"Elapsed: {TimeSpan.FromSeconds(e):hh\\:mm\\:ss}"
             : "";

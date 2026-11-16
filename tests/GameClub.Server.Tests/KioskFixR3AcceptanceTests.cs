@@ -138,8 +138,7 @@ public sealed class KioskFixR3AcceptanceTests(GameClubWebApplicationFactory fact
             var ack = await scope2.ServiceProvider.GetRequiredService<KioskCheckpointCoordinator>()
                 .OnHeartbeatAsync(deviceId, sessionId, 3_605_000, default);
             Assert.NotNull(ack.Display);
-            Assert.InRange(ack.Display!.PackageMinutesRemaining![0], 59, 60);
-            Assert.Equal(3_600, ack.Display.EstimatedRemainingSeconds);
+            Assert.Equal(3_600, ack.Display!.EstimatedRemainingSeconds);
         }
     }
 
@@ -176,7 +175,6 @@ public sealed class KioskFixR3AcceptanceTests(GameClubWebApplicationFactory fact
         await using (var scope2 = factory.Services.CreateAsyncScope())
         {
             var ack = await scope2.ServiceProvider.GetRequiredService<KioskCheckpointCoordinator>().OnHeartbeatAsync(deviceId, sessionId, 3_605_000, default);
-            Assert.Equal(0, ack.Display!.PackageMinutesRemaining![0]);
             Assert.NotNull(ack.Lease);
             Assert.Equal(ack.LastAcceptedCheckpointUtc, ack.Lease!.Payload.AuthorizedUntilUtc);
         }

@@ -15,7 +15,7 @@ public sealed class Round10CapRegressionTests
     }
 
     static CustomerAccount Cust(long money)
-        => new("m", WalletSettings.Shared with { ApplyDiscountsToPc = true }, new WalletPocket(money, 0), new WalletPocket(0, 0), []);
+        => new("m", WalletSettings.Shared with { ApplyDiscountsToPc = true }, new WalletPocket(money, 0), new WalletPocket(0, 0));
 
     [Fact]
     public void rc_219_club_cap_below_100_is_not_saturation()
@@ -23,15 +23,15 @@ public sealed class Round10CapRegressionTests
         var charge = HourCharge();
         Assert.Equal(51_700, AccountSettlement.Settle(
             charge,
-            new PcAccount("m", 1_000_000, []),
+            new PcAccount("m", 1_000_000),
             discount: new SessionDiscount(LevelPercent: 58, Cap: 53)).MoneyConsumedToman);
         Assert.Equal(27_500, AccountSettlement.Settle(
             charge,
-            new PcAccount("m", 1_000_000, []),
+            new PcAccount("m", 1_000_000),
             discount: new SessionDiscount(LevelPercent: 41, CodePercent: 34, Cap: 58)).MoneyConsumedToman);
         Assert.Equal(19_800, AccountSettlement.Settle(
             charge,
-            new PcAccount("m", 1_000_000, []),
+            new PcAccount("m", 1_000_000),
             discount: new SessionDiscount(CodePercent: 82, Cap: 54)).MoneyConsumedToman);
 
         var bd = JalaliDate.FromGregorian(new LocalDate(2026, 6, 2));
@@ -80,7 +80,7 @@ public sealed class Round10CapRegressionTests
                     issuedAt: issued).Settlement.MoneyConsumedToman);
                 Assert.Equal(expected, AccountSettlement.Settle(
                     charge,
-                    new PcAccount("m", 1_000_000, []),
+                    new PcAccount("m", 1_000_000),
                     discount: new SessionDiscount(
                         LevelPercent: level,
                         BirthdayPercent: birthDate is null ? 0 : birthdayPercent,

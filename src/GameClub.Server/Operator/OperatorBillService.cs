@@ -52,11 +52,9 @@ public sealed class BillCalculator(
         var snapshot = await rates.LoadAsync(ct);
         var settings = await memberContext.LoadSettingsAsync(ct);
         CustomerMemberEntity? member = null;
-        IReadOnlyList<TimePackage> packages = [];
         if (customerId is Guid id)
         {
             member = await memberContext.EnsureMemberAsync(id, ct);
-            (_, packages) = await memberContext.LoadMemberStateAsync(id, ct);
         }
 
         return ToBillAmounts(MemberBillComposer.ComputeBuffetOnly(saleLines, snapshot, customerId, member, settings, previewTenders));
@@ -93,11 +91,9 @@ public sealed class BillCalculator(
         var charge = billing.BuildCharge(session, endUtc, snapshot);
         var settings = await memberContext.LoadSettingsAsync(ct);
         CustomerMemberEntity? member = null;
-        IReadOnlyList<TimePackage> packages = [];
         if (session.CustomerId is Guid cid)
         {
             member = await memberContext.EnsureMemberAsync(cid, ct);
-            (_, packages) = await memberContext.LoadMemberStateAsync(cid, ct);
         }
 
         var applyPricing = session.Station?.Group?.Kind != StationKind.Pc || settings.ApplyDiscountsToPc;
@@ -111,7 +107,6 @@ public sealed class BillCalculator(
             session.CustomerId,
             member,
             settings,
-            packages,
             stationKind,
             previewTenders.Count > 0 ? previewTenders : null,
             applyPricing);

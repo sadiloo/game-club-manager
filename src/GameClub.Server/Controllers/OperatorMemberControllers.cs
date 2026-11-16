@@ -9,8 +9,7 @@ namespace GameClub.Server.Controllers;
 [Route("api/operator/members")]
 public sealed class OperatorMemberController(
     OperatorMemberWalletService wallet,
-    OperatorMemberContext members,
-    OperatorPackageService packages) : ControllerBase
+    OperatorMemberContext members) : ControllerBase
 {
     [HttpGet("customers/{customerId:guid}/wallet")]
     public async Task<IActionResult> GetWallet(Guid customerId, CancellationToken ct)
@@ -81,27 +80,14 @@ public sealed class OperatorMemberController(
         return Ok(ladder.Levels.Select(l => new { l.Name, l.MinimumLifetimeHours, l.DiscountPercent }));
     }
 
-    public sealed record PackageSellRequest(string ProductId, IReadOnlyList<OperatorBillService.PaymentInput> Payments);
-
     [HttpGet("packages")]
-    public async Task<IActionResult> ListPackages(CancellationToken ct)
-        => Ok(await packages.ListProductsAsync(ct));
-
-    public sealed record PackageProductBody(string Name, long PriceToman, long Minutes, int? ExpiresAfterDays, string? AllowedGroupIdsJson);
+    public IActionResult ListPackages() => NotFound();
 
     [HttpPut("packages/{productId}")]
-    public async Task<IActionResult> UpsertPackage(string productId, PackageProductBody body, CancellationToken ct)
-    {
-        await packages.UpsertProductAsync(productId, body.Name, body.PriceToman, body.Minutes, body.ExpiresAfterDays, body.AllowedGroupIdsJson, ct);
-        return NoContent();
-    }
+    public IActionResult UpsertPackage(string productId) => NotFound();
 
     [HttpPost("customers/{customerId:guid}/packages/sell")]
-    public async Task<IActionResult> SellPackage(Guid customerId, PackageSellRequest body, CancellationToken ct)
-    {
-        await packages.SellPackageAsync(customerId, body.ProductId, body.Payments, ct);
-        return NoContent();
-    }
+    public IActionResult SellPackage(Guid customerId) => NotFound();
 
     [HttpGet("wallet/pending")]
     public async Task<IActionResult> ListPendingWalletTopUps(CancellationToken ct)

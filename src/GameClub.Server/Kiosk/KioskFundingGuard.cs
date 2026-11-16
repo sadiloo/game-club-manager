@@ -19,14 +19,14 @@ public sealed class KioskFundingGuard(
     {
         var settings = await members.LoadSettingsAsync(ct);
         var wallet = MemberSettingsMapper.LoadWalletSettings(settings);
-        var (member, packages) = await members.LoadMemberStateAsync(customerId, ct);
+        var member = await members.LoadMemberAsync(customerId, ct);
         if (member is null)
         {
-            throw new ApiException(StatusCodes.Status403Forbidden, "no_credit", "Insufficient credit or packages for PC play.");
+            throw new ApiException(StatusCodes.Status403Forbidden, "no_credit", "Insufficient credit for PC play.");
         }
 
         var pocket = MemberWalletMapper.ToPocket(member);
-        var account = new CustomerAccount(customerId.ToString(), wallet, pocket, new WalletPocket(0, 0), packages);
+        var account = new CustomerAccount(customerId.ToString(), wallet, pocket, new WalletPocket(0, 0));
         var snapshot = await rates.LoadAsync(ct);
         var station = await db.Stations.Include(s => s.Group).FirstAsync(s => s.Id == StationIdNormalizer.Normalize(stationId), ct);
         var groupId = station.GroupId ?? PilotSeed.PcNormalGroupId;
@@ -52,7 +52,7 @@ public sealed class KioskFundingGuard(
                 }
             }
 
-            throw new ApiException(StatusCodes.Status403Forbidden, "no_credit", "Insufficient credit or packages for PC play.");
+            throw new ApiException(StatusCodes.Status403Forbidden, "no_credit", "Insufficient credit for PC play.");
         }
     }
 }
