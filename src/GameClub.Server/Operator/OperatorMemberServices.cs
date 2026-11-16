@@ -6,6 +6,7 @@ using GameClub.Server.Services;
 using GameClub.Server.Time;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace GameClub.Server.Operator;
 
@@ -82,8 +83,18 @@ public sealed partial class OperatorMemberWalletService(
     AuditService audit,
     OperatorContext op,
     OperatorMemberContext members,
-    OperatorShiftGate shiftGate)
+    OperatorShiftGate shiftGate,
+    IServiceScopeFactory scopeFactory)
 {
+    private async Task<object> ResolveWalletCommandUniqueViolationAsync(
+        Guid commandId,
+        string fingerprint,
+        CancellationToken ct)
+    {
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var freshDb = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        return await WalletCommandSupport.HandleUniqueViolationAsync(freshDb, commandId, fingerprint, ct);
+    }
     public async Task<object> GetWalletAsync(Guid customerId, CancellationToken ct)
     {
         var member = await members.EnsureMemberAsync(customerId, ct);
@@ -184,8 +195,7 @@ public sealed partial class OperatorMemberWalletService(
                     }
                     catch (DbUpdateException ex) when (PostgresErrors.IsWalletCommandUniqueViolation(ex))
                     {
-                        var dup = await WalletCommandSupport.HandleUniqueViolationAsync(db, cmdId, fingerprint, innerCt);
-                        throw new WalletCommandReplayException(dup);
+                        throw new WalletCommandUniqueViolationException(cmdId, fingerprint);
                     }
 
                     var pending = db.PendingWalletTopUps.Local.OrderByDescending(p => p.Id).First();
@@ -195,6 +205,11 @@ public sealed partial class OperatorMemberWalletService(
                 }, ct, pendingTx);
 
                 await pendingTx.CommitAsync(ct);
+            }
+            catch (WalletCommandUniqueViolationException uve)
+            {
+                await pendingTx.RollbackAsync(ct);
+                return await ResolveWalletCommandUniqueViolationAsync(uve.CommandId, uve.Fingerprint, ct);
             }
             catch (WalletCommandReplayException replayEx)
             {
@@ -271,9 +286,14 @@ public sealed partial class OperatorMemberWalletService(
                 }
                 catch (DbUpdateException ex) when (PostgresErrors.IsWalletCommandUniqueViolation(ex))
                 {
-                    result = await WalletCommandSupport.HandleUniqueViolationAsync(db, cmdId, fingerprint, innerCt);
+                    throw new WalletCommandUniqueViolationException(cmdId, fingerprint);
                 }
             }, ct, tx);
+        }
+        catch (WalletCommandUniqueViolationException uve)
+        {
+            await tx.RollbackAsync(ct);
+            return await ResolveWalletCommandUniqueViolationAsync(uve.CommandId, uve.Fingerprint, ct);
         }
         catch (WalletCommandReplayException replayEx)
         {
@@ -304,6 +324,12 @@ public sealed partial class OperatorMemberWalletService(
     private sealed class WalletCommandReplayException(object body) : Exception
     {
         public object Body { get; } = body;
+    }
+
+    private sealed class WalletCommandUniqueViolationException(Guid commandId, string fingerprint) : Exception
+    {
+        public Guid CommandId { get; } = commandId;
+        public string Fingerprint { get; } = fingerprint;
     }
 
     private async Task<object> BuildWalletSnapshotAsync(Guid customerId, CancellationToken ct)

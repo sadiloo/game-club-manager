@@ -252,7 +252,9 @@ public sealed partial class OperatorMemberWalletService
 
         await using var tx = await db.Database.BeginTransactionAsync(ct);
         object? replayResult = null;
-        await WithMemberWriteLockAsync(customerId, async (_, member, innerCt) =>
+        try
+        {
+            await WithMemberWriteLockAsync(customerId, async (_, member, innerCt) =>
         {
             if (body.CommandId is Guid cmdInLock && fingerprint is not null)
             {
@@ -388,14 +390,18 @@ public sealed partial class OperatorMemberWalletService
             {
                 if (body.CommandId is Guid cmd && fingerprint is not null)
                 {
-                    replayResult = await WalletCommandSupport.HandleUniqueViolationAsync(db, cmd, fingerprint, innerCt);
+                    throw new WalletCommandUniqueViolationException(cmd, fingerprint);
                 }
-                else
-                {
-                    throw;
-                }
+
+                throw;
             }
         }, ct, tx);
+        }
+        catch (WalletCommandUniqueViolationException uve)
+        {
+            await tx.RollbackAsync(ct);
+            return await ResolveWalletCommandUniqueViolationAsync(uve.CommandId, uve.Fingerprint, ct);
+        }
 
         if (replayResult is not null)
         {

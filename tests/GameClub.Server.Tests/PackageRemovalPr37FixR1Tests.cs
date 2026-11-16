@@ -186,6 +186,45 @@ public sealed class PackageRemovalPr37FixR1Tests(GameClubWebApplicationFactory f
     }
 
     [Fact]
+    public async Task fixr1_b_topup_concurrent_same_command_id_conflicting_body_one_200_one_409_no_500()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var mgr = await factory.CreateOperatorClientAsync("manager", "1234");
+        var op = await factory.CreateOperatorClientAsync();
+        var op2 = await factory.CreateOperatorClientAsync();
+        await S3TestHelpers.EnableShiftsAsync(mgr, true);
+        await S3TestHelpers.OpenShiftAsync(op, 0);
+        await SetGiftCapAsync(mgr, 500_000, 100);
+        for (var round = 0; round < 20; round++)
+        {
+            var customerSame = await CreateCustomerAsync(op, $"09129{round:D5}91");
+            var cmdSame = Guid.NewGuid();
+            var bodyA = WalletTopUpTestJson.Cash(100_000, 0, cmdSame);
+            var bodyB = WalletTopUpTestJson.Cash(200_000, 0, cmdSame);
+            var raceSameCustomer = await RaceAsync(
+                () => op.PostAsJsonAsync($"/api/operator/members/customers/{customerSame}/wallet/top-up", bodyA),
+                () => op2.PostAsJsonAsync($"/api/operator/members/customers/{customerSame}/wallet/top-up", bodyB));
+            Assert.Equal(1, raceSameCustomer.Count(r => r.StatusCode == HttpStatusCode.OK));
+            Assert.Equal(1, raceSameCustomer.Count(r => r.StatusCode == HttpStatusCode.Conflict));
+            Assert.Equal(0, raceSameCustomer.Count(r => (int)r.StatusCode >= 500));
+            Assert.Equal("command_id_reused",
+                (await raceSameCustomer.Single(r => r.StatusCode == HttpStatusCode.Conflict).Content.ReadFromJsonAsync<JsonElement>())
+                .GetProperty("code").GetString());
+
+            var customerA = await CreateCustomerAsync(op, $"09129{round:D5}92");
+            var customerB = await CreateCustomerAsync(op, $"09129{round:D5}93");
+            var cmdCross = Guid.NewGuid();
+            var crossBody = WalletTopUpTestJson.Cash(50_000, 0, cmdCross);
+            var raceCrossCustomer = await RaceAsync(
+                () => op.PostAsJsonAsync($"/api/operator/members/customers/{customerA}/wallet/top-up", crossBody),
+                () => op2.PostAsJsonAsync($"/api/operator/members/customers/{customerB}/wallet/top-up", crossBody));
+            Assert.Equal(1, raceCrossCustomer.Count(r => r.StatusCode == HttpStatusCode.OK));
+            Assert.Equal(1, raceCrossCustomer.Count(r => r.StatusCode == HttpStatusCode.Conflict));
+            Assert.Equal(0, raceCrossCustomer.Count(r => (int)r.StatusCode >= 500));
+        }
+    }
+
+    [Fact]
     public async Task fixr1_b_topup_duplicate_command_id_different_body_409()
     {
         await S3TestHelpers.ResetAsync(factory);
@@ -214,17 +253,30 @@ public sealed class PackageRemovalPr37FixR1Tests(GameClubWebApplicationFactory f
         await mgr.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/opening-balance", new { debtToman = 40_000L });
         (await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up",
             WalletTopUpTestJson.Cash(40_000, 4_000))).EnsureSuccessStatusCode();
+        var acceptWallet = await op.GetFromJsonAsync<JsonElement>($"/api/operator/members/customers/{customerId}/wallet");
+        Assert.Equal(0, acceptWallet.GetProperty("realToman").GetInt64());
+        Assert.Equal(4_000, acceptWallet.GetProperty("giftToman").GetInt64());
         var customer2 = await CreateCustomerAsync(op, "09129000021");
         await mgr.PostAsJsonAsync($"/api/operator/members/customers/{customer2}/opening-balance", new { debtToman = 40_000L });
         var bad = await op.PostAsJsonAsync($"/api/operator/members/customers/{customer2}/wallet/top-up",
-            WalletTopUpTestJson.Cash(39_999, 1_000));
+            WalletTopUpTestJson.Cash(39_999, 4_000));
         Assert.Equal(HttpStatusCode.Conflict, bad.StatusCode);
+        Assert.Equal("gift_not_allowed_with_debt", (await bad.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("code").GetString());
+        var rejectWallet = await op.GetFromJsonAsync<JsonElement>($"/api/operator/members/customers/{customer2}/wallet");
+        Assert.Equal(-40_000, rejectWallet.GetProperty("realToman").GetInt64());
+        Assert.Equal(0, rejectWallet.GetProperty("giftToman").GetInt64());
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        Assert.Equal(0, await db.WalletLedger.CountAsync(w =>
+            w.CustomerId == customer2
+            && (w.Kind == WalletLedgerKind.TopUpReal || w.Kind == WalletLedgerKind.TopUpGift)));
     }
 
     [Fact]
     public async Task fixr1_d_manager_gift_between_shifts_on_last_close_working_day_daily_only()
     {
         await S3TestHelpers.ResetAsync(factory);
+        factory.Clock.SetTehran(2026, 6, 5, 23, 30);
         var mgr = await factory.CreateOperatorClientAsync("manager", "1234");
         var op = await factory.CreateOperatorClientAsync();
         await S3TestHelpers.EnableShiftsAsync(mgr, true);
@@ -237,6 +289,7 @@ public sealed class PackageRemovalPr37FixR1Tests(GameClubWebApplicationFactory f
             actualCashToman = 50_000L,
             actualCardReaderToman = 0L,
         });
+        factory.Clock.SetTehran(2026, 6, 6, 7, 15);
         await mgr.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/gift", new { giftToman = 5_000L });
         using var scope = factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
@@ -245,8 +298,10 @@ public sealed class PackageRemovalPr37FixR1Tests(GameClubWebApplicationFactory f
         Assert.Equal(2026, gift.WorkingDayYear);
         Assert.Equal(6, gift.WorkingDayMonth);
         Assert.Equal(5, gift.WorkingDayDay);
-        var daily = await mgr.GetFromJsonAsync<JsonElement>("/api/operator/reports/income/daily?year=2026&month=6&day=5");
-        Assert.Equal(5_000, daily.GetProperty("giftIssuedToman").GetInt64());
+        var dailyShift = await mgr.GetFromJsonAsync<JsonElement>("/api/operator/reports/income/daily?year=2026&month=6&day=5");
+        Assert.Equal(5_000, dailyShift.GetProperty("giftIssuedToman").GetInt64());
+        var dailyCalendarToday = await mgr.GetFromJsonAsync<JsonElement>("/api/operator/reports/income/daily?year=2026&month=6&day=6");
+        Assert.Equal(0, dailyCalendarToday.GetProperty("giftIssuedToman").GetInt64());
     }
 
     [Fact]
@@ -284,6 +339,8 @@ public sealed class PackageRemovalPr37FixR1Tests(GameClubWebApplicationFactory f
         await S3TestHelpers.ResetAsync(factory);
         var mgr = await factory.CreateOperatorClientAsync("manager", "1234");
         var op = await factory.CreateOperatorClientAsync();
+        await S3TestHelpers.EnableShiftsAsync(mgr, true);
+        await S3TestHelpers.OpenShiftAsync(op, 0);
         await SetGiftCapAsync(mgr, 500_000, 100);
         var customerId = await CreateCustomerAsync(op, "09129000022");
         await mgr.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/opening-balance", new { debtToman = 40_000L });
@@ -292,6 +349,8 @@ public sealed class PackageRemovalPr37FixR1Tests(GameClubWebApplicationFactory f
         var wallet = await op.GetFromJsonAsync<JsonElement>($"/api/operator/members/customers/{customerId}/wallet");
         Assert.Equal(10_000, wallet.GetProperty("realToman").GetInt64());
         Assert.Equal(5_000, wallet.GetProperty("giftToman").GetInt64());
+        var preview = await ShiftPreviewAsync(op);
+        Assert.Equal(50_000, preview.GetProperty("received").GetProperty("cashReceived").GetInt64());
     }
 
     [Fact]
