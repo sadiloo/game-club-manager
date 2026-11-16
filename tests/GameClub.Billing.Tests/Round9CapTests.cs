@@ -52,7 +52,7 @@ public sealed class Round9CapTests
     }
 
     [Fact]
-    public void r9_2_block_grace_money_only_shows_ledger_discount_and_full_omitted()
+    public void r9_2_block_grace_money_only_shows_ledger_discount_and_zero_omitted()
     {
         var d0 = T.At(2026, 6, 2, 10, 0);
         var charge = SessionPricer.Price(
