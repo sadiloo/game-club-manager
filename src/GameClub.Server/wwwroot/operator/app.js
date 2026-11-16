@@ -309,7 +309,13 @@ async function walletTopUp(method) {
     showError("مبلغ نامعتبر است.");
     return;
   }
-  const body = { method, amountToman };
+  const giftRaw = window.prompt("اعتبار هدیه (تومان، خالی = ۰)", "");
+  const giftToman = giftRaw && giftRaw.trim() ? Number(String(giftRaw).replace(/,/g, "")) : 0;
+  if (!Number.isFinite(giftToman) || giftToman < 0) {
+    showError("هدیه نامعتبر است.");
+    return;
+  }
+  const body = { method, amountToman, giftToman };
   if (method === "CardToCard") {
     body.destinationCardId = window.prompt("کارت مقصد", destinationCards[0]?.id || "") || undefined;
     body.reference = window.prompt("ارجاع", "") || undefined;
@@ -1235,44 +1241,23 @@ bindClick("mgrLadderBtn", async () => {
   await api("/api/operator/members/settings/level-ladder", { method: "PUT", body: JSON.stringify(rows) });
 });
 
-bindClick("mgrPackageBtn", async () => {
-  const id = window.prompt("شناسه بسته", "pkg120");
-  if (!id) return;
-  const name = window.prompt("نام", "۲ ساعت");
-  const priceToman = Number(String(window.prompt("قیمت", "220000")).replace(/,/g, ""));
-  const minutes = Number(window.prompt("دقیقه", "120"));
-  const expRaw = window.prompt("انقضا (روز، خالی = بدون انقضا)", "");
-  const restrictRaw = window.prompt('محدودیت گروه (JSON آرایه، خالی = بدون محدودیت)', "");
-  await api(`/api/operator/members/packages/${id}`, {
+bindClick("mgrGiftCapBtn", async () => {
+  const cur = await api("/api/operator/members/settings/operator-gift-cap");
+  const maxToman = Number(String(window.prompt("سقف مبلغ هدیه (تومان)", String(cur.maxToman ?? 0))).replace(/,/g, ""));
+  const maxPercent = Number(window.prompt("سقف درصد هدیه", String(cur.maxPercent ?? 0)));
+  await api("/api/operator/members/settings/operator-gift-cap", {
     method: "PUT",
-    body: JSON.stringify({
-      name,
-      priceToman,
-      minutes,
-      expiresAfterDays: expRaw && expRaw.trim() ? Number(expRaw) : null,
-      allowedGroupIdsJson: restrictRaw && restrictRaw.trim() ? restrictRaw.trim() : null,
-    }),
+    body: JSON.stringify({ maxToman, maxPercent }),
   });
 });
 
-async function sellPackageFlow() {
-  const linked = await resolveLinkedCustomerForWallet();
-  if (!linked) return showError("عضو پیوسته نیست.");
-  const productId = window.prompt("شناسه بسته", "pkg120");
-  if (!productId) return;
-  const method = window.prompt("روش پرداخت (Cash | CardReader | Wallet)", "Cash");
-  const amountToman = Number(String(window.prompt("مبلغ", "220000")).replace(/,/g, ""));
-  await api(`/api/operator/members/customers/${linked.id}/packages/sell`, {
-    method: "POST",
-    body: JSON.stringify({
-      productId,
-      payments: [{ method, amountToman }],
-    }),
-  });
-  await refreshWalletBalance();
-}
-
-bindClick("opSellPackageBtn", () => sellPackageFlow().catch(showError));
+bindClick("mgrCorrectionsBtn", async () => {
+  const rows = await api("/api/operator/members/wallet/corrections");
+  const text = (rows || [])
+    .map((r) => `${r.atUtc}: ${r.beforeAmountToman}→${r.afterAmountToman} هدیه ${r.beforeGiftToman}→${r.afterGiftToman}`)
+    .join("\n");
+  window.alert(text || "اصلاحی ثبت نشده");
+});
 
 async function refreshShiftState() {
   const state = await api("/api/operator/shift/state");
@@ -1395,7 +1380,7 @@ function renderIncomeSummary(body) {
   };
   const categories = renderReportsTable(
     "ستون‌های درآمد",
-    ["بازی", "بوفه", "خدمات", "گرد کردن", "خدمت ویژه", "بسته", "شارژ کیف", "دریافتی", "نقد", "کارتخوان", "کارت‌به‌کارت"],
+    ["بازی", "بوفه", "خدمات", "گرد کردن", "خدمت ویژه", "هدیه داده‌شده", "شارژ کیف", "دریافتی", "نقد", "کارتخوان", "کارت‌به‌کارت"],
     [
       [
         merged.playToman ?? 0,
@@ -1403,7 +1388,7 @@ function renderIncomeSummary(body) {
         merged.servicesToman ?? 0,
         merged.roundingToman ?? 0,
         merged.surchargeToman ?? 0,
-        merged.packageSalesToman ?? 0,
+        merged.giftIssuedToman ?? 0,
         merged.walletTopUpToman ?? 0,
         merged.receivedMoneyToman ?? 0,
         merged.receivedCashToman ?? 0,
