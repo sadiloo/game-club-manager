@@ -64,7 +64,7 @@ public sealed class Round9CapTests
             new CustomerAccount(
                 "m",
                 WalletSettings.Shared with { ApplyDiscountsToPc = true },
-                new WalletPocket(4_458, 0),
+                new WalletPocket(100_000, 0),
                 new WalletPocket(0, 0)),
             billing: G(15),
             pricing: new CustomerPricing("Titan", 28, null, 0),
@@ -72,9 +72,9 @@ public sealed class Round9CapTests
             issuedAt: d0.AddHours(1).AddSeconds(31));
         var st = r.Settlement;
         Assert.Equal(charge.TotalAmountToman, Parts(st));
-        Assert.Equal(3_960, st.MoneyConsumedToman);
-        Assert.Equal(3_374, st.DiscountToman);
-        Assert.Equal(18_333, st.OmittedToman);
+        Assert.Equal(59_366, st.MoneyConsumedToman);
+        Assert.Equal(78_134, st.DiscountToman);
+        Assert.Equal(0, st.OmittedToman);
         Assert.Equal(0, st.WriteOffToman);
         Assert.Null(st.Grace);
         AssertInvoice(r);
@@ -102,9 +102,9 @@ public sealed class Round9CapTests
         var st = r.Settlement;
         Assert.Equal(charge.TotalAmountToman, Parts(st));
         Assert.Equal(348, st.MoneyConsumedToman);
-        Assert.Equal(8_433, st.DiscountToman);
+        Assert.Equal(23_833, st.DiscountToman);
         Assert.Equal(1_284, st.Grace!.WaivedToman);
-        Assert.Equal(935, st.WriteOffToman);
+        Assert.Equal(36_868, st.WriteOffToman);
         Assert.Equal(0, st.OmittedToman);
         AssertInvoice(r);
     }
@@ -131,9 +131,9 @@ public sealed class Round9CapTests
         var st = r.Settlement;
         Assert.Equal(charge.TotalAmountToman, Parts(st));
         Assert.Equal(348, st.MoneyConsumedToman);
-        Assert.Equal(8_433, st.DiscountToman);
+        Assert.Equal(23_833, st.DiscountToman);
         Assert.Equal(1_284, st.Grace!.WaivedToman);
-        Assert.Equal(935, st.WriteOffToman);
+        Assert.Equal(36_868, st.WriteOffToman);
         Assert.Equal(0, st.OmittedToman);
         AssertInvoice(r);
     }

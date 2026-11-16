@@ -28,8 +28,9 @@ public sealed class Round8MoneyOnlyRegressionTests
             G(1),
             discount: new SessionDiscount(CodePercent: 50, ValidFrom: T.At(2026, 6, 2, 22, 40)));
         Assert.Equal(charge.TotalAmountToman, SettlementSum(st));
-        Assert.Equal(T.At(2026, 6, 2, 22, 41), st.Grace?.At);
-        Assert.Equal(917, st.Grace!.WaivedToman);
+        // B5': money-only on 1a731de engine with [] — full discounted net of grace minute.
+        Assert.Equal(T.At(2026, 6, 2, 22, 30), st.Grace?.At);
+        Assert.Equal(1_833, st.Grace!.WaivedToman);
     }
 
     [Fact]
@@ -42,11 +43,11 @@ public sealed class Round8MoneyOnlyRegressionTests
             new Session("x", [new PlaySegment("a", start, end, "st", V, PlayMode.Offline, 1, StationKind.Pc)]),
             PilotSeed.CreateCard(),
             policy: G(1));
-        var st = AccountSettlement.Settle(charge, new PcAccount("m", 20_499), G(1));
+        var st = AccountSettlement.Settle(charge, new PcAccount("m", 59_501), G(1));
         Assert.Equal(0, st.WriteOffToman);
         Assert.Null(st.Alert);
-        Assert.Equal(18_333, st.MoneyConsumedToman);
-        Assert.Equal(2_166, st.UpdatedAccount.MoneyBalanceToman);
+        Assert.Equal(59_500, st.MoneyConsumedToman);
+        Assert.Equal(1, st.UpdatedAccount.MoneyBalanceToman);
     }
 
     [Fact]
