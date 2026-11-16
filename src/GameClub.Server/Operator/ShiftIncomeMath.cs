@@ -19,6 +19,13 @@ public sealed record PostCloseCorrectionsTotals(long Cash, long Card, long C2c, 
 
 public static class ShiftIncomeMath
 {
+    public static IQueryable<WalletLedgerEntryEntity> WhereWalletMoneyTopUpOrCorrection(IQueryable<WalletLedgerEntryEntity> query)
+        => query.Where(w => w.Kind == WalletLedgerKind.TopUpReal || w.Kind == WalletLedgerKind.Correction);
+
+    public static IQueryable<WalletLedgerEntryEntity> WhereWalletMoneyExpected(IQueryable<WalletLedgerEntryEntity> query)
+        => query.Where(w => (w.Kind == WalletLedgerKind.TopUpReal || w.Kind == WalletLedgerKind.Correction)
+                            && !w.IsPostCloseAdjustment);
+
     public static bool IsReceivedPaymentLine(PaymentLineEntity line)
         => line.Method != PaymentMethod.Wallet
            && line.Method != PaymentMethod.PcBalance

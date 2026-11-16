@@ -256,7 +256,10 @@ public sealed partial class OperatorMemberWalletService
                     throw new ApiException(
                         StatusCodes.Status409Conflict,
                         "correction_exceeds_balance",
-                        $"این اصلاح موجودی پرداختی مشتری را منفی می‌کند (مشتری قبلاً خرج کرده). اصلاح انجام نشد؛ به مدیر خبر دهید. availableRealToman={member.RealToman}");
+                        "این اصلاح موجودی پرداختی مشتری را منفی می‌کند (مشتری قبلاً خرج کرده). اصلاح انجام نشد؛ به مدیر خبر دهید.")
+                    {
+                        Extras = new Dictionary<string, object> { ["availableRealToman"] = member.RealToman },
+                    };
                 }
 
                 pocket = WalletPocketMath.Add(pocket, realDelta, 0);

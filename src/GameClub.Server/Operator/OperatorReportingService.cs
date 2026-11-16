@@ -561,8 +561,7 @@ public sealed class OperatorReportingService(AppDbContext db, OperatorContext op
             }
         }
 
-        IQueryable<WalletLedgerEntryEntity> walletQuery = db.WalletLedger.AsNoTracking()
-            .Where(w => w.Kind == WalletLedgerKind.TopUpReal);
+        IQueryable<WalletLedgerEntryEntity> walletQuery = ShiftIncomeMath.WhereWalletMoneyExpected(db.WalletLedger.AsNoTracking());
         if (close.ShiftId is Guid closeShiftId)
         {
             walletQuery = walletQuery.Where(w => w.ShiftId == closeShiftId);
@@ -793,9 +792,8 @@ public sealed class OperatorReportingService(AppDbContext db, OperatorContext op
         var periodEnd = close.ClosedAtUtc;
         var bijection = await BuildConfirmedWalletC2CBijectionAsync(ct);
 
-        var inPeriodRaw = await db.WalletLedger.AsNoTracking()
-            .Where(w => w.Kind == WalletLedgerKind.TopUpReal
-                        && w.ShiftId == null
+        var inPeriodRaw = await ShiftIncomeMath.WhereWalletMoneyExpected(db.WalletLedger.AsNoTracking())
+            .Where(w => w.ShiftId == null
                         && w.AtUtc >= periodStart
                         && w.AtUtc < periodEnd)
             .ToListAsync(ct);
@@ -804,6 +802,12 @@ public sealed class OperatorReportingService(AppDbContext db, OperatorContext op
         foreach (var row in inPeriodRaw)
         {
             if (row.Method != PaymentMethod.CardToCard)
+            {
+                inPeriod.Add(row);
+                continue;
+            }
+
+            if (row.Kind == WalletLedgerKind.Correction)
             {
                 inPeriod.Add(row);
                 continue;
@@ -861,9 +865,8 @@ public sealed class OperatorReportingService(AppDbContext db, OperatorContext op
                       || p.ConfirmationStatus == PaymentConfirmationStatus.Settled)
             select new { CardId = p.DestinationCardId!, Amount = p.AmountToman }).ToListAsync(ct);
 
-        var walletRows = await db.WalletLedger.AsNoTracking()
-            .Where(w => w.Kind == WalletLedgerKind.TopUpReal
-                        && w.Method == PaymentMethod.CardToCard
+        var walletRows = await ShiftIncomeMath.WhereWalletMoneyTopUpOrCorrection(db.WalletLedger.AsNoTracking())
+            .Where(w => w.Method == PaymentMethod.CardToCard
                         && w.DestinationCardId != null
                         && w.WorkingDayYear == year
                         && w.WorkingDayMonth == month

@@ -121,6 +121,7 @@ public sealed class PackageRemovalCorrectionTests(GameClubWebApplicationFactory 
             Assert.Equal(HttpStatusCode.Conflict, resp.StatusCode);
             var err = await resp.Content.ReadFromJsonAsync<JsonElement>();
             Assert.Equal("correction_exceeds_balance", err.GetProperty("code").GetString());
+            Assert.Equal(380_000, err.GetProperty("availableRealToman").GetInt64());
         }
 
         await S3TestHelpers.ResetAsync(factory);

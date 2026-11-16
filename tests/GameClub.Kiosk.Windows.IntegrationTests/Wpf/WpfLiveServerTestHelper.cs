@@ -29,7 +29,7 @@ internal static class WpfLiveServerTestHelper
         using var cmd = new NpgsqlCommand(
             """
             UPDATE rate_lines SET "HourlyToman" = 80000
-            WHERE "GroupId" = 'pc-normal' AND "IsSpecialBand" = false AND "PlayMode" = 'Offline' AND "PlayerCount" = 1
+            WHERE "GroupId" = 'pc-normal' AND "PlayMode" = 'Offline' AND "PlayerCount" = 1
             """,
             conn);
         await cmd.ExecuteNonQueryAsync();
