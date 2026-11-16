@@ -1116,4 +1116,181 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
         Assert.Matches(CommandIdUuidRegex, secondId);
         Assert.Equal(firstId, secondId);
     }
+
+    [Fact]
+    public async Task pr37_fix_r5_wallet_pending_confirm_double_click_sends_one_request()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var mgr = await LoginOperatorClientAsync("manager", "1234");
+        var op = await LoginOperatorClientAsync();
+        await S3TestHelpers.EnableShiftsAsync(mgr, true);
+        await S3TestHelpers.OpenShiftAsync(op, 0);
+        (await mgr.PutAsJsonAsync("/api/operator/members/settings/operator-gift-cap",
+            new { maxToman = 500_000L, maxPercent = 100 })).EnsureSuccessStatusCode();
+        await mgr.PutAsJsonAsync("/api/operator/destination-cards/e2e-r5w", new { label = "w" });
+
+        var tag = Guid.NewGuid().ToString("N")[..8];
+        var created = await op.PostAsJsonAsync("/api/operator/customers", new { name = "r5w", mobile = "0912" + tag });
+        created.EnsureSuccessStatusCode();
+        var customerId = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetGuid();
+        (await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up",
+            WalletTopUpTestJson.CardToCard(80_000, 0, "e2e-r5w", "dbl"))).EnsureSuccessStatusCode();
+
+        var page = await LoginAsync(op);
+        await page.EvaluateAsync("() => refreshPendingWalletTopups()");
+        await page.WaitForSelectorAsync("#pendingWalletList li");
+
+        var confirmAttempts = 0;
+        var slowEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await page.RouteAsync(
+            url => url.Contains("/members/wallet/pending/", StringComparison.Ordinal)
+                && url.Contains("/confirm", StringComparison.Ordinal),
+            async route =>
+            {
+                if (!string.Equals(route.Request.Method, "POST", StringComparison.OrdinalIgnoreCase))
+                {
+                    await route.FallbackAsync();
+                    return;
+                }
+
+                confirmAttempts++;
+                slowEntered.TrySetResult();
+                await Task.Delay(800);
+                await route.FallbackAsync();
+            });
+
+        var confirmBtn = page.Locator("#pendingWalletList li").First
+            .GetByRole(AriaRole.Button, new() { Name = "تأیید" });
+        var firstClick = confirmBtn.ClickAsync();
+        await slowEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await confirmBtn.ClickAsync(new() { Force = true });
+        await firstClick;
+        await page.WaitForFunctionAsync("() => !document.querySelector('#pendingWalletList li')");
+
+        Assert.Equal(1, confirmAttempts);
+
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var wallet = await db.CustomerMembers.AsNoTracking().SingleAsync(m => m.CustomerId == customerId);
+        Assert.Equal(80_000, wallet.RealToman);
+        Assert.Equal(1, await db.WalletLedger.CountAsync(w =>
+            w.CustomerId == customerId && w.Kind == WalletLedgerKind.TopUpReal));
+    }
+
+    [Fact]
+    public async Task pr37_fix_r5_wallet_pending_confirm_failure_reenables_button_and_shows_error()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var mgr = await LoginOperatorClientAsync("manager", "1234");
+        var op = await LoginOperatorClientAsync();
+        await S3TestHelpers.EnableShiftsAsync(mgr, true);
+        await S3TestHelpers.OpenShiftAsync(op, 0);
+        await mgr.PutAsJsonAsync("/api/operator/destination-cards/e2e-r5wf", new { label = "wf" });
+
+        var tag = Guid.NewGuid().ToString("N")[..8];
+        var created = await op.PostAsJsonAsync("/api/operator/customers", new { name = "r5wf", mobile = "0913" + tag });
+        created.EnsureSuccessStatusCode();
+        var customerId = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetGuid();
+        (await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up",
+            WalletTopUpTestJson.CardToCard(60_000, 0, "e2e-r5wf", "fail"))).EnsureSuccessStatusCode();
+
+        var page = await LoginAsync(op);
+        await page.EvaluateAsync("() => refreshPendingWalletTopups()");
+        await page.WaitForSelectorAsync("#pendingWalletList li");
+
+        await page.RouteAsync(
+            url => url.Contains("/members/wallet/pending/", StringComparison.Ordinal)
+                && url.Contains("/confirm", StringComparison.Ordinal),
+            route => route.FulfillAsync(new()
+            {
+                Status = 503,
+                ContentType = "application/json",
+                Body = """{"code":"temp_fail","message":"خطای موقت سرور"}""",
+            }));
+
+        var confirmBtn = page.Locator("#pendingWalletList li").First
+            .GetByRole(AriaRole.Button, new() { Name = "تأیید" });
+        await confirmBtn.ClickAsync();
+        await page.WaitForFunctionAsync(
+            "() => document.getElementById('error').textContent.length > 0");
+
+        Assert.True(await confirmBtn.IsEnabledAsync());
+        var errText = await page.TextContentAsync("#error");
+        Assert.False(string.IsNullOrWhiteSpace(errText));
+        Assert.Contains("خطا", errText!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task pr37_fix_r5_session_payment_pending_confirm_double_click_sends_one_request()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var manager = await LoginOperatorClientAsync("manager", "1234");
+        await manager.PutAsJsonAsync("/api/operator/destination-cards/card-r5", new { label = "A" });
+        await S3TestHelpers.RegisterPc(_api, "PC-R5C2C", PilotSeed.PcNormalGroupId);
+        factory.Clock.SetTehran(2026, 6, 3, 14, 0);
+        var sessionId = await S3TestHelpers.StartSession(_api, "PC-R5C2C");
+        factory.Clock.SetTehran(2026, 6, 3, 15, 0);
+        await S3TestHelpers.CheckpointAsync(_api, sessionId, S3TestHelpers.T(2026, 6, 3, 15, 0));
+        await _api.PostAsync($"/api/sessions/{sessionId}/stop", null);
+
+        var opClient = await LoginOperatorClientAsync();
+        var page = await LoginAsync(opClient);
+        var prompts = new Queue<string>(["80000", "", ""]);
+        page.Dialog += async (_, d) =>
+        {
+            var v = prompts.Count > 0 ? prompts.Dequeue() : "";
+            await d.AcceptAsync(v);
+        };
+
+        await page.ClickAsync(".tile[data-station-id='PC-R5C2C']");
+        await page.ClickAsync("#addC2cLineBtn");
+        await page.ClickAsync("#confirmBtn");
+        await page.WaitForSelectorAsync("#pendingC2cList li");
+
+        var confirmAttempts = 0;
+        var slowEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await page.RouteAsync(
+            url => url.Contains("/api/operator/payments/", StringComparison.Ordinal)
+                && url.Contains("/confirm", StringComparison.Ordinal),
+            async route =>
+            {
+                if (!string.Equals(route.Request.Method, "POST", StringComparison.OrdinalIgnoreCase))
+                {
+                    await route.FallbackAsync();
+                    return;
+                }
+
+                confirmAttempts++;
+                slowEntered.TrySetResult();
+                await Task.Delay(800);
+                await route.FallbackAsync();
+            });
+
+        var confirmBtn = page.Locator("#pendingC2cList li").First
+            .GetByRole(AriaRole.Button, new() { Name = "تأیید" });
+        var firstClick = confirmBtn.ClickAsync();
+        await slowEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await confirmBtn.ClickAsync(new() { Force = true });
+        await firstClick;
+
+        for (var i = 0; i < 40; i++)
+        {
+            using var scope = factory.Services.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            if ((await db.PaymentLines.SingleAsync()).ConfirmationStatus == PaymentConfirmationStatus.Confirmed)
+            {
+                break;
+            }
+
+            await Task.Delay(250);
+        }
+
+        Assert.Equal(1, confirmAttempts);
+
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            Assert.Equal(PaymentConfirmationStatus.Confirmed, (await db.PaymentLines.SingleAsync()).ConfirmationStatus);
+        }
+    }
 }

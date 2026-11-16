@@ -767,6 +767,19 @@ async function refreshGrid() {
   }
 }
 
+function bindPendingListAction(button, run) {
+  button.onclick = async () => {
+    if (button.disabled) return;
+    button.disabled = true;
+    try {
+      await run();
+    } catch (e) {
+      showError(String(e.message || e) || "خطا در انجام عملیات.");
+      button.disabled = false;
+    }
+  };
+}
+
 async function refreshPendingC2c() {
   const list = await api("/api/operator/payments/pending-card-to-card");
   const ul = document.getElementById("pendingC2cList");
@@ -781,18 +794,14 @@ async function refreshPendingC2c() {
     const rejectBtn = document.createElement("button");
     rejectBtn.type = "button";
     rejectBtn.textContent = "رد";
-    confirmBtn.onclick = async () => {
-      try {
-        await api(`/api/operator/payments/${row.id}/confirm`, { method: "POST" });
-        await refreshPendingC2c();
-      } catch (_) {}
-    };
-    rejectBtn.onclick = async () => {
-      try {
-        await api(`/api/operator/payments/${row.id}/reject`, { method: "POST" });
-        await refreshPendingC2c();
-      } catch (_) {}
-    };
+    bindPendingListAction(confirmBtn, async () => {
+      await api(`/api/operator/payments/${row.id}/confirm`, { method: "POST" });
+      await refreshPendingC2c();
+    });
+    bindPendingListAction(rejectBtn, async () => {
+      await api(`/api/operator/payments/${row.id}/reject`, { method: "POST" });
+      await refreshPendingC2c();
+    });
     li.appendChild(confirmBtn);
     li.appendChild(rejectBtn);
     ul.appendChild(li);
@@ -1183,17 +1192,17 @@ async function refreshPendingWalletTopups() {
     const ok = document.createElement("button");
     ok.type = "button";
     ok.textContent = "تأیید";
-    ok.onclick = async () => {
+    bindPendingListAction(ok, async () => {
       await api(`/api/operator/members/wallet/pending/${row.id}/confirm`, { method: "POST" });
       await refreshPendingWalletTopups();
-    };
+    });
     const no = document.createElement("button");
     no.type = "button";
     no.textContent = "رد";
-    no.onclick = async () => {
+    bindPendingListAction(no, async () => {
       await api(`/api/operator/members/wallet/pending/${row.id}/reject`, { method: "POST" });
       await refreshPendingWalletTopups();
-    };
+    });
     li.append(ok, no);
     ul.appendChild(li);
   }

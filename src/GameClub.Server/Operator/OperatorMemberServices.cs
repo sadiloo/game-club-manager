@@ -133,7 +133,6 @@ public sealed partial class OperatorMemberWalletService(
         }
 
         var memberSettings = await members.LoadSettingsAsync(ct);
-        WalletGiftCapMath.ValidateOperatorGiftOrThrow(op.Role ?? UserRole.Operator, amountToman, giftToman, memberSettings);
 
         var method = OperatorPaymentMethods.Parse(methodRaw);
         if (method == PaymentMethod.Wallet)
@@ -148,6 +147,8 @@ public sealed partial class OperatorMemberWalletService(
         {
             return replay;
         }
+
+        WalletGiftCapMath.ValidateOperatorGiftOrThrow(op.Role ?? UserRole.Operator, amountToman, giftToman, memberSettings);
 
         await members.EnsureMemberAsync(customerId, ct);
         if (method == PaymentMethod.CardToCard)
