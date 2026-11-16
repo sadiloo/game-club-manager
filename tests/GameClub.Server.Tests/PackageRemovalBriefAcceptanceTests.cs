@@ -99,6 +99,24 @@ public sealed class PackageRemovalBriefAcceptanceTests(GameClubWebApplicationFac
     }
 
     [Fact]
+    public async Task example_5a_real_topup_clears_debt_gift_stacks()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var mgr = await factory.CreateOperatorClientAsync("manager", "1234");
+        var op = await factory.CreateOperatorClientAsync();
+        await SetGiftCapAsync(mgr, 500_000, 100);
+        var customerId = await CreateCustomerAsync(op, "09128100051");
+        await mgr.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/opening-balance",
+            new { debtToman = 40_000L });
+        (await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up",
+            new { method = "Cash", amountToman = 100_000L, giftToman = 10_000L })).EnsureSuccessStatusCode();
+        var wallet = await op.GetFromJsonAsync<JsonElement>($"/api/operator/members/customers/{customerId}/wallet");
+        Assert.Equal(60_000, wallet.GetProperty("realToman").GetInt64());
+        Assert.Equal(10_000, wallet.GetProperty("giftToman").GetInt64());
+        Assert.Equal(70_000, wallet.GetProperty("spendableToman").GetInt64());
+    }
+
+    [Fact]
     public async Task example_5b_gift_does_not_clear_debt()
     {
         await S3TestHelpers.ResetAsync(factory);
@@ -154,6 +172,59 @@ public sealed class PackageRemovalBriefAcceptanceTests(GameClubWebApplicationFac
         await op.PostAsync($"/api/operator/members/wallet/pending/{pendingId2}/reject", null);
         var preview2 = await ShiftPreviewAsync(op);
         Assert.Equal(20_000, preview2.GetProperty("giftIssuedToman").GetInt64());
+    }
+
+    [Fact]
+    public async Task example_11_proportional_wallet_spend_leaves_35000_spendable()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var mgr = await factory.CreateOperatorClientAsync("manager", "1234");
+        var op = await factory.CreateOperatorClientAsync();
+        await S3TestHelpers.EnableShiftsAsync(mgr, true);
+        await S3TestHelpers.OpenShiftAsync(op, 0);
+        await SetGiftCapAsync(mgr, 500_000, 100);
+        var customerId = await CreateCustomerAsync(op, "09128100011");
+        (await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up",
+            new { method = "Cash", amountToman = 60_000L, giftToman = 10_000L })).EnsureSuccessStatusCode();
+        await WalletSpendHelper.SpendAsync(op, customerId, 35_000);
+        var wallet = await op.GetFromJsonAsync<JsonElement>($"/api/operator/members/customers/{customerId}/wallet");
+        Assert.Equal(30_000, wallet.GetProperty("realToman").GetInt64());
+        Assert.Equal(5_000, wallet.GetProperty("giftToman").GetInt64());
+        Assert.Equal(35_000, wallet.GetProperty("spendableToman").GetInt64());
+        var preview = await ShiftPreviewAsync(op);
+        Assert.Equal(60_000, preview.GetProperty("received").GetProperty("cashReceived").GetInt64());
+    }
+
+    [Fact]
+    public async Task operator_gift_cap_percent_zero_blocks_any_gift_toman_cap_only()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var mgr = await factory.CreateOperatorClientAsync("manager", "1234");
+        var op = await factory.CreateOperatorClientAsync();
+        await SetGiftCapAsync(mgr, 50_000, 0);
+        var customerId = await CreateCustomerAsync(op, "09128100071");
+        var resp = await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up",
+            new { method = "Cash", amountToman = 300_000L, giftToman = 1L });
+        Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
+        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(0, body.GetProperty("maxAllowedGiftToman").GetInt64());
+        (await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up",
+            new { method = "Cash", amountToman = 300_000L })).EnsureSuccessStatusCode();
+    }
+
+    [Fact]
+    public async Task operator_gift_cap_percent_hundred_cap_only_by_amount()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var mgr = await factory.CreateOperatorClientAsync("manager", "1234");
+        var op = await factory.CreateOperatorClientAsync();
+        await SetGiftCapAsync(mgr, 10_000_000, 100);
+        var customerId = await CreateCustomerAsync(op, "09128100072");
+        (await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up",
+            new { method = "Cash", amountToman = 40_000L, giftToman = 40_000L })).EnsureSuccessStatusCode();
+        Assert.Equal(HttpStatusCode.BadRequest,
+            (await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up",
+                new { method = "Cash", amountToman = 40_000L, giftToman = 40_001L })).StatusCode);
     }
 
     [Fact]
@@ -241,5 +312,20 @@ public sealed class PackageRemovalBriefAcceptanceTests(GameClubWebApplicationFac
         var income = await mgr.GetFromJsonAsync<JsonElement>("/api/operator/reports/income/daily?year=2026&month=6&day=3");
         Assert.Equal(13_000, income.GetProperty("giftIssuedToman").GetInt64());
         Assert.Equal(0, income.GetProperty("postCloseCorrections").GetProperty("gift").GetInt64());
+    }
+}
+
+internal static class WalletSpendHelper
+{
+    public static async Task SpendAsync(HttpClient op, Guid customerId, long amount)
+    {
+        var bo = (await op.PostAsync("/api/operator/buffet-only/start", null)).EnsureSuccessStatusCode();
+        var openSaleId = (await bo.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("openSaleId").GetGuid();
+        await op.PutAsJsonAsync($"/api/operator/buffet-only/{openSaleId}/customer", new { customerId });
+        await op.PostAsJsonAsync($"/api/operator/buffet-only/{openSaleId}/lines",
+            new { catalogItemId = CatalogSeed.CustomServiceId, customAmountToman = amount });
+        await op.PostAsync($"/api/operator/buffet-only/{openSaleId}/checkout", null);
+        await op.PostAsJsonAsync($"/api/operator/buffet-only/{openSaleId}/confirm",
+            new { payments = new[] { new { method = "Wallet", amountToman = amount } } });
     }
 }

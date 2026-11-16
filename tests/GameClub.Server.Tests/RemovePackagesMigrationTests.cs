@@ -42,6 +42,27 @@ public sealed class RemovePackagesMigrationTests
         await Assert.ThrowsAsync<PostgresException>(() => db.Database.MigrateAsync());
     }
 
+    [Fact]
+    public async Task migration_guard_stops_on_wallet_ledger_package_purchase_kind()
+    {
+        var cs = await FreshDbAsync();
+        var options = new DbContextOptionsBuilder<AppDbContext>().UseNpgsql(cs).Options;
+        await using var db = new AppDbContext(options);
+        await db.Database.MigrateAsync("20261108171252_20261108_StepPcKioskScope");
+        var customerId = Guid.NewGuid();
+        db.Customers.Add(new CustomerEntity { Id = customerId, Name = "x", Mobile = "09120000001", CreatedAtUtc = DateTime.UtcNow });
+        db.CustomerMembers.Add(new CustomerMemberEntity { CustomerId = customerId });
+        await db.SaveChangesAsync();
+        await db.Database.ExecuteSqlRawAsync(
+            """
+            INSERT INTO wallet_ledger ("CustomerId","AtUtc","Kind","RealDeltaToman","GiftDeltaToman")
+            VALUES ({0}, NOW() AT TIME ZONE 'utc', 'PackagePurchase', 0, 0)
+            """,
+            customerId);
+        var ex = await Assert.ThrowsAsync<PostgresException>(() => db.Database.MigrateAsync());
+        Assert.Contains("PackagePurchase", ex.MessageText);
+    }
+
 }
 
 [Collection("server")]
