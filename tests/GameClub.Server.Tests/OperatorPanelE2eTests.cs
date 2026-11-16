@@ -1293,4 +1293,138 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
             Assert.Equal(PaymentConfirmationStatus.Confirmed, (await db.PaymentLines.SingleAsync()).ConfirmationStatus);
         }
     }
+
+    [Fact]
+    public async Task pr37_fix_r5b_wallet_pending_confirm_timeout_reenables_button_and_shows_message()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var mgr = await LoginOperatorClientAsync("manager", "1234");
+        var op = await LoginOperatorClientAsync();
+        await S3TestHelpers.EnableShiftsAsync(mgr, true);
+        await S3TestHelpers.OpenShiftAsync(op, 0);
+        await mgr.PutAsJsonAsync("/api/operator/destination-cards/e2e-r5b-to", new { label = "to" });
+
+        var tag = Guid.NewGuid().ToString("N")[..8];
+        var created = await op.PostAsJsonAsync("/api/operator/customers", new { name = "r5bto", mobile = "0914" + tag });
+        created.EnsureSuccessStatusCode();
+        var customerId = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetGuid();
+        (await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up",
+            WalletTopUpTestJson.CardToCard(50_000, 0, "e2e-r5b-to", "hang"))).EnsureSuccessStatusCode();
+
+        var context = await _browser!.NewContextAsync();
+        await context.AddInitScriptAsync("window.__pendingActionTimeoutMs = 1500;");
+        var page = await context.NewPageAsync();
+        await page.RouteAsync("**/*", async route =>
+        {
+            var request = route.Request;
+            var pathAndQuery = request.Url.StartsWith(PanelOrigin, StringComparison.OrdinalIgnoreCase)
+                ? request.Url[PanelOrigin.Length..]
+                : request.Url;
+            using var message = new HttpRequestMessage(new HttpMethod(request.Method), pathAndQuery);
+            if (request.Headers.TryGetValue("cookie", out var cookie))
+            {
+                message.Headers.TryAddWithoutValidation("Cookie", cookie);
+            }
+
+            var postBytes = request.PostDataBuffer;
+            if (request.Method is "POST" or "PUT" or "PATCH")
+            {
+                if (postBytes is { Length: > 0 })
+                {
+                    var mediaType = request.Headers.TryGetValue("content-type", out var contentType)
+                        ? contentType.Split(';')[0]
+                        : "application/json";
+                    message.Content = new ByteArrayContent(postBytes);
+                    message.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue(mediaType);
+                }
+                else
+                {
+                    message.Content = new StringContent("", System.Text.Encoding.UTF8, "application/json");
+                }
+            }
+
+            var response = await op.SendAsync(message);
+            var body = await response.Content.ReadAsByteArrayAsync();
+            var headers = response.Headers
+                .Concat(response.Content.Headers)
+                .GroupBy(h => h.Key, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => string.Join(", ", g.SelectMany(x => x.Value)), StringComparer.OrdinalIgnoreCase);
+            await route.FulfillAsync(new()
+            {
+                Status = (int)response.StatusCode,
+                BodyBytes = body,
+                Headers = headers,
+            });
+        });
+        await page.GotoAsync($"{PanelOrigin}/operator/index.html");
+        await page.FillAsync("#username", "operator");
+        await page.FillAsync("#pin", "1111");
+        await page.ClickAsync("#loginBtn");
+        await page.WaitForSelectorAsync("#grid .tile");
+
+        await page.EvaluateAsync("() => refreshPendingWalletTopups()");
+        await page.WaitForSelectorAsync("#pendingWalletList li");
+
+        await page.RouteAsync(
+            url => url.Contains("/members/wallet/pending/", StringComparison.Ordinal)
+                && url.Contains("/confirm", StringComparison.Ordinal),
+            _ => Task.CompletedTask);
+
+        var confirmBtn = page.Locator("#pendingWalletList li").First
+            .GetByRole(AriaRole.Button, new() { Name = "تأیید" });
+        await confirmBtn.ClickAsync();
+        await page.WaitForFunctionAsync(
+            "() => document.getElementById('error').textContent.includes('زمان درخواست تمام شد')",
+            null,
+            new() { Timeout = 10_000 });
+
+        Assert.True(await confirmBtn.IsEnabledAsync());
+        var errText = await page.TextContentAsync("#error");
+        Assert.Contains("زمان درخواست تمام شد", errText ?? "", StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task pr37_fix_r5b_session_payment_pending_confirm_network_abort_reenables_button_and_shows_message()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var manager = await LoginOperatorClientAsync("manager", "1234");
+        await manager.PutAsJsonAsync("/api/operator/destination-cards/card-r5b", new { label = "A" });
+        await S3TestHelpers.RegisterPc(_api, "PC-R5B", PilotSeed.PcNormalGroupId);
+        factory.Clock.SetTehran(2026, 6, 3, 14, 0);
+        var sessionId = await S3TestHelpers.StartSession(_api, "PC-R5B");
+        factory.Clock.SetTehran(2026, 6, 3, 15, 0);
+        await S3TestHelpers.CheckpointAsync(_api, sessionId, S3TestHelpers.T(2026, 6, 3, 15, 0));
+        await _api.PostAsync($"/api/sessions/{sessionId}/stop", null);
+
+        var opClient = await LoginOperatorClientAsync();
+        var page = await LoginAsync(opClient);
+        var prompts = new Queue<string>(["80000", "", ""]);
+        page.Dialog += async (_, d) =>
+        {
+            var v = prompts.Count > 0 ? prompts.Dequeue() : "";
+            await d.AcceptAsync(v);
+        };
+
+        await page.ClickAsync(".tile[data-station-id='PC-R5B']");
+        await page.ClickAsync("#addC2cLineBtn");
+        await page.ClickAsync("#confirmBtn");
+        await page.WaitForSelectorAsync("#pendingC2cList li");
+
+        await page.RouteAsync(
+            url => url.Contains("/api/operator/payments/", StringComparison.Ordinal)
+                && url.Contains("/confirm", StringComparison.Ordinal),
+            route => route.AbortAsync());
+
+        var confirmBtn = page.Locator("#pendingC2cList li").First
+            .GetByRole(AriaRole.Button, new() { Name = "تأیید" });
+        await confirmBtn.ClickAsync();
+        await page.WaitForFunctionAsync(
+            "() => document.getElementById('error').textContent.includes('خطای شبکه')",
+            null,
+            new() { Timeout = 10_000 });
+
+        Assert.True(await confirmBtn.IsEnabledAsync());
+        var errText = await page.TextContentAsync("#error");
+        Assert.Contains("خطای شبکه", errText ?? "", StringComparison.Ordinal);
+    }
 }
