@@ -12,7 +12,7 @@ public sealed record IncomeBreakdown(
     long RoundingToman,
     long SurchargeToman,
     long WalletTopUpToman,
-    long PackageSalesToman,
+    long GiftIssuedToman,
     MethodTotals Received);
 
 public static class ShiftIncomeMath
@@ -53,7 +53,7 @@ public static class ShiftIncomeMath
         long cash = 0;
         long card = 0;
         long c2c = 0;
-        foreach (var row in topUps.Where(t => t.Kind == WalletLedgerKind.TopUpReal && t.Method is not null))
+        foreach (var row in topUps.Where(t => t.Kind is WalletLedgerKind.TopUpReal or WalletLedgerKind.Correction && t.Method is not null))
         {
             switch (row.Method)
             {
@@ -72,19 +72,17 @@ public static class ShiftIncomeMath
         return new MethodTotals(cash, card, c2c);
     }
 
+    public static MethodTotals SumWalletTopUpExpected(IEnumerable<WalletLedgerEntryEntity> topUps)
+    {
+        return SumWalletTopUpReceived(topUps.Where(t => !t.IsPostCloseAdjustment));
+    }
+
     public static IncomeBreakdown BuildInvoiceIncome(InvoiceEntity invoice, IReadOnlyList<WalletLedgerEntryEntity> walletTopUpsForShift)
     {
         if (invoice.Status == "void")
         {
             return new IncomeBreakdown(0, 0, 0, 0, 0, 0, 0, new MethodTotals(0, 0, 0));
         }
-
-        var package = invoice.CatalogLines.Any(l => l.Kind == SaleLineKind.Service && invoice.TimeGrossToman == 0 && invoice.BuffetGrossToman == 0)
-            && invoice.TimeGrossToman == 0
-            ? invoice.CollectibleToman
-            : invoice.CatalogLines.Where(l => l.Kind == SaleLineKind.Service).Sum(l => l.LineTotalToman);
-
-        var isPackageOnly = invoice.SessionId is null && invoice.TimeGrossToman == 0 && invoice.BuffetGrossToman == 0 && package > 0;
 
         var received = SumReceivedMethods(invoice.PaymentLines);
         return new IncomeBreakdown(
@@ -94,7 +92,7 @@ public static class ShiftIncomeMath
             invoice.RoundingToman,
             invoice.SurchargeToman,
             0,
-            isPackageOnly ? package : 0,
+            0,
             received);
     }
 

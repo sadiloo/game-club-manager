@@ -355,7 +355,8 @@ public sealed class OperatorShiftCloseService(
         CancellationToken ct)
     {
         IQueryable<WalletLedgerEntryEntity> query = db.WalletLedger
-            .Where(w => w.Kind == WalletLedgerKind.TopUpReal && w.WorkingDayYear == null);
+            .Where(w => (w.Kind == WalletLedgerKind.TopUpReal || w.Kind == WalletLedgerKind.Correction || w.Kind == WalletLedgerKind.TopUpGift)
+                        && w.WorkingDayYear == null);
         if (shiftId is Guid sid)
         {
             query = query.Where(w => w.ShiftId == sid || (w.ShiftId == null && w.AtUtc >= periodStart));
@@ -386,7 +387,7 @@ public sealed class OperatorShiftCloseService(
 
         return await db.WalletLedger.AsNoTracking().AnyAsync(
             w => w.WorkingDayYear == null
-                 && w.Kind == WalletLedgerKind.TopUpReal
+                 && (w.Kind == WalletLedgerKind.TopUpReal || w.Kind == WalletLedgerKind.Correction)
                  && w.AtUtc >= periodStartUtc,
             ct);
     }
@@ -413,7 +414,8 @@ public sealed class OperatorShiftCloseService(
         }
 
         IQueryable<WalletLedgerEntryEntity> walletQuery = db.WalletLedger
-            .Where(w => w.Kind == WalletLedgerKind.TopUpReal && w.WorkingDayYear == null);
+            .Where(w => (w.Kind == WalletLedgerKind.TopUpReal || w.Kind == WalletLedgerKind.Correction || w.Kind == WalletLedgerKind.TopUpGift)
+                        && w.WorkingDayYear == null);
         if (shiftId is Guid sid2)
         {
             walletQuery = walletQuery.Where(w => w.ShiftId == sid2);
@@ -486,7 +488,7 @@ public sealed class OperatorShiftCloseService(
         }
 
         IQueryable<WalletLedgerEntryEntity> topUpQ = db.WalletLedger.AsNoTracking()
-            .Where(w => w.Kind == WalletLedgerKind.TopUpReal);
+            .Where(w => (w.Kind == WalletLedgerKind.TopUpReal || w.Kind == WalletLedgerKind.Correction) && !w.IsPostCloseAdjustment);
         if (shiftId is Guid s)
         {
             topUpQ = topUpQ.Where(w => w.ShiftId == s);
