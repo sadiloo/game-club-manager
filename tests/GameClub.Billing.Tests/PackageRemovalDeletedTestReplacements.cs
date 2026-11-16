@@ -54,6 +54,8 @@ public sealed class PackageRemovalDeletedTestReplacements
     Assert.Equal(charge.TotalAmountToman, Parts(st));
     Assert.Equal(38_366, st.DiscountToman);
     Assert.Equal(70_000, st.MoneyConsumedToman);
+    Assert.Equal(1319, st.Grace?.WaivedToman);
+    Assert.Equal(9482, st.WriteOffToman);
   }
 
   [Fact]
