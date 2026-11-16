@@ -9,20 +9,27 @@ namespace GameClub.Server.Tests;
 
 public sealed class RemovePackagesMigrationTests
 {
-    const string AdminConnection = "Host=localhost;Database=postgres;Username=gameclub;Password=gameclub";
     const string TestDbPrefix = "gameclub_mig_test_";
+
+    static string ResolveConnectionString() =>
+        Environment.GetEnvironmentVariable("GAMECLUB_TEST_DATABASE")
+        ?? Environment.GetEnvironmentVariable("GAMECLUB_DATABASE")
+        ?? "Host=localhost;Database=gameclub_test;Username=gameclub;Password=gameclub";
 
     static async Task<string> FreshDbAsync()
     {
+        var template = new NpgsqlConnectionStringBuilder(ResolveConnectionString());
         var dbName = TestDbPrefix + Guid.NewGuid().ToString("N");
-        await using var admin = new NpgsqlConnection(AdminConnection);
-        await admin.OpenAsync();
-        await using (var cmd = new NpgsqlCommand($"CREATE DATABASE \"{dbName}\"", admin))
+        var admin = new NpgsqlConnectionStringBuilder(template.ConnectionString) { Database = "postgres" };
+        await using var adminConn = new NpgsqlConnection(admin.ConnectionString);
+        await adminConn.OpenAsync();
+        await using (var cmd = new NpgsqlCommand($"CREATE DATABASE \"{dbName}\"", adminConn))
         {
             await cmd.ExecuteNonQueryAsync();
         }
 
-        return $"Host=localhost;Database={dbName};Username=gameclub;Password=gameclub";
+        template.Database = dbName;
+        return template.ConnectionString;
     }
 
     [Fact]
