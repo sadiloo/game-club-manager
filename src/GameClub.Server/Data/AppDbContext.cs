@@ -61,9 +61,7 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
 
     public DbSet<PendingWalletTopUpEntity> PendingWalletTopUps => Set<PendingWalletTopUpEntity>();
 
-    public DbSet<CustomerPackageEntity> CustomerPackages => Set<CustomerPackageEntity>();
-
-    public DbSet<PackageProductEntity> PackageProducts => Set<PackageProductEntity>();
+    public DbSet<WalletTopUpCorrectionEntity> WalletTopUpCorrections => Set<WalletTopUpCorrectionEntity>();
 
     public DbSet<LoyaltyHourLedgerEntity> LoyaltyHourLedger => Set<LoyaltyHourLedgerEntity>();
 
@@ -319,17 +317,13 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             e.HasOne(x => x.Member).WithMany().HasForeignKey(x => x.CustomerId);
         });
 
-        modelBuilder.Entity<CustomerPackageEntity>(e =>
+        modelBuilder.Entity<WalletTopUpCorrectionEntity>(e =>
         {
-            e.ToTable("customer_packages");
+            e.ToTable("wallet_topup_corrections");
             e.HasKey(x => x.Id);
-            e.HasOne(x => x.Member).WithMany().HasForeignKey(x => x.CustomerId);
-        });
-
-        modelBuilder.Entity<PackageProductEntity>(e =>
-        {
-            e.ToTable("package_products");
-            e.HasKey(x => x.Id);
+            e.Property(x => x.Method).HasConversion<string>();
+            e.HasIndex(x => x.AtUtc);
+            e.HasIndex(x => x.TopUpGroupId);
         });
 
         modelBuilder.Entity<LoyaltyHourLedgerEntity>(e =>

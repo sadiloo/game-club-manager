@@ -10,7 +10,6 @@ public enum WalletLedgerKind
     InvoiceVoidReversal = 3,
     OpeningBalance = 4,
     Correction = 5,
-    PackagePurchase = 6,
 }
 
 public enum PendingWalletTopUpStatus
@@ -47,8 +46,9 @@ public sealed class BranchMemberSettingsEntity
     /// <summary>on_and_after | around</summary>
     public string BirthdayWindowAnchor { get; set; } = "on_and_after";
 
-    /// <summary>packages_then_money | money_then_packages</summary>
-    public string PackageConsumptionOrder { get; set; } = "packages_then_money";
+    public long OperatorGiftMaxToman { get; set; }
+
+    public int OperatorGiftMaxPercent { get; set; }
 
     public int MaxCombinedDiscountPercent { get; set; } = 100;
 
@@ -124,6 +124,10 @@ public sealed class WalletLedgerEntryEntity
     public int? WorkingDayMonth { get; set; }
 
     public int? WorkingDayDay { get; set; }
+
+    public Guid? TopUpGroupId { get; set; }
+
+    public bool IsPostCloseAdjustment { get; set; }
 }
 
 public sealed class PendingWalletTopUpEntity
@@ -135,6 +139,8 @@ public sealed class PendingWalletTopUpEntity
     public CustomerMemberEntity? Member { get; set; }
 
     public long AmountToman { get; set; }
+
+    public long GiftToman { get; set; }
 
     public PaymentMethod Method { get; set; }
 
@@ -151,48 +157,37 @@ public sealed class PendingWalletTopUpEntity
     public Guid? ShiftId { get; set; }
 }
 
-public sealed class CustomerPackageEntity
+public sealed class WalletTopUpCorrectionEntity
 {
-    public Guid Id { get; set; }
+    public long Id { get; set; }
+
+    public Guid TopUpGroupId { get; set; }
+
+    public long CorrectionLedgerEntryId { get; set; }
 
     public Guid CustomerId { get; set; }
 
-    public CustomerMemberEntity? Member { get; set; }
+    public PaymentMethod Method { get; set; }
 
-    public string Name { get; set; } = string.Empty;
+    public long BeforeAmountToman { get; set; }
 
-    public long RemainingMinutes { get; set; }
+    public long AfterAmountToman { get; set; }
 
-    public long FaceValueToman { get; set; }
+    public long BeforeGiftToman { get; set; }
 
-    public DateTime? ExpiresAtUtc { get; set; }
+    public long AfterGiftToman { get; set; }
 
-    public string? AllowedGroupIdsJson { get; set; }
+    public string Description { get; set; } = string.Empty;
 
-    public DateTime? ValidFromUtc { get; set; }
+    public Guid ActorUserId { get; set; }
 
-    public DateTime? ValidToUtc { get; set; }
+    public DateTime AtUtc { get; set; }
 
-    public string? HourWindowJson { get; set; }
+    public Guid? ShiftId { get; set; }
 
-    public Guid? PurchaseInvoiceId { get; set; }
-}
+    public Guid? OriginalShiftId { get; set; }
 
-public sealed class PackageProductEntity
-{
-    public string Id { get; set; } = string.Empty;
-
-    public string Name { get; set; } = string.Empty;
-
-    public long PriceToman { get; set; }
-
-    public long Minutes { get; set; }
-
-    public string? AllowedGroupIdsJson { get; set; }
-
-    public int? ExpiresAfterDays { get; set; }
-
-    public bool IsActive { get; set; } = true;
+    public bool IsPostCloseAdjustment { get; set; }
 }
 
 public sealed class LoyaltyHourLedgerEntity
@@ -228,5 +223,4 @@ public sealed class InvoiceMemberEffectEntity
 
     public long LoyaltyMinutesPosted { get; set; }
 
-    public string? PackageDrawsJson { get; set; }
 }
