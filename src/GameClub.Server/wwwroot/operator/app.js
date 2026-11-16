@@ -16,6 +16,12 @@ let walletTopUpInFlight = false;
 let walletTopUpDraftKey = null;
 let walletCorrectDraftKey = null;
 
+function newCommandId() {
+  if (typeof crypto !== "undefined" && crypto.randomUUID) return crypto.randomUUID();
+  const part = () => Math.floor((1 + Math.random()) * 0x10000).toString(16).slice(1);
+  return `${part()}${part()}-${part()}-4${part().slice(0, 3)}-a${part().slice(0, 3)}-${part()}${part()}${part()}`;
+}
+
 function buildWalletTopUpDraftKey(linkedId, method, amountToman, giftToman, destinationCardId) {
   return JSON.stringify({
     customerId: linkedId,
@@ -39,7 +45,7 @@ function resetWalletCorrectForm() {
 
 function ensureWalletTopUpCommandIdForDraft(draftKey) {
   if (!walletTopUpCommandId || walletTopUpDraftKey !== draftKey) {
-    walletTopUpCommandId = crypto.randomUUID();
+    walletTopUpCommandId = newCommandId();
     walletC2cCommandId = null;
   }
   walletTopUpDraftKey = draftKey;
@@ -47,7 +53,7 @@ function ensureWalletTopUpCommandIdForDraft(draftKey) {
 
 function ensureWalletCorrectCommandIdForDraft(draftKey) {
   if (!walletCorrectCommandId || walletCorrectDraftKey !== draftKey) {
-    walletCorrectCommandId = crypto.randomUUID();
+    walletCorrectCommandId = newCommandId();
   }
   walletCorrectDraftKey = draftKey;
 }
@@ -1005,11 +1011,7 @@ document.getElementById("transferBtn").onclick = async () => {
   if (target == null || !String(target).trim()) return;
   const markSourceBroken = document.getElementById("transferFaultChk").checked;
   const tile = (lastGridTiles || []).find((x) => x.sessionId === selectedSessionId);
-  const commandId = (() => {
-    if (typeof crypto !== "undefined" && crypto.randomUUID) return crypto.randomUUID();
-    const part = () => Math.floor((1 + Math.random()) * 0x10000).toString(16).slice(1);
-    return `${part()}${part()}-${part()}-4${part().slice(0, 3)}-a${part().slice(0, 3)}-${part()}${part()}${part()}`;
-  })();
+  const commandId = newCommandId();
   try {
     await api(`/api/operator/sessions/${selectedSessionId}/transfer`, {
       method: "POST",

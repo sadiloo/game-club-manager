@@ -1,5 +1,6 @@
 using System.Net.Http.Json;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using GameClub.Billing;
 using GameClub.Server.Data;
 using GameClub.Server.Data.Entities;
@@ -35,10 +36,31 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
         _playwright?.Dispose();
     }
 
-    private async Task<IPage> NewPanelPageAsync(HttpClient? operatorClient = null)
+    private static readonly Regex CommandIdUuidRegex = new(
+        "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private static string? ParseCommandIdFromPost(string? postData)
+    {
+        if (string.IsNullOrWhiteSpace(postData))
+        {
+            return null;
+        }
+
+        using var doc = JsonDocument.Parse(postData);
+        return doc.RootElement.TryGetProperty("commandId", out var id) ? id.GetString() : null;
+    }
+
+    private async Task<IPage> NewPanelPageAsync(HttpClient? operatorClient = null, bool stripRandomUuid = false)
     {
         var client = operatorClient ?? factory.CreateClient();
         var context = await _browser!.NewContextAsync();
+        if (stripRandomUuid)
+        {
+            await context.AddInitScriptAsync(
+                "() => { if (typeof crypto !== 'undefined') { delete crypto.randomUUID; } }");
+        }
+
         var page = await context.NewPageAsync();
         await page.RouteAsync("**/*", async route =>
         {
@@ -85,9 +107,9 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
         return page;
     }
 
-    private async Task<IPage> LoginAsync(HttpClient? operatorClient = null)
+    private async Task<IPage> LoginAsync(HttpClient? operatorClient = null, bool stripRandomUuid = false)
     {
-        var page = await NewPanelPageAsync(operatorClient);
+        var page = await NewPanelPageAsync(operatorClient, stripRandomUuid);
         await page.GotoAsync($"{PanelOrigin}/operator/index.html");
         await page.FillAsync("#username", "operator");
         await page.FillAsync("#pin", "1111");
@@ -874,5 +896,224 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
             "() => [...document.querySelectorAll('.tile')].some(t => t.dataset.stationId === 'PS5-FROM' && t.dataset.status === 'Free')",
             null,
             new() { Timeout = 5000 });
+    }
+
+    [Fact]
+    public async Task pr37_fix_r4_wallet_top_up_uses_fallback_command_id_and_retries_same_id()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var op = await LoginOperatorClientAsync();
+        await S3TestHelpers.RegisterConsole(_api, op, "PS5-R4TU", 1);
+        factory.Clock.SetTehran(2026, 6, 3, 14, 0);
+        var sessionId = await S3TestHelpers.StartSession(_api, "PS5-R4TU", 1);
+        var tag = Guid.NewGuid().ToString("N")[..7];
+        var mobile = "0912" + tag;
+        (await op.PostAsJsonAsync("/api/operator/customers", new
+        {
+            name = "r4-topup",
+            mobile,
+            linkSessionId = sessionId,
+        })).EnsureSuccessStatusCode();
+
+        var page = await LoginAsync(op, stripRandomUuid: true);
+        Assert.False(await page.EvaluateAsync<bool>(
+            "() => typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'"));
+
+        await page.EvaluateAsync("() => refreshGrid()");
+        await page.ClickAsync(".tile[data-station-id='PS5-R4TU']");
+        await page.WaitForSelectorAsync("#walletTopUpCash:not([disabled])");
+        page.Dialog += (_, d) =>
+        {
+            if (d.Type == DialogType.Prompt)
+            {
+                _ = d.AcceptAsync(d.Message.Contains("هدیه") ? "" : "50000");
+            }
+        };
+
+        var topUpPosts = new List<string?>();
+        var topUpAttempts = 0;
+        await page.RouteAsync(
+            url => url.Contains("/wallet/top-up", StringComparison.Ordinal)
+                && !url.Contains("/wallet/top-ups", StringComparison.Ordinal),
+            async route =>
+            {
+                if (!string.Equals(route.Request.Method, "POST", StringComparison.OrdinalIgnoreCase))
+                {
+                    await route.FallbackAsync();
+                    return;
+                }
+
+                topUpAttempts++;
+                topUpPosts.Add(route.Request.PostData);
+                if (topUpAttempts == 1)
+                {
+                    await route.FulfillAsync(new()
+                    {
+                        Status = 503,
+                        ContentType = "application/json",
+                        Body = """{"code":"transient","message":"fail"}""",
+                    });
+                    return;
+                }
+
+                await route.FallbackAsync();
+            });
+
+        var firstFail = page.WaitForResponseAsync(r =>
+            r.Request.Method == "POST"
+            && r.Url.Contains("/wallet/top-up", StringComparison.Ordinal)
+            && !r.Url.Contains("/wallet/top-ups", StringComparison.Ordinal)
+            && r.Status == 503);
+        await page.ClickAsync("#walletTopUpCash");
+        await firstFail;
+
+        Assert.Equal(1, topUpAttempts);
+        Assert.Single(topUpPosts);
+        var firstId = ParseCommandIdFromPost(topUpPosts[0]);
+        Assert.NotNull(firstId);
+        Assert.Matches(CommandIdUuidRegex, firstId);
+
+        var successResponse = page.WaitForResponseAsync(r =>
+            r.Request.Method == "POST"
+            && r.Url.Contains("/wallet/top-up", StringComparison.Ordinal)
+            && !r.Url.Contains("/wallet/top-ups", StringComparison.Ordinal)
+            && r.Ok);
+        await page.ClickAsync("#walletTopUpCash");
+        var ok = await successResponse;
+        Assert.True(ok.Ok);
+
+        Assert.Equal(2, topUpAttempts);
+        Assert.Equal(2, topUpPosts.Count);
+        var secondId = ParseCommandIdFromPost(topUpPosts[1]);
+        Assert.NotNull(secondId);
+        Assert.Matches(CommandIdUuidRegex, secondId);
+        Assert.Equal(firstId, secondId);
+    }
+
+    [Fact]
+    public async Task pr37_fix_r4_wallet_correction_uses_fallback_command_id_and_retries_same_id()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var mgr = await LoginOperatorClientAsync("manager", "1234");
+        var op = await LoginOperatorClientAsync();
+        await S3TestHelpers.EnableShiftsAsync(mgr, true);
+        await S3TestHelpers.OpenShiftAsync(op, 0);
+        (await mgr.PutAsJsonAsync("/api/operator/members/settings/operator-gift-cap",
+            new { maxToman = 500_000L, maxPercent = 100 })).EnsureSuccessStatusCode();
+
+        await S3TestHelpers.RegisterConsole(_api, op, "PS5-R4CR", 1);
+        factory.Clock.SetTehran(2026, 6, 3, 14, 0);
+        var sessionId = await S3TestHelpers.StartSession(_api, "PS5-R4CR", 1);
+        var tag = Guid.NewGuid().ToString("N")[..7];
+        var mobile = "0913" + tag;
+        var created = await op.PostAsJsonAsync("/api/operator/customers", new
+        {
+            name = "r4-corr",
+            mobile,
+            linkSessionId = sessionId,
+        });
+        created.EnsureSuccessStatusCode();
+        var customerId = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetGuid();
+        (await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up",
+            new { method = "Cash", amountToman = 100_000L, giftToman = 0L, commandId = Guid.NewGuid() }))
+            .EnsureSuccessStatusCode();
+
+        var page = await LoginAsync(op, stripRandomUuid: true);
+        Assert.False(await page.EvaluateAsync<bool>(
+            "() => typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'"));
+
+        await page.EvaluateAsync("() => refreshGrid()");
+        await page.ClickAsync(".tile[data-station-id='PS5-R4CR']");
+        await page.WaitForSelectorAsync("#walletCorrectBtn:not([disabled])");
+
+        page.Dialog += (_, d) =>
+        {
+            if (d.Type != DialogType.Prompt)
+            {
+                return;
+            }
+
+            var msg = d.Message;
+            if (msg.Contains("شماره شارژ"))
+            {
+                _ = d.AcceptAsync("1");
+            }
+            else if (msg.Contains("مبلغ پرداختی"))
+            {
+                _ = d.AcceptAsync("90000");
+            }
+            else if (msg.Contains("هدیه درست"))
+            {
+                _ = d.AcceptAsync("0");
+            }
+            else if (msg.Contains("توضیح"))
+            {
+                _ = d.AcceptAsync("r4-e2e");
+            }
+        };
+
+        var correctPosts = new List<string?>();
+        var correctAttempts = 0;
+        await page.RouteAsync(
+            url => url.Contains("/wallet/top-ups/", StringComparison.Ordinal)
+                && url.Contains("/correct", StringComparison.Ordinal),
+            async route =>
+            {
+                if (!string.Equals(route.Request.Method, "POST", StringComparison.OrdinalIgnoreCase))
+                {
+                    await route.FallbackAsync();
+                    return;
+                }
+
+                correctAttempts++;
+                correctPosts.Add(route.Request.PostData);
+                if (correctAttempts == 1)
+                {
+                    await route.FulfillAsync(new()
+                    {
+                        Status = 503,
+                        ContentType = "application/json",
+                        Body = """{"code":"transient","message":"fail"}""",
+                    });
+                    return;
+                }
+
+                await route.FallbackAsync();
+            });
+
+        var firstFail = page.WaitForResponseAsync(r =>
+            r.Request.Method == "POST"
+            && r.Url.Contains("/correct", StringComparison.Ordinal)
+            && r.Status == 503);
+        await page.ClickAsync("#walletCorrectBtn");
+        await firstFail;
+
+        Assert.Equal(1, correctAttempts);
+        Assert.Single(correctPosts);
+        var firstId = ParseCommandIdFromPost(correctPosts[0]);
+        Assert.NotNull(firstId);
+        Assert.Matches(CommandIdUuidRegex, firstId);
+
+        page.Dialog += (_, d) =>
+        {
+            if (d.Type == DialogType.Alert)
+            {
+                _ = d.AcceptAsync();
+            }
+        };
+        var successResponse = page.WaitForResponseAsync(r =>
+            r.Request.Method == "POST"
+            && r.Url.Contains("/correct", StringComparison.Ordinal)
+            && r.Ok);
+        await page.ClickAsync("#walletCorrectBtn");
+        var ok = await successResponse;
+        Assert.True(ok.Ok);
+
+        Assert.Equal(2, correctAttempts);
+        Assert.Equal(2, correctPosts.Count);
+        var secondId = ParseCommandIdFromPost(correctPosts[1]);
+        Assert.NotNull(secondId);
+        Assert.Matches(CommandIdUuidRegex, secondId);
+        Assert.Equal(firstId, secondId);
     }
 }
