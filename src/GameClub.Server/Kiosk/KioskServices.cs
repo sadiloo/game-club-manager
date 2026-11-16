@@ -14,6 +14,13 @@ using Microsoft.EntityFrameworkCore;
 
 namespace GameClub.Server.Kiosk;
 
+internal static class KioskAccruedChargeEnd
+{
+    /// <summary>Bill only through the last accepted PC checkpoint, never uncheckpointed wall time.</summary>
+    public static DateTime Resolve(PlaySessionEntity session) =>
+        session.LastCheckpointUtc ?? session.StartedAtUtc;
+}
+
 public sealed class KioskPairingService(AppDbContext db, IClock clock, IKioskLeaseSigner leaseSigner, AuditService audit)
 {
     public async Task<object> CreatePairingCodeAsync(string stationId, CancellationToken ct)
@@ -241,7 +248,7 @@ public sealed class KioskLeaseService(
             var snapshot = await rates.LoadSnapshotAsync(session.RateCardSnapshotId, ct);
             var groupId = session.Station?.GroupId ?? PilotSeed.PcNormalGroupId;
             var at = clock.UtcNow;
-            var endUtc = session.LastCheckpointUtc ?? clock.UtcNow.UtcDateTime;
+            var endUtc = KioskAccruedChargeEnd.Resolve(session);
             var charge = billing.BuildCharge(session, endUtc, snapshot);
             var (settled, estimate) = KioskPlayEstimate.AfterAcceptedPlay(session, member, account, charge, groupId, settings, snapshot.Card, at);
             var moneyMinutes = estimate.MoneyMinutes ?? 0;
@@ -331,7 +338,7 @@ public sealed class KioskDisplayService(
         }
 
         var snapshot = await rates.LoadSnapshotAsync(session.RateCardSnapshotId, ct);
-        var endUtc = session.LastCheckpointUtc ?? clock.UtcNow.UtcDateTime;
+        var endUtc = KioskAccruedChargeEnd.Resolve(session);
         var charge = billing.BuildCharge(session, endUtc, snapshot);
         var account = KioskPlayEstimate.BuildAccount(member, wallet);
         var groupId = session.Station?.GroupId ?? PilotSeed.PcNormalGroupId;
@@ -413,7 +420,7 @@ public sealed class KioskDisplayService(
         }
 
         var snapshot = await rates.LoadSnapshotAsync(session.RateCardSnapshotId, ct);
-        var endUtc = session.LastCheckpointUtc ?? clock.UtcNow.UtcDateTime;
+        var endUtc = KioskAccruedChargeEnd.Resolve(session);
         var charge = billing.BuildCharge(session, endUtc, snapshot);
         var account = KioskPlayEstimate.BuildAccount(member, wallet);
         var groupId = session.Station?.GroupId ?? PilotSeed.PcNormalGroupId;
@@ -456,7 +463,7 @@ public sealed class KioskDisplayService(
         }
 
         var snapshot = await rates.LoadSnapshotAsync(session.RateCardSnapshotId, ct);
-        var endUtc = session.LastCheckpointUtc ?? clock.UtcNow.UtcDateTime;
+        var endUtc = KioskAccruedChargeEnd.Resolve(session);
         var charge = billing.BuildCharge(session, endUtc, snapshot);
         var account = KioskPlayEstimate.BuildAccount(member, wallet);
         var groupId = session.Station?.GroupId ?? PilotSeed.PcNormalGroupId;
@@ -494,7 +501,7 @@ public sealed class KioskDisplayService(
         }
 
         var snapshot = await rates.LoadSnapshotAsync(session.RateCardSnapshotId, ct);
-        var endUtc = session.LastCheckpointUtc ?? clock.UtcNow.UtcDateTime;
+        var endUtc = KioskAccruedChargeEnd.Resolve(session);
         var charge = billing.BuildCharge(session, endUtc, snapshot);
         var account = KioskPlayEstimate.BuildAccount(member, wallet);
         var groupId = session.Station?.GroupId ?? PilotSeed.PcNormalGroupId;
