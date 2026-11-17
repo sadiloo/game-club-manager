@@ -41,6 +41,7 @@ public sealed class ShiftReportsFixRound7Tests(GameClubWebApplicationFactory fac
             method = "CardToCard",
             amountToman = 30_000L,
             destinationCardId = "r7-card",
+        commandId = Guid.NewGuid(),
         })).EnsureSuccessStatusCode();
         var pending1 = await LastPendingIdAsync(factory);
 
@@ -70,6 +71,7 @@ public sealed class ShiftReportsFixRound7Tests(GameClubWebApplicationFactory fac
             method = "CardToCard",
             amountToman = 30_000L,
             destinationCardId = "r7-card",
+        commandId = Guid.NewGuid(),
         })).EnsureSuccessStatusCode();
         var pending2 = await LastPendingIdAsync(factory);
 

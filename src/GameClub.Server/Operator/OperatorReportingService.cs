@@ -191,9 +191,10 @@ public sealed class OperatorReportingService(AppDbContext db, OperatorContext op
         var members = await db.CustomerMembers.AsNoTracking().ToListAsync(ct);
         var realLiability = members.Sum(m => Math.Max(0, m.RealToman));
         var giftLiability = members.Sum(m => Math.Max(0, m.GiftToman));
-        var giftsIssued = await db.WalletLedger.AsNoTracking()
-            .Where(w => w.Kind == WalletLedgerKind.TopUpGift)
-            .SumAsync(w => w.GiftDeltaToman, ct);
+        var giftRows = await db.WalletLedger.AsNoTracking()
+            .Where(w => w.Kind == WalletLedgerKind.TopUpGift || w.Kind == WalletLedgerKind.Correction)
+            .ToListAsync(ct);
+        var giftsIssued = OperatorMemberWalletService.SumGiftIssuedToman(giftRows);
         return new { realMoneyLiabilityToman = realLiability, giftCreditLiabilityToman = giftLiability, giftsIssuedToman = giftsIssued };
     }
 
@@ -225,18 +226,11 @@ public sealed class OperatorReportingService(AppDbContext db, OperatorContext op
             .Where(i => i.WorkingDayYear == year && i.WorkingDayMonth == month && i.WorkingDayDay == day)
             .ToListAsync(ct);
 
-        var invoiceIds = invoices.Select(i => i.Id).ToList();
-        var packageInvoiceIds = await db.WalletLedger.AsNoTracking()
-            .Where(w => w.Kind == WalletLedgerKind.PackagePurchase && w.InvoiceId != null && invoiceIds.Contains(w.InvoiceId.Value))
-            .Select(w => w.InvoiceId!.Value)
-            .ToHashSetAsync(ct);
-
         long play = 0;
         long buffet = 0;
         long services = 0;
         long rounding = 0;
         long surcharge = 0;
-        long package = 0;
         var received = new MethodTotals(0, 0, 0);
         var byStation = new Dictionary<string, long>();
         var byOperator = new Dictionary<Guid, long>();
@@ -253,11 +247,6 @@ public sealed class OperatorReportingService(AppDbContext db, OperatorContext op
             services = MoneyMath.CheckedAdd(services, invoice.ServicesGrossToman);
             rounding = MoneyMath.CheckedAdd(rounding, invoice.RoundingToman);
             surcharge = MoneyMath.CheckedAdd(surcharge, invoice.SurchargeToman);
-            if (packageInvoiceIds.Contains(invoice.Id))
-            {
-                package = MoneyMath.CheckedAdd(package, invoice.CollectibleToman);
-            }
-
             var methods = ShiftIncomeMath.SumReceivedMethods(invoice.PaymentLines);
             received = new MethodTotals(
                 MoneyMath.CheckedAdd(received.Cash, methods.Cash),
@@ -273,11 +262,28 @@ public sealed class OperatorReportingService(AppDbContext db, OperatorContext op
         }
 
         var topUps = await db.WalletLedger.AsNoTracking()
-            .Where(w => w.Kind == WalletLedgerKind.TopUpReal
+            .Where(w => (w.Kind == WalletLedgerKind.TopUpReal || w.Kind == WalletLedgerKind.Correction)
                         && w.WorkingDayYear == year
                         && w.WorkingDayMonth == month
                         && w.WorkingDayDay == day)
             .ToListAsync(ct);
+
+        var giftRows = await db.WalletLedger.AsNoTracking()
+            .Where(w => (w.Kind == WalletLedgerKind.TopUpGift || w.Kind == WalletLedgerKind.Correction)
+                        && w.WorkingDayYear == year
+                        && w.WorkingDayMonth == month
+                        && w.WorkingDayDay == day)
+            .ToListAsync(ct);
+        var giftIssued = OperatorMemberWalletService.SumGiftIssuedToman(giftRows);
+
+        var postCloseRows = await db.WalletLedger.AsNoTracking()
+            .Where(w => w.Kind == WalletLedgerKind.Correction
+                        && w.IsPostCloseAdjustment
+                        && w.WorkingDayYear == year
+                        && w.WorkingDayMonth == month
+                        && w.WorkingDayDay == day)
+            .ToListAsync(ct);
+        var postClose = ShiftIncomeMath.SumPostCloseCorrections(postCloseRows);
 
         long walletTopUp = topUps.Sum(w => w.RealDeltaToman);
         var walletMethods = ShiftIncomeMath.SumWalletTopUpReceived(topUps);
@@ -321,7 +327,8 @@ public sealed class OperatorReportingService(AppDbContext db, OperatorContext op
             servicesToman = services,
             roundingToman = rounding,
             surchargeToman = surcharge,
-            packageSalesToman = package,
+            giftIssuedToman = giftIssued,
+            postCloseCorrections = new { cash = postClose.Cash, card = postClose.Card, c2c = postClose.C2c, gift = postClose.Gift },
             walletTopUpToman = walletTopUp,
             receivedCashToman = received.Cash,
             receivedCardReaderToman = received.CardReader,
@@ -358,7 +365,14 @@ public sealed class OperatorReportingService(AppDbContext db, OperatorContext op
             servicesToman = SumLong(r => r.servicesToman),
             roundingToman = SumLong(r => r.roundingToman),
             surchargeToman = SumLong(r => r.surchargeToman),
-            packageSalesToman = SumLong(r => r.packageSalesToman),
+            giftIssuedToman = SumLong(r => r.giftIssuedToman),
+            postCloseCorrections = new
+            {
+                cash = SumLong(r => r.postCloseCorrections.cash),
+                card = SumLong(r => r.postCloseCorrections.card),
+                c2c = SumLong(r => r.postCloseCorrections.c2c),
+                gift = SumLong(r => r.postCloseCorrections.gift),
+            },
             walletTopUpToman = SumLong(r => r.walletTopUpToman),
             receivedCashToman = SumLong(r => r.receivedCashToman),
             receivedCardReaderToman = SumLong(r => r.receivedCardReaderToman),
@@ -547,8 +561,7 @@ public sealed class OperatorReportingService(AppDbContext db, OperatorContext op
             }
         }
 
-        IQueryable<WalletLedgerEntryEntity> walletQuery = db.WalletLedger.AsNoTracking()
-            .Where(w => w.Kind == WalletLedgerKind.TopUpReal);
+        IQueryable<WalletLedgerEntryEntity> walletQuery = ShiftIncomeMath.WhereWalletMoneyExpected(db.WalletLedger.AsNoTracking());
         if (close.ShiftId is Guid closeShiftId)
         {
             walletQuery = walletQuery.Where(w => w.ShiftId == closeShiftId);
@@ -779,9 +792,8 @@ public sealed class OperatorReportingService(AppDbContext db, OperatorContext op
         var periodEnd = close.ClosedAtUtc;
         var bijection = await BuildConfirmedWalletC2CBijectionAsync(ct);
 
-        var inPeriodRaw = await db.WalletLedger.AsNoTracking()
-            .Where(w => w.Kind == WalletLedgerKind.TopUpReal
-                        && w.ShiftId == null
+        var inPeriodRaw = await ShiftIncomeMath.WhereWalletMoneyExpected(db.WalletLedger.AsNoTracking())
+            .Where(w => w.ShiftId == null
                         && w.AtUtc >= periodStart
                         && w.AtUtc < periodEnd)
             .ToListAsync(ct);
@@ -790,6 +802,12 @@ public sealed class OperatorReportingService(AppDbContext db, OperatorContext op
         foreach (var row in inPeriodRaw)
         {
             if (row.Method != PaymentMethod.CardToCard)
+            {
+                inPeriod.Add(row);
+                continue;
+            }
+
+            if (row.Kind == WalletLedgerKind.Correction)
             {
                 inPeriod.Add(row);
                 continue;
@@ -847,9 +865,8 @@ public sealed class OperatorReportingService(AppDbContext db, OperatorContext op
                       || p.ConfirmationStatus == PaymentConfirmationStatus.Settled)
             select new { CardId = p.DestinationCardId!, Amount = p.AmountToman }).ToListAsync(ct);
 
-        var walletRows = await db.WalletLedger.AsNoTracking()
-            .Where(w => w.Kind == WalletLedgerKind.TopUpReal
-                        && w.Method == PaymentMethod.CardToCard
+        var walletRows = await ShiftIncomeMath.WhereWalletMoneyTopUpOrCorrection(db.WalletLedger.AsNoTracking())
+            .Where(w => w.Method == PaymentMethod.CardToCard
                         && w.DestinationCardId != null
                         && w.WorkingDayYear == year
                         && w.WorkingDayMonth == month

@@ -77,7 +77,7 @@ public sealed class ShiftReportsFixRound3Tests(GameClubWebApplicationFactory fac
             .EnsureSuccessStatusCode();
         var customerId = (await customer.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetGuid();
         await BuffetOnlyCashAsync(op, 80_000);
-        await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up", new { method = "Cash", amountToman = 20_000L });
+        await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up", new { method = "Cash", amountToman = 20_000L , commandId = Guid.NewGuid() });
         var sessionId = await S3TestHelpers.StartSession(_api, "PS5-R3-620", 1);
         await op.PostAsJsonAsync($"/api/operator/sessions/{sessionId}/sale/lines", new
         {
@@ -119,6 +119,7 @@ public sealed class ShiftReportsFixRound3Tests(GameClubWebApplicationFactory fac
             method = "CardToCard",
             amountToman = 30_000L,
             destinationCardId = "qa-card-a",
+        commandId = Guid.NewGuid(),
         })).EnsureSuccessStatusCode();
         long pendingId;
         using (var scope = factory.Services.CreateScope())

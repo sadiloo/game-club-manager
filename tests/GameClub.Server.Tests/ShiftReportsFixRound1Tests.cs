@@ -106,7 +106,7 @@ public sealed class ShiftReportsFixRound1Tests(GameClubWebApplicationFactory fac
         factory.Clock.SetTehran(2026, 6, 3, 15, 0);
         await op.PostAsync($"/api/operator/sessions/{s1}/bill/open", null);
         await S3TestHelpers.ConfirmCashAsync(op, s1, 110_000);
-        await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up", new { method = "Cash", amountToman = 20_000L });
+        await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up", new { method = "Cash", amountToman = 20_000L , commandId = Guid.NewGuid() });
         await op.PostAsJsonAsync("/api/operator/shift/close", new
         {
             workingDay = new { year = 2026, month = 6, day = 3 },

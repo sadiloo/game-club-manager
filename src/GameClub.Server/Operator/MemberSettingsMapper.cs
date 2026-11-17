@@ -37,11 +37,6 @@ public static class MemberSettingsMapper
         return new DiscountPolicy(row.MaxCombinedDiscountPercent, birthday);
     }
 
-    public static AccountPolicy LoadAccountPolicy(BranchMemberSettingsEntity row)
-        => row.PackageConsumptionOrder == "money_then_packages"
-            ? new AccountPolicy(ConsumptionOrder.MoneyThenPackages)
-            : AccountPolicy.Default;
-
     public static DebtPolicy LoadDebtPolicy(BranchMemberSettingsEntity row)
         => row.WalletDebtFloorToman is long floor
             ? floor == 0 ? DebtPolicy.None : DebtPolicy.Limited(-floor)

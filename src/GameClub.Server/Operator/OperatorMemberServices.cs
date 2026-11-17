@@ -6,6 +6,7 @@ using GameClub.Server.Services;
 using GameClub.Server.Time;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace GameClub.Server.Operator;
 
@@ -65,56 +66,35 @@ public sealed class OperatorMemberContext(AppDbContext db)
         return member;
     }
 
-    public async Task<(CustomerMemberEntity? Member, IReadOnlyList<TimePackage> Packages)> LoadMemberStateAsync(Guid? customerId, CancellationToken ct)
+    public async Task<CustomerMemberEntity?> LoadMemberAsync(Guid? customerId, CancellationToken ct)
     {
         if (customerId is not Guid id)
         {
-            return (null, []);
+            return null;
         }
 
-        var member = await db.CustomerMembers.FirstOrDefaultAsync(m => m.CustomerId == id, ct);
-        if (member is null)
-        {
-            return (null, []);
-        }
-
-        var pkgRows = await db.CustomerPackages.Where(p => p.CustomerId == id).ToListAsync(ct);
-        var packages = pkgRows.Select(MapPackage).ToArray();
-        return (member, packages);
-    }
-
-    private static TimePackage MapPackage(CustomerPackageEntity row)
-    {
-        IReadOnlySet<string>? groups = null;
-        if (!string.IsNullOrWhiteSpace(row.AllowedGroupIdsJson))
-        {
-            var ids = JsonSerializer.Deserialize<string[]>(row.AllowedGroupIdsJson) ?? [];
-            groups = new HashSet<string>(ids, StringComparer.Ordinal);
-        }
-
-        LocalDate? validThrough = row.ExpiresAtUtc is DateTime exp
-            ? TehranTime.Date(TehranTime.FromUtc(DateTime.SpecifyKind(exp, DateTimeKind.Utc)))
-            : null;
-
-        return new TimePackage(
-            row.Id.ToString(),
-            row.RemainingMinutes,
-            row.FaceValueToman,
-            groups,
-            null,
-            null,
-            validThrough);
+        return await db.CustomerMembers.FirstOrDefaultAsync(m => m.CustomerId == id, ct);
     }
 }
 
-public sealed class OperatorMemberWalletService(
+public sealed partial class OperatorMemberWalletService(
     AppDbContext db,
     IClock clock,
     AuditService audit,
     OperatorContext op,
     OperatorMemberContext members,
-    OperatorShiftGate shiftGate)
+    OperatorShiftGate shiftGate,
+    IServiceScopeFactory scopeFactory)
 {
+    private async Task<object> ResolveWalletCommandUniqueViolationAsync(
+        Guid commandId,
+        string fingerprint,
+        CancellationToken ct)
+    {
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var freshDb = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        return await WalletCommandSupport.HandleUniqueViolationAsync(freshDb, commandId, fingerprint, ct);
+    }
     public async Task<object> GetWalletAsync(Guid customerId, CancellationToken ct)
     {
         var member = await members.EnsureMemberAsync(customerId, ct);
@@ -134,18 +114,25 @@ public sealed class OperatorMemberWalletService(
         };
     }
 
-    public async Task TopUpAsync(
+    public async Task<object> TopUpAsync(
         Guid customerId,
         string methodRaw,
         long amountToman,
+        long giftToman,
         string? destinationCardId,
         string? reference,
+        Guid? commandId,
         CancellationToken ct)
     {
+        WalletCommandSupport.EnsureCommandIdPresent(commandId);
+        var cmdId = commandId!.Value;
+
         if (amountToman <= 0)
         {
             throw new ApiException(StatusCodes.Status400BadRequest, "invalid_amount", "Amount must be positive.");
         }
+
+        var memberSettings = await members.LoadSettingsAsync(ct);
 
         var method = OperatorPaymentMethods.Parse(methodRaw);
         if (method == PaymentMethod.Wallet)
@@ -153,26 +140,86 @@ public sealed class OperatorMemberWalletService(
             throw new ApiException(StatusCodes.Status400BadRequest, "invalid_method", "Invalid top-up method.");
         }
 
+        var methodName = method.ToString();
+        var fingerprint = WalletCommandSupport.BuildTopUpFingerprint(customerId, methodName, amountToman, giftToman);
+        var replay = await WalletCommandSupport.TryReplayOrThrowReuseAsync(db, cmdId, fingerprint, ct);
+        if (replay is not null)
+        {
+            return replay;
+        }
+
+        WalletGiftCapMath.ValidateOperatorGiftOrThrow(op.Role ?? UserRole.Operator, amountToman, giftToman, memberSettings);
+
         await members.EnsureMemberAsync(customerId, ct);
         if (method == PaymentMethod.CardToCard)
         {
             await shiftGate.EnsureMoneyRecordingAllowedAsync(ct);
             var c2cShiftId = await shiftGate.RequireOpenShiftIdAsync(ct);
-            db.PendingWalletTopUps.Add(new PendingWalletTopUpEntity
+            await using var pendingTx = await db.Database.BeginTransactionAsync(ct);
+            try
             {
-                CustomerId = customerId,
-                AmountToman = amountToman,
-                Method = method,
-                DestinationCardId = destinationCardId,
-                Reference = reference,
-                Status = PendingWalletTopUpStatus.Pending,
-                CreatedAtUtc = clock.UtcNow.UtcDateTime,
-                ActorUserId = op.UserId,
-                ShiftId = c2cShiftId,
-            });
-            await audit.AppendAsync("wallet.topup.pending", new { customerId, amountToman, method = method.ToString() }, ct);
-            await db.SaveChangesAsync(ct);
-            return;
+                await WithMemberWriteLockAsync(customerId, async (_, member, innerCt) =>
+                {
+                    var pendingReplay = await WalletCommandSupport.TryReplayOrThrowReuseAsync(db, cmdId, fingerprint, innerCt);
+                    if (pendingReplay is not null)
+                    {
+                        throw new WalletCommandReplayException(pendingReplay);
+                    }
+
+                    WalletGiftCapMath.ValidateGiftNotBlockedByDebt(member.RealToman, amountToman, giftToman);
+                    db.PendingWalletTopUps.Add(new PendingWalletTopUpEntity
+                    {
+                        CustomerId = customerId,
+                        AmountToman = amountToman,
+                        GiftToman = giftToman,
+                        Method = method,
+                        DestinationCardId = destinationCardId,
+                        Reference = reference,
+                        Status = PendingWalletTopUpStatus.Pending,
+                        CreatedAtUtc = clock.UtcNow.UtcDateTime,
+                        ActorUserId = op.UserId,
+                        ShiftId = c2cShiftId,
+                    });
+                    await audit.AppendAsync("wallet.topup.pending", new { customerId, amountToman, giftToman, method = methodName }, innerCt);
+                    var walletJson = JsonSerializer.Serialize(await BuildWalletSnapshotAsync(customerId, innerCt));
+                    WalletCommandSupport.RecordWalletCommand(
+                        db,
+                        clock,
+                        cmdId,
+                        WalletCommandTypes.TopUpPending,
+                        customerId,
+                        fingerprint,
+                        walletJson);
+                    try
+                    {
+                        await db.SaveChangesAsync(innerCt);
+                    }
+                    catch (DbUpdateException ex) when (PostgresErrors.IsWalletCommandUniqueViolation(ex))
+                    {
+                        throw new WalletCommandUniqueViolationException(cmdId, fingerprint);
+                    }
+
+                    var pending = db.PendingWalletTopUps.Local.OrderByDescending(p => p.Id).First();
+                    var cmd = db.WalletCommands.Local.Single(c => c.CommandId == cmdId);
+                    cmd.PendingWalletTopUpId = pending.Id;
+                    await db.SaveChangesAsync(innerCt);
+                }, ct, pendingTx);
+
+                await pendingTx.CommitAsync(ct);
+            }
+            catch (WalletCommandUniqueViolationException uve)
+            {
+                await pendingTx.RollbackAsync(ct);
+                return await ResolveWalletCommandUniqueViolationAsync(uve.CommandId, uve.Fingerprint, ct);
+            }
+            catch (WalletCommandReplayException replayEx)
+            {
+                await pendingTx.RollbackAsync(ct);
+                return replayEx.Body;
+            }
+
+            var storedPending = await WalletCommandSupport.TryReplayAsync(db, cmdId, ct);
+            return storedPending ?? await GetWalletAsync(customerId, ct);
         }
 
         await using var tx = await db.Database.BeginTransactionAsync(ct);
@@ -200,25 +247,67 @@ public sealed class OperatorMemberWalletService(
             await db.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock({0})", 884_2002);
         }
 
-        await WithMemberWriteLockAsync(customerId, async (_, member, innerCt) =>
+        var topUpGroupId = Guid.NewGuid();
+        object? result = null;
+        try
         {
-            var pocket = MemberWalletMapper.ToPocket(member);
-            pocket = MemberWalletMapper.ApplyRealTopUp(pocket, amountToman);
-            MemberWalletMapper.ApplyPocket(member, pocket);
-            db.WalletLedger.Add(new WalletLedgerEntryEntity
+            await WithMemberWriteLockAsync(customerId, async (_, member, innerCt) =>
             {
-                CustomerId = customerId,
-                AtUtc = clock.UtcNow.UtcDateTime,
-                Kind = WalletLedgerKind.TopUpReal,
-                RealDeltaToman = amountToman,
-                Method = method,
-                Reference = reference,
-                Label = method.ToString(),
-                ActorUserId = op.UserId,
-                ShiftId = shiftId,
-            });
-            await audit.AppendAsync("wallet.topup", new { customerId, amountToman, method = method.ToString() }, innerCt);
-        }, ct, tx);
+                var topUpReplay = await WalletCommandSupport.TryReplayOrThrowReuseAsync(db, cmdId, fingerprint, innerCt);
+                if (topUpReplay is not null)
+                {
+                    result = topUpReplay;
+                    return;
+                }
+
+                WalletGiftCapMath.ValidateGiftNotBlockedByDebt(member.RealToman, amountToman, giftToman);
+                var pocket = MemberWalletMapper.ToPocket(member);
+                pocket = MemberWalletMapper.ApplyRealTopUp(pocket, amountToman);
+                if (giftToman > 0)
+                {
+                    pocket = MemberWalletMapper.ApplyGiftTopUp(pocket, giftToman);
+                }
+
+                MemberWalletMapper.ApplyPocket(member, pocket);
+                WriteTopUpLedgerPair(customerId, amountToman, giftToman, method, null, reference, topUpGroupId, shiftId);
+                await audit.AppendAsync("wallet.topup", new { customerId, amountToman, giftToman, method = methodName }, innerCt);
+                var walletJson = JsonSerializer.Serialize(await BuildWalletSnapshotAsync(customerId, innerCt));
+                WalletCommandSupport.RecordWalletCommand(
+                    db,
+                    clock,
+                    cmdId,
+                    WalletCommandTypes.TopUp,
+                    customerId,
+                    fingerprint,
+                    walletJson,
+                    topUpGroupId);
+                try
+                {
+                    await db.SaveChangesAsync(innerCt);
+                }
+                catch (DbUpdateException ex) when (PostgresErrors.IsWalletCommandUniqueViolation(ex))
+                {
+                    throw new WalletCommandUniqueViolationException(cmdId, fingerprint);
+                }
+            }, ct, tx);
+        }
+        catch (WalletCommandUniqueViolationException uve)
+        {
+            await tx.RollbackAsync(ct);
+            return await ResolveWalletCommandUniqueViolationAsync(uve.CommandId, uve.Fingerprint, ct);
+        }
+        catch (WalletCommandReplayException replayEx)
+        {
+            await tx.RollbackAsync(ct);
+            return replayEx.Body;
+        }
+
+        if (result is not null)
+        {
+            await tx.RollbackAsync(ct);
+            return result;
+        }
+
         if (settings.ShiftsEnabled && shiftId is Guid sid)
         {
             var shift = await db.Shifts.AsNoTracking().FirstOrDefaultAsync(s => s.Id == sid, ct);
@@ -229,45 +318,69 @@ public sealed class OperatorMemberWalletService(
         }
 
         await tx.CommitAsync(ct);
+        var stored = await WalletCommandSupport.TryReplayAsync(db, cmdId, ct);
+        return stored ?? await GetWalletAsync(customerId, ct);
     }
+
+    private sealed class WalletCommandReplayException(object body) : Exception
+    {
+        public object Body { get; } = body;
+    }
+
+    private sealed class WalletCommandUniqueViolationException(Guid commandId, string fingerprint) : Exception
+    {
+        public Guid CommandId { get; } = commandId;
+        public string Fingerprint { get; } = fingerprint;
+    }
+
+    private async Task<object> BuildWalletSnapshotAsync(Guid customerId, CancellationToken ct)
+        => await GetWalletAsync(customerId, ct);
 
     public async Task ConfirmPendingTopUpAsync(long pendingId, CancellationToken ct)
     {
-        var pendingExists = await db.PendingWalletTopUps.AsNoTracking().FirstOrDefaultAsync(p => p.Id == pendingId, ct)
+        _ = await db.PendingWalletTopUps.AsNoTracking().FirstOrDefaultAsync(p => p.Id == pendingId, ct)
             ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Pending top-up not found.");
         await using var tx = await db.Database.BeginTransactionAsync(ct);
-        var updated = await db.PendingWalletTopUps
-            .Where(p => p.Id == pendingId && p.Status == PendingWalletTopUpStatus.Pending)
-            .ExecuteUpdateAsync(
-                s => s.SetProperty(p => p.Status, PendingWalletTopUpStatus.Confirmed),
-                ct);
-        if (updated == 0)
+        await db.Database.ExecuteSqlRawAsync(
+            """SELECT "Id" FROM pending_wallet_topups WHERE "Id" = {0} FOR UPDATE""",
+            pendingId);
+        var locked = await db.PendingWalletTopUps.FirstAsync(p => p.Id == pendingId, ct);
+        if (locked.Status != PendingWalletTopUpStatus.Pending)
         {
             throw new ApiException(StatusCodes.Status409Conflict, "not_pending", "Top-up is not pending.");
         }
 
-        var pending = await db.PendingWalletTopUps.AsNoTracking().FirstAsync(p => p.Id == pendingId, ct);
-        await WithMemberWriteLockAsync(pending.CustomerId, async (_, member, innerCt) =>
+        locked.Status = PendingWalletTopUpStatus.Confirmed;
+        var groupId = Guid.NewGuid();
+        await WithMemberWriteLockAsync(locked.CustomerId, async (_, member, innerCt) =>
         {
             var before = new { member.RealToman, member.GiftToman };
             var pocket = MemberWalletMapper.ToPocket(member);
-            pocket = MemberWalletMapper.ApplyRealTopUp(pocket, pending.AmountToman);
-            MemberWalletMapper.ApplyPocket(member, pocket);
-            var ledger = new WalletLedgerEntryEntity
+            pocket = MemberWalletMapper.ApplyRealTopUp(pocket, locked.AmountToman);
+            if (locked.GiftToman > 0)
             {
-                CustomerId = pending.CustomerId,
-                AtUtc = clock.UtcNow.UtcDateTime,
-                Kind = WalletLedgerKind.TopUpReal,
-                RealDeltaToman = pending.AmountToman,
-                Method = pending.Method,
-                DestinationCardId = pending.DestinationCardId,
-                Reference = pending.Reference,
-                Label = "card_to_card_confirmed",
-                ActorUserId = op.UserId,
-                ShiftId = pending.ShiftId,
-            };
-            await ApplyWalletTopUpOriginatingWorkingDayAsync(ledger, pending.ShiftId, pending.CreatedAtUtc, innerCt);
-            db.WalletLedger.Add(ledger);
+                pocket = MemberWalletMapper.ApplyGiftTopUp(pocket, locked.GiftToman);
+            }
+
+            MemberWalletMapper.ApplyPocket(member, pocket);
+            WriteTopUpLedgerPair(
+                locked.CustomerId,
+                locked.AmountToman,
+                locked.GiftToman,
+                locked.Method,
+                locked.DestinationCardId,
+                locked.Reference,
+                groupId,
+                locked.ShiftId);
+            var ledgers = db.ChangeTracker.Entries<WalletLedgerEntryEntity>()
+                .Where(e => e.State == EntityState.Added && e.Entity.TopUpGroupId == groupId)
+                .Select(e => e.Entity)
+                .ToList();
+            foreach (var ledger in ledgers)
+            {
+                await ApplyWalletTopUpOriginatingWorkingDayAsync(ledger, locked.ShiftId, locked.CreatedAtUtc, innerCt);
+            }
+
             await audit.AppendAsync("wallet.topup.confirmed", new { pendingId, before, after = new { member.RealToman, member.GiftToman } }, innerCt);
         }, ct, tx);
         await tx.CommitAsync(ct);
@@ -314,6 +427,9 @@ public sealed class OperatorMemberWalletService(
         }
 
         _ = await members.EnsureMemberAsync(customerId, ct);
+        var (shiftId, workingDayYear, workingDayMonth, workingDayDay) =
+            await ResolveManagerGiftLedgerContextAsync(ct);
+
         await WithMemberWriteLockAsync(customerId, async (_, member, innerCt) =>
         {
             var pocket = MemberWalletMapper.ToPocket(member);
@@ -327,9 +443,40 @@ public sealed class OperatorMemberWalletService(
                 GiftDeltaToman = giftToman,
                 Label = "gift",
                 ActorUserId = op.UserId,
+                ShiftId = shiftId,
+                WorkingDayYear = workingDayYear,
+                WorkingDayMonth = workingDayMonth,
+                WorkingDayDay = workingDayDay,
             });
             await audit.AppendAsync("wallet.gift", new { customerId, giftToman }, innerCt);
         }, ct);
+    }
+
+    private async Task<(Guid? ShiftId, int? WorkingDayYear, int? WorkingDayMonth, int? WorkingDayDay)> ResolveManagerGiftLedgerContextAsync(
+        CancellationToken ct)
+    {
+        var settings = await shiftGate.LoadSettingsAsync(ct);
+        if (!settings.ShiftsEnabled)
+        {
+            return (null, null, null, null);
+        }
+
+        var openShift = await shiftGate.GetOpenShiftForUpdateAsync(ct);
+        if (openShift is not null)
+        {
+            return (openShift.Id, null, null, null);
+        }
+
+        var lastClose = await db.CloseRecords.AsNoTracking()
+            .Where(c => c.ShiftId != null)
+            .OrderByDescending(c => c.ClosedAtUtc)
+            .FirstOrDefaultAsync(ct);
+        if (lastClose is null)
+        {
+            throw new ApiException(StatusCodes.Status409Conflict, "no_open_shift", "No shift is open.");
+        }
+
+        return (null, lastClose.WorkingDayYear, lastClose.WorkingDayMonth, lastClose.WorkingDayDay);
     }
 
     public sealed record OpeningBalanceRequest(
@@ -578,6 +725,7 @@ public sealed class OperatorMemberWalletService(
             p.Id,
             p.CustomerId,
             amountToman = p.AmountToman,
+            giftToman = p.GiftToman,
             method = p.Method.ToString(),
             p.DestinationCardId,
             p.Reference,
@@ -705,21 +853,6 @@ public sealed class OperatorMemberBillingService(AppDbContext db, OperatorMember
             return;
         }
 
-        if (bill.PackageSettlement is not null)
-        {
-            foreach (var draw in bill.PackageSettlement.PackageDraws)
-            {
-                if (Guid.TryParse(draw.PackageId, out var pkgId))
-                {
-                    var row = await db.CustomerPackages.FirstOrDefaultAsync(p => p.Id == pkgId, ct);
-                    if (row is not null)
-                    {
-                        row.RemainingMinutes -= draw.Minutes;
-                    }
-                }
-            }
-        }
-
         if (billedMinutes > 0)
         {
             member.LifetimePlayMinutes = MoneyMath.CheckedAdd(member.LifetimePlayMinutes, billedMinutes);
@@ -741,9 +874,6 @@ public sealed class OperatorMemberBillingService(AppDbContext db, OperatorMember
             WalletRealDrawnToman = bill.Allocation?.Tenders.Where(t => t.Method == PaymentMethod.Wallet).Sum(t => t.RealDrawnToman) ?? 0,
             WalletGiftDrawnToman = bill.Allocation?.Tenders.Where(t => t.Method == PaymentMethod.Wallet).Sum(t => t.GiftDrawnToman) ?? 0,
             LoyaltyMinutesPosted = billedMinutes,
-            PackageDrawsJson = bill.PackageSettlement is null
-                ? null
-                : JsonSerializer.Serialize(bill.PackageSettlement.PackageDraws),
         });
     }
 
@@ -752,7 +882,6 @@ public sealed class OperatorMemberBillingService(AppDbContext db, OperatorMember
         var effect = await db.InvoiceMemberEffects.FirstOrDefaultAsync(e => e.InvoiceId == invoice.Id, ct);
         if (effect is null)
         {
-            await ReversePackagePurchaseAsync(invoice, ct);
             return;
         }
 
@@ -817,306 +946,5 @@ public sealed class OperatorMemberBillingService(AppDbContext db, OperatorMember
             });
         }
 
-        if (!string.IsNullOrWhiteSpace(effect.PackageDrawsJson))
-        {
-            var draws = JsonSerializer.Deserialize<PackageDraw[]>(effect.PackageDrawsJson) ?? [];
-            foreach (var draw in draws)
-            {
-                if (Guid.TryParse(draw.PackageId, out var pkgId))
-                {
-                    var row = await db.CustomerPackages.FirstOrDefaultAsync(p => p.Id == pkgId, ct);
-                    if (row is not null)
-                    {
-                        row.RemainingMinutes += draw.Minutes;
-                    }
-                }
-            }
-        }
-
-        await ReversePackagePurchaseAsync(invoice, ct);
-    }
-
-    private async Task ReversePackagePurchaseAsync(InvoiceEntity invoice, CancellationToken ct)
-    {
-        if (invoice.CustomerId is not Guid customerId)
-        {
-            return;
-        }
-
-        var pkg = await db.CustomerPackages.FirstOrDefaultAsync(
-            p => p.PurchaseInvoiceId == invoice.Id,
-            ct);
-        if (pkg is null)
-        {
-            return;
-        }
-
-        db.CustomerPackages.Remove(pkg);
-
-        var purchaseLedger = await db.WalletLedger
-            .Where(e => e.InvoiceId == invoice.Id && e.Kind == WalletLedgerKind.PackagePurchase)
-            .ToListAsync(ct);
-        if (purchaseLedger.Count == 0 && invoice.PaymentLines.All(p => p.Method != PaymentMethod.Wallet))
-        {
-            db.WalletLedger.Add(new WalletLedgerEntryEntity
-            {
-                CustomerId = customerId,
-                AtUtc = DateTime.UtcNow,
-                Kind = WalletLedgerKind.InvoiceVoidReversal,
-                InvoiceId = invoice.Id,
-                Label = "package_sale_void",
-            });
-            return;
-        }
-
-        long realRestore = 0;
-        long giftRestore = 0;
-        foreach (var entry in purchaseLedger)
-        {
-            realRestore = MoneyMath.CheckedAdd(realRestore, -entry.RealDeltaToman);
-            giftRestore = MoneyMath.CheckedAdd(giftRestore, -entry.GiftDeltaToman);
-        }
-
-        await using var tx = await db.Database.BeginTransactionAsync(ct);
-        try
-        {
-            _ = await members.ReloadMemberForUpdateAsync(customerId, ct);
-            if (realRestore != 0 || giftRestore != 0)
-            {
-                var member = await db.CustomerMembers.FirstAsync(m => m.CustomerId == customerId, ct);
-                var pocket = MemberWalletMapper.ToPocket(member);
-                pocket = WalletPocketMath.Add(pocket, realRestore, giftRestore);
-                MemberWalletMapper.ApplyPocket(member, pocket);
-            }
-
-            foreach (var entry in purchaseLedger)
-            {
-                db.WalletLedger.Add(new WalletLedgerEntryEntity
-                {
-                    CustomerId = customerId,
-                    AtUtc = DateTime.UtcNow,
-                    Kind = WalletLedgerKind.InvoiceVoidReversal,
-                    RealDeltaToman = -entry.RealDeltaToman,
-                    GiftDeltaToman = -entry.GiftDeltaToman,
-                    InvoiceId = invoice.Id,
-                    Label = "package_sale_void",
-                });
-            }
-
-            await db.SaveChangesAsync(ct);
-            await tx.CommitAsync(ct);
-        }
-        catch
-        {
-            await tx.RollbackAsync(ct);
-            throw;
-        }
-    }
-}
-
-public sealed class OperatorPackageService(
-    AppDbContext db,
-    AuditService audit,
-    OperatorMemberContext members,
-    OperatorContext op,
-    IClock clock,
-    OperatorShiftGate shiftGate)
-{
-    public async Task SellPackageAsync(Guid customerId, string productId, IReadOnlyList<OperatorBillService.PaymentInput> payments, CancellationToken ct)
-    {
-        var product = await db.PackageProducts.AsNoTracking().FirstOrDefaultAsync(p => p.Id == productId && p.IsActive, ct)
-            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Package not found.");
-
-        await shiftGate.EnsureMoneyRecordingAllowedAsync(ct);
-        var shiftId = await shiftGate.RequireOpenShiftIdAsync(ct);
-        await members.EnsureMemberAsync(customerId, ct);
-        await using var tx = await db.Database.BeginTransactionAsync(ct);
-        await db.Database.ExecuteSqlRawAsync(
-            """SELECT "CustomerId" FROM customer_members WHERE "CustomerId" = {0} FOR UPDATE""",
-            customerId);
-        var member = await db.CustomerMembers.FirstAsync(m => m.CustomerId == customerId, ct);
-        await db.Entry(member).ReloadAsync(ct);
-
-        var tenders = payments.Select(p => new Tender(OperatorPaymentMethods.Parse(p.Method), p.AmountToman, customerId.ToString())).ToList();
-        var split = PaymentSplitter.Split(product.PriceToman, tenders, [
-            MemberWalletMapper.ToMemberWallet(customerId, member),
-        ]);
-        if (!split.IsValid)
-        {
-            throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", split.Errors.FirstOrDefault()?.Message ?? "Invalid payment.");
-        }
-
-        var invoiceId = Guid.NewGuid();
-        var number = await NextInvoiceNumberAsync(ct);
-        var invoice = new InvoiceEntity
-        {
-            Id = invoiceId,
-            Number = number,
-            CustomerId = customerId,
-            TimeGrossToman = 0,
-            BuffetGrossToman = 0,
-            ServicesGrossToman = 0,
-            UnroundedPayableToman = product.PriceToman,
-            RoundingToman = 0,
-            CollectibleToman = product.PriceToman,
-            IssuedAtUtc = clock.UtcNow.UtcDateTime,
-            BilledToUtc = clock.UtcNow.UtcDateTime,
-            Status = "confirmed",
-            ShiftId = shiftId,
-            SettledByUserId = op.UserId,
-        };
-        invoice.CatalogLines.Add(new InvoiceCatalogLineEntity
-        {
-            CatalogItemId = productId,
-            Name = product.Name,
-            Kind = SaleLineKind.Service,
-            Quantity = 1,
-            UnitPriceToman = product.PriceToman,
-            LineTotalToman = product.PriceToman,
-        });
-        foreach (var pay in payments)
-        {
-            var method = OperatorPaymentMethods.Parse(pay.Method);
-            var splitLine = split.Tenders.FirstOrDefault(t => t.Method == method && t.AmountToman == pay.AmountToman && t.Accepted);
-            invoice.PaymentLines.Add(new PaymentLineEntity
-            {
-                Method = method,
-                AmountToman = pay.AmountToman,
-                ConfirmationStatus = method == PaymentMethod.CardToCard
-                    ? PaymentConfirmationStatus.Pending
-                    : PaymentConfirmationStatus.Settled,
-                WalletCustomerId = method == PaymentMethod.Wallet ? customerId : null,
-                WalletRealDrawnToman = splitLine?.RealDrawnToman ?? 0,
-                WalletGiftDrawnToman = splitLine?.GiftDrawnToman ?? 0,
-            });
-        }
-
-        db.Invoices.Add(invoice);
-
-        var walletTender = split.Tenders.FirstOrDefault(t => t.Method == PaymentMethod.Wallet && t.Accepted);
-        if (walletTender is not null)
-        {
-            var pocket = MemberWalletMapper.ToPocket(member);
-            pocket = WalletPocketMath.Add(pocket, -walletTender.RealDrawnToman, -walletTender.GiftDrawnToman);
-            MemberWalletMapper.ApplyPocket(member, pocket);
-            db.WalletLedger.Add(new WalletLedgerEntryEntity
-            {
-                CustomerId = customerId,
-                AtUtc = clock.UtcNow.UtcDateTime,
-                Kind = WalletLedgerKind.PackagePurchase,
-                RealDeltaToman = -walletTender.RealDrawnToman,
-                GiftDeltaToman = -walletTender.GiftDrawnToman,
-                Method = PaymentMethod.Wallet,
-                Label = "package",
-                InvoiceId = invoiceId,
-                ActorUserId = op.UserId,
-            });
-        }
-        else
-        {
-            db.WalletLedger.Add(new WalletLedgerEntryEntity
-            {
-                CustomerId = customerId,
-                AtUtc = clock.UtcNow.UtcDateTime,
-                Kind = WalletLedgerKind.PackagePurchase,
-                Method = payments.Select(p => OperatorPaymentMethods.Parse(p.Method)).First(),
-                Label = "package",
-                InvoiceId = invoiceId,
-                ActorUserId = op.UserId,
-            });
-        }
-
-        var pkgId = Guid.NewGuid();
-        db.CustomerPackages.Add(new CustomerPackageEntity
-        {
-            Id = pkgId,
-            CustomerId = customerId,
-            Name = product.Name,
-            RemainingMinutes = product.Minutes,
-            FaceValueToman = product.PriceToman,
-            AllowedGroupIdsJson = product.AllowedGroupIdsJson,
-            ExpiresAtUtc = product.ExpiresAfterDays is int days
-                ? clock.UtcNow.UtcDateTime.AddDays(days)
-                : null,
-            PurchaseInvoiceId = invoiceId,
-        });
-
-        await audit.AppendAsync("package.sold", new { customerId, productId, product.Minutes, pkgId, invoiceId, payments }, ct);
-        await db.SaveChangesAsync(ct);
-        await tx.CommitAsync(ct);
-    }
-
-    private async Task<long> NextInvoiceNumberAsync(CancellationToken ct)
-    {
-        await db.Database.OpenConnectionAsync(ct);
-        try
-        {
-            await using var cmd = db.Database.GetDbConnection().CreateCommand();
-            cmd.CommandText = "SELECT nextval('invoice_number_seq')";
-            var value = await cmd.ExecuteScalarAsync(ct);
-            return Convert.ToInt64(value);
-        }
-        finally
-        {
-            await db.Database.CloseConnectionAsync();
-        }
-    }
-
-    private void EnsureManager()
-    {
-        if (op.Role is not UserRole.Manager and not UserRole.Owner)
-        {
-            throw new ApiException(StatusCodes.Status403Forbidden, "forbidden", "Manager permission required.");
-        }
-    }
-
-    public async Task<IReadOnlyList<object>> ListProductsAsync(CancellationToken ct)
-    {
-        var rows = await db.PackageProducts.AsNoTracking().Where(p => p.IsActive).ToListAsync(ct);
-        return rows.Select(p => new
-        {
-            p.Id,
-            p.Name,
-            p.PriceToman,
-            p.Minutes,
-            p.ExpiresAfterDays,
-            p.AllowedGroupIdsJson,
-        }).Cast<object>().ToList();
-    }
-
-    public async Task UpsertProductAsync(
-        string id,
-        string name,
-        long priceToman,
-        long minutes,
-        int? expiresAfterDays,
-        string? allowedGroupIdsJson,
-        CancellationToken ct)
-    {
-        EnsureManager();
-        if (string.IsNullOrWhiteSpace(id))
-        {
-            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_id", "Package id is required.");
-        }
-
-        if (priceToman <= 0 || minutes <= 0)
-        {
-            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_product", "Price and minutes must be positive.");
-        }
-
-        var row = await db.PackageProducts.FirstOrDefaultAsync(p => p.Id == id, ct);
-        if (row is null)
-        {
-            row = new PackageProductEntity { Id = id };
-            db.PackageProducts.Add(row);
-        }
-
-        row.Name = name;
-        row.PriceToman = priceToman;
-        row.Minutes = minutes;
-        row.ExpiresAfterDays = expiresAfterDays;
-        row.AllowedGroupIdsJson = allowedGroupIdsJson;
-        row.IsActive = true;
-        await db.SaveChangesAsync(ct);
     }
 }

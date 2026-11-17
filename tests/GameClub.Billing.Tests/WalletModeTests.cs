@@ -7,14 +7,13 @@ public class WalletModeTests
     private static readonly DateTimeOffset At = T.At(2026, 6, 2, 10, 0);
 
     [Fact]
-    public void Shared_wallet_debt_blocks_pc_unless_package_minutes_are_explicitly_allowed()
+    public void Shared_wallet_debt_blocks_pc_unless_allow_pc_while_in_debt_is_set()
     {
         var blocked = new CustomerAccount(
             "m",
             WalletSettings.Shared.WithDebt(DebtPolicy.Unlimited),
             new WalletPocket(30_000, 0),
-            new WalletPocket(0, 0),
-            [new TimePackage("hours", 120, 200_000)]);
+            new WalletPocket(0, 0));
         var inDebt = blocked.ChargeNonPc(80_000);
         Assert.True(inDebt.Accepted);
         Assert.Equal(-50_000, inDebt.Account.PcMoneyToman);
@@ -25,30 +24,19 @@ public class WalletModeTests
         Assert.Equal(0, estimate.TotalMinutes);
 
         var play = CustomerPlay.Settle(PcHour(), inDebt.Account);
-        Assert.Equal(0, play.Settlement.PackageMinutesConsumed);
         Assert.Equal(110_000, play.Settlement.UncoveredToman);
         Assert.Equal(-50_000, play.Account.PcMoneyToman);
-        Assert.Equal(120, play.Account.Packages[0].RemainingMinutes);
 
-        var allowed = blocked with { Settings = new WalletSettings(WalletMode.Shared, true, DebtPolicy.Unlimited) };
-        var allowedDebt = allowed.ChargeNonPc(80_000).Account;
-        var packageEstimate = CustomerPlay.Estimate(allowedDebt, CafeFixture.ExampleNormal, PlayMode.Offline, 1, At, CafeFixture.Card());
-        Assert.False(packageEstimate.BlockedByDebt);
-        Assert.Equal(120, packageEstimate.EligiblePackageMinutes);
-        Assert.Equal(0, packageEstimate.MoneyMinutes);
-        Assert.Equal(120, packageEstimate.TotalMinutes);
-        Assert.Equal(-50_000, packageEstimate.MoneyBalanceToman);
+        var allowed = inDebt.Account with { Settings = new WalletSettings(WalletMode.Shared, true, DebtPolicy.Unlimited) };
+        var whileInDebt = CustomerPlay.Estimate(allowed, CafeFixture.ExampleNormal, PlayMode.Offline, 1, At, CafeFixture.Card());
+        Assert.False(whileInDebt.BlockedByDebt);
+        Assert.Equal(0, whileInDebt.MoneyMinutes);
+        Assert.Equal(0, whileInDebt.TotalMinutes);
+        Assert.Equal(-50_000, whileInDebt.MoneyBalanceToman);
 
-        var onPackage = CustomerPlay.Settle(PcHour(), allowedDebt);
-        Assert.Equal(60, onPackage.Settlement.PackageMinutesConsumed);
-        Assert.Equal(0, onPackage.Settlement.MoneyConsumedToman);
-        Assert.Equal(0, onPackage.Settlement.UncoveredToman);
-        Assert.Equal(-50_000, onPackage.Account.PcMoneyToman);
-
-        var noPackage = allowedDebt with { Packages = [] };
-        var stillNegative = CustomerPlay.Settle(PcHour(), noPackage);
-        Assert.Equal(110_000, stillNegative.Settlement.UncoveredToman);
-        Assert.Equal(-50_000, stillNegative.Account.PcMoneyToman);
+        var uncoveredPlay = CustomerPlay.Settle(PcHour(), allowed);
+        Assert.Equal(110_000, uncoveredPlay.Settlement.UncoveredToman);
+        Assert.Equal(-50_000, uncoveredPlay.Account.PcMoneyToman);
 
         var limited = blocked with { Settings = WalletSettings.Shared.WithDebt(DebtPolicy.Limited(40_000)) };
         var refused = limited.ChargeNonPc(80_000);
@@ -63,8 +51,7 @@ public class WalletModeTests
             "m",
             WalletSettings.Separate.WithDebt(DebtPolicy.Unlimited),
             new WalletPocket(50_000, 0),
-            new WalletPocket(30_000, 0),
-            []);
+            new WalletPocket(30_000, 0));
         var console = account.ChargeNonPc(80_000);
         Assert.True(console.Accepted);
         Assert.Equal(50_000, console.Account.PcMoneyToman);
@@ -98,7 +85,7 @@ public class WalletModeTests
     }
 
     private static CustomerAccount blockedShared()
-        => new("m", WalletSettings.Shared, new WalletPocket(0, 0), new WalletPocket(0, 0), []);
+        => new("m", WalletSettings.Shared, new WalletPocket(0, 0), new WalletPocket(0, 0));
 
     private static SessionCharge PcHour()
         => CafeFixture.Price(CafeFixture.Session(

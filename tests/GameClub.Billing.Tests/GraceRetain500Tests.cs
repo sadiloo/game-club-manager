@@ -34,8 +34,7 @@ public sealed class GraceRetain500Tests
             "c1",
             WalletSettings.Shared,
             new WalletPocket(500, 0),
-            new WalletPocket(0, 0),
-            []);
+            new WalletPocket(0, 0));
         var result = CustomerPlay.Settle(charge, account);
         Assert.Equal(0, result.Settlement.MoneyConsumedToman);
         Assert.Equal(500, result.Account.Pc.TotalToman);

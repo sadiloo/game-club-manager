@@ -129,12 +129,11 @@ public class InvariantAndReferenceTests
             if (charge.TotalAmountToman > 0 && invoice.TimeGrossToman > 0)
             {
                 var opening = rng.Next(0, 500_000);
-                var settled = AccountSettlement.Settle(charge, new PcAccount("m", opening, [new TimePackage("p", rng.Next(0, 90), 200_000)]));
-                Assert.Equal(charge.TotalAmountToman, settled.PackageCoveredToman + settled.MoneyConsumedToman + settled.DiscountToman + (settled.Grace?.WaivedToman ?? 0) + settled.WriteOffToman + settled.UncoveredToman + settled.OmittedToman);
+                var settled = AccountSettlement.Settle(charge, new PcAccount("m", opening));
+                Assert.Equal(charge.TotalAmountToman, settled.MoneyConsumedToman + settled.DiscountToman + (settled.Grace?.WaivedToman ?? 0) + settled.WriteOffToman + settled.UncoveredToman + settled.OmittedToman);
                 Assert.True(settled.UpdatedAccount.MoneyBalanceToman >= 0);
                 Assert.True(settled.MoneyConsumedToman <= opening);
                 Assert.Equal(opening - settled.MoneyConsumedToman, settled.UpdatedAccount.MoneyBalanceToman);
-                Assert.True(settled.PackageMinutesConsumed >= 0);
             }
         }
     }

@@ -9,21 +9,64 @@ namespace GameClub.Server.Controllers;
 [Route("api/operator/members")]
 public sealed class OperatorMemberController(
     OperatorMemberWalletService wallet,
-    OperatorMemberContext members,
-    OperatorPackageService packages) : ControllerBase
+    OperatorMemberContext members) : ControllerBase
 {
     [HttpGet("customers/{customerId:guid}/wallet")]
     public async Task<IActionResult> GetWallet(Guid customerId, CancellationToken ct)
         => Ok(await wallet.GetWalletAsync(customerId, ct));
 
-    public sealed record TopUpRequest(string Method, long AmountToman, string? DestinationCardId, string? Reference);
+    public sealed record TopUpRequest(
+        string Method,
+        long AmountToman,
+        long GiftToman = 0,
+        string? DestinationCardId = null,
+        string? Reference = null,
+        Guid? CommandId = null);
 
     [HttpPost("customers/{customerId:guid}/wallet/top-up")]
     public async Task<IActionResult> TopUp(Guid customerId, TopUpRequest body, CancellationToken ct)
+        => Ok(await wallet.TopUpAsync(
+            customerId,
+            body.Method,
+            body.AmountToman,
+            body.GiftToman,
+            body.DestinationCardId,
+            body.Reference,
+            body.CommandId,
+            ct));
+
+    public sealed record OperatorGiftCapRequest(long MaxToman, int MaxPercent);
+
+    [HttpGet("settings/operator-gift-cap")]
+    public async Task<IActionResult> GetOperatorGiftCap(CancellationToken ct)
+        => Ok(await wallet.GetOperatorGiftCapAsync(ct));
+
+    [HttpPut("settings/operator-gift-cap")]
+    public async Task<IActionResult> SetOperatorGiftCap(OperatorGiftCapRequest body, CancellationToken ct)
     {
-        await wallet.TopUpAsync(customerId, body.Method, body.AmountToman, body.DestinationCardId, body.Reference, ct);
-        return Ok(await wallet.GetWalletAsync(customerId, ct));
+        await wallet.SetOperatorGiftCapAsync(body.MaxToman, body.MaxPercent, ct);
+        return NoContent();
     }
+
+    [HttpGet("customers/{customerId:guid}/wallet/top-ups")]
+    public async Task<IActionResult> ListCorrectableTopUps(Guid customerId, CancellationToken ct)
+        => Ok(await wallet.ListCorrectableTopUpsAsync(customerId, ct));
+
+  public sealed record CorrectTopUpBody(long NewAmountToman, long NewGiftToman, string Description, Guid? CommandId);
+
+    [HttpPost("wallet/top-ups/{topUpGroupId:guid}/correct")]
+    public async Task<IActionResult> CorrectTopUp(Guid topUpGroupId, CorrectTopUpBody body, CancellationToken ct)
+    {
+        var result = await wallet.CorrectTopUpAsync(
+            topUpGroupId,
+            new OperatorMemberWalletService.CorrectTopUpRequest(body.NewAmountToman, body.NewGiftToman, body.Description, body.CommandId),
+            ct);
+        return Ok(result);
+    }
+
+    [HttpGet("wallet/corrections")]
+    public async Task<IActionResult> ListCorrections(DateTime? from, DateTime? to, CancellationToken ct)
+        => Ok(await wallet.ListTopUpCorrectionsAsync(from, to, ct));
 
     [HttpPost("wallet/pending/{pendingId:long}/confirm")]
     public async Task<IActionResult> ConfirmTopUp(long pendingId, CancellationToken ct)
@@ -81,27 +124,14 @@ public sealed class OperatorMemberController(
         return Ok(ladder.Levels.Select(l => new { l.Name, l.MinimumLifetimeHours, l.DiscountPercent }));
     }
 
-    public sealed record PackageSellRequest(string ProductId, IReadOnlyList<OperatorBillService.PaymentInput> Payments);
-
     [HttpGet("packages")]
-    public async Task<IActionResult> ListPackages(CancellationToken ct)
-        => Ok(await packages.ListProductsAsync(ct));
-
-    public sealed record PackageProductBody(string Name, long PriceToman, long Minutes, int? ExpiresAfterDays, string? AllowedGroupIdsJson);
+    public IActionResult ListPackages() => NotFound();
 
     [HttpPut("packages/{productId}")]
-    public async Task<IActionResult> UpsertPackage(string productId, PackageProductBody body, CancellationToken ct)
-    {
-        await packages.UpsertProductAsync(productId, body.Name, body.PriceToman, body.Minutes, body.ExpiresAfterDays, body.AllowedGroupIdsJson, ct);
-        return NoContent();
-    }
+    public IActionResult UpsertPackage(string productId) => NotFound();
 
     [HttpPost("customers/{customerId:guid}/packages/sell")]
-    public async Task<IActionResult> SellPackage(Guid customerId, PackageSellRequest body, CancellationToken ct)
-    {
-        await packages.SellPackageAsync(customerId, body.ProductId, body.Payments, ct);
-        return NoContent();
-    }
+    public IActionResult SellPackage(Guid customerId) => NotFound();
 
     [HttpGet("wallet/pending")]
     public async Task<IActionResult> ListPendingWalletTopUps(CancellationToken ct)

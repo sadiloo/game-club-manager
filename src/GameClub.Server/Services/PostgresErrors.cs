@@ -11,8 +11,18 @@ public static class PostgresErrors
 
     public const string SessionCommandIndexName = "IX_session_commands_SessionId_CommandId";
 
+    public const string WalletCommandIndexName = "UX_wallet_commands_CommandId";
+
+    public const string WalletTopUpCorrectionCommandIndexName = "UX_wallet_topup_corrections_CommandId";
+
     public static bool IsSessionCommandUniqueViolation(DbUpdateException ex)
         => IsUniqueViolation(ex, SessionCommandIndexName);
+
+    public static bool IsWalletCommandUniqueViolation(DbUpdateException ex)
+        => IsUniqueViolation(ex, WalletCommandIndexName);
+
+    public static bool IsWalletTopUpCorrectionCommandUniqueViolation(DbUpdateException ex)
+        => IsUniqueViolation(ex, WalletTopUpCorrectionCommandIndexName);
 
     public static bool IsActiveSessionUniqueViolation(DbUpdateException ex)
     {

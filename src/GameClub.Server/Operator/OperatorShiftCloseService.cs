@@ -137,6 +137,8 @@ public sealed class OperatorShiftCloseService(
             ?? DateTime.UnixEpoch;
 
         var expected = await BuildExpectedAsync(shift?.Id, periodStart, settings.ShiftsEnabled, ct);
+        var received = await BuildReceivedAsync(shift?.Id, periodStart, settings.ShiftsEnabled, ct);
+        var walletPresentation = await BuildWalletPresentationAsync(shift?.Id, periodStart, ct);
         var openSessions = await ListOpenSessionsForCloseAsync(ct);
         var pendingC2c = await ListPendingC2cForPeriodAsync(shift?.Id, periodStart, ct);
         var pendingWallet = await ListPendingWalletForPeriodAsync(shift?.Id, periodStart, ct);
@@ -171,6 +173,14 @@ public sealed class OperatorShiftCloseService(
                 cardToCardConfirmedExpected = expected.CardToCardConfirmedExpected,
                 cardToCardPending = expected.CardToCardPending,
             },
+            received = new
+            {
+                cashReceived = received.CashExpected,
+                cardReaderReceived = received.CardReaderExpected,
+                cardToCardConfirmedReceived = received.CardToCardConfirmedExpected,
+            },
+            giftIssuedToman = walletPresentation.GiftIssuedToman,
+            postCloseCorrections = walletPresentation.PostCloseCorrections,
             openSessions,
             pendingCardToCard = pendingC2c,
             pendingWalletTopUps = pendingWallet,
@@ -259,6 +269,8 @@ public sealed class OperatorShiftCloseService(
                 }
 
                 var expected = await BuildExpectedAsync(shift?.Id, periodStart, settings.ShiftsEnabled, ct);
+                var received = await BuildReceivedAsync(shift?.Id, periodStart, settings.ShiftsEnabled, ct);
+                var walletPresentation = await BuildWalletPresentationAsync(shift?.Id, periodStart, ct);
                 var discrepancies = new[]
                 {
                     actualCashToman - expected.CashExpected,
@@ -326,6 +338,14 @@ public sealed class OperatorShiftCloseService(
                     shiftId = shift?.Id,
                     workingDay,
                     expected,
+                    received = new
+                    {
+                        cashReceived = received.CashExpected,
+                        cardReaderReceived = received.CardReaderExpected,
+                        cardToCardConfirmedReceived = received.CardToCardConfirmedExpected,
+                    },
+                    giftIssuedToman = walletPresentation.GiftIssuedToman,
+                    postCloseCorrections = walletPresentation.PostCloseCorrections,
                     actualCashToman,
                     actualCardReaderToman,
                 };
@@ -355,7 +375,8 @@ public sealed class OperatorShiftCloseService(
         CancellationToken ct)
     {
         IQueryable<WalletLedgerEntryEntity> query = db.WalletLedger
-            .Where(w => w.Kind == WalletLedgerKind.TopUpReal && w.WorkingDayYear == null);
+            .Where(w => (w.Kind == WalletLedgerKind.TopUpReal || w.Kind == WalletLedgerKind.Correction || w.Kind == WalletLedgerKind.TopUpGift)
+                        && w.WorkingDayYear == null);
         if (shiftId is Guid sid)
         {
             query = query.Where(w => w.ShiftId == sid || (w.ShiftId == null && w.AtUtc >= periodStart));
@@ -386,7 +407,7 @@ public sealed class OperatorShiftCloseService(
 
         return await db.WalletLedger.AsNoTracking().AnyAsync(
             w => w.WorkingDayYear == null
-                 && w.Kind == WalletLedgerKind.TopUpReal
+                 && (w.Kind == WalletLedgerKind.TopUpReal || w.Kind == WalletLedgerKind.Correction)
                  && w.AtUtc >= periodStartUtc,
             ct);
     }
@@ -413,7 +434,8 @@ public sealed class OperatorShiftCloseService(
         }
 
         IQueryable<WalletLedgerEntryEntity> walletQuery = db.WalletLedger
-            .Where(w => w.Kind == WalletLedgerKind.TopUpReal && w.WorkingDayYear == null);
+            .Where(w => (w.Kind == WalletLedgerKind.TopUpReal || w.Kind == WalletLedgerKind.Correction || w.Kind == WalletLedgerKind.TopUpGift)
+                        && w.WorkingDayYear == null);
         if (shiftId is Guid sid2)
         {
             walletQuery = walletQuery.Where(w => w.ShiftId == sid2);
@@ -486,7 +508,7 @@ public sealed class OperatorShiftCloseService(
         }
 
         IQueryable<WalletLedgerEntryEntity> topUpQ = db.WalletLedger.AsNoTracking()
-            .Where(w => w.Kind == WalletLedgerKind.TopUpReal);
+            .Where(w => (w.Kind == WalletLedgerKind.TopUpReal || w.Kind == WalletLedgerKind.Correction) && !w.IsPostCloseAdjustment);
         if (shiftId is Guid s)
         {
             topUpQ = topUpQ.Where(w => w.ShiftId == s);
@@ -513,6 +535,111 @@ public sealed class OperatorShiftCloseService(
         }
 
         return new ExpectedTotals(cash, card, c2cConfirmed, c2cPending);
+    }
+
+    private async Task<ExpectedTotals> BuildReceivedAsync(Guid? shiftId, DateTime periodStart, bool shiftsEnabled, CancellationToken ct)
+    {
+        long opening = 0;
+        if (shiftsEnabled && shiftId is Guid sid)
+        {
+            opening = await db.Shifts.AsNoTracking().Where(s => s.Id == sid).Select(s => s.OpeningFloatToman).FirstAsync(ct);
+        }
+
+        IQueryable<InvoiceEntity> invQ = db.Invoices.AsNoTracking()
+            .Include(i => i.PaymentLines)
+            .Where(i => i.Status == "confirmed");
+        if (shiftId is Guid shift)
+        {
+            invQ = invQ.Where(i => i.ShiftId == shift);
+        }
+        else
+        {
+            invQ = invQ.Where(i => i.CloseRecordId == null && i.IssuedAtUtc >= periodStart);
+        }
+
+        var invoices = await invQ.ToListAsync(ct);
+        long cash = opening;
+        long card = 0;
+        long c2cConfirmed = 0;
+        long c2cPending = 0;
+        foreach (var invoice in invoices)
+        {
+            foreach (var line in invoice.PaymentLines)
+            {
+                if (line.Method == PaymentMethod.Cash)
+                {
+                    cash = MoneyMath.CheckedAdd(cash, line.AmountToman);
+                }
+                else if (line.Method == PaymentMethod.CardReader)
+                {
+                    card = MoneyMath.CheckedAdd(card, line.AmountToman);
+                }
+                else if (line.Method == PaymentMethod.CardToCard)
+                {
+                    if (line.ConfirmationStatus == PaymentConfirmationStatus.Pending)
+                    {
+                        c2cPending = MoneyMath.CheckedAdd(c2cPending, line.AmountToman);
+                    }
+                    else if (line.ConfirmationStatus == PaymentConfirmationStatus.Confirmed
+                             || line.ConfirmationStatus == PaymentConfirmationStatus.Settled)
+                    {
+                        c2cConfirmed = MoneyMath.CheckedAdd(c2cConfirmed, line.AmountToman);
+                    }
+                }
+            }
+        }
+
+        IQueryable<WalletLedgerEntryEntity> topUpQ = db.WalletLedger.AsNoTracking()
+            .Where(w => w.Kind == WalletLedgerKind.TopUpReal || w.Kind == WalletLedgerKind.Correction);
+        if (shiftId is Guid s)
+        {
+            topUpQ = topUpQ.Where(w => w.ShiftId == s);
+        }
+        else
+        {
+            topUpQ = topUpQ.Where(w => w.AtUtc >= periodStart && w.ShiftId == null && w.WorkingDayYear == null);
+        }
+
+        foreach (var row in await topUpQ.ToListAsync(ct))
+        {
+            switch (row.Method)
+            {
+                case PaymentMethod.Cash:
+                    cash = MoneyMath.CheckedAdd(cash, row.RealDeltaToman);
+                    break;
+                case PaymentMethod.CardReader:
+                    card = MoneyMath.CheckedAdd(card, row.RealDeltaToman);
+                    break;
+                case PaymentMethod.CardToCard:
+                    c2cConfirmed = MoneyMath.CheckedAdd(c2cConfirmed, row.RealDeltaToman);
+                    break;
+            }
+        }
+
+        return new ExpectedTotals(cash, card, c2cConfirmed, c2cPending);
+    }
+
+    private sealed record WalletPresentation(long GiftIssuedToman, object PostCloseCorrections);
+
+    private async Task<WalletPresentation> BuildWalletPresentationAsync(Guid? shiftId, DateTime periodStart, CancellationToken ct)
+    {
+        IQueryable<WalletLedgerEntryEntity> walletQ = db.WalletLedger.AsNoTracking();
+        if (shiftId is Guid sid)
+        {
+            walletQ = walletQ.Where(w => w.ShiftId == sid);
+        }
+        else
+        {
+            walletQ = walletQ.Where(w => w.AtUtc >= periodStart && w.ShiftId == null && w.WorkingDayYear == null);
+        }
+
+        var walletRows = await walletQ.ToListAsync(ct);
+        var giftIssued = OperatorMemberWalletService.SumGiftIssuedToman(
+            walletRows.Where(w => w.Kind is WalletLedgerKind.TopUpGift or WalletLedgerKind.Correction));
+        var post = ShiftIncomeMath.SumPostCloseCorrections(walletRows);
+        return new WalletPresentation(
+            giftIssued,
+            new { cash = post.Cash, card = post.Card, c2c = post.C2c, gift = post.Gift });
     }
 
     private async Task<IReadOnlyList<object>> ListOpenSessionsForCloseAsync(CancellationToken ct)

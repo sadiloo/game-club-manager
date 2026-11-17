@@ -43,12 +43,12 @@ public sealed class WalletLoyaltyAcceptanceTests(GameClubWebApplicationFactory f
         var customerId = customer.GetProperty("id").GetGuid();
 
         await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up",
-            new { method = "Cash", amountToman = 50_000L });
+            new { method = "Cash", amountToman = 50_000L, commandId = Guid.NewGuid()});
         var afterCash = await op.GetFromJsonAsync<JsonElement>($"/api/operator/members/customers/{customerId}/wallet");
         Assert.Equal(50_000, afterCash.GetProperty("spendableToman").GetInt64());
 
         await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up",
-            new { method = "CardToCard", amountToman = 30_000L, destinationCardId = "card-a", reference = "99" });
+            new { method = "CardToCard", amountToman = 30_000L, destinationCardId = "card-a", reference = "99", commandId = Guid.NewGuid()});
         var afterPending = await op.GetFromJsonAsync<JsonElement>($"/api/operator/members/customers/{customerId}/wallet");
         Assert.Equal(50_000, afterPending.GetProperty("spendableToman").GetInt64());
 
@@ -101,7 +101,7 @@ public sealed class WalletLoyaltyAcceptanceTests(GameClubWebApplicationFactory f
         await mgr.PutAsJsonAsync("/api/operator/members/settings/debt-floor", new { floorToman = -50_000L });
         var customer = await CreateCustomerAsync(mgr, "09123333333");
         var customerId = customer.GetProperty("id").GetGuid();
-        await mgr.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up", new { method = "Cash", amountToman = 200_000L });
+        await mgr.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up", new { method = "Cash", amountToman = 200_000L , commandId = Guid.NewGuid() });
         var op = await OpAsync();
         await S3TestHelpers.RegisterConsole(_api, op, "PS5-B8", 1);
         factory.Clock.SetTehran(2026, 6, 3, 14, 0);
@@ -118,47 +118,6 @@ public sealed class WalletLoyaltyAcceptanceTests(GameClubWebApplicationFactory f
         response.EnsureSuccessStatusCode();
         var wallet = await op.GetFromJsonAsync<JsonElement>($"/api/operator/members/customers/{customerId}/wallet");
         Assert.Equal(200_000 - collect, wallet.GetProperty("spendableToman").GetInt64());
-    }
-
-    [Fact]
-    public async Task wl_scenario_14_package_minutes_decrease_after_play()
-    {
-        await S3TestHelpers.ResetAsync(factory);
-        var mgr = await OpAsync("manager");
-        var customer = await CreateCustomerAsync(mgr, "09124444444");
-        var customerId = customer.GetProperty("id").GetGuid();
-        using (var scope = factory.Services.CreateScope())
-        {
-            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            db.CustomerMembers.Add(new CustomerMemberEntity { CustomerId = customerId });
-            db.PackageProducts.Add(new PackageProductEntity { Id = "pkg120", Name = "۲ ساعت", PriceToman = 220_000, Minutes = 120, IsActive = true });
-            db.CustomerPackages.Add(new CustomerPackageEntity
-            {
-                Id = Guid.NewGuid(),
-                CustomerId = customerId,
-                Name = "۲ ساعت",
-                RemainingMinutes = 120,
-                FaceValueToman = 220_000,
-            });
-            await db.SaveChangesAsync();
-        }
-
-        await S3TestHelpers.RegisterConsole(_api, mgr, "PS5-PKG", 1);
-        factory.Clock.SetTehran(2026, 6, 3, 14, 0);
-        var sessionId = await S3TestHelpers.StartSession(_api, "PS5-PKG", 1);
-        await mgr.PutAsJsonAsync($"/api/operator/sessions/{sessionId}/customer", new { customerId });
-        factory.Clock.SetTehran(2026, 6, 3, 14, 30);
-        await mgr.PostAsync($"/api/operator/sessions/{sessionId}/bill/open", null);
-        var bill = await mgr.GetFromJsonAsync<JsonElement>($"/api/operator/sessions/{sessionId}/bill");
-        var collectible = bill.GetProperty("collectibleToman").GetInt64();
-        Assert.Equal(0, collectible);
-        await mgr.PostAsJsonAsync($"/api/operator/sessions/{sessionId}/bill/confirm", new { payments = Array.Empty<object>() });
-        using (var scope = factory.Services.CreateScope())
-        {
-            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            var remain = await db.CustomerPackages.Where(p => p.CustomerId == customerId).Select(p => p.RemainingMinutes).SingleAsync();
-            Assert.Equal(90, remain);
-        }
     }
 
     [Fact]

@@ -112,7 +112,7 @@ public sealed class ShiftReportsFixRound2Tests(GameClubWebApplicationFactory fac
         var customer = (await op.PostAsJsonAsync("/api/operator/customers", new { name = "tu2", mobile = "09124445556" }))
             .EnsureSuccessStatusCode();
         var customerId = (await customer.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetGuid();
-        (await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up", new { method = "Cash", amountToman = 20_000L }))
+        (await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up", new { method = "Cash", amountToman = 20_000L , commandId = Guid.NewGuid() }))
             .EnsureSuccessStatusCode();
         (await op.PostAsJsonAsync("/api/operator/shift/close", new
         {
@@ -139,7 +139,7 @@ public sealed class ShiftReportsFixRound2Tests(GameClubWebApplicationFactory fac
             .EnsureSuccessStatusCode();
         var customerId = (await customer.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetGuid();
         var responses = await RaceAsync(
-            () => op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up", new { method = "Cash", amountToman = 20_000L }),
+            () => op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up", new { method = "Cash", amountToman = 20_000L , commandId = Guid.NewGuid() }),
             () => op2.PostAsJsonAsync("/api/operator/shift/close", new
             {
                 workingDay = new { year = 2026, month = 6, day = 3 },
@@ -164,7 +164,7 @@ public sealed class ShiftReportsFixRound2Tests(GameClubWebApplicationFactory fac
         var c1 = (await op.PostAsJsonAsync("/api/operator/customers", new { name = "a", mobile = "09125556666" }))
             .EnsureSuccessStatusCode();
         var id1 = (await c1.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetGuid();
-        await op.PostAsJsonAsync($"/api/operator/members/customers/{id1}/wallet/top-up", new { method = "Cash", amountToman = 10_000L });
+        await op.PostAsJsonAsync($"/api/operator/members/customers/{id1}/wallet/top-up", new { method = "Cash", amountToman = 10_000L , commandId = Guid.NewGuid() });
         var close1 = await op.PostAsJsonAsync("/api/operator/shift/close", new
         {
             workingDay = new { year = 2026, month = 11, day = 25 },
@@ -177,7 +177,7 @@ public sealed class ShiftReportsFixRound2Tests(GameClubWebApplicationFactory fac
         var c2 = (await op.PostAsJsonAsync("/api/operator/customers", new { name = "b", mobile = "09127778888" }))
             .EnsureSuccessStatusCode();
         var id2 = (await c2.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetGuid();
-        await op.PostAsJsonAsync($"/api/operator/members/customers/{id2}/wallet/top-up", new { method = "Cash", amountToman = 20_000L });
+        await op.PostAsJsonAsync($"/api/operator/members/customers/{id2}/wallet/top-up", new { method = "Cash", amountToman = 20_000L , commandId = Guid.NewGuid() });
         var close2 = await op.PostAsJsonAsync("/api/operator/shift/close", new
         {
             workingDay = new { year = 2026, month = 11, day = 25 },
@@ -210,6 +210,7 @@ public sealed class ShiftReportsFixRound2Tests(GameClubWebApplicationFactory fac
             method = "CardToCard",
             amountToman = 30_000L,
             destinationCardId = "qa-card-a",
+        commandId = Guid.NewGuid(),
         });
         long pendingId;
         using (var scope = factory.Services.CreateScope())
@@ -260,7 +261,7 @@ public sealed class ShiftReportsFixRound2Tests(GameClubWebApplicationFactory fac
         var customer = (await op.PostAsJsonAsync("/api/operator/customers", new { name = "wl", mobile = "09128887777" }))
             .EnsureSuccessStatusCode();
         var customerId = (await customer.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetGuid();
-        (await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up", new { method = "Cash", amountToman = 100_000L }))
+        (await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up", new { method = "Cash", amountToman = 100_000L , commandId = Guid.NewGuid() }))
             .EnsureSuccessStatusCode();
         factory.Clock.SetTehran(2026, 6, 11, 15, 0);
         var sessionId = await S3TestHelpers.StartSession(_api, "PS5-W", 1);

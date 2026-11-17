@@ -41,6 +41,7 @@ public sealed class ShiftReportsFixRound6Tests(GameClubWebApplicationFactory fac
             method = "CardToCard",
             amountToman = 30_000L,
             destinationCardId = "r6-card",
+        commandId = Guid.NewGuid(),
         })).EnsureSuccessStatusCode();
         var pending1 = await LastPendingIdAsync(factory);
 
@@ -60,6 +61,7 @@ public sealed class ShiftReportsFixRound6Tests(GameClubWebApplicationFactory fac
             method = "CardToCard",
             amountToman = 30_000L,
             destinationCardId = "r6-card",
+        commandId = Guid.NewGuid(),
         })).EnsureSuccessStatusCode();
         var pending2 = await LastPendingIdAsync(factory);
 
@@ -115,7 +117,7 @@ public sealed class ShiftReportsFixRound6Tests(GameClubWebApplicationFactory fac
         var cashCust = (await op.PostAsJsonAsync("/api/operator/customers", new { name = "r6-cash", mobile = "09128882002" }))
             .EnsureSuccessStatusCode();
         var cashCustId = (await cashCust.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetGuid();
-        (await op.PostAsJsonAsync($"/api/operator/members/customers/{cashCustId}/wallet/top-up", new { method = "Cash", amountToman = 20_000L }))
+        (await op.PostAsJsonAsync($"/api/operator/members/customers/{cashCustId}/wallet/top-up", new { method = "Cash", amountToman = 20_000L , commandId = Guid.NewGuid() }))
             .EnsureSuccessStatusCode();
         factory.Clock.SetTehran(2026, 11, 20, 14, 5);
         var c1 = (await (await op.PostAsJsonAsync("/api/operator/shift/close", new
@@ -125,7 +127,7 @@ public sealed class ShiftReportsFixRound6Tests(GameClubWebApplicationFactory fac
             actualCardReaderToman = 0L,
         })).Content.ReadFromJsonAsync<JsonElement>()).GetProperty("closeRecordId").GetGuid();
         factory.Clock.SetTehran(2026, 11, 20, 16, 0);
-        (await op.PostAsJsonAsync($"/api/operator/members/customers/{cashCustId}/wallet/top-up", new { method = "Cash", amountToman = 30_000L }))
+        (await op.PostAsJsonAsync($"/api/operator/members/customers/{cashCustId}/wallet/top-up", new { method = "Cash", amountToman = 30_000L , commandId = Guid.NewGuid() }))
             .EnsureSuccessStatusCode();
         factory.Clock.SetTehran(2026, 11, 20, 16, 5);
         var c2 = (await (await op.PostAsJsonAsync("/api/operator/shift/close", new
@@ -158,6 +160,7 @@ public sealed class ShiftReportsFixRound6Tests(GameClubWebApplicationFactory fac
             method = "CardToCard",
             amountToman = 30_000L,
             destinationCardId = "qa-card-a",
+        commandId = Guid.NewGuid(),
         })).EnsureSuccessStatusCode();
         var pendingLate = await LastPendingIdAsync(factory);
         factory.Clock.SetTehran(2026, 12, 4, 14, 5);
@@ -173,7 +176,7 @@ public sealed class ShiftReportsFixRound6Tests(GameClubWebApplicationFactory fac
             .EnsureSuccessStatusCode();
         var cash2Id = (await cash2.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetGuid();
         factory.Clock.SetTehran(2026, 12, 4, 16, 0);
-        (await op.PostAsJsonAsync($"/api/operator/members/customers/{cash2Id}/wallet/top-up", new { method = "Cash", amountToman = 20_000L }))
+        (await op.PostAsJsonAsync($"/api/operator/members/customers/{cash2Id}/wallet/top-up", new { method = "Cash", amountToman = 20_000L , commandId = Guid.NewGuid() }))
             .EnsureSuccessStatusCode();
         factory.Clock.SetTehran(2026, 12, 4, 16, 5);
         var l2 = (await (await op.PostAsJsonAsync("/api/operator/shift/close", new
@@ -208,6 +211,7 @@ public sealed class ShiftReportsFixRound6Tests(GameClubWebApplicationFactory fac
             method = "CardToCard",
             amountToman = 30_000L,
             destinationCardId = "qa-card-a",
+        commandId = Guid.NewGuid(),
         })).EnsureSuccessStatusCode();
         var pendingDist = await LastPendingIdAsync(factory);
         factory.Clock.SetTehran(2026, 11, 20, 14, 5);

@@ -57,7 +57,7 @@ public class Round3Tests
         var played = SessionPricer.Price(new Session("x", [
             new PlaySegment("a", plan.Start, plan.End, "st", "flat", PlayMode.Offline, 1),
         ]), card);
-        var settled = AccountSettlement.Settle(played, new PcAccount("m", budget, []));
+        var settled = AccountSettlement.Settle(played, new PcAccount("m", budget));
         Assert.Equal(plan.ConsumedToman, settled.MoneyConsumedToman);
         Assert.Equal(plan.Grace.WaivedToman, settled.Grace!.WaivedToman);
         Assert.Equal(0, settled.UncoveredToman);
@@ -71,7 +71,7 @@ public class Round3Tests
             var session = SessionPricer.Price(new Session("x", [
                 new PlaySegment("a", priced.Start, priced.End, "st", "flat", PlayMode.Offline, 1),
             ]), card);
-            var result = AccountSettlement.Settle(session, new PcAccount("m", amount, []));
+            var result = AccountSettlement.Settle(session, new PcAccount("m", amount));
             Assert.Equal(priced.ConsumedToman, result.MoneyConsumedToman);
             Assert.Equal(priced.Grace?.WaivedToman ?? 0, result.Grace?.WaivedToman ?? 0);
             Assert.Equal(0, result.UncoveredToman);

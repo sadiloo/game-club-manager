@@ -328,7 +328,7 @@ public class InvoiceAndPaymentTests
     public void Grace_minute_is_its_own_invoice_line_and_does_not_create_debt()
     {
         var minute = MoneyMath.ChargeForMinutes(110_000, 1, RateRemainderMode.Nearest);
-        var account = new PcAccount("pc", 500, []);
+        var account = new PcAccount("pc", 500);
         var charge = CafeFixture.Price(CafeFixture.Session(
             "pc",
             CafeFixture.Play("a", T.At(2026, 6, 2, 10, 0), T.At(2026, 6, 2, 10, 1), "example-pc-1", CafeFixture.ExampleNormal, 1)));

@@ -56,7 +56,7 @@ public sealed class WalletLoyaltyFixRound2Tests(GameClubWebApplicationFactory fa
         var customerId = await CreateCustomerAsync(op, "09122110001");
         async Task<HttpResponseMessage> TopUp(HttpClient c, long amount) =>
             await c.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up",
-                new { method = "Cash", amountToman = amount });
+                new { method = "Cash", amountToman = amount, commandId = Guid.NewGuid()});
         var responses = await RaceAsync(() => TopUp(op, 10_000), () => TopUp(op2, 20_000));
         Assert.All(responses, r => Assert.Equal(HttpStatusCode.OK, r.StatusCode));
         var (spendable, ledger) = await WalletTotalsAsync(factory, customerId);
@@ -72,7 +72,7 @@ public sealed class WalletLoyaltyFixRound2Tests(GameClubWebApplicationFactory fa
         var clients = await Task.WhenAll(Enumerable.Range(0, 10).Select(async _ => await OpAsync()));
         var responses = await RaceAsync(clients.Select((c, i) => (Func<Task<HttpResponseMessage>>)(() =>
             c.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up",
-                new { method = "Cash", amountToman = 1_000L }))).ToArray());
+                new { method = "Cash", amountToman = 1_000L, commandId = Guid.NewGuid()}))).ToArray());
         Assert.All(responses, r => Assert.Equal(HttpStatusCode.OK, r.StatusCode));
         var (spendable, ledger) = await WalletTotalsAsync(factory, customerId);
         Assert.Equal(10_000, spendable);
@@ -86,7 +86,7 @@ public sealed class WalletLoyaltyFixRound2Tests(GameClubWebApplicationFactory fa
         var op = await OpAsync();
         var customerId = await CreateCustomerAsync(op, "09122110003");
         await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up",
-            new { method = "Cash", amountToman = 200_000L });
+            new { method = "Cash", amountToman = 200_000L, commandId = Guid.NewGuid()});
         await S3TestHelpers.RegisterConsole(_api, op, "PS5-S6", 1);
         factory.Clock.SetTehran(2026, 6, 3, 14, 0);
         var sessionId = await S3TestHelpers.StartSession(_api, "PS5-S6", 1);
@@ -160,7 +160,7 @@ public sealed class WalletLoyaltyFixRound2Tests(GameClubWebApplicationFactory fa
         var op = await OpAsync();
         var customerId = await CreateCustomerAsync(op, "09122110004");
         await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up",
-            new { method = "Cash", amountToman = 10_000L });
+            new { method = "Cash", amountToman = 10_000L, commandId = Guid.NewGuid()});
         await mgr.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/opening-balance",
             new { realToman = 10_000L });
         var (spendable, ledger) = await WalletTotalsAsync(factory, customerId);
@@ -191,44 +191,13 @@ public sealed class WalletLoyaltyFixRound2Tests(GameClubWebApplicationFactory fa
         var op = await OpAsync();
         var customerId = await CreateCustomerAsync(op, "09122110042");
         await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up",
-            new { method = "Cash", amountToman = 50_000L });
+            new { method = "Cash", amountToman = 50_000L, commandId = Guid.NewGuid()});
         await mgr.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/opening-balance",
             new { debtToman = 10_000L });
         var (spendable, ledger) = await WalletTotalsAsync(factory, customerId);
         var wallet = await mgr.GetFromJsonAsync<System.Text.Json.JsonElement>($"/api/operator/members/customers/{customerId}/wallet");
         Assert.Equal(40_000, wallet.GetProperty("realToman").GetInt64());
         Assert.Equal(ledger, spendable);
-    }
-
-    [Fact]
-    public async Task round2_c3_operator_package_put_forbidden()
-    {
-        await S3TestHelpers.ResetAsync(factory);
-        var op = await OpAsync();
-        var put = await op.PutAsJsonAsync("/api/operator/members/packages/pkg-test",
-            new { name = "t", priceToman = 1L, minutes = 120L });
-        Assert.Equal(HttpStatusCode.Forbidden, put.StatusCode);
-    }
-
-    [Fact]
-    public async Task round2_c3_cash_package_sale_writes_invoice_and_payment()
-    {
-        await S3TestHelpers.ResetAsync(factory);
-        var mgr = await MgrAsync();
-        var op = await OpAsync();
-        var customerId = await CreateCustomerAsync(op, "09122110005");
-        await mgr.PutAsJsonAsync("/api/operator/members/packages/pkg-cash",
-            new { name = "بسته", priceToman = 50_000L, minutes = 60L });
-        await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/packages/sell",
-            new { productId = "pkg-cash", payments = new[] { new { method = "Cash", amountToman = 50_000L } } });
-        using var scope = factory.Services.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        var invoice = await db.Invoices.Include(i => i.PaymentLines).SingleAsync(i => i.CustomerId == customerId);
-        Assert.Equal(50_000, invoice.CollectibleToman);
-        Assert.Equal(0, invoice.BuffetGrossToman);
-        Assert.Contains(invoice.PaymentLines, p => p.Method == PaymentMethod.Cash && p.AmountToman == 50_000);
-        Assert.True(await db.WalletLedger.AnyAsync(e =>
-            e.CustomerId == customerId && e.Kind == WalletLedgerKind.PackagePurchase && e.InvoiceId == invoice.Id));
     }
 
     [Fact]
@@ -252,7 +221,7 @@ public sealed class WalletLoyaltyFixRound2Tests(GameClubWebApplicationFactory fa
         var op2 = await OpAsync();
         var customerId = await CreateCustomerAsync(op, "09122110006");
         await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up",
-            new { method = "CardToCard", amountToman = 5_000L, destinationCardId = "card-a" });
+            new { method = "CardToCard", amountToman = 5_000L, destinationCardId = "card-a", commandId = Guid.NewGuid()});
         long pendingId;
         using (var scope = factory.Services.CreateScope())
         {
@@ -306,7 +275,7 @@ public sealed class WalletLoyaltyFixRound2Tests(GameClubWebApplicationFactory fa
         var op2 = await OpAsync();
         var customerId = await CreateCustomerAsync(op, "09122110007");
         await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up",
-            new { method = "Cash", amountToman = 300_000L });
+            new { method = "Cash", amountToman = 300_000L, commandId = Guid.NewGuid()});
         await S3TestHelpers.RegisterConsole(_api, op, "PS5-WC1", 1);
         await S3TestHelpers.RegisterConsole(_api, op, "PS5-WC2", 1);
         factory.Clock.SetTehran(2026, 6, 3, 14, 0);

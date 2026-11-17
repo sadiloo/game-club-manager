@@ -9,6 +9,65 @@ let buffetMode = "session";
 let billTarget = null;
 let customerSearchTimer = null;
 let displayedLinkedCustomer = null;
+let walletTopUpCommandId = null;
+let walletC2cCommandId = null;
+let walletCorrectCommandId = null;
+let walletTopUpInFlight = false;
+let walletTopUpDraftKey = null;
+let walletCorrectDraftKey = null;
+
+const PENDING_ACTION_TIMEOUT_MS = 15000;
+const pendingRowInFlight = new Set();
+
+function pendingRowKey(kind, id) {
+  return `${kind}:${id}`;
+}
+
+function isPendingRowInFlight(kind, id) {
+  return pendingRowInFlight.has(pendingRowKey(kind, id));
+}
+
+function newCommandId() {
+  if (typeof crypto !== "undefined" && crypto.randomUUID) return crypto.randomUUID();
+  const part = () => Math.floor((1 + Math.random()) * 0x10000).toString(16).slice(1);
+  return `${part()}${part()}-${part()}-4${part().slice(0, 3)}-a${part().slice(0, 3)}-${part()}${part()}${part()}`;
+}
+
+function buildWalletTopUpDraftKey(linkedId, method, amountToman, giftToman, destinationCardId) {
+  return JSON.stringify({
+    customerId: linkedId,
+    method,
+    amountToman,
+    giftToman,
+    destinationCardId: destinationCardId ?? null,
+  });
+}
+
+function resetWalletTopUpForm() {
+  walletTopUpCommandId = null;
+  walletC2cCommandId = null;
+  walletTopUpDraftKey = null;
+}
+
+function resetWalletCorrectForm() {
+  walletCorrectCommandId = null;
+  walletCorrectDraftKey = null;
+}
+
+function ensureWalletTopUpCommandIdForDraft(draftKey) {
+  if (!walletTopUpCommandId || walletTopUpDraftKey !== draftKey) {
+    walletTopUpCommandId = newCommandId();
+    walletC2cCommandId = null;
+  }
+  walletTopUpDraftKey = draftKey;
+}
+
+function ensureWalletCorrectCommandIdForDraft(draftKey) {
+  if (!walletCorrectCommandId || walletCorrectDraftKey !== draftKey) {
+    walletCorrectCommandId = newCommandId();
+  }
+  walletCorrectDraftKey = draftKey;
+}
 
 function resetBuffetOnlyContext() {
   buffetMode = "session";
@@ -47,21 +106,33 @@ function cashTendered() {
 }
 
 async function api(path, options = {}) {
-  showError("");
+  const { background, ...fetchOptions } = options;
+  const isBackground = background === true;
+  if (!isBackground) {
+    showError("");
+  }
   const res = await fetch(path, {
     credentials: "include",
-    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
-    ...options,
+    headers: { "Content-Type": "application/json", ...(fetchOptions.headers || {}) },
+    ...fetchOptions,
   });
   const text = await res.text();
   if (!res.ok) {
     let msg = text;
+    let code;
     try {
       const j = JSON.parse(text);
+      code = j.code;
       msg = j.message || j.code || text;
     } catch (_) {}
+    if (res.status === 409 && code === "not_pending") {
+      msg = "این مورد قبلاً انجام شده است.";
+    }
     showError(msg);
-    throw new Error(msg);
+    const err = new Error(msg);
+    err.status = res.status;
+    err.code = code;
+    throw err;
   }
   if (res.status === 204 || !text) return null;
   return JSON.parse(text);
@@ -72,7 +143,7 @@ async function loadCatalog() {
 }
 
 async function refreshLowStock() {
-  const rows = (await api("/api/operator/catalog/low-stock")) || [];
+  const rows = (await api("/api/operator/catalog/low-stock", { background: true })) || [];
   const el = document.getElementById("lowStockList");
   if (!rows.length) {
     el.textContent = "";
@@ -303,30 +374,174 @@ async function walletTopUp(method) {
     return;
   }
   const raw = window.prompt("مبلغ شارژ (تومان)", "50000");
-  if (!raw) return;
+  if (!raw) {
+    resetWalletTopUpForm();
+    return;
+  }
   const amountToman = Number(String(raw).replace(/,/g, ""));
   if (!Number.isFinite(amountToman) || amountToman <= 0) {
     showError("مبلغ نامعتبر است.");
+    resetWalletTopUpForm();
     return;
   }
-  const body = { method, amountToman };
+  const giftRaw = window.prompt("اعتبار هدیه (تومان، خالی = ۰)", "");
+  const giftToman = giftRaw && giftRaw.trim() ? Number(String(giftRaw).replace(/,/g, "")) : 0;
+  if (!Number.isFinite(giftToman) || giftToman < 0) {
+    showError("هدیه نامعتبر است.");
+    resetWalletTopUpForm();
+    return;
+  }
+  let destinationCardId;
   if (method === "CardToCard") {
-    body.destinationCardId = window.prompt("کارت مقصد", destinationCards[0]?.id || "") || undefined;
+    destinationCardId = window.prompt("کارت مقصد", destinationCards[0]?.id || "") || undefined;
+    if (!destinationCardId) {
+      resetWalletTopUpForm();
+      return;
+    }
+  }
+  const draftKey = buildWalletTopUpDraftKey(linked.id, method, amountToman, giftToman, destinationCardId);
+  ensureWalletTopUpCommandIdForDraft(draftKey);
+  const commandId = method === "CardToCard"
+    ? (walletC2cCommandId ||= walletTopUpCommandId)
+    : walletTopUpCommandId;
+  const body = {
+    method,
+    amountToman,
+    giftToman,
+    commandId,
+  };
+  if (method === "CardToCard") {
+    body.destinationCardId = destinationCardId;
     body.reference = window.prompt("ارجاع", "") || undefined;
   }
-  await api(`/api/operator/members/customers/${linked.id}/wallet/top-up`, {
-    method: "POST",
-    body: JSON.stringify(body),
-  });
-  renderCustomerChip(linked);
+  if (walletTopUpInFlight) {
+    return;
+  }
+  walletTopUpInFlight = true;
+  setWalletTopUpButtonsDisabled(true);
+  try {
+    await api(`/api/operator/members/customers/${linked.id}/wallet/top-up`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+    renderCustomerChip(linked);
+    resetWalletTopUpForm();
+  } finally {
+    walletTopUpInFlight = false;
+    setWalletTopUpButtonsDisabled(false);
+  }
+}
+
+function setWalletTopUpButtonsDisabled(disabled) {
+  for (const id of ["walletTopUpCash", "walletTopUpCard", "walletTopUpC2c"]) {
+    const el = document.getElementById(id);
+    if (el) {
+      el.disabled = disabled;
+    }
+  }
 }
 
 const walletTopUpCashBtn = document.getElementById("walletTopUpCash");
-if (walletTopUpCashBtn) walletTopUpCashBtn.onclick = () => walletTopUp("Cash").catch(() => {});
+if (walletTopUpCashBtn) {
+  walletTopUpCashBtn.onclick = () => {
+    walletTopUp("Cash").catch(() => {});
+  };
+}
 const walletTopUpCardBtn = document.getElementById("walletTopUpCard");
-if (walletTopUpCardBtn) walletTopUpCardBtn.onclick = () => walletTopUp("CardReader").catch(() => {});
+if (walletTopUpCardBtn) {
+  walletTopUpCardBtn.onclick = () => {
+    walletTopUp("CardReader").catch(() => {});
+  };
+}
 const walletTopUpC2cBtn = document.getElementById("walletTopUpC2c");
-if (walletTopUpC2cBtn) walletTopUpC2cBtn.onclick = () => walletTopUp("CardToCard").catch(() => {});
+if (walletTopUpC2cBtn) {
+  walletTopUpC2cBtn.onclick = () => {
+    walletTopUp("CardToCard").catch(() => {});
+  };
+}
+
+async function walletCorrectTopUp() {
+  const linked = await resolveLinkedCustomerForWallet();
+  if (!linked) {
+    showError("عضوی پیوسته نیست.");
+    return;
+  }
+  const list = await api(`/api/operator/members/customers/${linked.id}/wallet/top-ups`);
+  if (!list?.length) {
+    window.alert("شارژ قابل اصلاحی نیست (موقت)");
+    return;
+  }
+  const lines = list.map(
+    (t, i) =>
+      `${i + 1}: ${t.method} ${t.currentAmountToman} + هدیه ${t.currentGiftToman ?? 0} (${t.topUpGroupId})`,
+  );
+  const pick = window.prompt(`شماره شارژ برای اصلاح (موقت):\n${lines.join("\n")}`, "1");
+  if (!pick) {
+    resetWalletCorrectForm();
+    return;
+  }
+  const idx = Number(pick) - 1;
+  if (!Number.isFinite(idx) || idx < 0 || idx >= list.length) {
+    showError("انتخاب نامعتبر");
+    resetWalletCorrectForm();
+    return;
+  }
+  const row = list[idx];
+  const amountRaw = window.prompt("مبلغ پرداختی درست (تومان)", String(row.currentAmountToman));
+  if (amountRaw == null) {
+    resetWalletCorrectForm();
+    return;
+  }
+  const giftRaw = window.prompt("هدیه درست (تومان)", String(row.currentGiftToman ?? 0));
+  if (giftRaw == null) {
+    resetWalletCorrectForm();
+    return;
+  }
+  const description = window.prompt("توضیح (اجباری)", "");
+  if (!description?.trim()) {
+    showError("توضیح الزامی است.");
+    resetWalletCorrectForm();
+    return;
+  }
+  const newAmountToman = Number(String(amountRaw).replace(/,/g, ""));
+  const newGiftToman = Number(String(giftRaw).replace(/,/g, ""));
+  const draftKey = JSON.stringify({
+    topUpGroupId: row.topUpGroupId,
+    newAmountToman,
+    newGiftToman,
+    description: description.trim(),
+  });
+  ensureWalletCorrectCommandIdForDraft(draftKey);
+  const correctBtn = document.getElementById("walletCorrectBtn");
+  if (correctBtn) {
+    correctBtn.disabled = true;
+  }
+  try {
+    await api(`/api/operator/members/wallet/top-ups/${row.topUpGroupId}/correct`, {
+      method: "POST",
+      body: JSON.stringify({
+        newAmountToman,
+        newGiftToman,
+        description: description.trim(),
+        commandId: walletCorrectCommandId,
+      }),
+    });
+    renderCustomerChip(linked);
+    window.alert("اصلاح ثبت شد (موقت)");
+    resetWalletCorrectForm();
+  } finally {
+    if (correctBtn) {
+      correctBtn.disabled = false;
+    }
+  }
+}
+
+const walletCorrectBtn = document.getElementById("walletCorrectBtn");
+if (walletCorrectBtn) {
+  walletCorrectBtn.onclick = () => {
+    walletCorrectTopUp().catch(() => {});
+  };
+}
 
 async function linkCustomer(customerId) {
   const ctx = customerLinkContext();
@@ -448,12 +663,16 @@ document.getElementById("loginBtn").onclick = async () => {
     await refreshPendingWalletTopups();
     await refreshShiftState();
     await refreshCafeSettingsUi();
+    const pollMs =
+      typeof window !== "undefined" && window.__operatorPollIntervalMs != null
+        ? window.__operatorPollIntervalMs
+        : 10000;
     setInterval(async () => {
       await refreshGrid();
       await refreshLowStock();
       await refreshPendingC2c();
       await refreshPendingWalletTopups();
-    }, 10000);
+    }, pollMs);
     if (typeof signalR !== "undefined") {
       const hub = new signalR.HubConnectionBuilder()
         .withUrl("/hubs/operator", { withCredentials: true })
@@ -523,7 +742,7 @@ async function refreshPrepaidGlobalAlerts() {
   for (const t of lastGridTiles) {
     if (!t.sessionId) continue;
     try {
-      const st = await api(`/api/operator/sessions/${t.sessionId}/prepaid`);
+      const st = await api(`/api/operator/sessions/${t.sessionId}/prepaid`, { background: true });
       if (st.prepaidEndAlert) alertStations.push(t.id);
     } catch (_) {}
   }
@@ -539,7 +758,7 @@ async function refreshPrepaidGlobalAlerts() {
 }
 
 async function refreshGrid() {
-  const tiles = await api("/api/operator/grid");
+  const tiles = await api("/api/operator/grid", { background: true });
   lastGridTiles = tiles;
   await refreshPrepaidGlobalAlerts();
   const grid = document.getElementById("grid");
@@ -575,32 +794,77 @@ async function refreshGrid() {
   }
 }
 
+function bindPendingListAction(button, kind, rowId, run, refreshList) {
+  button.onclick = async () => {
+    if (button.disabled) return;
+    const key = pendingRowKey(kind, rowId);
+    if (pendingRowInFlight.has(key)) return;
+    pendingRowInFlight.add(key);
+    const li = button.closest("li");
+    if (li) {
+      for (const b of li.querySelectorAll("button")) {
+        b.disabled = true;
+      }
+    } else {
+      button.disabled = true;
+    }
+    const timeoutMs =
+      typeof window !== "undefined" && window.__pendingActionTimeoutMs != null
+        ? window.__pendingActionTimeoutMs
+        : PENDING_ACTION_TIMEOUT_MS;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      await run(controller.signal);
+    } catch (e) {
+      if (e && e.status === 409 && e.code === "not_pending") {
+        await refreshList();
+      } else {
+        if (e.name === "AbortError") {
+          showError("زمان درخواست تمام شد؛ دوباره تلاش کنید.");
+        } else if (e instanceof TypeError) {
+          showError("خطای شبکه؛ دوباره تلاش کنید.");
+        } else {
+          showError(String(e.message || e) || "خطا در انجام عملیات.");
+        }
+        if (li && li.isConnected) {
+          for (const b of li.querySelectorAll("button")) {
+            b.disabled = false;
+          }
+        }
+      }
+    } finally {
+      clearTimeout(timer);
+      pendingRowInFlight.delete(key);
+    }
+  };
+}
+
 async function refreshPendingC2c() {
-  const list = await api("/api/operator/payments/pending-card-to-card");
+  const list = await api("/api/operator/payments/pending-card-to-card", { background: true });
   const ul = document.getElementById("pendingC2cList");
   ul.replaceChildren();
   for (const row of list || []) {
     const li = document.createElement("li");
     li.textContent = `#${row.invoiceNumber} — ${row.amountToman} تومان`;
     if (row.destinationCardId) li.textContent += ` → ${row.destinationCardId}`;
+    const inFlight = isPendingRowInFlight("c2c", row.id);
     const confirmBtn = document.createElement("button");
     confirmBtn.type = "button";
     confirmBtn.textContent = "تأیید";
+    confirmBtn.disabled = inFlight;
     const rejectBtn = document.createElement("button");
     rejectBtn.type = "button";
     rejectBtn.textContent = "رد";
-    confirmBtn.onclick = async () => {
-      try {
-        await api(`/api/operator/payments/${row.id}/confirm`, { method: "POST" });
-        await refreshPendingC2c();
-      } catch (_) {}
-    };
-    rejectBtn.onclick = async () => {
-      try {
-        await api(`/api/operator/payments/${row.id}/reject`, { method: "POST" });
-        await refreshPendingC2c();
-      } catch (_) {}
-    };
+    rejectBtn.disabled = inFlight;
+    bindPendingListAction(confirmBtn, "c2c", row.id, async (signal) => {
+      await api(`/api/operator/payments/${row.id}/confirm`, { method: "POST", signal });
+      await refreshPendingC2c();
+    }, refreshPendingC2c);
+    bindPendingListAction(rejectBtn, "c2c", row.id, async (signal) => {
+      await api(`/api/operator/payments/${row.id}/reject`, { method: "POST", signal });
+      await refreshPendingC2c();
+    }, refreshPendingC2c);
     li.appendChild(confirmBtn);
     li.appendChild(rejectBtn);
     ul.appendChild(li);
@@ -819,11 +1083,7 @@ document.getElementById("transferBtn").onclick = async () => {
   if (target == null || !String(target).trim()) return;
   const markSourceBroken = document.getElementById("transferFaultChk").checked;
   const tile = (lastGridTiles || []).find((x) => x.sessionId === selectedSessionId);
-  const commandId = (() => {
-    if (typeof crypto !== "undefined" && crypto.randomUUID) return crypto.randomUUID();
-    const part = () => Math.floor((1 + Math.random()) * 0x10000).toString(16).slice(1);
-    return `${part()}${part()}-${part()}-4${part().slice(0, 3)}-a${part().slice(0, 3)}-${part()}${part()}${part()}`;
-  })();
+  const commandId = newCommandId();
   try {
     await api(`/api/operator/sessions/${selectedSessionId}/transfer`, {
       method: "POST",
@@ -987,25 +1247,28 @@ document.getElementById("voidInvoiceBtn").onclick = async () => {
 async function refreshPendingWalletTopups() {
   const ul = document.getElementById("pendingWalletList");
   if (!ul) return;
-  const list = (await api("/api/operator/members/wallet/pending")) || [];
+  const list = (await api("/api/operator/members/wallet/pending", { background: true })) || [];
   ul.replaceChildren();
   for (const row of list) {
     const li = document.createElement("li");
     li.textContent = `#${row.id} — ${row.amountToman}`;
+    const inFlight = isPendingRowInFlight("topup", row.id);
     const ok = document.createElement("button");
     ok.type = "button";
     ok.textContent = "تأیید";
-    ok.onclick = async () => {
-      await api(`/api/operator/members/wallet/pending/${row.id}/confirm`, { method: "POST" });
+    ok.disabled = inFlight;
+    bindPendingListAction(ok, "topup", row.id, async (signal) => {
+      await api(`/api/operator/members/wallet/pending/${row.id}/confirm`, { method: "POST", signal });
       await refreshPendingWalletTopups();
-    };
+    }, refreshPendingWalletTopups);
     const no = document.createElement("button");
     no.type = "button";
     no.textContent = "رد";
-    no.onclick = async () => {
-      await api(`/api/operator/members/wallet/pending/${row.id}/reject`, { method: "POST" });
+    no.disabled = inFlight;
+    bindPendingListAction(no, "topup", row.id, async (signal) => {
+      await api(`/api/operator/members/wallet/pending/${row.id}/reject`, { method: "POST", signal });
       await refreshPendingWalletTopups();
-    };
+    }, refreshPendingWalletTopups);
     li.append(ok, no);
     ul.appendChild(li);
   }
@@ -1021,7 +1284,7 @@ async function refreshPrepaidStatus() {
   const el = document.getElementById("prepaidStatus");
   if (!el) return;
   try {
-    const st = await api(`/api/operator/sessions/${selectedSessionId}/prepaid`);
+    const st = await api(`/api/operator/sessions/${selectedSessionId}/prepaid`, { background: true });
     const mins = Math.floor((st.remainingActiveSeconds ?? 0) / 60);
     const secs = (st.remainingActiveSeconds ?? 0) % 60;
     el.textContent =
@@ -1037,10 +1300,14 @@ async function refreshPrepaidStatus() {
   }
 }
 
+const prepaidRefreshMs =
+  typeof window !== "undefined" && window.__prepaidRefreshIntervalMs != null
+    ? window.__prepaidRefreshIntervalMs
+    : 5000;
 setInterval(() => {
   refreshPrepaidStatus().catch(() => {});
   refreshPrepaidGlobalAlerts().catch(() => {});
-}, 5000);
+}, prepaidRefreshMs);
 
 bindClick("prepaidDurationBtn", async () => {
   if (!selectedSessionId) return;
@@ -1235,44 +1502,23 @@ bindClick("mgrLadderBtn", async () => {
   await api("/api/operator/members/settings/level-ladder", { method: "PUT", body: JSON.stringify(rows) });
 });
 
-bindClick("mgrPackageBtn", async () => {
-  const id = window.prompt("شناسه بسته", "pkg120");
-  if (!id) return;
-  const name = window.prompt("نام", "۲ ساعت");
-  const priceToman = Number(String(window.prompt("قیمت", "220000")).replace(/,/g, ""));
-  const minutes = Number(window.prompt("دقیقه", "120"));
-  const expRaw = window.prompt("انقضا (روز، خالی = بدون انقضا)", "");
-  const restrictRaw = window.prompt('محدودیت گروه (JSON آرایه، خالی = بدون محدودیت)', "");
-  await api(`/api/operator/members/packages/${id}`, {
+bindClick("mgrGiftCapBtn", async () => {
+  const cur = await api("/api/operator/members/settings/operator-gift-cap");
+  const maxToman = Number(String(window.prompt("سقف مبلغ هدیه (تومان)", String(cur.maxToman ?? 0))).replace(/,/g, ""));
+  const maxPercent = Number(window.prompt("سقف درصد هدیه", String(cur.maxPercent ?? 0)));
+  await api("/api/operator/members/settings/operator-gift-cap", {
     method: "PUT",
-    body: JSON.stringify({
-      name,
-      priceToman,
-      minutes,
-      expiresAfterDays: expRaw && expRaw.trim() ? Number(expRaw) : null,
-      allowedGroupIdsJson: restrictRaw && restrictRaw.trim() ? restrictRaw.trim() : null,
-    }),
+    body: JSON.stringify({ maxToman, maxPercent }),
   });
 });
 
-async function sellPackageFlow() {
-  const linked = await resolveLinkedCustomerForWallet();
-  if (!linked) return showError("عضو پیوسته نیست.");
-  const productId = window.prompt("شناسه بسته", "pkg120");
-  if (!productId) return;
-  const method = window.prompt("روش پرداخت (Cash | CardReader | Wallet)", "Cash");
-  const amountToman = Number(String(window.prompt("مبلغ", "220000")).replace(/,/g, ""));
-  await api(`/api/operator/members/customers/${linked.id}/packages/sell`, {
-    method: "POST",
-    body: JSON.stringify({
-      productId,
-      payments: [{ method, amountToman }],
-    }),
-  });
-  await refreshWalletBalance();
-}
-
-bindClick("opSellPackageBtn", () => sellPackageFlow().catch(showError));
+bindClick("mgrCorrectionsBtn", async () => {
+  const rows = await api("/api/operator/members/wallet/corrections");
+  const text = (rows || [])
+    .map((r) => `${r.atUtc}: ${r.beforeAmountToman}→${r.afterAmountToman} هدیه ${r.beforeGiftToman}→${r.afterGiftToman}`)
+    .join("\n");
+  window.alert(text || "اصلاحی ثبت نشده");
+});
 
 async function refreshShiftState() {
   const state = await api("/api/operator/shift/state");
@@ -1314,8 +1560,11 @@ function refreshClosePreviewSummary() {
     .map((p) => `کیف → ${p.destinationCardId ?? "—"} ${p.amountToman}`)
     .join("؛ ");
   const pendParts = [pendInv, pendWal].filter(Boolean).join(" | ");
+  const recv = closePreviewMeta.received || {};
+  const post = closePreviewMeta.postCloseCorrections || {};
+  const giftIssued = closePreviewMeta.giftIssuedToman ?? 0;
   el.textContent =
-    `مورد انتظار: نقد ${cashExpected} | کارتخوان ${e.cardReaderExpected ?? 0} | کارت‌به‌کارت تأییدشده ${e.cardToCardConfirmedExpected ?? 0} | معلق ${e.cardToCardPending ?? 0} | مقصد: ${dest || "—"} | C2C معلق: ${pendParts || "—"}`;
+    `مورد انتظار: نقد ${cashExpected} | کارتخوان ${e.cardReaderExpected ?? 0} | کارت‌به‌کارت تأییدشده ${e.cardToCardConfirmedExpected ?? 0} | معلق ${e.cardToCardPending ?? 0} | دریافتی: نقد ${recv.cashReceived ?? "—"} | کارتخوان ${recv.cardReaderReceived ?? "—"} | هدیه داده‌شده ${giftIssued} | تعدیل اصلاح شارژ (موقت): نقد ${post.cash ?? 0} کارت ${post.card ?? 0} C2C ${post.c2c ?? 0} هدیه ${post.gift ?? 0} | مقصد: ${dest || "—"} | C2C معلق: ${pendParts || "—"}`;
 }
 
 function recalcCloseExpectedCash() {
@@ -1395,7 +1644,7 @@ function renderIncomeSummary(body) {
   };
   const categories = renderReportsTable(
     "ستون‌های درآمد",
-    ["بازی", "بوفه", "خدمات", "گرد کردن", "خدمت ویژه", "بسته", "شارژ کیف", "دریافتی", "نقد", "کارتخوان", "کارت‌به‌کارت"],
+    ["بازی", "بوفه", "خدمات", "گرد کردن", "خدمت ویژه", "هدیه داده‌شده", "شارژ کیف", "دریافتی", "نقد", "کارتخوان", "کارت‌به‌کارت"],
     [
       [
         merged.playToman ?? 0,
@@ -1403,7 +1652,7 @@ function renderIncomeSummary(body) {
         merged.servicesToman ?? 0,
         merged.roundingToman ?? 0,
         merged.surchargeToman ?? 0,
-        merged.packageSalesToman ?? 0,
+        merged.giftIssuedToman ?? 0,
         merged.walletTopUpToman ?? 0,
         merged.receivedMoneyToman ?? 0,
         merged.receivedCashToman ?? 0,

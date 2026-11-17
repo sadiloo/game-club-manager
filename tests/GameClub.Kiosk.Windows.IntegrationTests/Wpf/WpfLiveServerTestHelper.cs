@@ -26,13 +26,32 @@ internal static class WpfLiveServerTestHelper
     {
         await using var conn = new NpgsqlConnection(ResolveConnectionString());
         await conn.OpenAsync();
-        using var cmd = new NpgsqlCommand(
+        using (var cmd = new NpgsqlCommand(
             """
             UPDATE rate_lines SET "HourlyToman" = 80000
             WHERE "GroupId" = 'pc-normal' AND "IsSpecialBand" = false AND "PlayMode" = 'Offline' AND "PlayerCount" = 1
             """,
-            conn);
-        await cmd.ExecuteNonQueryAsync();
+            conn))
+        {
+            var rateRows = await cmd.ExecuteNonQueryAsync();
+            if (rateRows != 1)
+            {
+                throw new InvalidOperationException(
+                    $"Expected exactly one pc-normal offline rate line update (IsSpecialBand = false), but {rateRows} row(s) were affected.");
+            }
+        }
+
+        using (var cmd = new NpgsqlCommand(
+            """UPDATE branch_rounding SET "PcSpecialBandSurchargeToman" = 0""",
+            conn))
+        {
+            var roundingRows = await cmd.ExecuteNonQueryAsync();
+            if (roundingRows < 1)
+            {
+                throw new InvalidOperationException(
+                    $"Expected at least one branch_rounding row update for PcSpecialBandSurchargeToman, but {roundingRows} row(s) were affected.");
+            }
+        }
     }
 
     public static async Task<Guid> LookupCustomerIdByLoginAsync(string loginName)
@@ -106,7 +125,7 @@ internal static class WpfLiveServerTestHelper
         created.EnsureSuccessStatusCode();
         var createdJson = await created.Content.ReadAsStringAsync();
         var customerId = ParseGuidProperty(createdJson, "id");
-        var topUp = await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up", new { method = "Cash", amountToman = 48_667L });
+        var topUp = await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up", new { method = "Cash", amountToman = 48_667L , commandId = Guid.NewGuid() });
         LastTopUpStatus = (int)topUp.StatusCode;
         var credential = await op.PutJsonAsync($"/api/operator/customers/{customerId}/credential", new { loginName, password });
         LastCredentialStatus = (int)credential.StatusCode;

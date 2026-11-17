@@ -2,6 +2,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using GameClub.Server.Data;
 using GameClub.Server.Data.Entities;
+using GameClub.Server.Operator;
 using GameClub.Server.Services;
 using GameClub.Server.Time;
 using Microsoft.AspNetCore.Hosting;
@@ -89,7 +90,7 @@ public class GameClubWebApplicationFactory : WebApplicationFactory<Program>
 internal static class S3TestHelpers
 {
     public const string TruncateSql = """
-        TRUNCATE invoice_member_effects, loyalty_hour_ledger, wallet_ledger, pending_wallet_topups, customer_packages, package_products, customer_members, branch_member_settings, branch_cafe_settings, close_records, shifts, invoice_catalog_lines, open_sale_lines, open_sales, catalog_items, catalog_categories RESTART IDENTITY CASCADE;
+        TRUNCATE wallet_topup_corrections, invoice_member_effects, loyalty_hour_ledger, wallet_ledger, pending_wallet_topups, customer_members, branch_member_settings, branch_cafe_settings, close_records, shifts, invoice_catalog_lines, open_sale_lines, open_sales, catalog_items, catalog_categories RESTART IDENTITY CASCADE;
         TRUNCATE kiosk_heartbeats, kiosk_devices, kiosk_pairing_codes, kiosk_lease_signing_keys, customer_credentials, game_catalog_entries, game_catalog_categories, station_kiosk_profiles RESTART IDENTITY CASCADE;
         TRUNCATE session_commands, rejected_card_to_card, payment_lines, pending_bills, audit_log, checkpoints, pause_intervals, play_segments, invoices, sessions, customers, rate_card_snapshot, stations, destination_cards RESTART IDENTITY CASCADE;
         TRUNCATE operator_users RESTART IDENTITY CASCADE;
@@ -107,6 +108,21 @@ internal static class S3TestHelpers
         await db.Database.ExecuteSqlRawAsync(TruncateSql);
         await DatabaseSeed.EnsureAsync(db);
         await EnsureCatalogCategoryTwoForTestsAsync(db);
+        await EnsureOwnerUserForTestsAsync(db);
+    }
+
+    /// <summary>Test fixture only — Owner role for brief correction_exceeds_balance checks.</summary>
+    private static async Task EnsureOwnerUserForTestsAsync(AppDbContext db)
+    {
+        if (await db.OperatorUsers.AnyAsync(u => u.Username == "owner"))
+        {
+            return;
+        }
+
+        var owner = new OperatorUserEntity { Id = Guid.NewGuid(), Username = "owner", Role = UserRole.Owner };
+        owner.PinHash = OperatorAuthService.HashPin(owner, "5678");
+        db.OperatorUsers.Add(owner);
+        await db.SaveChangesAsync();
     }
 
     /// <summary>Test fixture only — category id 2 for operator catalog PUT (freeze PC-5 / case 8).</summary>

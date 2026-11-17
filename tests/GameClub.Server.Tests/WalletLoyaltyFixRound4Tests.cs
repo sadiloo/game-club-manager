@@ -49,48 +49,6 @@ public sealed class WalletLoyaltyFixRound4Tests(GameClubWebApplicationFactory fa
     }
 
     [Fact]
-    public async Task round4_package_void_concurrent_cash_topup_leaves_spendable_matching_ledger()
-    {
-        for (var attempt = 0; attempt < 12; attempt++)
-        {
-            await S3TestHelpers.ResetAsync(factory);
-            var mgr = await MgrAsync();
-            var op = await OpAsync();
-            var op2 = await OpAsync();
-            var customerId = await CreateCustomerAsync(op, $"0912414{attempt:D4}");
-            await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up",
-                new { method = "Cash", amountToman = 300_000L });
-            await mgr.PutAsJsonAsync("/api/operator/members/packages/pkg-r4-race",
-                new { name = "بسته", priceToman = 220_000L, minutes = 30L });
-            await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/packages/sell",
-                new { productId = "pkg-r4-race", payments = new[] { new { method = "Wallet", amountToman = 220_000L } } });
-            long invoiceNumber;
-            using (var scope = factory.Services.CreateScope())
-            {
-                var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-                invoiceNumber = await db.Invoices.Where(i => i.CustomerId == customerId).Select(i => i.Number).SingleAsync();
-            }
-
-            var responses = await RaceAsync(
-                () => mgr.PostAsJsonAsync($"/api/operator/invoices/{invoiceNumber}/void", new { reason = "اشتباه" }),
-                () => op2.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up",
-                    new { method = "Cash", amountToman = 10_000L }));
-            Assert.All(responses, r => Assert.True(r.StatusCode is HttpStatusCode.NoContent or HttpStatusCode.OK));
-
-            var (_, _, spendable, ledger) = await WalletStateAsync(factory, customerId);
-            Assert.Equal(310_000, spendable);
-            Assert.Equal(ledger, spendable);
-            using var verifyScope = factory.Services.CreateScope();
-            var verifyDb = verifyScope.ServiceProvider.GetRequiredService<AppDbContext>();
-            Assert.Empty(await verifyDb.CustomerPackages.Where(p => p.CustomerId == customerId).ToListAsync());
-            Assert.Contains(await verifyDb.WalletLedger.Where(e => e.CustomerId == customerId).ToListAsync(),
-                e => e.Kind == WalletLedgerKind.InvoiceVoidReversal && e.Label == "package_sale_void");
-            Assert.Contains(await verifyDb.WalletLedger.Where(e => e.CustomerId == customerId).ToListAsync(),
-                e => e.Kind == WalletLedgerKind.TopUpReal && e.RealDeltaToman == 10_000);
-        }
-    }
-
-    [Fact]
     public async Task round4_live_session_bill_exposes_level_and_birthday_discount_lines()
     {
         await S3TestHelpers.ResetAsync(factory);

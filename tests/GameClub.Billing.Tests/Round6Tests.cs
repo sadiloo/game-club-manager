@@ -15,7 +15,7 @@ public class Round6Tests
         Assert.Equal(500, plan5.UnusedToman);
         Assert.NotNull(plan5.Grace);
         var played5 = Price(card, start, plan5.End, five);
-        var settled5 = AccountSettlement.Settle(played5, new PcAccount("m", 18_833, []), billing: five);
+        var settled5 = AccountSettlement.Settle(played5, new PcAccount("m", 18_833), billing: five);
         Assert.Equal(plan5.ConsumedToman, settled5.MoneyConsumedToman);
         Assert.Equal(plan5.Grace!.WaivedToman, settled5.Grace!.WaivedToman);
         Assert.Equal(500, settled5.UpdatedAccount.MoneyBalanceToman);
@@ -26,7 +26,7 @@ public class Round6Tests
         var plan15 = PrepaidPlanner.ForAmount(start, 55_500, "a", "st", "g", PlayMode.Offline, 1, card, policy: fifteen);
         Assert.Equal(500, plan15.UnusedToman);
         Assert.NotNull(plan15.Grace);
-        var settled15 = AccountSettlement.Settle(Price(card, start, plan15.End, fifteen), new PcAccount("m", 55_500, []), billing: fifteen);
+        var settled15 = AccountSettlement.Settle(Price(card, start, plan15.End, fifteen), new PcAccount("m", 55_500), billing: fifteen);
         Assert.Equal(0, settled15.WriteOffToman);
         Assert.Null(settled15.Alert);
         Assert.Equal(500, settled15.UpdatedAccount.MoneyBalanceToman);
@@ -60,7 +60,7 @@ public class Round6Tests
         foreach (var budget in new long[] { 12_834, 18_334, 23_834 })
         {
             var plan = PrepaidPlanner.ForAmount(start, budget, "a", "st", "g", PlayMode.Offline, 1, card);
-            var settled = AccountSettlement.Settle(Price(card, start, plan.End, null), new PcAccount("m", budget, []));
+            var settled = AccountSettlement.Settle(Price(card, start, plan.End, null), new PcAccount("m", budget));
             Assert.Equal(plan.ConsumedToman, settled.MoneyConsumedToman);
             Assert.Equal(plan.Grace?.WaivedToman ?? 0, settled.Grace?.WaivedToman ?? 0);
             Assert.NotNull(settled.Grace);
@@ -140,7 +140,7 @@ public class Round6Tests
             policy: new BillingPolicy(5, PartialUnitMode.Ceiling, RateRemainderMode.Nearest));
         var billing = new BillingPolicy(5, PartialUnitMode.Ceiling, RateRemainderMode.Nearest);
         var balance = OracleHalfUp(110_000, 70) + 10;
-        var settled = AccountSettlement.Settle(charge, new PcAccount("m", balance, []), billing: billing);
+        var settled = AccountSettlement.Settle(charge, new PcAccount("m", balance), billing: billing);
         Assert.Equal(T.At(2026, 6, 6, 0, 40), settled.Grace!.At);
     }
 
@@ -193,7 +193,7 @@ public class Round6Tests
         var start = T.At(2026, 6, 2, 10, 0);
         var charge = Play(Flat(), start, start.AddHours(1));
         var spec = new SessionDiscount(LevelPercent: 30, CodePercent: 80, ValidFrom: start.AddMinutes(30));
-        var settled = AccountSettlement.Settle(charge, new PcAccount("m", 100_000_000, []), discount: spec);
+        var settled = AccountSettlement.Settle(charge, new PcAccount("m", 100_000_000), discount: spec);
         Assert.Equal(38_500, settled.MoneyConsumedToman);
         Assert.Equal(71_500, settled.DiscountToman);
         var play = CustomerPlay.Settle(
@@ -285,24 +285,14 @@ public class Round6Tests
 
             var expectedDiscount = IndependentOracleDiscount(session, charge, policy, spec);
             var balance = balances[rng.Next(balances.Length)];
-            TimePackage[] packages = rng.Next(3) == 0
-                ? [new TimePackage("p", rng.Next(1, 30), 200_000)]
-                : [];
-            var order = rng.Next(2) == 0
-                ? ConsumptionOrder.PackagesThenMoney
-                : ConsumptionOrder.MoneyThenPackages;
             var settled = AccountSettlement.Settle(
                 charge,
-                new PcAccount("m", balance, packages),
-                new AccountPolicy(order),
+                new PcAccount("m", balance),
                 billing: policy,
                 discount: spec);
-            if (packages.Length == 0)
-            {
-                Assert.Equal(expectedDiscount, settled.DiscountToman);
-            }
+            Assert.Equal(expectedDiscount, settled.DiscountToman);
 
-            var parts = settled.PackageCoveredToman + settled.MoneyConsumedToman + settled.DiscountToman
+            var parts = settled.MoneyConsumedToman + settled.DiscountToman
                 + (settled.Grace?.WaivedToman ?? 0) + settled.WriteOffToman + settled.UncoveredToman + settled.OmittedToman;
             Assert.Equal(charge.TotalAmountToman, parts);
         }
@@ -313,7 +303,6 @@ public class Round6Tests
     {
         var rng = new Random(808);
         var flat = Flat();
-        var pilot = PilotSeed.CreateCard();
         var cards = new (RateCard Card, string GroupId)[]
         {
             (flat, "g"),
@@ -352,13 +341,9 @@ public class Round6Tests
                 CodePercent: codePercent,
                 FixedToman: fixedToman,
                 ValidFrom: validFrom);
-            var packageMinutes = rng.Next(4) == 0 ? 0 : rng.Next(1, 45);
             var balance = rng.Next(3) == 0
                 ? rng.Next(0, 50_000)
                 : rng.Next(0, 500_000);
-            var packages = packageMinutes > 0
-                ? new[] { new TimePackage("p", packageMinutes, 200_000) }
-                : Array.Empty<TimePackage>();
 
             var (expectedMoneyMinutes, expectedMoneyNet) = OracleMoneyFirstPrefix(
                 line,
@@ -368,23 +353,21 @@ public class Round6Tests
                 balance);
             var settled = AccountSettlement.Settle(
                 charge,
-                new PcAccount("m", balance, packages),
-                new AccountPolicy(ConsumptionOrder.MoneyThenPackages),
+                new PcAccount("m", balance),
                 billing: policy,
                 discount: spec);
-            var parts = settled.PackageCoveredToman + settled.MoneyConsumedToman + settled.DiscountToman
+            var parts = settled.MoneyConsumedToman + settled.DiscountToman
                 + (settled.Grace?.WaivedToman ?? 0) + settled.WriteOffToman + settled.UncoveredToman + settled.OmittedToman;
             Assert.Equal(charge.TotalAmountToman, parts);
             Assert.True(settled.WriteOffToman >= 0);
             Assert.True(settled.OmittedToman >= 0);
-            if (packageMinutes == 0 && balance >= charge.TotalAmountToman - settled.DiscountToman)
+            if (balance >= charge.TotalAmountToman - settled.DiscountToman)
             {
                 Assert.Equal(expectedMoneyNet, settled.MoneyConsumedToman);
-            }
-
-            if (expectedMoneyMinutes > 0)
-            {
-                Assert.Equal(expectedMoneyMinutes, settled.MoneyDraws[0].Minutes);
+                if (expectedMoneyMinutes > 0)
+                {
+                    Assert.Equal(expectedMoneyMinutes, settled.MoneyDraws[0].Minutes);
+                }
             }
         }
     }
@@ -458,7 +441,7 @@ public class Round6Tests
             spec);
 
     private static long Discount(SessionCharge charge, SessionDiscount spec)
-        => AccountSettlement.Settle(charge, new PcAccount("m", 100_000_000, []), discount: spec).DiscountToman;
+        => AccountSettlement.Settle(charge, new PcAccount("m", 100_000_000), discount: spec).DiscountToman;
 
     private static Session GapSession()
         => new Session("gap", [
@@ -792,5 +775,5 @@ public class Round6Tests
     private static SessionCharge Play(RateCard card, DateTimeOffset start, DateTimeOffset end) => Price(card, start, end, null);
 
     private static CustomerAccount Wallet()
-        => new("m", WalletSettings.Shared with { ApplyDiscountsToPc = true }, new WalletPocket(1_000_000, 0), new WalletPocket(0, 0), []);
+        => new("m", WalletSettings.Shared with { ApplyDiscountsToPc = true }, new WalletPocket(1_000_000, 0), new WalletPocket(0, 0));
 }

@@ -280,7 +280,7 @@ public sealed class KioskFixR1AcceptanceTests(GameClubWebApplicationFactory fact
             new Session("s", [new PlaySegment("a", start, start.AddMinutes(1), "PC-1", PilotSeed.PcNormalGroupId, PlayMode.Offline, 1, StationKind.Pc)], null),
             PilotSeed.CreateCard(),
             policy: policy);
-        var wallet = new CustomerAccount("m", WalletSettings.Shared, new WalletPocket(500, 0), new WalletPocket(0, 0), []);
+        var wallet = new CustomerAccount("m", WalletSettings.Shared, new WalletPocket(500, 0), new WalletPocket(0, 0));
         var play = CustomerPlay.Settle(charge, wallet, billing: policy);
         Assert.Equal(500, play.Account.Pc.TotalToman);
         Assert.NotNull(play.Settlement.Grace);
@@ -300,30 +300,6 @@ public sealed class KioskFixR1AcceptanceTests(GameClubWebApplicationFactory fact
         await Assert.ThrowsAsync<ApiException>(async () =>
             await factory.Services.CreateScope().ServiceProvider.GetRequiredService<KioskCheckpointCoordinator>()
                 .OnHeartbeatAsync(src.DeviceId, sessionId, 5000, default));
-    }
-
-    [Fact]
-    public async Task package_display_sixty_remaining_after_sixty_minutes_accepted_play()
-    {
-        await S3TestHelpers.ResetAsync(factory);
-        await S3TestHelpers.RegisterPc(factory.CreateClientWithKey(), "PC-1", PilotSeed.PcNormalGroupId);
-        using var scope = factory.Services.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        var customer = new CustomerEntity { Id = Guid.NewGuid(), Name = "Pkg", Mobile = "09125555555", CreatedAtUtc = DateTime.UtcNow };
-        db.Customers.Add(customer);
-        db.CustomerMembers.Add(new CustomerMemberEntity { CustomerId = customer.Id, RealToman = 0 });
-        db.CustomerPackages.Add(new CustomerPackageEntity { Id = Guid.NewGuid(), CustomerId = customer.Id, Name = "Pkg", RemainingMinutes = 120, FaceValueToman = 0 });
-        await db.SaveChangesAsync();
-        await scope.ServiceProvider.GetRequiredService<KioskCustomerAuthService>().SetCredentialAsync(customer.Id, "pkg", "pass", default);
-        factory.Clock.SetTehran(2026, 6, 3, 14, 0);
-        var (deviceId, deviceKey, _) = await PairDeviceAsync("PC-1");
-        await CreateKioskClient(deviceId, deviceKey).PostAsJsonAsync("/api/kiosk/auth/login", new { loginName = "pkg", password = "pass", stationId = "PC-1" });
-        var sessionId = await db.Sessions.Select(s => s.Id).SingleAsync();
-        factory.Clock.SetTehran(2026, 6, 3, 15, 0);
-        var coordinator = scope.ServiceProvider.GetRequiredService<KioskCheckpointCoordinator>();
-        await coordinator.OnHeartbeatAsync(deviceId, sessionId, 1000, default);
-        var display = await scope.ServiceProvider.GetRequiredService<KioskDisplayService>().BuildAsync(await db.Sessions.Include(s => s.Station)!.ThenInclude(st => st!.Group).FirstAsync(s => s.Id == sessionId), default);
-        Assert.Equal(60, display!.PackageMinutesRemaining![0]);
     }
 
     [Fact]

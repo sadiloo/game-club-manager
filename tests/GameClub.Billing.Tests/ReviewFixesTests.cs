@@ -206,7 +206,7 @@ public class ReviewFixesTests
                 "s",
                 CafeFixture.Play("a", T.At(2026, 6, 2, 10, 0), T.At(2026, 6, 2, 10, 0, 1), "example-pc-1", CafeFixture.ExampleNormal, 1)), policy);
             Assert.Equal(granularity, charge.TotalBilledMinutes);
-            var settled = AccountSettlement.Settle(charge, new PcAccount("m", 500, []), billing: policy);
+            var settled = AccountSettlement.Settle(charge, new PcAccount("m", 500), billing: policy);
             Assert.Equal(1, settled.Grace!.Minutes);
             Assert.Equal(minute, settled.Grace.WaivedToman);
             Assert.Equal(0, settled.MoneyConsumedToman);
@@ -215,23 +215,8 @@ public class ReviewFixesTests
             Assert.Equal(0, settled.WriteOffToman);
             Assert.Null(settled.Alert);
             Assert.Equal(charge.TotalAmountToman - minute, settled.OmittedToman);
-            Assert.Equal(charge.TotalAmountToman, settled.PackageCoveredToman + settled.MoneyConsumedToman + settled.Grace.WaivedToman + settled.WriteOffToman + settled.UncoveredToman + settled.OmittedToman);
+            Assert.Equal(charge.TotalAmountToman, settled.MoneyConsumedToman + settled.Grace.WaivedToman + settled.WriteOffToman + settled.UncoveredToman + settled.OmittedToman);
         }
-
-        var emptyWindow = new TimePackage(
-            "empty",
-            0,
-            null,
-            null,
-            new TimeOfDay(10, 0),
-            new TimeOfDay(10, 2));
-        var split = CafeFixture.Price(CafeFixture.Session(
-            "s",
-            CafeFixture.Play("a", T.At(2026, 6, 2, 10, 0), T.At(2026, 6, 2, 10, 2), "example-pc-1", CafeFixture.ExampleNormal, 1)));
-        var withPackage = AccountSettlement.Settle(split, new PcAccount("m", 500, [emptyWindow]));
-        Assert.NotNull(withPackage.Grace);
-        Assert.Equal(1, withPackage.Grace!.Minutes);
-        Assert.Equal(500, withPackage.MoneyConsumedToman);
     }
 
     [Fact]
@@ -329,19 +314,8 @@ public class ReviewFixesTests
     }
 
     [Fact]
-    public void A_package_stops_at_midnight_and_prepaid_matches_settlement()
+    public void Prepaid_matches_settlement_across_midnight()
     {
-        var package = new TimePackage("day", 1_000, null, null, null, null, new LocalDate(2026, 6, 2));
-        var account = new PcAccount("m", 1_000_000, [package]);
-        var charge = CafeFixture.Price(CafeFixture.Session(
-            "night",
-            CafeFixture.Play("a", T.At(2026, 6, 2, 23, 0), T.At(2026, 6, 3, 1, 0), "example-pc-1", CafeFixture.ExampleNormal, 1)));
-        Assert.Single(charge.Lines);
-        var settled = AccountSettlement.Settle(charge, account);
-        Assert.Equal(60, settled.PackageMinutesConsumed);
-        Assert.Equal(110_000, settled.MoneyConsumedToman);
-        Assert.Equal(0, settled.UncoveredToman);
-
         var plan = PrepaidPlanner.ForAmount(
             T.At(2026, 6, 2, 10, 0),
             110_000,
@@ -354,7 +328,7 @@ public class ReviewFixesTests
         var played = CafeFixture.Price(CafeFixture.Session(
             "played",
             CafeFixture.Play("a", plan.Start, plan.End, "example-pc-1", CafeFixture.ExampleNormal, 1)));
-        var paid = AccountSettlement.Settle(played, new PcAccount("m", 110_000, []));
+        var paid = AccountSettlement.Settle(played, new PcAccount("m", 110_000));
         Assert.Equal(plan.ConsumedToman, paid.MoneyConsumedToman);
         Assert.Null(plan.Grace);
         Assert.Null(paid.Grace);
@@ -371,7 +345,7 @@ public class ReviewFixesTests
         var smallPlayed = CafeFixture.Price(CafeFixture.Session(
             "small",
             CafeFixture.Play("a", small.Start, small.End, "example-pc-1", CafeFixture.ExampleNormal, 1)));
-        var smallPaid = AccountSettlement.Settle(smallPlayed, new PcAccount("m", 500, []));
+        var smallPaid = AccountSettlement.Settle(smallPlayed, new PcAccount("m", 500));
         Assert.Equal(small.Grace!.WaivedToman, smallPaid.Grace!.WaivedToman);
         Assert.Equal(0, smallPaid.MoneyConsumedToman);
         Assert.Equal(500, smallPaid.UpdatedAccount.MoneyBalanceToman);

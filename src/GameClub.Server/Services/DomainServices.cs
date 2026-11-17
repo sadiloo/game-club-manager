@@ -304,7 +304,7 @@ public sealed class SessionCloser(
         CancellationToken ct)
     {
         var number = await NextInvoiceNumberAsync(ct);
-        var writeOffToman = amounts.Detail?.PackageSettlement?.WriteOffToman ?? 0;
+        var writeOffToman = amounts.Detail?.PlaySettlement?.WriteOffToman ?? 0;
         if (writeOffToman == 0)
         {
             writeOffToman = amounts.Detail?.InvoicePreview.Lines
@@ -1063,6 +1063,8 @@ public sealed class ApiException(int status, string code, string message) : Exce
     public int Status { get; } = status;
 
     public string Code { get; } = code;
+
+  public IReadOnlyDictionary<string, object>? Extras { get; init; }
 }
 
 public sealed class DatabaseSeed

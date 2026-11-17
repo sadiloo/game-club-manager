@@ -1,4 +1,5 @@
 using GameClub.Server.Data.Entities;
+using GameClub.Server.Services;
 using Microsoft.EntityFrameworkCore;
 
 namespace GameClub.Server.Data;
@@ -61,9 +62,9 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
 
     public DbSet<PendingWalletTopUpEntity> PendingWalletTopUps => Set<PendingWalletTopUpEntity>();
 
-    public DbSet<CustomerPackageEntity> CustomerPackages => Set<CustomerPackageEntity>();
+    public DbSet<WalletTopUpCorrectionEntity> WalletTopUpCorrections => Set<WalletTopUpCorrectionEntity>();
 
-    public DbSet<PackageProductEntity> PackageProducts => Set<PackageProductEntity>();
+    public DbSet<WalletCommandEntity> WalletCommands => Set<WalletCommandEntity>();
 
     public DbSet<LoyaltyHourLedgerEntity> LoyaltyHourLedger => Set<LoyaltyHourLedgerEntity>();
 
@@ -319,17 +320,24 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             e.HasOne(x => x.Member).WithMany().HasForeignKey(x => x.CustomerId);
         });
 
-        modelBuilder.Entity<CustomerPackageEntity>(e =>
+        modelBuilder.Entity<WalletCommandEntity>(e =>
         {
-            e.ToTable("customer_packages");
+            e.ToTable("wallet_commands");
             e.HasKey(x => x.Id);
-            e.HasOne(x => x.Member).WithMany().HasForeignKey(x => x.CustomerId);
+            e.HasIndex(x => x.CommandId).IsUnique().HasDatabaseName(PostgresErrors.WalletCommandIndexName);
         });
 
-        modelBuilder.Entity<PackageProductEntity>(e =>
+        modelBuilder.Entity<WalletTopUpCorrectionEntity>(e =>
         {
-            e.ToTable("package_products");
+            e.ToTable("wallet_topup_corrections");
             e.HasKey(x => x.Id);
+            e.Property(x => x.Method).HasConversion<string>();
+            e.HasIndex(x => x.AtUtc);
+            e.HasIndex(x => x.TopUpGroupId);
+            e.HasIndex(x => x.CommandId)
+                .IsUnique()
+                .HasDatabaseName(PostgresErrors.WalletTopUpCorrectionCommandIndexName)
+                .HasFilter("\"CommandId\" IS NOT NULL");
         });
 
         modelBuilder.Entity<LoyaltyHourLedgerEntity>(e =>

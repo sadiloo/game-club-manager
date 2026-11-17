@@ -64,7 +64,7 @@ public sealed class WalletLoyaltyFixRound3Tests(GameClubWebApplicationFactory fa
         });
         var customerId = await CreateCustomerAsync(op, "09123130001");
         await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up",
-            new { method = "Cash", amountToman = 80_000L });
+            new { method = "Cash", amountToman = 80_000L, commandId = Guid.NewGuid()});
         await mgr.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/gift",
             new { giftToman = 20_000L });
         for (var i = 0; i < 10; i++)
@@ -103,7 +103,7 @@ public sealed class WalletLoyaltyFixRound3Tests(GameClubWebApplicationFactory fa
 
         var priorCashId = await CreateCustomerAsync(op, "09123130003");
         await op.PostAsJsonAsync($"/api/operator/members/customers/{priorCashId}/wallet/top-up",
-            new { method = "Cash", amountToman = 50_000L });
+            new { method = "Cash", amountToman = 50_000L, commandId = Guid.NewGuid()});
         await mgr.PostAsJsonAsync($"/api/operator/members/customers/{priorCashId}/opening-balance",
             new { debtToman = 10_000L });
         var (r1, _, s1, l1) = await WalletStateAsync(factory, priorCashId);
@@ -125,7 +125,7 @@ public sealed class WalletLoyaltyFixRound3Tests(GameClubWebApplicationFactory fa
         await mgr.PutAsJsonAsync($"/api/operator/members/customers/{customerId}/birthday",
             new { year = 1380, month = 3, day = 13 });
         await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up",
-            new { method = "Cash", amountToman = 500_000L });
+            new { method = "Cash", amountToman = 500_000L, commandId = Guid.NewGuid()});
         await S3TestHelpers.RegisterConsole(_api, op, "PS5-C2R3", 1);
         var sessionId = await S3TestHelpers.StartSession(_api, "PS5-C2R3", 1);
         await op.PutAsJsonAsync($"/api/operator/sessions/{sessionId}/customer", new { customerId });
@@ -146,96 +146,4 @@ public sealed class WalletLoyaltyFixRound3Tests(GameClubWebApplicationFactory fa
         Assert.Equal(115_000, viaHttp.GetProperty("unroundedPayableToman").GetInt64() + viaHttp.GetProperty("roundingToman").GetInt64());
     }
 
-    [Fact]
-    public async Task round3_c3_cash_package_sale_ledger_not_buffet()
-    {
-        await S3TestHelpers.ResetAsync(factory);
-        var mgr = await MgrAsync();
-        var op = await OpAsync();
-        var customerId = await CreateCustomerAsync(op, "09123130005");
-        await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up",
-            new { method = "Cash", amountToman = 100_000L });
-        await mgr.PutAsJsonAsync("/api/operator/members/packages/pkg-r3-cash",
-            new { name = "بسته", priceToman = 50_000L, minutes = 60L, allowedGroupIdsJson = "[\"ps5\"]" });
-        var before = await WalletStateAsync(factory, customerId);
-        await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/packages/sell",
-            new { productId = "pkg-r3-cash", payments = new[] { new { method = "Cash", amountToman = 50_000L } } });
-        var after = await WalletStateAsync(factory, customerId);
-        Assert.Equal(before.Spendable, after.Spendable);
-        using var scope = factory.Services.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        var invoice = await db.Invoices.Include(i => i.CatalogLines).SingleAsync(i => i.CustomerId == customerId);
-        Assert.Equal(0, invoice.BuffetGrossToman);
-        Assert.True(await db.WalletLedger.AnyAsync(e =>
-            e.CustomerId == customerId && e.Kind == WalletLedgerKind.PackagePurchase && e.InvoiceId == invoice.Id));
-    }
-
-    [Fact]
-    public async Task round3_package_sale_void_restores_wallet_and_removes_package()
-    {
-        await S3TestHelpers.ResetAsync(factory);
-        var mgr = await MgrAsync();
-        var op = await OpAsync();
-        var customerId = await CreateCustomerAsync(op, "09123130006");
-        await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up",
-            new { method = "Cash", amountToman = 300_000L });
-        await mgr.PutAsJsonAsync("/api/operator/members/packages/pkg-r3-void",
-            new { name = "بسته", priceToman = 50_000L, minutes = 120L });
-        await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/packages/sell",
-            new { productId = "pkg-r3-void", payments = new[] { new { method = "Wallet", amountToman = 50_000L } } });
-        var beforeVoid = await WalletStateAsync(factory, customerId);
-        Assert.Equal(250_000, beforeVoid.Spendable);
-        long invoiceNumber;
-        using (var scope = factory.Services.CreateScope())
-        {
-            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            invoiceNumber = await db.Invoices.Where(i => i.CustomerId == customerId).Select(i => i.Number).SingleAsync();
-            Assert.Single(await db.CustomerPackages.Where(p => p.CustomerId == customerId).ToListAsync());
-        }
-
-        var voided = await mgr.PostAsJsonAsync($"/api/operator/invoices/{invoiceNumber}/void",
-            new { reason = "اشتباه" });
-        Assert.Equal(HttpStatusCode.NoContent, voided.StatusCode);
-        var afterVoid = await WalletStateAsync(factory, customerId);
-        Assert.Equal(300_000, afterVoid.Spendable);
-        Assert.Equal(afterVoid.Ledger, afterVoid.Spendable);
-        using (var scope = factory.Services.CreateScope())
-        {
-            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            Assert.Empty(await db.CustomerPackages.Where(p => p.CustomerId == customerId).ToListAsync());
-            Assert.Contains(await db.WalletLedger.Where(e => e.CustomerId == customerId).ToListAsync(),
-                e => e.Kind == WalletLedgerKind.InvoiceVoidReversal && e.Label == "package_sale_void");
-        }
-    }
-
-    [Fact]
-    public async Task round3_package_sale_race_with_wallet_confirm_refuses_negative_balance()
-    {
-        await S3TestHelpers.ResetAsync(factory);
-        var mgr = await MgrAsync();
-        var op = await OpAsync();
-        var op2 = await OpAsync();
-        var customerId = await CreateCustomerAsync(op, "09123130007");
-        await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up",
-            new { method = "Cash", amountToman = 250_000L });
-        await mgr.PutAsJsonAsync("/api/operator/members/packages/pkg-r3-race",
-            new { name = "بسته", priceToman = 220_000L, minutes = 30L });
-        await S3TestHelpers.RegisterConsole(_api, op, "PS5-RACE", 1);
-        factory.Clock.SetTehran(2026, 6, 3, 14, 0);
-        var sessionId = await S3TestHelpers.StartSession(_api, "PS5-RACE", 1);
-        await op.PutAsJsonAsync($"/api/operator/sessions/{sessionId}/customer", new { customerId });
-        factory.Clock.SetTehran(2026, 6, 3, 14, 30);
-        await op.PostAsync($"/api/operator/sessions/{sessionId}/bill/open", null);
-        var bill = await op.GetFromJsonAsync<System.Text.Json.JsonElement>($"/api/operator/sessions/{sessionId}/bill");
-        var collect = bill.GetProperty("collectibleToman").GetInt64();
-        var responses = await RaceAsync(
-            () => op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/packages/sell",
-                new { productId = "pkg-r3-race", payments = new[] { new { method = "Wallet", amountToman = 220_000L } } }),
-            () => op2.PostAsJsonAsync($"/api/operator/sessions/{sessionId}/bill/confirm",
-                new { payments = new[] { new { method = "Wallet", amountToman = collect } } }));
-        Assert.Contains(responses, r => r.StatusCode is HttpStatusCode.BadRequest or HttpStatusCode.Conflict);
-        var after = await WalletStateAsync(factory, customerId);
-        Assert.True(after.Real >= 0);
-        Assert.Equal(after.Ledger, after.Spendable);
-    }
 }

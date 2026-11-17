@@ -23,7 +23,6 @@ public sealed class KioskHostService : IAsyncDisposable
     private readonly Window _shell;
     private readonly TextBlock _status;
     private readonly TextBlock _balance;
-    private readonly TextBlock _package;
     private readonly TextBlock _elapsed;
     private readonly TextBlock _freeBand;
     private readonly UIElement _lockPanel;
@@ -55,7 +54,6 @@ public sealed class KioskHostService : IAsyncDisposable
         Window shell,
         TextBlock status,
         TextBlock balance,
-        TextBlock package,
         TextBlock elapsed,
         TextBlock freeBand,
         UIElement lockPanel,
@@ -68,7 +66,6 @@ public sealed class KioskHostService : IAsyncDisposable
         _shell = shell;
         _status = status;
         _balance = balance;
-        _package = package;
         _elapsed = elapsed;
         _freeBand = freeBand;
         _lockPanel = lockPanel;
@@ -559,9 +556,6 @@ public sealed class KioskHostService : IAsyncDisposable
 
         _balance.Text = _lastDisplay.WalletBalanceToman is long w
             ? $"Wallet: {w:N0} تومان"
-            : "";
-        _package.Text = _lastDisplay.PackageMinutesRemaining is { Count: > 0 } pk
-            ? $"Package minutes: {string.Join(", ", pk)}"
             : "";
         _elapsed.Text = _lastDisplay.ElapsedDisplaySeconds is long e
             ? $"Elapsed: {TimeSpan.FromSeconds(e):hh\\:mm\\:ss}"
