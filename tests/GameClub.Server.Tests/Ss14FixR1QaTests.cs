@@ -184,59 +184,38 @@ public sealed class Ss14FixR1QaTests(GameClubWebApplicationFactory factory)
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
             auditBefore = await db.AuditLog.CountAsync(a => a.Action.StartsWith("game_"));
-            await db.Database.ExecuteSqlRawAsync(
-                """
-                CREATE OR REPLACE FUNCTION test_block_game_rate_change_audit()
-                RETURNS trigger LANGUAGE plpgsql AS $$
-                BEGIN
-                  IF NEW.action = 'game_rate.change' THEN
-                    RAISE EXCEPTION 'test_block_game_rate_change_audit';
-                  END IF;
-                  RETURN NEW;
-                END;
-                $$;
-                DROP TRIGGER IF EXISTS test_block_game_rate_change_audit ON audit_log;
-                CREATE TRIGGER test_block_game_rate_change_audit
-                  BEFORE INSERT ON audit_log
-                  FOR EACH ROW EXECUTE FUNCTION test_block_game_rate_change_audit();
-                """);
         }
 
-        try
-        {
-            var res = await mgr.PutAsJsonAsync(
-                $"/api/operator/game-titles/{gameId}",
-                new
+        using var fault = SaveTitleSecondSaveFaultInterceptor.Activate(factory, gameId, throwOnSecondSave: true);
+        var res = await mgr.PutAsJsonAsync(
+            $"/api/operator/game-titles/{gameId}",
+            new
+            {
+                name = "AfterName",
+                enabled = false,
+                rates = new[]
                 {
-                    name = "AfterName",
-                    enabled = false,
-                    rates = new[]
-                    {
-                        new { mode = "Offline", playerCount = (int?)1, hourlyToman = 999_000L },
-                        new { mode = "Offline", playerCount = (int?)2, hourlyToman = 888_000L },
-                    },
-                });
-            Assert.NotEqual(HttpStatusCode.OK, res.StatusCode);
-            using var scope = factory.Services.CreateScope();
-            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            var title = await db.GameTitles.Include(g => g.RateLines).SingleAsync(g => g.Id == gameId);
-            Assert.Equal("BeforeName", title.Name);
-            Assert.True(title.Enabled);
-            var line1 = title.RateLines.Single(r => r.PlayerCount == 1);
-            Assert.Equal(150_000L, line1.HourlyToman);
-            Assert.Equal(180_000L, line1.NightHourlyToman);
-            Assert.Equal(auditBefore, await db.AuditLog.CountAsync(a => a.Action.StartsWith("game_")));
-        }
-        finally
-        {
-            using var scope = factory.Services.CreateScope();
-            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            await db.Database.ExecuteSqlRawAsync(
-                """
-                DROP TRIGGER IF EXISTS test_block_game_rate_change_audit ON audit_log;
-                DROP FUNCTION IF EXISTS test_block_game_rate_change_audit();
-                """);
-        }
+                    new { mode = "Offline", playerCount = (int?)1, hourlyToman = 999_000L },
+                    new { mode = "Offline", playerCount = (int?)2, hourlyToman = 888_000L },
+                },
+            });
+        Assert.NotEqual(HttpStatusCode.OK, res.StatusCode);
+        Assert.Equal(2, fault.SaveAttempts);
+        Assert.Equal(
+            "BeforeName",
+            fault.TitleNameAfterFirstSaveOtherConnection);
+        Assert.Equal(
+            150_000L,
+            fault.RateHourlyP1AfterFirstSaveOtherConnection);
+        using var verifyScope = factory.Services.CreateScope();
+        var verifyDb = verifyScope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var title = await verifyDb.GameTitles.Include(g => g.RateLines).SingleAsync(g => g.Id == gameId);
+        Assert.Equal("BeforeName", title.Name);
+        Assert.True(title.Enabled);
+        var line1 = title.RateLines.Single(r => r.PlayerCount == 1);
+        Assert.Equal(150_000L, line1.HourlyToman);
+        Assert.Equal(180_000L, line1.NightHourlyToman);
+        Assert.Equal(auditBefore, await verifyDb.AuditLog.CountAsync(a => a.Action.StartsWith("game_")));
     }
 
     [Fact]
