@@ -69,6 +69,115 @@ public sealed class WindowsKioskServerIntegrationTests
     }
 
     [Fact(Timeout = 180_000)]
+    public async Task live_server_login_waits_for_transport_before_session_starts()
+    {
+        await _backend.ResetAsync();
+        await _backend.RegisterPcAsync(_backend.CreateApiClient(), "PC-TRANSPORT");
+        await _backend.SeedCustomerWithCredentialAsync("tranlogin", "pass", 100_000);
+        var (deviceId, deviceKey, _) = await _backend.PairAsync("PC-TRANSPORT");
+        var kioskHttp = _backend.CreateKioskHttpClient(deviceId, deviceKey);
+        var queuePath = Path.Combine(Path.GetTempPath(), $"kiosk-transport-{Guid.NewGuid():N}.db");
+        var runtime = new KioskRuntime(() => kioskHttp);
+        runtime.Configure(
+            _backend.HubUri,
+            deviceId,
+            deviceKey,
+            "PC-TRANSPORT",
+            queuePath,
+            legacyWindows: true,
+            testHubHandler: _backend.TestHubHandler);
+        await runtime.StartAsync(default);
+        await WaitUntilTransportConnectedAsync(runtime, TimeSpan.FromSeconds(45));
+        var login = await kioskHttp.PostAsJsonAsync(
+            "/api/kiosk/auth/login",
+            new { loginName = "tranlogin", password = "pass", stationId = "PC-TRANSPORT" });
+        login.EnsureSuccessStatusCode();
+        runtime.BindSession((await login.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("sessionId").GetGuid());
+        Assert.NotEqual(Guid.Empty, await _backend.OpenSessionIdAsync());
+        await runtime.DisposeAsync();
+    }
+
+    [Fact(Timeout = 180_000)]
+    public async Task live_server_kiosk_reconnects_when_server_unreachable_at_start()
+    {
+        if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("GAMECLUB_DATABASE"))
+            && !KioskIntegrationBackend.IsLiveMode)
+        {
+            throw new InvalidOperationException("Postgres or CHECKPOINT_SERVER_URL required for B-7(a) proof.");
+        }
+
+        OutOfProcessLiveServer? ownedServer = null;
+        KioskIntegrationBackend backend;
+        var priorCheckpointUrl = Environment.GetEnvironmentVariable("CHECKPOINT_SERVER_URL");
+        try
+        {
+            if (KioskIntegrationBackend.IsLiveMode)
+            {
+                backend = KioskIntegrationBackend.Create(null);
+            }
+            else
+            {
+                ownedServer = await OutOfProcessLiveServer.StartNewAsync();
+                Environment.SetEnvironmentVariable("CHECKPOINT_SERVER_URL", ownedServer.BaseUrl);
+                backend = KioskIntegrationBackend.CreateForBaseUrl(ownedServer.BaseUrl);
+            }
+
+            await backend.ResetAsync();
+            await backend.RegisterPcAsync(backend.CreateApiClient(), "PC-UNREACH");
+            var (deviceId, deviceKey, _) = await backend.PairAsync("PC-UNREACH");
+            var kioskHttp = backend.CreateKioskHttpClient(deviceId, deviceKey);
+            if (ownedServer is not null)
+            {
+                ownedServer.Stop();
+            }
+
+            var queuePath = Path.Combine(Path.GetTempPath(), $"kiosk-unreach-{Guid.NewGuid():N}.db");
+            var runtime = new KioskRuntime(() => kioskHttp);
+            runtime.Configure(
+                backend.HubUri,
+                deviceId,
+                deviceKey,
+                "PC-UNREACH",
+                queuePath,
+                legacyWindows: true,
+                testHubHandler: backend.TestHubHandler);
+            await runtime.StartAsync(default);
+
+            if (ownedServer is not null)
+            {
+                var reconnectDeadline = DateTime.UtcNow.AddSeconds(30);
+                await ownedServer.RelaunchAsync();
+                while (DateTime.UtcNow < reconnectDeadline)
+                {
+                    if (runtime.IsTransportConnected)
+                    {
+                        break;
+                    }
+
+                    await Task.Delay(250);
+                }
+            }
+            else
+            {
+                await WaitUntilTransportConnectedAsync(runtime, TimeSpan.FromSeconds(30));
+            }
+
+            Assert.True(runtime.IsTransportConnected, "Transport must connect within 30 seconds after server returns.");
+            var heartbeatBefore = await backend.CountHeartbeatsAsync();
+            await WaitForHeartbeatAdvanceAsync(backend, deviceId, heartbeatBefore, await backend.DeviceLastSeenUtcAsync(deviceId));
+            await runtime.DisposeAsync();
+        }
+        finally
+        {
+            if (ownedServer is not null)
+            {
+                await ownedServer.DisposeAsync();
+                Environment.SetEnvironmentVariable("CHECKPOINT_SERVER_URL", priorCheckpointUrl);
+            }
+        }
+    }
+
+    [Fact(Timeout = 180_000)]
     public async Task live_server_pairing_registers_device_on_station()
     {
         await _backend.ResetAsync();

@@ -47,6 +47,8 @@ public sealed class KioskHostService : IAsyncDisposable
     private string _stationId = "";
     private Guid _sessionId;
     private KioskDisplayDto? _lastDisplay;
+    private bool _runtimeConfigured;
+    private DateTime? _lastHeartbeatAckUtc;
 
     public string ServerBase => _serverBase;
 
@@ -77,6 +79,7 @@ public sealed class KioskHostService : IAsyncDisposable
         _runtime = new KioskRuntime(() => CreateHttpClient());
         _runtime.HeartbeatAcknowledged += OnHeartbeatAcknowledged;
         _runtime.HeartbeatTransportFailed += OnHeartbeatTransportFailed;
+        _runtime.ConnectionStatusChanged += OnRuntimeConnectionStatus;
         _http.DefaultRequestHeaders.Add("User-Agent", "CheckpointKiosk/1.0");
         _uiTick.Tick += (_, _) => OnUiTick();
         _replayTick.Tick += async (_, _) => await DrainOfflineQueueAsync();
@@ -251,6 +254,7 @@ public sealed class KioskHostService : IAsyncDisposable
 
     private void OnHeartbeatAcknowledged(KioskHeartbeatAck ack)
     {
+        _lastHeartbeatAckUtc = DateTime.UtcNow;
         var phase = _orchestrator.OnHeartbeatAck(ack, _sessionId, _runtime.ClientMonotonicMs);
         ApplyHeartbeatDisplay(ack.Display);
         _ = DrainOfflineQueueAsync();
@@ -354,6 +358,19 @@ public sealed class KioskHostService : IAsyncDisposable
         }
 
         var transportDown = _sessionId != Guid.Empty && !_runtime.IsTransportConnected;
+        if (transportDown)
+        {
+            _shell.Dispatcher.Invoke(() =>
+            {
+                var text = _status.Text ?? "";
+                if (text.IndexOf("left", StringComparison.OrdinalIgnoreCase) >= 0
+                    || text.IndexOf("connected", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    _status.Text = $"Station {_stationId} — reconnecting…";
+                }
+            });
+        }
+
         var phase = _orchestrator.TickLease(_sessionId, _runtime.ClientMonotonicMs, DateTime.UtcNow, transportDown);
         if (phase == KioskShellPhase.LeaseExpired)
         {
@@ -376,6 +393,42 @@ public sealed class KioskHostService : IAsyncDisposable
         }
 
         _orchestrator.EnqueuePoweredSegmentOnDisconnect(_sessionId, _runtime.ClientMonotonicMs);
+    }
+
+    private void OnRuntimeConnectionStatus(KioskTransportPhase phase, string detail)
+    {
+        _shell.Dispatcher.Invoke(() =>
+        {
+            if (_sessionId != Guid.Empty && phase == KioskTransportPhase.Connected
+                && _lastHeartbeatAckUtc.HasValue
+                && DateTime.UtcNow - _lastHeartbeatAckUtc.Value < TimeSpan.FromSeconds(10))
+            {
+                return;
+            }
+
+            switch (phase)
+            {
+                case KioskTransportPhase.Connecting:
+                    _status.Text = $"Station {_stationId} — connecting…";
+                    break;
+                case KioskTransportPhase.Connected:
+                    if (_sessionId == Guid.Empty)
+                    {
+                        _status.Text = $"Station {_stationId} — connected";
+                    }
+
+                    break;
+                case KioskTransportPhase.Disconnected:
+                case KioskTransportPhase.Reconnecting:
+                    _status.Text = $"Station {_stationId} — reconnecting…";
+                    break;
+                case KioskTransportPhase.LastError:
+                    _status.Text = string.IsNullOrEmpty(detail)
+                        ? $"Station {_stationId} — reconnecting…"
+                        : $"Station {_stationId} — {detail}";
+                    break;
+            }
+        });
     }
 
     private void RunSessionCleanup()
@@ -629,11 +682,16 @@ public sealed class KioskHostService : IAsyncDisposable
 
         var root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "Checkpoint", "kiosk");
         Directory.CreateDirectory(root);
-        var queuePath = Path.Combine(root, "events.db");
-        _runtime.Configure(new Uri($"{_serverBase}/hubs/kiosk"), _deviceId, _deviceKey, _stationId, queuePath, legacyWindows: true);
+        if (!_runtimeConfigured)
+        {
+            var queuePath = Path.Combine(root, "events.db");
+            _runtime.Configure(new Uri($"{_serverBase}/hubs/kiosk"), _deviceId, _deviceKey, _stationId, queuePath, legacyWindows: true);
+            _orchestrator.BindOfflineQueue(_runtime.GetQueue());
+            _runtimeConfigured = true;
+            EnsureCatalogStore();
+        }
+
         await _runtime.StartAsync(CancellationToken.None);
-        _orchestrator.BindOfflineQueue(_runtime.GetQueue());
-        EnsureCatalogStore();
     }
 
     private void EnsureCatalogStore()
@@ -654,9 +712,15 @@ public sealed class KioskHostService : IAsyncDisposable
         try
         {
             await EnsureRuntimeAsync();
-            await ApplyStationProfileAsync();
-            await RefreshCatalogAsync();
-            _status.Text = $"Station {_stationId} — connected";
+            if (_runtime.IsTransportConnected)
+            {
+                await ApplyStationProfileAsync();
+                await RefreshCatalogAsync();
+                if (_sessionId == Guid.Empty)
+                {
+                    _status.Text = $"Station {_stationId} — connected";
+                }
+            }
         }
         catch (Exception ex)
         {

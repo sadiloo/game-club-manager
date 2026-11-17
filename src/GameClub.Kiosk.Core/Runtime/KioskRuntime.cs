@@ -18,9 +18,13 @@ public enum KioskRuntimeState
 public sealed class KioskRuntime : IAsyncDisposable
 {
     private readonly Func<HttpClient> _httpFactory;
+    private IKioskHubTransport? _transport;
     private HubConnection? _hub;
-    private SqliteOfflineEventQueue? _queue;
+    private IOfflineEventQueue? _queue;
     private CancellationTokenSource? _heartbeatCts;
+    private CancellationTokenSource? _lifecycleCts;
+    private KioskHubLifecycle? _lifecycle;
+    private Task? _heartbeatSupervisor;
     private Guid _sessionId;
     private readonly Stopwatch _monotonic = new();
 
@@ -34,11 +38,27 @@ public sealed class KioskRuntime : IAsyncDisposable
 
     public event Action? HeartbeatTransportFailed;
 
+    public event Action<KioskTransportPhase, string>? ConnectionStatusChanged;
+
     public long ClientMonotonicMs => _monotonic.ElapsedMilliseconds;
 
-    public bool IsTransportConnected => _hub?.State == HubConnectionState.Connected;
+    public bool IsTransportConnected =>
+        _lifecycle?.IsTransportConnected == true || _transport?.State == HubConnectionState.Connected;
+
+    public KioskTransportPhase TransportPhase =>
+        _lifecycle?.CurrentPhase ?? KioskTransportPhase.Unconfigured;
 
     private long _lastTransportFailedSignalMs;
+
+    internal Func<TimeSpan, CancellationToken, Task>? TestDelayAsync { get; set; }
+
+    internal Func<int, TimeSpan>? TestBackoffPolicy { get; set; }
+
+    internal bool TestSingleHeartbeatIteration { get; set; }
+
+    internal int HeartbeatLoopStartCount { get; private set; }
+
+    internal TimeSpan TestHeartbeatInterval { get; set; } = TimeSpan.FromSeconds(5);
 
     public KioskRuntime(Func<HttpClient> httpFactory) => _httpFactory = httpFactory;
 
@@ -57,27 +77,87 @@ public sealed class KioskRuntime : IAsyncDisposable
         StationId = stationId;
         _queue = new SqliteOfflineEventQueue(queuePath);
         _hub = KioskConnectionFactory.Create(hubUri, deviceId.ToString(), deviceKey, legacyWindows, testHubHandler);
+        _transport = new SignalRHubTransport(_hub);
+        WireLifecycle();
         State = KioskRuntimeState.Locked;
     }
 
-    public async Task StartAsync(CancellationToken ct)
+    internal void ConfigureForTests(
+        IKioskHubTransport transport,
+        IOfflineEventQueue queue,
+        string serverBase,
+        Guid deviceId,
+        string deviceKey,
+        string stationId)
     {
-        if (_hub is null || _queue is null)
+        ServerBase = serverBase;
+        DeviceId = deviceId;
+        DeviceKey = deviceKey;
+        StationId = stationId;
+        _queue = queue;
+        _transport = transport;
+        WireLifecycle();
+        State = KioskRuntimeState.Locked;
+    }
+
+    private void WireLifecycle()
+    {
+        if (_transport is null)
+        {
+            return;
+        }
+
+        _lifecycle?.ConnectionStatusChanged -= ForwardConnectionStatus;
+        _lifecycle = new KioskHubLifecycle(_transport)
+        {
+            DelayAsync = TestDelayAsync,
+            BackoffPolicy = TestBackoffPolicy,
+        };
+        _lifecycle.ConnectionStatusChanged += ForwardConnectionStatus;
+    }
+
+    private void ForwardConnectionStatus(KioskTransportPhase phase, string detail)
+    {
+        if (phase == KioskTransportPhase.Connected)
+        {
+            _monotonic.Restart();
+        }
+
+        ConnectionStatusChanged?.Invoke(phase, detail);
+    }
+
+    public Task StartAsync(CancellationToken ct)
+    {
+        if (_transport is null || _queue is null || _lifecycle is null)
         {
             throw new InvalidOperationException("Kiosk runtime is not configured.");
         }
 
-        await _hub.StartAsync(ct);
-        _monotonic.Restart();
+        _lifecycleCts?.Cancel();
+        _lifecycleCts?.Dispose();
+        _lifecycleCts = new CancellationTokenSource();
+        _lifecycle.Begin(_lifecycleCts.Token);
+        _heartbeatCts?.Cancel();
+        _heartbeatCts?.Dispose();
         _heartbeatCts = new CancellationTokenSource();
-        _ = RunHeartbeatAsync(_heartbeatCts.Token);
-        State = _sessionId == Guid.Empty ? KioskRuntimeState.Locked : KioskRuntimeState.Playing;
+        _heartbeatSupervisor = RunHeartbeatSupervisorAsync(_heartbeatCts.Token);
+        return Task.CompletedTask;
+    }
+
+    public Task WaitForTransportConnectedAsync(TimeSpan timeout, CancellationToken ct)
+    {
+        if (_lifecycle is null)
+        {
+            throw new InvalidOperationException("Kiosk runtime is not configured.");
+        }
+
+        return _lifecycle.WaitForTransportConnectedAsync(timeout, ct);
     }
 
     public void BindSession(Guid sessionId)
     {
         _sessionId = sessionId;
-        if (_hub?.State == HubConnectionState.Connected && sessionId != Guid.Empty)
+        if (IsTransportConnected && sessionId != Guid.Empty)
         {
             State = KioskRuntimeState.Playing;
         }
@@ -87,7 +167,7 @@ public sealed class KioskRuntime : IAsyncDisposable
         }
     }
 
-    public SqliteOfflineEventQueue GetQueue()
+    public IOfflineEventQueue GetQueue()
     {
         if (_queue is null)
         {
@@ -97,15 +177,53 @@ public sealed class KioskRuntime : IAsyncDisposable
         return _queue;
     }
 
+    private async Task RunHeartbeatSupervisorAsync(CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            HeartbeatLoopStartCount++;
+            var loop = RunHeartbeatAsync(ct);
+            try
+            {
+                await loop.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                break;
+            }
+            catch
+            {
+                if (ct.IsCancellationRequested)
+                {
+                    break;
+                }
+            }
+
+            if (ct.IsCancellationRequested)
+            {
+                break;
+            }
+
+            try
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(100), ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                break;
+            }
+        }
+    }
+
     private async Task RunHeartbeatAsync(CancellationToken ct)
     {
         while (!ct.IsCancellationRequested)
         {
             try
             {
-                if (_hub?.State == HubConnectionState.Connected)
+                if (_transport?.State == HubConnectionState.Connected)
                 {
-                    var ack = await _hub.InvokeAsync<KioskHeartbeatAck>(
+                    var ack = await _transport.InvokeAsync<KioskHeartbeatAck>(
                         "Heartbeat",
                         new KioskHeartbeatRequest
                         {
@@ -123,17 +241,29 @@ public sealed class KioskRuntime : IAsyncDisposable
             }
             catch (Exception ex)
             {
-                await _queue!.EnqueueAsync(Guid.NewGuid(), "heartbeat_error", ex.Message, DateTime.UtcNow);
+                try
+                {
+                    await _queue!.EnqueueAsync(Guid.NewGuid(), "heartbeat_error", ex.Message, DateTime.UtcNow, ct);
+                }
+                catch
+                {
+                }
+
                 SignalTransportDownIfNeeded();
             }
 
-            await Task.Delay(TimeSpan.FromSeconds(5), ct);
+            if (TestSingleHeartbeatIteration)
+            {
+                return;
+            }
+
+            await Task.Delay(TestHeartbeatInterval, ct);
         }
     }
 
     public void SignalTransportDownIfNeeded()
     {
-        if (_sessionId == Guid.Empty || _hub?.State == HubConnectionState.Connected)
+        if (_sessionId == Guid.Empty || IsTransportConnected)
         {
             return;
         }
@@ -197,12 +327,30 @@ public sealed class KioskRuntime : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        _lifecycleCts?.Cancel();
         _heartbeatCts?.Cancel();
-        if (_hub is not null)
+        if (_heartbeatSupervisor is not null)
         {
-            await _hub.DisposeAsync();
+            try
+            {
+                await _heartbeatSupervisor.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        }
+
+        if (_lifecycle is not null)
+        {
+            await _lifecycle.DisposeAsync();
+        }
+
+        if (_transport is not null)
+        {
+            await _transport.DisposeAsync();
         }
 
         _heartbeatCts?.Dispose();
+        _lifecycleCts?.Dispose();
     }
 }

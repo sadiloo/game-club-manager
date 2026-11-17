@@ -130,6 +130,7 @@ public sealed class WindowsKioskWpfSmokeTests
                     window.Show();
                     window.UpdateLayout();
                     var host = GetField(window, "_host");
+                    await WpfLiveServerTransportHelper.WaitForKioskRuntimeTransportConnectedAsync(host, TimeSpan.FromSeconds(60));
                     var login = host.GetType().GetMethod("LoginAsync", BindingFlags.Instance | BindingFlags.Public);
                     await (Task)login.Invoke(host, new object[] { "fund48667", "pass" });
                     var status = (System.Windows.Controls.TextBlock)GetField(window, "StatusText");
