@@ -121,7 +121,7 @@ public sealed class GameTariffService(AppDbContext db, AuditService audit)
             t.Id,
             t.Name,
             t.Enabled,
-            rates = keys.Select(k => MapRateRow(t, k.Mode, k.PlayerCount)).Where(r => r is not null),
+            rates = keys.Select(k => MapRateRow(t, k.Mode, k.PlayerCount)),
         }).ToList();
     }
 
@@ -154,6 +154,8 @@ public sealed class GameTariffService(AppDbContext db, AuditService audit)
                 Enum.Parse<PlayMode>(r.PlayMode, true),
                 r.PlayerCount))
             .Distinct()
+            .OrderBy(k => k.Item1)
+            .ThenBy(k => k.PlayerCount ?? 0)
             .ToList();
     }
 
@@ -206,6 +208,11 @@ public sealed class GameTariffService(AppDbContext db, AuditService audit)
         }
 
         ValidateRates(rateLines);
+
+        var oldRates = entity.RateLines.ToDictionary(
+            r => RateLineKey(Enum.Parse<PlayMode>(r.PlayMode, true), r.PlayerCount),
+            r => (Hourly: r.HourlyToman, Night: r.NightHourlyToman));
+
         entity.RateLines.Clear();
         foreach (var row in rateLines)
         {
@@ -219,7 +226,7 @@ public sealed class GameTariffService(AppDbContext db, AuditService audit)
         }
 
         await db.SaveChangesAsync(ct);
-        await audit.AppendAsync("game_rate.change", new { gameTitleId = entity.Id, rows = rateLines.Count }, ct);
+        await AuditRateChangesAsync(entity.Id, oldRates, rateLines, ct);
         return entity;
     }
 
@@ -236,6 +243,58 @@ public sealed class GameTariffService(AppDbContext db, AuditService audit)
         db.GameTitles.Remove(entity);
         await audit.AppendAsync("game_title.delete", new { gameTitleId = id, name = entity.Name }, ct);
         await db.SaveChangesAsync(ct);
+    }
+
+    private static string RateLineKey(PlayMode mode, int? playerCount)
+        => $"{mode}:{playerCount?.ToString() ?? "-"}";
+
+    private async Task AuditRateChangesAsync(
+        int gameTitleId,
+        Dictionary<string, (long Hourly, long? Night)> oldRates,
+        IReadOnlyList<GameRateLineInput> newRates,
+        CancellationToken ct)
+    {
+        var newMap = newRates.ToDictionary(
+            r => RateLineKey(r.Mode, r.Mode == PlayMode.Offline ? r.PlayerCount : null),
+            r => (Hourly: r.HourlyToman, Night: r.NightHourlyToman));
+
+        var keys = oldRates.Keys.Union(newMap.Keys).Distinct();
+        foreach (var key in keys)
+        {
+            var hasOld = oldRates.TryGetValue(key, out var oldVal);
+            var hasNew = newMap.TryGetValue(key, out var newVal);
+            if (hasOld && hasNew && oldVal.Hourly == newVal.Hourly && oldVal.Night == newVal.Night)
+            {
+                continue;
+            }
+
+            if (!hasOld && !hasNew)
+            {
+                continue;
+            }
+
+            ParseRateLineKey(key, out var mode, out var playerCount);
+            await audit.AppendAsync(
+                "game_rate.change",
+                new
+                {
+                    gameTitleId,
+                    mode = mode.ToString(),
+                    playerCount,
+                    oldHourlyToman = hasOld ? oldVal.Hourly : (long?)null,
+                    newHourlyToman = hasNew ? newVal.Hourly : (long?)null,
+                    oldNightHourlyToman = hasOld ? oldVal.Night : null,
+                    newNightHourlyToman = hasNew ? newVal.Night : null,
+                },
+                ct);
+        }
+    }
+
+    private static void ParseRateLineKey(string key, out PlayMode mode, out int? playerCount)
+    {
+        var split = key.Split(':', 2);
+        mode = Enum.Parse<PlayMode>(split[0], true);
+        playerCount = split[1] == "-" ? null : int.Parse(split[1], System.Globalization.CultureInfo.InvariantCulture);
     }
 
     private static void ValidateRates(IReadOnlyList<GameRateLineInput> rateLines)

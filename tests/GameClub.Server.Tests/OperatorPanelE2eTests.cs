@@ -1891,4 +1891,22 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
         Assert.DoesNotContain("Payment is not pending", errAfterReject ?? "", StringComparison.OrdinalIgnoreCase);
         await page.WaitForFunctionAsync("() => !document.querySelector('#pendingC2cList li')");
     }
+
+    [Fact]
+    public async Task ss14_manager_login_renders_game_rate_inputs()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var mgr = await LoginOperatorClientAsync("manager", "1234");
+        var page = await NewPanelPageAsync(mgr);
+        await page.GotoAsync($"{PanelOrigin}/operator/index.html");
+        await page.FillAsync("#username", "manager");
+        await page.FillAsync("#pin", "1234");
+        await page.ClickAsync("#loginBtn");
+        await page.WaitForSelectorAsync("#grid .tile");
+        await page.EvaluateAsync("async () => { await refreshCafeSettingsUi(); }");
+        await page.WaitForSelectorAsync("#ss14GameRatesPanel:not(.hidden)");
+        await page.WaitForSelectorAsync("#ss14GameRatesBody input[data-rate=\"hourly\"]");
+        var count = await page.Locator("#ss14GameRatesBody input[data-rate=\"hourly\"]").CountAsync();
+        Assert.True(count >= 5);
+    }
 }

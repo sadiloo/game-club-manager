@@ -2105,9 +2105,34 @@ function ss14RefreshSessionGameUi(tile, isPcStation) {
     : "بدون بازی خاص";
 }
 
-async function ss14ConfirmTransferIfGame(tile) {
-  if (!tile?.currentGameTitleId) return true;
-  return window.confirm("بازی برداشته می‌شود /* متن موقت */");
+let ss14TransferConfirmEl = null;
+
+function ss14EnsureTransferConfirm() {
+  if (ss14TransferConfirmEl) return ss14TransferConfirmEl;
+  const el = document.createElement("div");
+  el.id = "ss14TransferConfirm";
+  el.className = "panel hidden";
+  el.innerHTML =
+    '<p>بازی برداشته می‌شود</p><button type="button" id="ss14TransferOkBtn">تأیید</button><button type="button" id="ss14TransferCancelBtn">انصراف</button>';
+  document.body.appendChild(el);
+  ss14TransferConfirmEl = el;
+  return el;
+}
+
+function ss14ConfirmTransferIfGame(tile) {
+  if (!tile?.currentGameTitleId) return Promise.resolve(true);
+  const panel = ss14EnsureTransferConfirm();
+  panel.classList.remove("hidden");
+  return new Promise((resolve) => {
+    const done = (ok) => {
+      panel.classList.add("hidden");
+      document.getElementById("ss14TransferOkBtn").onclick = null;
+      document.getElementById("ss14TransferCancelBtn").onclick = null;
+      resolve(ok);
+    };
+    document.getElementById("ss14TransferCancelBtn").onclick = () => done(false);
+    document.getElementById("ss14TransferOkBtn").onclick = () => done(true);
+  });
 }
 
 function ss14RenderTileGameBadge(el, tile) {
@@ -2118,21 +2143,218 @@ function ss14RenderTileGameBadge(el, tile) {
   el.appendChild(span);
 }
 
-function ss14RefreshManagerGameUi(isMgr) {
+let ss14MgrTitles = [];
+let ss14MgrConsoleKeys = [];
+let ss14MgrSelectedId = null;
+
+function ss14FmtToman(n) {
+  if (n == null || n === "") return "";
+  const num = Number(n);
+  if (!Number.isFinite(num)) return String(n);
+  return num.toLocaleString("fa-IR");
+}
+
+function ss14ParseTomanInput(raw) {
+  if (raw == null) return null;
+  const fa = "۰۱۲۳۴۵۶۷۸۹";
+  const s = String(raw)
+    .replace(/[,\u066C\u060C\s]/g, "")
+    .replace(/[۰-۹]/g, (d) => String(fa.indexOf(d)));
+  if (!s) return null;
+  const n = Number(s);
+  return Number.isFinite(n) ? n : null;
+}
+
+function ss14OptionLabel(mode, playerCount) {
+  if (String(mode).toLowerCase() === "online") return "آنلاین";
+  const p = playerCount ?? 1;
+  return `آفلاین ${p.toLocaleString("fa-IR")} دسته`;
+}
+
+function ss14EnsureManagerPanel() {
   let section = document.getElementById("ss14GameRatesPanel");
-  if (!section && isMgr) {
-    section = document.createElement("section");
-    section.id = "ss14GameRatesPanel";
-    section.className = "panel";
-    section.innerHTML = "<h2>نرخ بازی /* متن موقت */</h2><p id='ss14GameRatesOut'>…</p>";
-    document.getElementById("cafeSettings").parentElement.insertBefore(section, document.getElementById("cafeSettings"));
-    api("/api/operator/game-titles")
-      .then((rows) => {
-        document.getElementById("ss14GameRatesOut").textContent =
-          rows.length === 0 ? "هنوز بازی‌ای تعریف نشده است." : `${rows.length} بازی`;
-      })
-      .catch(() => {});
+  if (section) return section;
+  section = document.createElement("section");
+  section.id = "ss14GameRatesPanel";
+  section.className = "panel";
+  section.innerHTML =
+    '<h2>نرخ بازی /* متن موقت */</h2>' +
+    '<ul id="ss14GameTitleList"></ul>' +
+    '<button type="button" id="ss14GameNewBtn">بازی جدید /* متن موقت */</button>' +
+    '<div id="ss14GameEditForm">' +
+    '<label>نام <input id="ss14GameName" type="text" autocomplete="off"></label> ' +
+    '<label><input type="checkbox" id="ss14GameEnabled" checked> فعال</label>' +
+    '<table id="ss14GameRatesTable"><thead><tr><th>گزینه</th><th>نرخ عادی (تومان)</th><th>نرخ ساعت خاص (تومان)</th><th></th></tr></thead>' +
+    '<tbody id="ss14GameRatesBody"></tbody></table>' +
+    '<button type="button" id="ss14GameSaveBtn">ذخیره</button> ' +
+    '<button type="button" id="ss14GameDeleteBtn">حذف</button>' +
+    "</div>";
+  document.getElementById("cafeSettings").parentElement.insertBefore(section, document.getElementById("cafeSettings"));
+  document.getElementById("ss14GameNewBtn").onclick = () => {
+    ss14MgrSelectedId = null;
+    ss14RenderManagerForm(null);
+  };
+  document.getElementById("ss14GameSaveBtn").onclick = () => ss14SaveManagerTitle();
+  document.getElementById("ss14GameDeleteBtn").onclick = () => ss14DeleteManagerTitle();
+  return section;
+}
+
+function ss14RenderManagerTitleList() {
+  const list = document.getElementById("ss14GameTitleList");
+  if (!list) return;
+  list.replaceChildren();
+  for (const t of ss14MgrTitles) {
+    const li = document.createElement("li");
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = `${t.name}${t.enabled ? "" : " (غیرفعال)"}`;
+    btn.onclick = () => {
+      ss14MgrSelectedId = t.id;
+      ss14RenderManagerForm(t);
+    };
+    if (ss14MgrSelectedId === t.id) btn.setAttribute("aria-current", "true");
+    li.appendChild(btn);
+    list.appendChild(li);
   }
-  section?.classList.toggle("hidden", !isMgr);
+}
+
+function ss14RenderManagerForm(title) {
+  const nameEl = document.getElementById("ss14GameName");
+  const enEl = document.getElementById("ss14GameEnabled");
+  const body = document.getElementById("ss14GameRatesBody");
+  const delBtn = document.getElementById("ss14GameDeleteBtn");
+  if (!body) return;
+  nameEl.value = title?.name ?? "";
+  enEl.checked = title?.enabled !== false;
+  delBtn.classList.toggle("hidden", !title?.id);
+  const ratesByKey = new Map();
+  for (const r of title?.rates ?? []) {
+    const key = `${r.mode}:${r.playerCount ?? "-"}`;
+    ratesByKey.set(key, r);
+  }
+  body.replaceChildren();
+  for (const k of ss14MgrConsoleKeys) {
+    const key = `${k.mode}:${k.playerCount ?? "-"}`;
+    const row = ratesByKey.get(key);
+    const tr = document.createElement("tr");
+    tr.dataset.mode = k.mode;
+    tr.dataset.playerCount = k.playerCount ?? "";
+    const tdLabel = document.createElement("td");
+    tdLabel.textContent = ss14OptionLabel(k.mode, k.playerCount);
+    const tdH = document.createElement("td");
+    const inH = document.createElement("input");
+    inH.type = "text";
+    inH.inputMode = "numeric";
+    inH.dataset.rate = "hourly";
+    inH.value = row?.hourlyToman != null ? ss14FmtToman(row.hourlyToman) : "";
+    tdH.appendChild(inH);
+    const tdN = document.createElement("td");
+    const inN = document.createElement("input");
+    inN.type = "text";
+    inN.inputMode = "numeric";
+    inN.dataset.rate = "night";
+    inN.value = row?.nightHourlyToman != null ? ss14FmtToman(row.nightHourlyToman) : "";
+    tdN.appendChild(inN);
+    const tdNote = document.createElement("td");
+    /* temp text */
+    if (title?.id && row?.hourlyToman == null) {
+      tdNote.textContent = "در فهرست شروع نمی‌آید";
+    }
+    tr.append(tdLabel, tdH, tdN, tdNote);
+    body.appendChild(tr);
+  }
+}
+
+async function ss14LoadManagerData() {
+  ss14MgrTitles = (await api("/api/operator/game-titles", { background: true })) || [];
+  ss14MgrConsoleKeys = (await api("/api/operator/game-titles/console-options", { background: true })) || [];
+  if (!ss14MgrConsoleKeys.length && ss14MgrTitles[0]?.rates?.length) {
+    ss14MgrConsoleKeys = ss14MgrTitles[0].rates.map((r) => ({
+      mode: r.mode,
+      playerCount: r.playerCount,
+    }));
+  }
+  if (ss14MgrSelectedId != null && !ss14MgrTitles.some((t) => t.id === ss14MgrSelectedId)) {
+    ss14MgrSelectedId = ss14MgrTitles[0]?.id ?? null;
+  }
+  if (ss14MgrSelectedId == null && ss14MgrTitles.length) {
+    ss14MgrSelectedId = ss14MgrTitles[0].id;
+  }
+  ss14RenderManagerTitleList();
+  const sel = ss14MgrTitles.find((t) => t.id === ss14MgrSelectedId);
+  ss14RenderManagerForm(ss14MgrSelectedId == null ? null : sel ?? null);
+}
+
+function ss14CollectManagerRates() {
+  const rows = [];
+  const body = document.getElementById("ss14GameRatesBody");
+  if (!body) return rows;
+  for (const tr of body.querySelectorAll("tr")) {
+    const hourly = ss14ParseTomanInput(tr.querySelector('input[data-rate="hourly"]')?.value);
+    const nightRaw = tr.querySelector('input[data-rate="night"]')?.value;
+    const night = nightRaw != null && String(nightRaw).trim() !== "" ? ss14ParseTomanInput(nightRaw) : null;
+    if (hourly == null) continue;
+    if (hourly <= 0) {
+      throw new Error("نرخ عادی باید بیشتر از صفر باشد.");
+    }
+    if (night != null && night <= 0) {
+      throw new Error("نرخ ساعت خاص باید خالی یا بیشتر از صفر باشد.");
+    }
+    const mode = tr.dataset.mode;
+    const pc = tr.dataset.playerCount === "" ? null : Number(tr.dataset.playerCount);
+    rows.push({
+      mode,
+      playerCount: String(mode).toLowerCase() === "online" ? null : pc,
+      hourlyToman: hourly,
+      nightHourlyToman: night,
+    });
+  }
+  return rows;
+}
+
+async function ss14SaveManagerTitle() {
+  try {
+    const name = document.getElementById("ss14GameName")?.value?.trim();
+    if (!name) {
+      showError("نام بازی الزامی است.");
+      return;
+    }
+    const enabled = !!document.getElementById("ss14GameEnabled")?.checked;
+    const rates = ss14CollectManagerRates();
+    const body = { name, enabled, rates };
+    if (ss14MgrSelectedId == null) {
+      const created = await api("/api/operator/game-titles", { method: "POST", body: JSON.stringify(body) });
+      ss14MgrSelectedId = created.id;
+    } else {
+      await api(`/api/operator/game-titles/${ss14MgrSelectedId}`, { method: "PUT", body: JSON.stringify(body) });
+    }
+    await ss14LoadManagerData();
+  } catch (e) {
+    if (e.status) return;
+    showError(String(e.message || e));
+  }
+}
+
+async function ss14DeleteManagerTitle() {
+  if (ss14MgrSelectedId == null) return;
+  try {
+    await api(`/api/operator/game-titles/${ss14MgrSelectedId}`, { method: "DELETE" });
+    ss14MgrSelectedId = null;
+    await ss14LoadManagerData();
+  } catch (_) {
+    /* api() shows Persian error */
+  }
+}
+
+async function ss14RefreshManagerGameUi(isMgr) {
+  const section = ss14EnsureManagerPanel();
+  section.classList.toggle("hidden", !isMgr);
+  if (isMgr) {
+    try {
+      await ss14LoadManagerData();
+    } catch (_) {
+      /* errors via showError */
+    }
+  }
 }
 // --- end SS-14 ---

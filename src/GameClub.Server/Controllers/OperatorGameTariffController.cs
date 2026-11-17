@@ -26,6 +26,14 @@ public sealed class OperatorGameTariffController(GameTariffService gameTariff, O
         return Ok(await gameTariff.ListTitlesForManagerAsync(ct));
     }
 
+    [HttpGet("console-options")]
+    public async Task<IActionResult> ConsoleOptions(CancellationToken ct)
+    {
+        RequireManager();
+        var keys = await gameTariff.ConsoleRateKeysAsync(ct);
+        return Ok(keys.Select(k => new { mode = k.Mode.ToString(), playerCount = k.PlayerCount }));
+    }
+
     [HttpGet("selectable")]
     public async Task<IActionResult> ListSelectable([FromQuery] string mode, [FromQuery] int playerCount, CancellationToken ct)
     {
