@@ -18,6 +18,7 @@ public partial class Program
         builder.Services.AddControllers()
             .ConfigureApiBehaviorOptions(options =>
             {
+                var defaultFactory = options.InvalidModelStateResponseFactory;
                 options.InvalidModelStateResponseFactory = context =>
                 {
                     var path = context.HttpContext.Request.Path;
@@ -34,7 +35,7 @@ public partial class Program
                         };
                     }
 
-                    return new BadRequestObjectResult(context.ModelState);
+                    return defaultFactory(context);
                 };
             });
         builder.Services.AddSignalR();
