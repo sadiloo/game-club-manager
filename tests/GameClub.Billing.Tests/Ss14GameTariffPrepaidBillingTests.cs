@@ -79,7 +79,7 @@ public sealed class Ss14GameTariffPrepaidBillingTests
             "s",
             CafeFixture.Play("a", start, pcHop, "ps5-1", CafeFixture.Ps5, 1),
             CafeFixture.Play("b", pcHop, reg, "ps5-1", CafeFixture.Ps5, 2) with { SplitReason = "تعداد بازیکن" });
-        var tail = session.Segments[^1];
+        var tail = session.Segments[session.Segments.Count - 1];
         var plan = PrepaidPlanner.ForAmountFromSegments(session, reg, tail, 100_000, CafeFixture.Card());
         Assert.Equal(51, TimerMinutes(plan));
         Assert.Equal(T.At(2026, 8, 8, 14, 51), plan.End);
@@ -94,7 +94,7 @@ public sealed class Ss14GameTariffPrepaidBillingTests
             "s",
             CafeFixture.Play("a", start, hop, "ps5-1", CafeFixture.Ps5, 1),
             CafeFixture.Play("b", hop, hop, "ps5-1", CafeFixture.Ps5, 2) with { SplitReason = "تعداد بازیکن" });
-        var tail = session.Segments[^1];
+        var tail = session.Segments[session.Segments.Count - 1];
         var plan = PrepaidPlanner.ForAmountFromSegments(session, hop, tail, 100_000, CafeFixture.Card());
         Assert.Equal(51, TimerMinutes(plan));
         Assert.Equal(T.At(2026, 8, 8, 14, 51), plan.End);
