@@ -51,6 +51,22 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
         return doc.RootElement.TryGetProperty("commandId", out var id) ? id.GetString() : null;
     }
 
+    private static async Task<string> WaitForBillTextAsync(
+        Func<Task<string>> read,
+        string expectedSubstring,
+        TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        var text = await read();
+        while (!text.Contains(expectedSubstring, StringComparison.Ordinal) && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(200);
+            text = await read();
+        }
+
+        return text;
+    }
+
     private async Task<IPage> NewPanelPageAsync(HttpClient? operatorClient = null, bool stripRandomUuid = false)
     {
         var client = operatorClient ?? factory.CreateClient();
@@ -197,8 +213,11 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
         await page.FillAsync("#manualSettleList input[type=datetime-local]", "2026-06-03T15:30");
         await page.GetByRole(AriaRole.Button, new PageGetByRoleOptions { Name = "Bill to end time" }).ClickAsync();
         await page.WaitForSelectorAsync("#bill:not(.hidden)");
-        var detail = await page.TextContentAsync("#billDetail");
-        Assert.Contains("120000", detail!.Replace(",", "").Replace(" ", ""));
+        var detail = await WaitForBillTextAsync(
+            async () => (await page.TextContentAsync("#billDetail"))!.Replace(",", "").Replace(" ", ""),
+            "120000",
+            TimeSpan.FromSeconds(10));
+        Assert.Contains("120000", detail);
 
         page.Dialog += async (_, d) => await d.AcceptAsync(null);
         await page.ClickAsync("#confirmBtn");
@@ -332,8 +351,11 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
         await page.WaitForSelectorAsync("#sessionActions:not(.hidden)");
         await page.ClickAsync("#openBillBtn");
         await page.WaitForSelectorAsync("#bill:not(.hidden)");
-        var detailBefore = await page.TextContentAsync("#billDetail");
-        Assert.Contains("بوفه15000", detailBefore!.Replace(" ", ""));
+        var detailBefore = await WaitForBillTextAsync(
+            async () => (await page.TextContentAsync("#billDetail"))!.Replace(" ", ""),
+            "بوفه15000",
+            TimeSpan.FromSeconds(10));
+        Assert.Contains("بوفه15000", detailBefore);
 
         await page.ClickAsync("#confirmBtn");
         for (var i = 0; i < 40; i++)
@@ -375,8 +397,11 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
         await page.EvaluateAsync("() => refreshGrid()");
         await page.ClickAsync(".tile[data-station-id='PS5-R29B']");
         await page.WaitForSelectorAsync("#bill:not(.hidden)");
-        var before = await page.TextContentAsync("#billDetail");
-        Assert.Contains("بوفه15000", before!.Replace(" ", ""));
+        var before = await WaitForBillTextAsync(
+            async () => (await page.TextContentAsync("#billDetail"))!.Replace(" ", ""),
+            "بوفه15000",
+            TimeSpan.FromSeconds(10));
+        Assert.Contains("بوفه15000", before);
 
         await page.ClickAsync("#openBuffetFromBillBtn");
         await page.WaitForSelectorAsync("#buffetPanel:not(.hidden)");
@@ -396,8 +421,10 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
         Assert.Equal(0, billBody.GetProperty("buffetGrossToman").GetInt64());
         Assert.Equal(110_000, billBody.GetProperty("collectibleToman").GetInt64());
 
-        var after = await page.TextContentAsync("#billDetail");
-        var afterNorm = after!.Replace(" ", "");
+        var afterNorm = await WaitForBillTextAsync(
+            async () => (await page.TextContentAsync("#billDetail"))!.Replace(" ", ""),
+            "=110000",
+            TimeSpan.FromSeconds(10));
         Assert.Contains("بوفه0", afterNorm);
         Assert.DoesNotContain("بوفه15000", afterNorm);
         Assert.Contains("=110000", afterNorm);
@@ -426,7 +453,10 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
         await page.ClickAsync("#buffetCheckoutBtn");
         await checkoutDone;
         await page.WaitForSelectorAsync("#bill:not(.hidden)");
-        var before = (await page.TextContentAsync("#billDetail"))!.Replace(" ", "");
+        var before = await WaitForBillTextAsync(
+            async () => (await page.TextContentAsync("#billDetail"))!.Replace(" ", ""),
+            "=35000",
+            TimeSpan.FromSeconds(10));
         Assert.Contains("=35000", before);
         Assert.Contains("بوفه35000", before);
 
@@ -443,7 +473,10 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
         var billBody = await billResponse.JsonAsync<JsonElement>();
         Assert.Equal(20_000, billBody.GetProperty("bill").GetProperty("collectibleToman").GetInt64());
 
-        var after = (await page.TextContentAsync("#billDetail"))!.Replace(" ", "");
+        var after = await WaitForBillTextAsync(
+            async () => (await page.TextContentAsync("#billDetail"))!.Replace(" ", ""),
+            "=20000",
+            TimeSpan.FromSeconds(10));
         Assert.Contains("=20000", after);
         Assert.Contains("بوفه20000", after);
         Assert.DoesNotContain("35000", after);
@@ -466,7 +499,10 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
         await page.WaitForSelectorAsync("#sessionActions:not(.hidden)");
         await page.ClickAsync("#openBillBtn");
         await page.WaitForSelectorAsync("#bill:not(.hidden)");
-        var sessionBillBefore = (await page.TextContentAsync("#billDetail"))!.Replace(" ", "");
+        var sessionBillBefore = await WaitForBillTextAsync(
+            async () => (await page.TextContentAsync("#billDetail"))!.Replace(" ", ""),
+            "=110000",
+            TimeSpan.FromSeconds(10));
         Assert.Contains("=110000", sessionBillBefore);
 
         await page.ClickAsync(".tile[data-station-id='buffet-only']");
@@ -482,7 +518,10 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
         await page.ClickAsync("#buffetCheckoutBtn");
         await checkoutDone;
         await page.WaitForSelectorAsync("#bill:not(.hidden)");
-        var buffetBeforeRemove = (await page.TextContentAsync("#billDetail"))!.Replace(" ", "");
+        var buffetBeforeRemove = await WaitForBillTextAsync(
+            async () => (await page.TextContentAsync("#billDetail"))!.Replace(" ", ""),
+            "=30000",
+            TimeSpan.FromSeconds(10));
         Assert.Contains("=30000", buffetBeforeRemove);
 
         await page.Locator("#buffetSaleLines button", new() { HasText = "حذف" }).First.ClickAsync();
@@ -490,7 +529,10 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
             r.Request.Method == "GET"
             && r.Url.Contains("/buffet-only/", StringComparison.Ordinal)
             && r.Ok);
-        var buffetAfterRemove = (await page.TextContentAsync("#billDetail"))!.Replace(" ", "");
+        var buffetAfterRemove = await WaitForBillTextAsync(
+            async () => (await page.TextContentAsync("#billDetail"))!.Replace(" ", ""),
+            "=10000",
+            TimeSpan.FromSeconds(10));
         Assert.Contains("=10000", buffetAfterRemove);
         Assert.Contains("بوفه10000", buffetAfterRemove);
         Assert.DoesNotContain("=110000", buffetAfterRemove);
@@ -552,7 +594,10 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
             && r.Ok);
 
         Assert.Equal("", (await page.TextContentAsync("#error")) ?? "");
-        var detail = (await page.TextContentAsync("#billDetail"))!.Replace(" ", "");
+        var detail = await WaitForBillTextAsync(
+            async () => (await page.TextContentAsync("#billDetail"))!.Replace(" ", ""),
+            "=20000",
+            TimeSpan.FromSeconds(10));
         Assert.Contains("=20000", detail);
         Assert.DoesNotContain("No bill", detail);
     }
@@ -689,7 +734,10 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
         var chipAfter = await page.TextContentAsync("#customerChip");
         Assert.Contains("buffet-x", chipAfter);
         Assert.DoesNotContain("station-y", chipAfter!);
-        var billDetail = (await page.TextContentAsync("#billDetail"))!.Replace(" ", "");
+        var billDetail = await WaitForBillTextAsync(
+            async () => (await page.TextContentAsync("#billDetail"))!.Replace(" ", ""),
+            "بوفه30000",
+            TimeSpan.FromSeconds(10));
         Assert.Contains("بوفه30000", billDetail);
 
         await page.ClickAsync("#confirmBtn");
