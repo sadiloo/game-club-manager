@@ -26,6 +26,17 @@ public sealed class OperatorGameTariffController(GameTariffService gameTariff, O
         return Ok(await gameTariff.ListTitlesForManagerAsync(ct));
     }
 
+    [HttpGet("selectable")]
+    public async Task<IActionResult> ListSelectable([FromQuery] string mode, [FromQuery] int playerCount, CancellationToken ct)
+    {
+        if (!Enum.TryParse<PlayMode>(mode, true, out var parsed))
+        {
+            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_mode", "Play mode is required.");
+        }
+
+        return Ok(await gameTariff.ListSelectableAsync(parsed, playerCount, ct));
+    }
+
     public sealed record SaveGameTitleBody(
         string Name,
         bool Enabled,

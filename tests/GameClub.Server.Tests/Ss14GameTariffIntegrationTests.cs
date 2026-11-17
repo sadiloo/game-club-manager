@@ -34,6 +34,25 @@ public sealed class Ss14GameTariffIntegrationTests(GameClubWebApplicationFactory
     }
 
     [Fact]
+    public async Task Ss14OperatorGamesRoute_ReturnsCatalogEntries_SelectableTitlesSeparate()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var op = await factory.CreateOperatorClientAsync();
+        var mgr = await factory.CreateOperatorClientAsync("owner", "5678");
+        var catalog = await mgr.GetFromJsonAsync<JsonElement>("/api/operator/games");
+        Assert.True(catalog.TryGetProperty("entries", out _));
+        Assert.Equal(HttpStatusCode.OK, (await op.GetAsync("/api/operator/games")).StatusCode);
+
+        var gameId = await SeedFc27Async(mgr);
+        var selectable = await op.GetFromJsonAsync<JsonElement>(
+            "/api/operator/game-titles/selectable?mode=Offline&playerCount=1");
+        Assert.Equal(JsonValueKind.Array, selectable.ValueKind);
+        Assert.Contains(
+            selectable.EnumerateArray(),
+            e => e.GetProperty("id").GetInt32() == gameId);
+    }
+
+    [Fact]
     public async Task Ss14Example01_MidSessionGameChange_130000_e2e()
     {
         await S3TestHelpers.ResetAsync(factory);

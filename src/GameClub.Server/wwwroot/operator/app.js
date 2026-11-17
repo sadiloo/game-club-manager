@@ -1982,7 +1982,7 @@ function ss14EnsureGamePicker() {
 
 async function ss14FetchGamesForOption(mode, playerCount) {
   const qs = new URLSearchParams({ mode: String(mode), playerCount: String(playerCount) });
-  return api(`/api/operator/games?${qs}`, { background: true });
+  return api(`/api/operator/game-titles/selectable?${qs}`, { background: true });
 }
 
 async function ss14ShowGamePicker({ hint, mode, playerCount, onConfirm }) {

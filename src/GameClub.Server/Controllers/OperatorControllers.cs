@@ -139,18 +139,6 @@ public sealed class OperatorPanelController(
         });
     }
 
-    [HttpGet("games")]
-    public async Task<IActionResult> ListGames([FromQuery] string mode, [FromQuery] int playerCount, CancellationToken ct)
-    {
-        if (!Enum.TryParse<PlayMode>(mode, true, out var parsed))
-        {
-            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_mode", "Play mode is required.");
-        }
-
-        var gameTariff = HttpContext.RequestServices.GetRequiredService<GameTariffService>();
-        return Ok(await gameTariff.ListSelectableAsync(parsed, playerCount, ct));
-    }
-
     [HttpPatch("stations/{stationId}/defaults")]
     public async Task<IActionResult> UpdateDefaults(string stationId, UpdateDefaultsRequest body, CancellationToken ct)
     {
