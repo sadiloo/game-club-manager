@@ -708,7 +708,7 @@ public sealed class KioskSessionService(
         PlaySessionEntity? session = null;
         try
         {
-            session = await sessions.StartAsync(station.Id, 1, PlayMode.Offline, null, ct);
+            session = await sessions.StartAsync(station.Id, 1, PlayMode.Offline, null, null, ct);
             session = await db.Sessions.Include(s => s.Segments).Include(s => s.Station)!.ThenInclude(st => st!.Group)
                 .FirstAsync(s => s.Id == session.Id, ct);
             if (prepaidKind == PrepaidSessionKind.Duration && minutes is int mins)
@@ -787,7 +787,7 @@ public sealed class KioskSessionService(
                         throw new ApiException(StatusCodes.Status409Conflict, "session_elsewhere", "Customer already has an open PC session.");
                     }
 
-                    var session = await sessions.StartAsync(sid, 1, PlayMode.Offline, null, ct);
+                    var session = await sessions.StartAsync(sid, 1, PlayMode.Offline, null, null, ct);
                     await customers.LinkSessionAsync(session.Id, customerId, ct);
                     return await db.Sessions.FirstAsync(s => s.Id == session.Id, ct);
                 }

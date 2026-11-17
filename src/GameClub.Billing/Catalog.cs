@@ -25,6 +25,7 @@ public enum RateSource
     TimeBand = 1,
     Weekday = 2,
     SpecialDay = 3,
+    Game = 4,
 }
 
 /// <summary>A user-defined station group: معمولی, CIP, VIP, VVIP, a console model, a table game, and so on.</summary>

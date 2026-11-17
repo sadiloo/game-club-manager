@@ -132,6 +132,10 @@ public sealed class PlaySessionEntity
 
     public Guid? CarriedAtCloseRecordId { get; set; }
 
+    public int? CurrentGameTitleId { get; set; }
+
+    public GameTitleEntity? CurrentGameTitle { get; set; }
+
     public uint RowVersion { get; set; }
 }
 
@@ -161,6 +165,44 @@ public sealed class PlaySegmentEntity
 
     /// <summary>Segment split reason (e.g. انتقال for SS-4 transfer).</summary>
     public string? SplitReason { get; set; }
+
+    public int? GameTitleId { get; set; }
+
+    public GameTitleEntity? GameTitle { get; set; }
+
+  public long? GameHourlyRateToman { get; set; }
+
+    public long? GameNightHourlyRateToman { get; set; }
+}
+
+public sealed class GameTitleEntity
+{
+    public int Id { get; set; }
+
+    public string Name { get; set; } = string.Empty;
+
+    public string NameNormalized { get; set; } = string.Empty;
+
+    public bool Enabled { get; set; } = true;
+
+    public List<GameRateLineEntity> RateLines { get; set; } = [];
+}
+
+public sealed class GameRateLineEntity
+{
+    public long Id { get; set; }
+
+    public int GameTitleId { get; set; }
+
+    public GameTitleEntity? GameTitle { get; set; }
+
+    public string PlayMode { get; set; } = string.Empty;
+
+    public int? PlayerCount { get; set; }
+
+    public long HourlyToman { get; set; }
+
+    public long? NightHourlyToman { get; set; }
 }
 
 public sealed class SessionCommandEntity
@@ -255,6 +297,8 @@ public sealed class InvoiceEntity
     public List<PaymentLineEntity> PaymentLines { get; set; } = [];
 
     public List<InvoiceCatalogLineEntity> CatalogLines { get; set; } = [];
+
+    public List<InvoiceTimeLineEntity> TimeLines { get; set; } = [];
 
     public InvoiceMemberEffectEntity? MemberEffect { get; set; }
 
@@ -534,6 +578,22 @@ public sealed class OpenSaleLineEntity
     public long UnitPriceToman { get; set; }
 
     public long LineTotalToman { get; set; }
+}
+
+public sealed class InvoiceTimeLineEntity
+{
+    public long Id { get; set; }
+
+    public Guid InvoiceId { get; set; }
+
+    public InvoiceEntity? Invoice { get; set; }
+
+    public string Description { get; set; } = string.Empty;
+
+    public long AmountToman { get; set; }
+
+  /// <summary>Game name frozen at invoice issue (B5).</summary>
+    public string? GameTitleNameSnapshot { get; set; }
 }
 
 public sealed class InvoiceCatalogLineEntity

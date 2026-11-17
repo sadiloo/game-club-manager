@@ -777,6 +777,9 @@ async function refreshGrid() {
       el.appendChild(document.createElement("br"));
       el.appendChild(document.createTextNode(String(t.amountToman)));
     }
+    if (typeof ss14RenderTileGameBadge === "function") {
+      ss14RenderTileGameBadge(el, t);
+    }
     if (t.sessionId && (t.status === "Playing" || t.status === "Paused")) {
       const icon = document.createElement("button");
       icon.type = "button";
@@ -950,11 +953,13 @@ function renderBill(bill) {
   document.getElementById("bill").classList.remove("hidden");
   const d = document.getElementById("billDetail");
   const segText = (bill.segments || [])
-    .map(
-      (s) =>
-        `${s.segmentKey}: ${s.playerCount}p ${s.mode} @ ${s.hourlyToman ?? "?"} ` +
-        `${fmtTehran(s.startUtc)}–${fmtTehran(s.endUtc)}`,
-    )
+    .map((s) => {
+      if (s.displayLine) {
+        return `${s.segmentKey}: ${s.displayLine}`;
+      }
+      const rate = typeof ss14FmtToman === "function" ? ss14FmtToman(s.hourlyToman) : s.hourlyToman ?? "?";
+      return `${s.segmentKey}: ${s.playerCount}p ${s.mode} @ ${rate} ` + `${fmtTehran(s.startUtc)}–${fmtTehran(s.endUtc)}`;
+    })
     .join("\n");
   const levelDisc = bill.levelDiscountToman ?? 0;
   const bdayDisc = bill.birthdayDiscountToman ?? 0;
@@ -1029,7 +1034,11 @@ async function onTileClick(t) {
       await openBuffetPanel(t);
       return;
     }
-    await api(`/api/operator/stations/${encodeURIComponent(t.id)}/start`, { method: "POST" });
+    if (typeof ss14StartConsoleStation === "function") {
+      await ss14StartConsoleStation(t);
+    } else {
+      await api(`/api/operator/stations/${encodeURIComponent(t.id)}/start`, { method: "POST" });
+    }
     await refreshGrid();
     return;
   }
@@ -1076,13 +1085,23 @@ async function onTileClick(t) {
   document.getElementById("transferBtn").classList.toggle("hidden", !transferVisible);
   document.getElementById("transferFaultWrap").classList.toggle("hidden", !transferVisible);
   document.getElementById("transferFaultChk").checked = false;
+  if (typeof ss14RefreshSessionGameUi === "function") {
+    ss14RefreshSessionGameUi(t, isPcStation);
+  }
+  if (typeof ss14FilterPlayerCountSelect === "function") {
+    ss14FilterPlayerCountSelect(t);
+  }
 }
 
 document.getElementById("transferBtn").onclick = async () => {
+  const tile = (lastGridTiles || []).find((x) => x.sessionId === selectedSessionId);
+  if (typeof ss14ConfirmTransferIfGame === "function") {
+    const ok = await ss14ConfirmTransferIfGame(tile);
+    if (!ok) return;
+  }
   const target = window.prompt("شناسه ایستگاه مقصد (مثلاً PS5-2)");
   if (target == null || !String(target).trim()) return;
   const markSourceBroken = document.getElementById("transferFaultChk").checked;
-  const tile = (lastGridTiles || []).find((x) => x.sessionId === selectedSessionId);
   const commandId = newCommandId();
   try {
     await api(`/api/operator/sessions/${selectedSessionId}/transfer`, {
@@ -1938,4 +1957,545 @@ async function refreshCafeSettingsUi() {
     document.getElementById("shiftsEnabledToggle").checked = !!state.shiftsEnabled;
     document.getElementById("multiOperatorToggle").checked = !!state.multiOperatorEnabled;
   }
+  if (typeof ss14RefreshManagerGameUi === "function") {
+    ss14RefreshManagerGameUi(isMgr);
+  }
 }
+
+// --- SS-14 game tariff ---
+function ss14IsConsoleTile(t) {
+  const gk = t?.groupKind ?? "";
+  return !(gk === "Pc" || gk === "1" || String(t?.groupId || "").startsWith("pc"));
+}
+
+let ss14GamePickerEl = null;
+
+function ss14EnsureGamePicker() {
+  if (ss14GamePickerEl) return ss14GamePickerEl;
+  const el = document.createElement("div");
+  el.id = "ss14GamePicker";
+  el.className = "panel hidden";
+  // temp text
+  el.innerHTML =
+    '<h3>انتخاب بازی</h3><p id="ss14GamePickerHint"></p><select id="ss14GameSelect" size="8"></select><div><button type="button" id="ss14GameOkBtn">تأیید</button><button type="button" id="ss14GameCancelBtn">انصراف</button></div>';
+  document.body.appendChild(el);
+  ss14GamePickerEl = el;
+  return el;
+}
+
+async function ss14FetchGamesForOption(mode, playerCount) {
+  const qs = new URLSearchParams({ mode: String(mode), playerCount: String(playerCount) });
+  return api(`/api/operator/game-titles/selectable?${qs}`, { background: true });
+}
+
+async function ss14ShowGamePicker({ hint, mode, playerCount, onConfirm }) {
+  const panel = ss14EnsureGamePicker();
+  panel.classList.remove("hidden");
+  document.getElementById("ss14GamePickerHint").textContent = hint || "";
+  const select = document.getElementById("ss14GameSelect");
+  select.replaceChildren();
+  const none = document.createElement("option");
+  none.value = "";
+  none.textContent = "بدون بازی خاص";
+  select.appendChild(none);
+  const games = await ss14FetchGamesForOption(mode, playerCount);
+  for (const g of games) {
+    const opt = document.createElement("option");
+    opt.value = String(g.id);
+    opt.textContent = g.name;
+    select.appendChild(opt);
+  }
+  return await new Promise((resolve) => {
+    const cleanup = () => {
+      panel.classList.add("hidden");
+      document.getElementById("ss14GameOkBtn").onclick = null;
+      document.getElementById("ss14GameCancelBtn").onclick = null;
+    };
+    document.getElementById("ss14GameCancelBtn").onclick = () => {
+      cleanup();
+      resolve(null);
+    };
+    document.getElementById("ss14GameOkBtn").onclick = async () => {
+      const raw = select.value;
+      const gameTitleId = raw === "" ? null : Number(raw);
+      cleanup();
+      try {
+        if (onConfirm) await onConfirm(gameTitleId);
+        resolve(gameTitleId);
+      } catch (_) {
+        resolve(null);
+      }
+    };
+  });
+}
+
+async function ss14StartConsoleStation(tile) {
+  if (!ss14IsConsoleTile(tile)) {
+    await api(`/api/operator/stations/${encodeURIComponent(tile.id)}/start`, { method: "POST" });
+    return;
+  }
+  await ss14ShowGamePicker({
+    hint: "شروع کنسول",
+    mode: tile.defaultPlayMode || "Offline",
+    playerCount: tile.defaultPlayerCount || 1,
+    onConfirm: async (gameTitleId) => {
+      await api(`/api/operator/stations/${encodeURIComponent(tile.id)}/start`, {
+        method: "POST",
+        body: JSON.stringify(gameTitleId == null ? {} : { gameTitleId }),
+      });
+    },
+  });
+}
+
+function ss14EnsureSessionGameControls() {
+  let btn = document.getElementById("ss14GameChangeBtn");
+  if (!btn) {
+    btn = document.createElement("button");
+    btn.type = "button";
+    btn.id = "ss14GameChangeBtn";
+    // temp text
+    btn.textContent = "تغییر بازی";
+    const host = document.getElementById("sessionActions");
+    const anchor = document.getElementById("playerCountBtn");
+    host.insertBefore(btn, anchor);
+    btn.onclick = async () => {
+      const tile = (lastGridTiles || []).find((x) => x.sessionId === selectedSessionId);
+      if (!tile) return;
+      const cmd = newCommandId();
+      await ss14ShowGamePicker({
+        hint: "تغییر بازی",
+        mode: tile.playMode || "Offline",
+        playerCount: tile.playerCount || 1,
+        onConfirm: async (gameTitleId) => {
+          await api(`/api/operator/sessions/${selectedSessionId}/game`, {
+            method: "POST",
+            body: JSON.stringify({
+              gameTitleId,
+              expectedVersion: tile.rowVersion,
+              commandId: cmd,
+            }),
+          });
+          await refreshGrid();
+        },
+      });
+    };
+  }
+  let label = document.getElementById("ss14CurrentGameLbl");
+  if (!label) {
+    label = document.createElement("p");
+    label.id = "ss14CurrentGameLbl";
+    const host = document.getElementById("sessionActions");
+    host.insertBefore(label, document.getElementById("sessionLabel").nextSibling);
+  }
+  return { btn, label };
+}
+
+async function ss14FilterPlayerCountSelect(tile) {
+  const select = document.getElementById("playerCountSelect");
+  if (!select) return;
+  const mode = tile?.playMode || "Offline";
+  if (!tile?.currentGameTitleId) {
+    for (const opt of select.options) {
+      opt.disabled = false;
+      opt.hidden = false;
+    }
+    return;
+  }
+  const rated = tile.currentGameRatedPlayerCounts;
+  if (Array.isArray(rated) && rated.length >= 0) {
+    for (const opt of select.options) {
+      const count = Number(opt.value);
+      const ok = rated.length === 0 ? false : rated.includes(count);
+      opt.disabled = !ok;
+      opt.hidden = !ok;
+    }
+    return;
+  }
+  for (const opt of select.options) {
+    const count = Number(opt.value);
+    const games = await ss14FetchGamesForOption(mode, count).catch(() => []);
+    const ok = games.some((g) => g.id === tile.currentGameTitleId);
+    opt.disabled = !ok;
+    opt.hidden = !ok;
+  }
+}
+
+function ss14RefreshSessionGameUi(tile, isPcStation) {
+  const { btn, label } = ss14EnsureSessionGameControls();
+  const show = !isPcStation && (tile.status === "Playing" || tile.status === "Paused");
+  btn.classList.toggle("hidden", !show);
+  label.classList.toggle("hidden", !show);
+  label.textContent = tile.currentGameTitleName
+    ? `بازی: ${tile.currentGameTitleName}`
+    : "بدون بازی خاص";
+}
+
+let ss14TransferConfirmEl = null;
+
+function ss14EnsureTransferConfirm() {
+  if (ss14TransferConfirmEl) return ss14TransferConfirmEl;
+  const el = document.createElement("div");
+  el.id = "ss14TransferConfirm";
+  el.className = "panel hidden";
+  el.innerHTML =
+    '<p>بازی برداشته می‌شود</p><button type="button" id="ss14TransferOkBtn">تأیید</button><button type="button" id="ss14TransferCancelBtn">انصراف</button>';
+  document.body.appendChild(el);
+  ss14TransferConfirmEl = el;
+  return el;
+}
+
+function ss14ConfirmTransferIfGame(tile) {
+  if (!tile?.currentGameTitleId) return Promise.resolve(true);
+  const panel = ss14EnsureTransferConfirm();
+  panel.classList.remove("hidden");
+  return new Promise((resolve) => {
+    const done = (ok) => {
+      panel.classList.add("hidden");
+      document.getElementById("ss14TransferOkBtn").onclick = null;
+      document.getElementById("ss14TransferCancelBtn").onclick = null;
+      resolve(ok);
+    };
+    document.getElementById("ss14TransferCancelBtn").onclick = () => done(false);
+    document.getElementById("ss14TransferOkBtn").onclick = () => done(true);
+  });
+}
+
+function ss14RenderTileGameBadge(el, tile) {
+  if (!tile?.currentGameTitleName) return;
+  const span = document.createElement("span");
+  span.className = "ss14-game-badge";
+  span.textContent = tile.currentGameTitleName;
+  el.appendChild(span);
+}
+
+let ss14MgrTitles = [];
+let ss14MgrConsoleKeys = [];
+let ss14MgrSelectedId = null;
+
+function ss14FmtToman(n) {
+  if (n == null || n === "") return "";
+  const num = Number(n);
+  if (!Number.isFinite(num)) return String(n);
+  return num.toLocaleString("fa-IR");
+}
+
+function ss14IsRateDigitChar(ch) {
+  return /[0-9\u06F0-\u06F9\u0660-\u0669]/.test(ch);
+}
+
+function ss14IsRateSepChar(ch) {
+  return ch === "," || ch === "\u060C" || ch === "\u066C";
+}
+
+function ss14HasValidThousandsGrouping(trimmed) {
+  const groups = [];
+  let cur = "";
+  for (const ch of trimmed) {
+    if (ss14IsRateSepChar(ch)) {
+      if (cur.length === 0) return false;
+      groups.push(cur);
+      cur = "";
+    } else if (ss14IsRateDigitChar(ch)) {
+      cur += ch;
+    } else {
+      return false;
+    }
+  }
+  if (cur.length === 0 && groups.length > 0) return false;
+  if (cur.length > 0) groups.push(cur);
+  if (groups.length === 0) return false;
+  for (const g of groups) {
+    if (g.length === 0) return false;
+  }
+  if (groups.length === 1) return true;
+  if (groups[0].length < 1 || groups[0].length > 3) return false;
+  for (let i = 1; i < groups.length; i++) {
+    if (groups[i].length !== 3) return false;
+  }
+  return true;
+}
+
+function ss14RateDigitsNoIllegalLeadingZero(trimmed) {
+  let digits = "";
+  const fa = "۰۱۲۳۴۵۶۷۸۹";
+  for (const ch of trimmed) {
+    if (ss14IsRateSepChar(ch)) continue;
+    if (!ss14IsRateDigitChar(ch)) continue;
+    if (ch >= "0" && ch <= "9") digits += ch;
+    else if (ch >= "\u06F0" && ch <= "\u06F9") digits += String(fa.indexOf(ch));
+    else digits += String("0123456789"[ch.charCodeAt(0) - 0x0660]);
+  }
+  return !(digits.length > 1 && digits[0] === "0");
+}
+
+function ss14IsAllowedRateInput(raw) {
+  if (raw == null) return false;
+  const trimmed = String(raw).trim();
+  if (trimmed === "") return false;
+  if (!/^[0-9\u06F0-\u06F9\u0660-\u0669,\u060C\u066C]+$/.test(trimmed)) return false;
+  if (!ss14HasValidThousandsGrouping(trimmed)) return false;
+  return ss14RateDigitsNoIllegalLeadingZero(trimmed);
+}
+
+function ss14ParseTomanInput(raw) {
+  if (raw == null) return null;
+  const trimmed = String(raw).trim();
+  if (trimmed === "" || !ss14IsAllowedRateInput(trimmed)) return null;
+  const fa = "۰۱۲۳۴۵۶۷۸۹";
+  const s = trimmed
+    .replace(/[,\u060C\u066C]/g, "")
+    .replace(/[\u06F0-\u06F9]/g, (d) => String(fa.indexOf(d)))
+    .replace(/[\u0660-\u0669]/g, (d) => String("0123456789"[d.charCodeAt(0) - 0x0660]));
+  if (!s || !/^[0-9]+$/.test(s)) return null;
+  if (s.length > 1 && s[0] === "0") return null;
+  const n = Number(s);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+function ss14OptionLabel(mode, playerCount) {
+  if (String(mode).toLowerCase() === "online") return "آنلاین";
+  const p = playerCount ?? 1;
+  return `آفلاین ${p.toLocaleString("fa-IR")} دسته`;
+}
+
+function ss14EnsureManagerPanelStyles() {
+  if (document.getElementById("ss14GameRatesStyle")) return;
+  const style = document.createElement("style");
+  style.id = "ss14GameRatesStyle";
+  style.textContent =
+    "#ss14GameRatesPanel{max-width:100%;overflow-x:hidden;box-sizing:border-box}" +
+    "#ss14GameRatesPanel #ss14GameEditForm{display:flex;flex-direction:column;gap:0.5rem;max-width:100%}" +
+    "#ss14GameRatesPanel #ss14GameRatesTable{width:100%;max-width:100%;border-collapse:collapse}" +
+    "#ss14GameRatesPanel #ss14GameRatesTable thead{display:none}" +
+    "#ss14GameRatesPanel #ss14GameRatesTable tr{display:block;border:1px solid #ccc;margin:0.5rem 0;padding:0.5rem;box-sizing:border-box}" +
+    "#ss14GameRatesPanel #ss14GameRatesTable td{display:block;width:100%;max-width:100%;box-sizing:border-box;padding:0.25rem 0}" +
+    "#ss14GameRatesPanel #ss14GameRatesTable td.ss14-rate-cell label{display:block;font-size:0.85rem;line-height:1.35;margin:0 0 0.25rem;word-wrap:break-word;overflow-wrap:anywhere;max-width:100%;min-width:1px;min-height:1em}" +
+    "#ss14GameRatesPanel #ss14GameRatesTable input[type=\"text\"]{width:100%;max-width:100%;box-sizing:border-box}" +
+    "#ss14GameRatesPanel .ss14-game-rates-error{display:block;width:100%;max-width:100%;margin:0.35rem 0 0;color:#b00020;font-size:0.9rem;line-height:1.35;word-wrap:break-word;overflow-wrap:anywhere}";
+  document.head.appendChild(style);
+}
+
+function ss14EnsureManagerPanel() {
+  let section = document.getElementById("ss14GameRatesPanel");
+  if (section) return section;
+  ss14EnsureManagerPanelStyles();
+  section = document.createElement("section");
+  section.id = "ss14GameRatesPanel";
+  section.className = "panel";
+  // temp text
+  section.innerHTML =
+    '<h2>نرخ بازی</h2>' +
+    '<ul id="ss14GameTitleList"></ul>' +
+    // temp text
+    '<button type="button" id="ss14GameNewBtn">بازی جدید</button>' +
+    '<div id="ss14GameEditForm">' +
+    '<label>نام <input id="ss14GameName" type="text" autocomplete="off"></label> ' +
+    '<label><input type="checkbox" id="ss14GameEnabled" checked> فعال</label>' +
+    '<table id="ss14GameRatesTable"><thead><tr><th>گزینه</th><th>نرخ عادی (تومان)</th><th>نرخ ساعت خاص (تومان)</th><th></th></tr></thead>' +
+    '<tbody id="ss14GameRatesBody"></tbody></table>' +
+    '<button type="button" id="ss14GameSaveBtn">ذخیره</button> ' +
+    '<p id="ss14GameRatesError" class="ss14-game-rates-error" role="alert"></p> ' +
+    '<button type="button" id="ss14GameDeleteBtn">حذف</button>' +
+    "</div>";
+  document.getElementById("cafeSettings").parentElement.insertBefore(section, document.getElementById("cafeSettings"));
+  document.getElementById("ss14GameNewBtn").onclick = () => {
+    ss14MgrSelectedId = null;
+    ss14RenderManagerForm(null);
+  };
+  document.getElementById("ss14GameSaveBtn").onclick = () => ss14SaveManagerTitle();
+  document.getElementById("ss14GameDeleteBtn").onclick = () => ss14DeleteManagerTitle();
+  return section;
+}
+
+function ss14RenderManagerTitleList() {
+  const list = document.getElementById("ss14GameTitleList");
+  if (!list) return;
+  list.replaceChildren();
+  for (const t of ss14MgrTitles) {
+    const li = document.createElement("li");
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = `${t.name}${t.enabled ? "" : " (غیرفعال)"}`;
+    btn.onclick = () => {
+      ss14MgrSelectedId = t.id;
+      ss14RenderManagerForm(t);
+    };
+    if (ss14MgrSelectedId === t.id) btn.setAttribute("aria-current", "true");
+    li.appendChild(btn);
+    list.appendChild(li);
+  }
+}
+
+function ss14RenderManagerForm(title) {
+  const nameEl = document.getElementById("ss14GameName");
+  const enEl = document.getElementById("ss14GameEnabled");
+  const body = document.getElementById("ss14GameRatesBody");
+  const delBtn = document.getElementById("ss14GameDeleteBtn");
+  if (!body) return;
+  nameEl.value = title?.name ?? "";
+  enEl.checked = title?.enabled !== false;
+  delBtn.classList.toggle("hidden", !title?.id);
+  const ratesByKey = new Map();
+  for (const r of title?.rates ?? []) {
+    const key = `${r.mode}:${r.playerCount ?? "-"}`;
+    ratesByKey.set(key, r);
+  }
+  body.replaceChildren();
+  for (const k of ss14MgrConsoleKeys) {
+    const key = `${k.mode}:${k.playerCount ?? "-"}`;
+    const row = ratesByKey.get(key);
+    const tr = document.createElement("tr");
+    tr.dataset.mode = k.mode;
+    tr.dataset.playerCount = k.playerCount ?? "";
+    const tdLabel = document.createElement("td");
+    tdLabel.textContent = ss14OptionLabel(k.mode, k.playerCount);
+    const safeKey = key.replace(/:/g, "-");
+    const lblHourlyText = "نرخ عادی (تومان در ساعت)";
+    const lblNightText = "نرخ ساعت خاص (تومان در ساعت)";
+    const idH = `ss14RateHourly-${safeKey}`;
+    const idN = `ss14RateNight-${safeKey}`;
+    const tdH = document.createElement("td");
+    tdH.className = "ss14-rate-cell";
+    const lblH = document.createElement("label");
+    lblH.htmlFor = idH;
+    lblH.textContent = lblHourlyText;
+    const inH = document.createElement("input");
+    inH.id = idH;
+    inH.type = "text";
+    inH.inputMode = "numeric";
+    inH.dataset.rate = "hourly";
+    inH.setAttribute("aria-label", lblHourlyText);
+    inH.value = row?.hourlyToman != null ? ss14FmtToman(row.hourlyToman) : "";
+    tdH.append(lblH, inH);
+    const tdN = document.createElement("td");
+    tdN.className = "ss14-rate-cell";
+    const lblN = document.createElement("label");
+    lblN.htmlFor = idN;
+    lblN.textContent = lblNightText;
+    const inN = document.createElement("input");
+    inN.id = idN;
+    inN.type = "text";
+    inN.inputMode = "numeric";
+    inN.dataset.rate = "night";
+    inN.setAttribute("aria-label", lblNightText);
+    inN.value = row?.nightHourlyToman != null ? ss14FmtToman(row.nightHourlyToman) : "";
+    tdN.append(lblN, inN);
+    const tdNote = document.createElement("td");
+    /* temp text */
+    if (title?.id && row?.hourlyToman == null) {
+      tdNote.textContent = "در فهرست شروع نمی‌آید";
+    }
+    tr.append(tdLabel, tdH, tdN, tdNote);
+    body.appendChild(tr);
+  }
+}
+
+async function ss14LoadManagerData() {
+  ss14MgrTitles = (await api("/api/operator/game-titles", { background: true })) || [];
+  ss14MgrConsoleKeys = (await api("/api/operator/game-titles/console-options", { background: true })) || [];
+  if (!ss14MgrConsoleKeys.length && ss14MgrTitles[0]?.rates?.length) {
+    ss14MgrConsoleKeys = ss14MgrTitles[0].rates.map((r) => ({
+      mode: r.mode,
+      playerCount: r.playerCount,
+    }));
+  }
+  if (ss14MgrSelectedId != null && !ss14MgrTitles.some((t) => t.id === ss14MgrSelectedId)) {
+    ss14MgrSelectedId = ss14MgrTitles[0]?.id ?? null;
+  }
+  if (ss14MgrSelectedId == null && ss14MgrTitles.length) {
+    ss14MgrSelectedId = ss14MgrTitles[0].id;
+  }
+  ss14RenderManagerTitleList();
+  const sel = ss14MgrTitles.find((t) => t.id === ss14MgrSelectedId);
+  ss14RenderManagerForm(ss14MgrSelectedId == null ? null : sel ?? null);
+}
+
+function ss14CollectManagerRates() {
+  const rows = [];
+  const body = document.getElementById("ss14GameRatesBody");
+  if (!body) return rows;
+  for (const tr of body.querySelectorAll("tr")) {
+    const hourlyRaw = tr.querySelector('input[data-rate="hourly"]')?.value;
+    const hourlyTrim = hourlyRaw != null ? String(hourlyRaw).trim() : "";
+    if (hourlyTrim === "") continue;
+    const hourly = ss14ParseTomanInput(hourlyTrim);
+    if (hourly == null) {
+      throw new Error("مقدار نرخ عادی نامعتبر است.");
+    }
+    const nightRaw = tr.querySelector('input[data-rate="night"]')?.value;
+    const nightTrim = nightRaw != null ? String(nightRaw).trim() : "";
+    const night = nightTrim === "" ? null : ss14ParseTomanInput(nightTrim);
+    if (nightTrim !== "" && night == null) {
+      throw new Error("مقدار نرخ ساعت خاص نامعتبر است.");
+    }
+    if (hourly <= 0) {
+      throw new Error("نرخ عادی باید بیشتر از صفر باشد.");
+    }
+    if (night != null && night <= 0) {
+      throw new Error("نرخ ساعت خاص باید خالی یا بیشتر از صفر باشد.");
+    }
+    const mode = tr.dataset.mode;
+    const pc = tr.dataset.playerCount === "" ? null : Number(tr.dataset.playerCount);
+    rows.push({
+      mode,
+      playerCount: String(mode).toLowerCase() === "online" ? null : pc,
+      hourlyToman: hourly,
+      nightHourlyToman: night,
+    });
+  }
+  return rows;
+}
+
+function ss14ShowManagerError(msg) {
+  const el = document.getElementById("ss14GameRatesError");
+  if (el) el.textContent = msg || "";
+}
+
+async function ss14SaveManagerTitle() {
+  ss14ShowManagerError("");
+  try {
+    const name = document.getElementById("ss14GameName")?.value?.trim();
+    if (!name) {
+      ss14ShowManagerError("نام بازی الزامی است.");
+      return;
+    }
+    const enabled = !!document.getElementById("ss14GameEnabled")?.checked;
+    const rates = ss14CollectManagerRates();
+    const body = { name, enabled, rates };
+    const saveOpts = { method: "POST", body: JSON.stringify(body), background: true };
+    if (ss14MgrSelectedId == null) {
+      const created = await api("/api/operator/game-titles", saveOpts);
+      ss14MgrSelectedId = created.id;
+    } else {
+      await api(`/api/operator/game-titles/${ss14MgrSelectedId}`, { ...saveOpts, method: "PUT" });
+    }
+    await ss14LoadManagerData();
+    ss14ShowManagerError("");
+  } catch (e) {
+    ss14ShowManagerError(String(e.message || e));
+  }
+}
+
+async function ss14DeleteManagerTitle() {
+  if (ss14MgrSelectedId == null) return;
+  try {
+    await api(`/api/operator/game-titles/${ss14MgrSelectedId}`, { method: "DELETE" });
+    ss14MgrSelectedId = null;
+    await ss14LoadManagerData();
+  } catch (_) {
+    /* api() shows Persian error */
+  }
+}
+
+async function ss14RefreshManagerGameUi(isMgr) {
+  const section = ss14EnsureManagerPanel();
+  section.classList.toggle("hidden", !isMgr);
+  if (isMgr) {
+    try {
+      await ss14LoadManagerData();
+    } catch (_) {
+      /* errors via showError */
+    }
+  }
+}
+// --- end SS-14 ---

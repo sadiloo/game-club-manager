@@ -24,6 +24,12 @@ public sealed class AuditService(AppDbContext db, IClock clock, Operator.Operato
 {
     public async Task AppendAsync(string action, object details, CancellationToken ct = default)
     {
+        Stage(action, details);
+        await db.SaveChangesAsync(ct);
+    }
+
+    public void Stage(string action, object details)
+    {
         db.AuditLog.Add(new AuditLogEntry
         {
             AtUtc = clock.UtcNow.UtcDateTime,
@@ -31,7 +37,6 @@ public sealed class AuditService(AppDbContext db, IClock clock, Operator.Operato
             DetailsJson = JsonSerializer.Serialize(details),
             ActorUserId = operatorContext.UserId,
         });
-        await db.SaveChangesAsync(ct);
     }
 }
 
@@ -168,6 +173,19 @@ public sealed class SessionBilling(AppDbContext db, RateConfigService rates)
         foreach (var seg in session.Segments.OrderBy(s => s.StartUtc))
         {
             var end = seg.EndUtc ?? endUtc;
+            string? gameDisplayName = null;
+            if (seg.GameTitleId is int gameId)
+            {
+                gameDisplayName = seg.GameTitle?.Name;
+                if (gameDisplayName is null)
+                {
+                    gameDisplayName = db.GameTitles.AsNoTracking()
+                        .Where(g => g.Id == gameId)
+                        .Select(g => g.Name)
+                        .FirstOrDefault();
+                }
+            }
+
             segments.Add(new PlaySegment(
                 seg.SegmentKey,
                 TimeMapping.ToTehran(seg.StartUtc),
@@ -176,7 +194,12 @@ public sealed class SessionBilling(AppDbContext db, RateConfigService rates)
                 seg.GroupId,
                 seg.Mode,
                 seg.PlayerCount,
-                seg.Kind));
+                seg.Kind,
+                seg.GameTitleId,
+                seg.GameHourlyRateToman,
+                seg.GameNightHourlyRateToman,
+                seg.SplitReason,
+                gameDisplayName));
         }
 
         IReadOnlyList<PauseInterval>? pauses = null;
@@ -222,7 +245,17 @@ public sealed class SessionCloser(
         var shiftId = await shiftGate.RequireOpenShiftIdAsync(ct);
         var openSale = await db.OpenSales.Include(o => o.Lines).ThenInclude(l => l.CatalogItem)
             .FirstOrDefaultAsync(o => o.SessionId == session.Id, ct);
-        var invoice = await CreateInvoiceAsync(amounts, bill, payments, session.Id, openSale?.Id, session.CustomerId, shiftId, ct);
+        var chargeForLines = await billing.BuildChargeAsync(session, bill.FrozenAtUtc, ct);
+        var invoice = await CreateInvoiceAsync(
+            amounts,
+            bill,
+            payments,
+            session.Id,
+            openSale?.Id,
+            session.CustomerId,
+            shiftId,
+            chargeForLines,
+            ct);
         if (openSale is not null)
         {
             CopyCatalogLines(invoice, openSale.Lines);
@@ -266,7 +299,7 @@ public sealed class SessionCloser(
     {
         await shiftGate.EnsureOpenShiftForMoneyAsync(ct);
         var shiftId = await shiftGate.RequireOpenShiftIdAsync(ct);
-        var invoice = await CreateInvoiceAsync(amounts, bill, payments, null, sale.Id, sale.CustomerId, shiftId, ct);
+        var invoice = await CreateInvoiceAsync(amounts, bill, payments, null, sale.Id, sale.CustomerId, shiftId, null, ct);
         CopyCatalogLines(invoice, sale.Lines);
         db.OpenSaleLines.RemoveRange(sale.Lines);
         db.OpenSales.Remove(sale);
@@ -301,6 +334,7 @@ public sealed class SessionCloser(
         Guid? openSaleId,
         Guid? customerId,
         Guid? shiftId,
+        SessionCharge? sessionCharge,
         CancellationToken ct)
     {
         var number = await NextInvoiceNumberAsync(ct);
@@ -359,6 +393,14 @@ public sealed class SessionCloser(
                 WalletRealDrawnToman = method == PaymentMethod.Wallet ? walletDraw?.RealDrawnToman ?? 0 : 0,
                 WalletGiftDrawnToman = method == PaymentMethod.Wallet ? walletDraw?.GiftDrawnToman ?? 0 : 0,
             });
+        }
+
+        if (sessionCharge is not null)
+        {
+            foreach (var line in sessionCharge.Lines.Where(l => l.AmountToman > 0))
+            {
+                invoice.TimeLines.Add(Operator.Ss14BillDisplay.ToInvoiceTimeLine(invoice.Id, line));
+            }
         }
 
         return invoice;
@@ -431,10 +473,30 @@ public sealed class SessionService(
     AuditService audit,
     SessionBilling billing,
     RateConfigService rates,
+    GameTariffService gameTariff,
     OperatorBillService operatorBills,
     Operator.OperatorShiftGate shiftGate,
     IOperatorPanelNotifier panelNotifier)
 {
+    public Task<SessionGameChangeResult> ChangeGameAsync(
+        Guid sessionId,
+        int? gameTitleId,
+        uint? expectedVersion,
+        Guid commandId,
+        CancellationToken ct)
+        => SessionGameSupport.ChangeGameAsync(
+            db,
+            clock,
+            audit,
+            billing,
+            rates,
+            gameTariff,
+            panelNotifier,
+            sessionId,
+            gameTitleId,
+            expectedVersion,
+            commandId,
+            ct);
     public Task<SessionTransferResult> TransferAsync(
         Guid sessionId,
         string targetStationId,
@@ -456,7 +518,13 @@ public sealed class SessionService(
             commandId,
             ct);
 
-    public async Task<PlaySessionEntity> StartAsync(string stationId, int playerCount, PlayMode mode, DateTimeOffset? startedAt, CancellationToken ct)
+    public async Task<PlaySessionEntity> StartAsync(
+        string stationId,
+        int playerCount,
+        PlayMode mode,
+        DateTimeOffset? startedAt,
+        int? gameTitleId,
+        CancellationToken ct)
     {
         if (startedAt.HasValue)
         {
@@ -536,7 +604,7 @@ public sealed class SessionService(
                 OpenShiftId = openShiftId,
             };
 
-            session.Segments.Add(new PlaySegmentEntity
+            var firstSegment = new PlaySegmentEntity
             {
                 SegmentKey = "a",
                 StartUtc = startUtc,
@@ -545,7 +613,23 @@ public sealed class SessionService(
                 Mode = mode,
                 PlayerCount = playerCount,
                 Kind = station.Group.Kind,
-            });
+            };
+
+            if (gameTitleId is not null)
+            {
+                if (station.Group.Kind != StationKind.Console)
+                {
+                    throw new ApiException(StatusCodes.Status400BadRequest, "not_console", "Game selection applies to consoles only.");
+                }
+
+                var title = await gameTariff.EnsureGameForSessionAsync(gameTitleId, mode, playerCount, ct);
+                var (hourly, night) = await gameTariff.ResolveSnapshotsAsync(gameTitleId.Value, mode, playerCount, ct);
+                gameTariff.ApplySnapshots(firstSegment, gameTitleId.Value, hourly, night);
+                session.CurrentGameTitleId = gameTitleId;
+                _ = title;
+            }
+
+            session.Segments.Add(firstSegment);
 
             db.Sessions.Add(session);
             try
@@ -787,9 +871,14 @@ public sealed class SessionService(
             var now = clock.UtcNow.UtcDateTime;
             var openSegment = session.Segments.SingleOrDefault(s => s.EndUtc is null)
                 ?? throw new ApiException(StatusCodes.Status409Conflict, "awaiting_payment", "Session already has an open bill.");
+            if (session.CurrentGameTitleId is int gameId)
+            {
+                _ = await gameTariff.ResolveSnapshotsAsync(gameId, session.Mode, playerCount, innerCt);
+            }
+
             openSegment.EndUtc = now;
             var nextKey = ((char)('a' + session.Segments.Count)).ToString();
-            session.Segments.Add(new PlaySegmentEntity
+            var newSegment = new PlaySegmentEntity
             {
                 SegmentKey = nextKey,
                 StartUtc = now,
@@ -798,8 +887,18 @@ public sealed class SessionService(
                 Mode = session.Mode,
                 PlayerCount = playerCount,
                 Kind = StationKind.Console,
-            });
+            };
+            if (session.CurrentGameTitleId is int activeGame)
+            {
+                var (hourly, night) = await gameTariff.ResolveSnapshotsAsync(activeGame, session.Mode, playerCount, innerCt);
+                gameTariff.ApplySnapshots(newSegment, activeGame, hourly, night);
+            }
+
+            session.Segments.Add(newSegment);
             session.PlayerCount = playerCount;
+
+            var snapshot = await rates.LoadSnapshotAsync(session.RateCardSnapshotId, innerCt);
+            ConsolePrepaidRecalculator.RecalcAmountPrepaid(session, newSegment, snapshot, now);
             await audit.AppendAsync("session.player_count", new { sessionId, playerCount }, innerCt);
         }, ct);
 

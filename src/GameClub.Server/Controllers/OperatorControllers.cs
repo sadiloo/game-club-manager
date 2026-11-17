@@ -1,9 +1,11 @@
+using GameClub.Billing;
 using GameClub.Server.Data;
 using GameClub.Server.Data.Entities;
 using GameClub.Server.Operator;
 using GameClub.Server.Services;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace GameClub.Server.Controllers;
 
@@ -101,12 +103,41 @@ public sealed class OperatorPanelController(
     public IActionResult UpdateCustomer(Guid customerId)
         => StatusCode(StatusCodes.Status403Forbidden, new { code = "forbidden", message = "Customer profile edit is not available." });
 
+    public sealed record ConsoleStartBody(int? GameTitleId);
+
     [HttpPost("stations/{stationId}/start")]
-    public async Task<IActionResult> StartStation(string stationId, CancellationToken ct)
+    public async Task<IActionResult> StartStation(string stationId, ConsoleStartBody? body, CancellationToken ct)
     {
         var station = await stations.GetAsync(stationId, ct);
-        var session = await sessions.StartAsync(station.Id, station.DefaultPlayerCount, station.DefaultPlayMode, null, ct);
-        return Created($"/api/sessions/{session.Id}", new { session.Id, session.StationId, session.Status });
+        var session = await sessions.StartAsync(
+            station.Id,
+            station.DefaultPlayerCount,
+            station.DefaultPlayMode,
+            null,
+            body?.GameTitleId,
+            ct);
+        return Created($"/api/sessions/{session.Id}", new
+        {
+            session.Id,
+            session.StationId,
+            session.Status,
+            rowVersion = session.RowVersion,
+            currentGameTitleId = session.CurrentGameTitleId,
+        });
+    }
+
+    public sealed record GameChangeBody(int? GameTitleId, uint ExpectedVersion, Guid CommandId);
+
+    [HttpPost("sessions/{sessionId:guid}/game")]
+    public async Task<IActionResult> ChangeGame(Guid sessionId, GameChangeBody body, CancellationToken ct)
+    {
+        var result = await sessions.ChangeGameAsync(sessionId, body.GameTitleId, body.ExpectedVersion, body.CommandId, ct);
+        return Ok(new
+        {
+            sessionId = result.SessionId,
+            currentGameTitleId = result.CurrentGameTitleId,
+            rowVersion = result.RowVersion,
+        });
     }
 
     [HttpPatch("stations/{stationId}/defaults")]
@@ -281,6 +312,13 @@ public sealed class OperatorPanelController(
     public async Task<IActionResult> GetInvoice(long number, CancellationToken ct)
     {
         var invoice = await invoices.GetAsync(number, ct);
+        await using var scope = HttpContext.RequestServices.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<Data.AppDbContext>();
+        var timeLines = await db.InvoiceTimeLines.AsNoTracking()
+            .Where(t => t.InvoiceId == invoice.Id)
+            .OrderBy(t => t.Id)
+            .Select(t => new { t.Description, t.AmountToman, gameTitleName = t.GameTitleNameSnapshot })
+            .ToListAsync(ct);
         return Ok(new
         {
             invoice.Number,
@@ -318,6 +356,7 @@ public sealed class OperatorPanelController(
                 p.Reference,
                 status = p.ConfirmationStatus.ToString(),
             }),
+            timeLines,
         });
     }
 

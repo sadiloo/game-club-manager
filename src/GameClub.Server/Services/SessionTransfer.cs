@@ -129,6 +129,7 @@ public static class SessionTransferSupport
             }
 
             var nextKey = ((char)('a' + session.Segments.Count)).ToString();
+            var clearedGame = session.CurrentGameTitleId;
             session.Segments.Add(new PlaySegmentEntity
             {
                 SegmentKey = nextKey,
@@ -141,6 +142,7 @@ public static class SessionTransferSupport
                 SplitReason = SplitReasonTransfer,
             });
 
+            session.CurrentGameTitleId = null;
             session.StationId = target.Id;
             if (target.Group.Kind == StationKind.Pc)
             {
@@ -166,6 +168,13 @@ public static class SessionTransferSupport
                 throw new ApiException(StatusCodes.Status409Conflict, ex.Code, ex.Message);
             }
 
+            var transferSegment = session.Segments.Single(s => s.EndUtc is null);
+            var snapshot = await LoadSnapshotAsync(rates, session, ct);
+            if (target.Group!.Kind == StationKind.Console)
+            {
+                ConsolePrepaidRecalculator.RecalcAmountPrepaid(session, transferSegment, snapshot, now);
+            }
+
             await audit.AppendAsync(
                 "session.transfer",
                 new
@@ -175,6 +184,7 @@ public static class SessionTransferSupport
                     toStationId = target.Id,
                     markSourceBroken,
                     commandId,
+                    clearedGameTitleId = clearedGame,
                 },
                 ct);
 

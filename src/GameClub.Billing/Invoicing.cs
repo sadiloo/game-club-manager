@@ -158,21 +158,44 @@ public sealed record TimeChargeLine(
     string? GroupId,
     LocalDate? ServiceDate,
     DayOfWeek? Weekday,
-    bool IsPcTime = false)
+    bool IsPcTime = false,
+    bool IsGameLine = false,
+    int? GameTitleId = null)
 {
-    public static IReadOnlyList<TimeChargeLine> FromSession(SessionCharge charge)
+    public static IReadOnlyList<TimeChargeLine> FromSession(
+        SessionCharge charge,
+        Func<int, string>? gameTitleName = null)
     {
         var lines = new List<TimeChargeLine>();
         foreach (var line in charge.Lines)
         {
             var start = TehranTime.TimeOfDay(line.Start);
             var end = TehranTime.TimeOfDay(line.End);
-            var description = $"{line.GroupId} {line.Mode} x{line.PlayerCount} {start.Hour:00}:{start.Minute:00}-{end.Hour:00}:{end.Minute:00}";
+            var isGame = line.Source == RateSource.Game && line.GameTitleId is not null;
+            string description;
+            if (isGame)
+            {
+                var name = line.GameDisplayName
+                    ?? (gameTitleName is not null && line.GameTitleId is int gid ? gameTitleName(gid) : "بازی");
+                description = $"{name} · {line.PlayerCount} دسته · @ {line.HourlyRateToman} · {start.Hour:00}:{start.Minute:00}–{end.Hour:00}:{end.Minute:00}";
+            }
+            else
+            {
+                description = $"{line.GroupId} {line.Mode} x{line.PlayerCount} {start.Hour:00}:{start.Minute:00}-{end.Hour:00}:{end.Minute:00}";
+            }
+
             var byDate = line.ByDate;
             if (byDate is null || byDate.Count <= 1)
             {
                 var date = byDate is { Count: 1 } ? byDate[0].Date : TehranTime.Date(line.Start);
-                lines.Add(new TimeChargeLine(description, line.AmountToman, line.GroupId, date, date.DayOfWeek));
+                lines.Add(new TimeChargeLine(
+                    description,
+                    line.AmountToman,
+                    line.GroupId,
+                    date,
+                    date.DayOfWeek,
+                    IsGameLine: isGame,
+                    GameTitleId: line.GameTitleId));
                 continue;
             }
 
@@ -185,7 +208,14 @@ public sealed record TimeChargeLine(
             if (totalMinutes <= 0)
             {
                 var date = TehranTime.Date(line.Start);
-                lines.Add(new TimeChargeLine(description, line.AmountToman, line.GroupId, date, date.DayOfWeek));
+                lines.Add(new TimeChargeLine(
+                    description,
+                    line.AmountToman,
+                    line.GroupId,
+                    date,
+                    date.DayOfWeek,
+                    IsGameLine: isGame,
+                    GameTitleId: line.GameTitleId));
                 continue;
             }
 
@@ -193,7 +223,14 @@ public sealed record TimeChargeLine(
             for (var i = 0; i < byDate.Count; i++)
             {
                 var date = byDate[i].Date;
-                lines.Add(new TimeChargeLine(description, shares[i], line.GroupId, date, date.DayOfWeek));
+                lines.Add(new TimeChargeLine(
+                    description,
+                    shares[i],
+                    line.GroupId,
+                    date,
+                    date.DayOfWeek,
+                    IsGameLine: isGame,
+                    GameTitleId: line.GameTitleId));
             }
         }
 
@@ -265,7 +302,8 @@ public sealed record DiscountCode(
     DateTimeOffset? ValidUntil,
     IReadOnlyCollection<string>? AllowedGroupIds,
     IReadOnlyCollection<DayOfWeek>? AllowedWeekdays,
-    ChargeScope Scope = ChargeScope.Time)
+    ChargeScope Scope = ChargeScope.Time,
+    bool AppliesToGameLines = true)
 {
     public static DiscountCode PercentOff(
         string code,
@@ -281,7 +319,7 @@ public sealed record DiscountCode(
             throw new BillingException(BillingErrors.InvalidPolicy, "A discount code must take a percent or a fixed toman amount.");
         }
 
-        return new DiscountCode(code, percent, 0, validFrom, validUntil, allowedGroupIds, allowedWeekdays, scope);
+        return new DiscountCode(code, percent, 0, validFrom, validUntil, allowedGroupIds, allowedWeekdays, scope, true);
     }
 
     public static DiscountCode FixedOff(
@@ -298,7 +336,7 @@ public sealed record DiscountCode(
             throw new BillingException(BillingErrors.InvalidPolicy, "A discount code must take a percent or a fixed toman amount.");
         }
 
-        return new DiscountCode(code, 0, fixedToman, validFrom, validUntil, allowedGroupIds, allowedWeekdays, scope);
+        return new DiscountCode(code, 0, fixedToman, validFrom, validUntil, allowedGroupIds, allowedWeekdays, scope, true);
     }
 }
 
@@ -556,8 +594,21 @@ public static class InvoiceCalculator
         }
 
         var restricted = groupRestricted || code.AllowedWeekdays is { Count: > 0 };
+        var unrestrictedTime = timeGross;
+        if (!code.AppliesToGameLines)
+        {
+            unrestrictedTime = 0;
+            foreach (var line in request.TimeCharges)
+            {
+                if (!line.IsGameLine)
+                {
+                    unrestrictedTime = MoneyMath.CheckedAdd(unrestrictedTime, line.AmountToman);
+                }
+            }
+        }
+
         var timeBase = code.Scope.HasFlag(ChargeScope.Time)
-            ? restricted ? EligibleTime(request.TimeCharges, code) : timeGross
+            ? restricted ? EligibleTime(request.TimeCharges, code) : unrestrictedTime
             : 0;
         var buffetBase = code.Scope.HasFlag(ChargeScope.Buffet) ? buffetGross : 0;
         var serviceBase = code.Scope.HasFlag(ChargeScope.Services) ? servicesGross : 0;
@@ -635,6 +686,11 @@ public static class InvoiceCalculator
     {
         foreach (var line in lines)
         {
+            if (!code.AppliesToGameLines && line.IsGameLine)
+            {
+                continue;
+            }
+
             if (line.GroupId is not null && code.AllowedGroupIds!.Contains(line.GroupId))
             {
                 return true;
@@ -649,6 +705,11 @@ public static class InvoiceCalculator
         long sum = 0;
         foreach (var line in lines)
         {
+            if (!code.AppliesToGameLines && line.IsGameLine)
+            {
+                continue;
+            }
+
             if (code.AllowedGroupIds is { Count: > 0 } groups && (line.GroupId is null || !groups.Contains(line.GroupId)))
             {
                 continue;

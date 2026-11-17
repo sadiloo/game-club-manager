@@ -4,7 +4,9 @@ using GameClub.Server.Kiosk;
 using GameClub.Server.Operator;
 using GameClub.Server.Services;
 using GameClub.Server.Time;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using System.Text.Json;
 
 namespace GameClub.Server;
 
@@ -13,7 +15,29 @@ public partial class Program
     public static async Task Main(string[] args)
     {
         var builder = WebApplication.CreateBuilder(args);
-        builder.Services.AddControllers();
+        builder.Services.AddControllers()
+            .ConfigureApiBehaviorOptions(options =>
+            {
+                var defaultFactory = options.InvalidModelStateResponseFactory;
+                options.InvalidModelStateResponseFactory = context =>
+                {
+                    var path = context.HttpContext.Request.Path;
+                    if (path.StartsWithSegments("/api/operator/game-titles", StringComparison.OrdinalIgnoreCase))
+                    {
+                        return new JsonResult(new
+                        {
+                            error = "invalid_body",
+                            code = "invalid_body",
+                            message = "درخواست نامعتبر است.",
+                        })
+                        {
+                            StatusCode = StatusCodes.Status400BadRequest,
+                        };
+                    }
+
+                    return defaultFactory(context);
+                };
+            });
         builder.Services.AddSignalR();
         builder.Services.AddEndpointsApiExplorer();
         builder.Services.AddSwaggerGen();
@@ -25,6 +49,7 @@ public partial class Program
         builder.Services.AddScoped<RateConfigService>();
         builder.Services.AddScoped<AuditService>();
         builder.Services.AddScoped<StationService>();
+        builder.Services.AddScoped<GameTariffService>();
         builder.Services.AddScoped<SessionBilling>();
         builder.Services.AddScoped<SessionCloser>();
         builder.Services.AddScoped<SessionService>();
