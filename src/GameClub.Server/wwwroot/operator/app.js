@@ -1086,6 +1086,9 @@ async function onTileClick(t) {
   if (typeof ss14RefreshSessionGameUi === "function") {
     ss14RefreshSessionGameUi(t, isPcStation);
   }
+  if (typeof ss14FilterPlayerCountSelect === "function") {
+    ss14FilterPlayerCountSelect(t);
+  }
 }
 
 document.getElementById("transferBtn").onclick = async () => {
@@ -2077,6 +2080,19 @@ function ss14EnsureSessionGameControls() {
     host.insertBefore(label, document.getElementById("sessionLabel").nextSibling);
   }
   return { btn, label };
+}
+
+async function ss14FilterPlayerCountSelect(tile) {
+  const select = document.getElementById("playerCountSelect");
+  if (!select || !tile?.currentGameTitleId) return;
+  const mode = tile.playMode || "Offline";
+  for (const opt of select.options) {
+    const count = Number(opt.value);
+    const games = await ss14FetchGamesForOption(mode, count).catch(() => []);
+    const ok = games.some((g) => g.id === tile.currentGameTitleId);
+    opt.disabled = !ok;
+    opt.hidden = !ok;
+  }
 }
 
 function ss14RefreshSessionGameUi(tile, isPcStation) {

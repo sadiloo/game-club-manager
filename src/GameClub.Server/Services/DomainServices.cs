@@ -602,7 +602,7 @@ public sealed class SessionService(
                 var (hourly, night) = await gameTariff.ResolveSnapshotsAsync(gameTitleId.Value, mode, playerCount, ct);
                 gameTariff.ApplySnapshots(firstSegment, gameTitleId.Value, hourly, night);
                 session.CurrentGameTitleId = gameTitleId;
-                firstSegment.GameTitle = title;
+                _ = title;
             }
 
             session.Segments.Add(firstSegment);

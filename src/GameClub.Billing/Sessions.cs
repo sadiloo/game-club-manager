@@ -887,7 +887,16 @@ public static class PrepaidPlanner
             if (additionalMinutes > 0)
             {
                 var tailEnd = TehranTime.AddSeconds(now, additionalMinutes * 60L);
-                segments.Add(continuationSegment with { Start = now, End = tailEnd });
+                if (segments.Count > 0
+                    && string.Equals(segments[^1].Id, continuationSegment.Id, StringComparison.Ordinal)
+                    && segments[^1].End == now)
+                {
+                    segments[^1] = continuationSegment with { Start = segments[^1].Start, End = tailEnd };
+                }
+                else
+                {
+                    segments.Add(continuationSegment with { Start = now, End = tailEnd });
+                }
             }
 
             return SessionPricer.Price(new Session(session.Id, segments, pauses), rates, specialDays, policy);
