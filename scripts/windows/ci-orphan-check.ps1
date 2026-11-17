@@ -10,7 +10,6 @@ if ($orphanServers) {
     throw "Orphan GameClub.Server process(es) detected after kiosk integration."
 }
 
-if (-not $env:PGPASSWORD) { $env:PGPASSWORD = "postgres" }
 $psql = "C:\Program Files\PostgreSQL\16\bin\psql.exe"
 if (-not (Test-Path $psql)) {
     Write-Host "SKIP pg_stat_activity orphan check (psql not found)"
@@ -20,6 +19,12 @@ if (-not (Test-Path $psql)) {
 $conn = $env:GAMECLUB_TEST_DATABASE
 if ([string]::IsNullOrWhiteSpace($conn)) {
     $conn = "Host=localhost;Port=5432;Database=gameclub_test;Username=postgres;Password=postgres;SSL Mode=Disable"
+}
+if ($conn -match 'Password=([^;]+)') {
+    $env:PGPASSWORD = $Matches[1]
+}
+elseif (-not $env:PGPASSWORD) {
+    $env:PGPASSWORD = "postgres"
 }
 $db = if ($conn -match 'Database=([^;]+)') { $Matches[1] } else { "gameclub_test" }
 $hostName = if ($conn -match 'Host=([^;]+)') { $Matches[1] } else { "127.0.0.1" }

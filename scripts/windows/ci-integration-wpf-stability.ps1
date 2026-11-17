@@ -76,6 +76,7 @@ try {
     $wpfFilter = 'FullyQualifiedName~wpf_remaining_time_matches_funded_session_within_one_tick'
     for ($run = 1; $run -le $runs; $run++) {
         Write-Host "WPF stability run $run/$runs"
+        $env:WPF_STABILITY_LOGIN = "fund" + [guid]::NewGuid().ToString("N").Substring(0, 8)
         $wpfArgs = @(
             'test', 'tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj',
             '-c', 'Release', '-f', 'net48', '--no-build', '--nologo',

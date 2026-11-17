@@ -268,6 +268,12 @@ internal sealed class KioskIntegrationBackend
         => await S3TestHelpers.RegisterPc(api, stationId, groupId);
 
     public async Task SetPcNormalOfflineRate40000Async()
+        => await PutPcNormalOfflineRateAsync(40_000L);
+
+    public async Task SetPcNormalOfflineRate80000WithZeroSurchargeAsync()
+        => await PutPcNormalOfflineRateAsync(PilotSeed.PcNormalHourly);
+
+    private async Task PutPcNormalOfflineRateAsync(long hourlyToman)
     {
         var client = CreateApiClient();
         var ratesDoc = await client.GetFromJsonAsync<JsonElement>("/api/rates");
@@ -277,6 +283,7 @@ internal sealed class KioskIntegrationBackend
             {
                 roundingStepToman = ratesDoc.GetProperty("roundingStepToman").GetInt64(),
                 roundingDirection = ratesDoc.GetProperty("roundingDirection").GetString(),
+                pcSpecialBandSurchargeToman = 0L,
                 lines = new[]
                 {
                     new
@@ -285,14 +292,14 @@ internal sealed class KioskIntegrationBackend
                         playMode = "Offline",
                         playerCount = (int?)1,
                         isSpecialBand = false,
-                        hourlyToman = 40_000L,
+                        hourlyToman,
                     },
                 },
             });
-        await put.EnsureSuccessStatusCodeWithBodyAsync("PUT /api/rates (pc-normal 40,000/h)");
+        await put.EnsureSuccessStatusCodeWithBodyAsync($"PUT /api/rates (pc-normal {hourlyToman}/h, surcharge 0)");
     }
 
-    public async Task<G2BillingEvidence> CollectG2EvidenceAsync(Guid sessionId)
+    public async Task<G2BillingEvidence> CollectG2EvidenceAsync(Guid sessionId, double oraclePoweredSpanSeconds)
     {
         if (_factory is not null)
         {
@@ -312,12 +319,6 @@ internal sealed class KioskIntegrationBackend
             var factoryBillTotal = await db.PendingBills
                 .Where(b => b.SessionId == sessionId)
                 .SumAsync(b => b.CollectibleToman);
-            var session = await db.Sessions.Include(s => s.Segments).AsNoTracking()
-                .SingleAsync(s => s.Id == sessionId);
-            var lastSegmentEnd = session.Segments
-                .Select(s => s.EndUtc ?? s.StartUtc)
-                .DefaultIfEmpty(session.StartedAtUtc)
-                .Max();
             return G2BillingEvidence.Build(
                 sessionId,
                 checkpointCount,
@@ -325,8 +326,7 @@ internal sealed class KioskIntegrationBackend
                 checkpointMinMax.Select(c => c.AtUtc),
                 rateLine.HourlyToman,
                 factoryBillTotal,
-                session.StartedAtUtc,
-                lastSegmentEnd);
+                oraclePoweredSpanSeconds);
         }
         else
         {
@@ -381,29 +381,7 @@ internal sealed class KioskIntegrationBackend
             billTotal = Convert.ToInt64(await cmd.ExecuteScalarAsync() ?? 0L);
         }
 
-        DateTime sessionStart;
-        await using (var cmd = new NpgsqlCommand(
-            """SELECT "StartedAtUtc" FROM sessions WHERE "Id" = @id""",
-            conn))
-        {
-            cmd.Parameters.AddWithValue("id", sessionId);
-            sessionStart = (DateTime)(await cmd.ExecuteScalarAsync() ?? throw new InvalidOperationException("session missing"));
-        }
-
-        DateTime lastSegmentEnd;
-        await using (var cmd = new NpgsqlCommand(
-            """
-            SELECT COALESCE(MAX(COALESCE("EndUtc", "StartUtc")), @start)
-            FROM play_segments WHERE "SessionId" = @id
-            """,
-            conn))
-        {
-            cmd.Parameters.AddWithValue("id", sessionId);
-            cmd.Parameters.AddWithValue("start", sessionStart);
-            lastSegmentEnd = (DateTime)(await cmd.ExecuteScalarAsync() ?? sessionStart);
-        }
-
-        return G2BillingEvidence.Build(sessionId, checkpoints, offlineAuditCount, ats, hourly, billTotal, sessionStart, lastSegmentEnd);
+        return G2BillingEvidence.Build(sessionId, checkpoints, offlineAuditCount, ats, hourly, billTotal, oraclePoweredSpanSeconds);
         }
     }
 
@@ -527,15 +505,14 @@ internal sealed record G2BillingEvidence(
         IEnumerable<DateTime> checkpointTimes,
         long hourlyToman,
         long bill,
-        DateTime sessionStartedUtc,
-        DateTime lastSegmentEndUtc)
+        double oraclePoweredSpanSeconds)
     {
         var ordered = checkpointTimes.OrderBy(t => t).ToList();
         var span = ordered.Count == 0
             ? "no-checkpoints"
             : $"{ordered[0]:O}..{ordered[^1]:O} ({ordered.Count} rows)";
-        var elapsedSeconds = Math.Max(0, (lastSegmentEndUtc - sessionStartedUtc).TotalSeconds);
-        var expectedMinutes = (int)Math.Ceiling(elapsedSeconds / 60.0);
+        var measuredSeconds = Math.Max(0, oraclePoweredSpanSeconds);
+        var expectedMinutes = (int)Math.Floor(measuredSeconds / 60.0);
         var expectedCollectible = expectedMinutes * hourlyToman / 60;
         var minuteBuckets = ordered
             .Select(t => new DateTime(t.Year, t.Month, t.Day, t.Hour, t.Minute, 0, DateTimeKind.Utc))

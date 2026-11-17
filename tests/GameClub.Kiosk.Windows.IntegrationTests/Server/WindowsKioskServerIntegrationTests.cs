@@ -136,6 +136,7 @@ public sealed class WindowsKioskServerIntegrationTests
             }
 
             await backend.ResetAsync();
+            await backend.SetPcNormalOfflineRate80000WithZeroSurchargeAsync();
             await backend.RegisterPcAsync(backend.CreateApiClient(), "PC-UNREACH");
             await backend.SeedCustomerWithCredentialAsync("unreach", "pass", 200_000);
             var (deviceId, deviceKey, leasePem) = await backend.PairAsync("PC-UNREACH");
@@ -597,6 +598,7 @@ public sealed class WindowsKioskServerIntegrationTests
             }, leaseCts.Token);
             await runtime.StartAsync(default);
             await WaitUntilTransportConnectedAsync(runtime, TimeSpan.FromSeconds(60));
+            var poweredSpanStartUtc = DateTime.UtcNow;
             await Task.Delay(TimeSpan.FromMinutes(6));
 
             ownedServer.Stop();
@@ -612,6 +614,7 @@ public sealed class WindowsKioskServerIntegrationTests
             var afterOutage2 = (await runtime.GetQueue().PendingAsync()).Count(e => e.Type == "offline_play_segment");
             Assert.True(afterOutage2 > afterOutage1, "outage 2 must enqueue offline_play_segment evidence");
 
+            var poweredSpanSeconds = (DateTime.UtcNow - poweredSpanStartUtc).TotalSeconds;
             leaseCts.Cancel();
             await runtime.DisposeAsync();
             await ownedServer.RelaunchAsync();
@@ -645,10 +648,10 @@ public sealed class WindowsKioskServerIntegrationTests
 
             var stop = await backend.CreateApiClient().PostAsync($"/api/sessions/{sessionId}/stop", null);
             stop.EnsureSuccessStatusCode();
-            var evidence = await backend.CollectG2EvidenceAsync(sessionId);
+            var evidence = await backend.CollectG2EvidenceAsync(sessionId, poweredSpanSeconds);
             Console.WriteLine("G2_ROW_DUMP " + evidence.ToDumpLine());
             Console.WriteLine(
-                $"G2_ORACLE minutes={evidence.ExpectedBillableMinutes} expected_collectible={evidence.ExpectedCollectibleToman}");
+                $"G2_ORACLE measured_seconds={poweredSpanSeconds:F1} minutes={evidence.ExpectedBillableMinutes} expected_collectible={evidence.ExpectedCollectibleToman}");
             Assert.Equal(40_000, evidence.PcNormalOfflineHourlyToman);
             Assert.Equal(evidence.ExpectedBillableMinutes, evidence.CheckpointCount);
             Assert.Equal(0, evidence.DuplicateCheckpointMinuteBuckets);

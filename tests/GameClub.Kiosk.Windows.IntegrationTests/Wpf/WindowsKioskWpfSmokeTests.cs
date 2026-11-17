@@ -93,7 +93,8 @@ public sealed class WindowsKioskWpfSmokeTests
         {
             try
             {
-                WpfLiveServerTestHelper.SetupFundedSessionAsync("fund48667", "pass").GetAwaiter().GetResult();
+                var loginName = Environment.GetEnvironmentVariable("WPF_STABILITY_LOGIN") ?? "fund48667";
+                WpfLiveServerTestHelper.SetupFundedSessionAsync(loginName, "pass").GetAwaiter().GetResult();
             }
             catch (Exception ex)
             {
@@ -115,7 +116,8 @@ public sealed class WindowsKioskWpfSmokeTests
         Exception inProcessError = null;
         var at = DateTime.SpecifyKind(new DateTime(2026, 6, 3, 14, 0, 0), DateTimeKind.Unspecified);
         var card = new RateCardBuilder().AddBase("pc-normal", PlayMode.Offline, 1, 80_000).Build();
-        var account = new PcAccount("fund48667", startWalletToman);
+        var stabilityLogin = Environment.GetEnvironmentVariable("WPF_STABILITY_LOGIN") ?? "fund48667";
+        var account = new PcAccount(stabilityLogin, startWalletToman);
         var estimatorSeconds = (int)TimeSpan.FromMinutes(
             RemainingTimeEstimator.Estimate(account, "pc-normal", PlayMode.Offline, 1, at, card, graceMinuteEnabled: true).MoneyMinutes!.Value).TotalSeconds;
         Assert.Equal(expectedSeconds, estimatorSeconds);
@@ -132,7 +134,7 @@ public sealed class WindowsKioskWpfSmokeTests
                     var host = GetField(window, "_host");
                     await WpfLiveServerTransportHelper.WaitForKioskRuntimeTransportConnectedAsync(host, TimeSpan.FromSeconds(60));
                     var login = host.GetType().GetMethod("LoginAsync", BindingFlags.Instance | BindingFlags.Public);
-                    await (Task)login.Invoke(host, new object[] { "fund48667", "pass" });
+                    await (Task)login.Invoke(host, new object[] { stabilityLogin, "pass" });
                     var status = (System.Windows.Controls.TextBlock)GetField(window, "StatusText");
                     var pollStartedUtc = DateTime.UtcNow;
                     var deadline = DateTime.UtcNow.AddSeconds(90);

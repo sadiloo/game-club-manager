@@ -100,6 +100,7 @@ public sealed class KioskHostService : IAsyncDisposable
             _orchestrator.ConfigureLeaseVerifier(_leaseVerifyPublicKeyPem);
         }
 
+        EnsureStatusUiTickRunning();
         _ = RefreshAsync();
     }
 
@@ -159,10 +160,7 @@ public sealed class KioskHostService : IAsyncDisposable
         await ApplyStationProfileAsync();
         await RefreshCatalogAsync();
         _status.Text = $"Paired to {_stationId}";
-        if (_sessionId == Guid.Empty && !_uiTick.IsEnabled)
-        {
-            _uiTick.Start();
-        }
+        EnsureStatusUiTickRunning();
     }
 
     public async Task LoginAsync(string loginName, string password)
@@ -245,11 +243,7 @@ public sealed class KioskHostService : IAsyncDisposable
         RunSessionCleanup();
         ShowLockLayout();
         _replayTick.Stop();
-        if (_deviceId != Guid.Empty && !_uiTick.IsEnabled)
-        {
-            _uiTick.Start();
-        }
-
+        EnsureStatusUiTickRunning();
         RefreshStationStatusText();
     }
 
@@ -279,12 +273,11 @@ public sealed class KioskHostService : IAsyncDisposable
                 || string.Equals(ack.SessionStatus, "Ended", StringComparison.OrdinalIgnoreCase))
             {
                 RunSessionCleanup();
+                _sessionId = Guid.Empty;
+                _runtime.BindSession(Guid.Empty);
                 ShowLockLayout();
-                _uiTick.Stop();
                 _replayTick.Stop();
-                _status.Text = phase == KioskShellPhase.LeaseExpired
-                    ? $"Locked — lease expired ({_stationId})"
-                    : $"Locked — {_stationId}";
+                RefreshStationStatusText();
             }
             else if (string.Equals(ack.SessionStatus, "Open", StringComparison.OrdinalIgnoreCase))
             {
@@ -374,10 +367,11 @@ public sealed class KioskHostService : IAsyncDisposable
             _shell.Dispatcher.Invoke(() =>
             {
                 RunSessionCleanup();
+                _sessionId = Guid.Empty;
+                _runtime.BindSession(Guid.Empty);
                 ShowLockLayout();
-                _uiTick.Stop();
                 _replayTick.Stop();
-                _status.Text = $"Locked — lease expired ({_stationId})";
+                RefreshStationStatusText();
             });
         }
     }
@@ -398,10 +392,14 @@ public sealed class KioskHostService : IAsyncDisposable
         {
             try
             {
-                if (phase == KioskTransportPhase.Connected && _runCatalogOnFirstConnected)
+                if (phase == KioskTransportPhase.Connected)
                 {
-                    _runCatalogOnFirstConnected = false;
-                    _ = RunStartupCatalogRefreshAsync();
+                    EnsureStatusUiTickRunning();
+                    if (_runCatalogOnFirstConnected)
+                    {
+                        _runCatalogOnFirstConnected = false;
+                        _ = RunStartupCatalogRefreshAsync();
+                    }
                 }
 
                 RefreshStationStatusText();
@@ -411,6 +409,14 @@ public sealed class KioskHostService : IAsyncDisposable
                 // UI status subscribers must not break transport reconnect.
             }
         });
+    }
+
+    private void EnsureStatusUiTickRunning()
+    {
+        if (_deviceId != Guid.Empty && !_uiTick.IsEnabled)
+        {
+            _uiTick.Start();
+        }
     }
 
     private void RefreshStationStatusText()
@@ -732,16 +738,14 @@ public sealed class KioskHostService : IAsyncDisposable
                 if (_sessionId == Guid.Empty)
                 {
                     RefreshStationStatusText();
-                    if (!_uiTick.IsEnabled)
-                    {
-                        _uiTick.Start();
-                    }
+                    EnsureStatusUiTickRunning();
                 }
             }
             else
             {
                 _runCatalogOnFirstConnected = true;
                 RefreshStationStatusText();
+                EnsureStatusUiTickRunning();
             }
         }
         catch (Exception ex)
