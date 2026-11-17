@@ -35,12 +35,12 @@ public static class SessionGameSupport
     {
         if (commandId == Guid.Empty)
         {
-            throw new ApiException(StatusCodes.Status400BadRequest, "command_required", "Command id is required.");
+            throw new ApiException(StatusCodes.Status400BadRequest, "command_required", "شناسهٔ دستور الزامی است.");
         }
 
         if (expectedVersion is null)
         {
-            throw new ApiException(StatusCodes.Status400BadRequest, "version_required", "expectedVersion is required.");
+            throw new ApiException(StatusCodes.Status400BadRequest, "version_required", "نسخهٔ جلسه (expectedVersion) الزامی است.");
         }
 
         var strategy = db.Database.CreateExecutionStrategy();
@@ -64,7 +64,7 @@ public static class SessionGameSupport
             }
             catch (Exception ex) when (PostgresErrors.IsLockNotAvailable(ex))
             {
-                throw new ApiException(StatusCodes.Status409Conflict, "session_busy", "Session is being updated.");
+                throw new ApiException(StatusCodes.Status409Conflict, "session_busy", "جلسه در حال به‌روزرسانی است؛ دوباره تلاش کنید.");
             }
 
             var session = await db.Sessions
@@ -72,22 +72,22 @@ public static class SessionGameSupport
                 .Include(s => s.Segments)
                 .Include(s => s.Pauses)
                 .FirstOrDefaultAsync(s => s.Id == sessionId, ct)
-                ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Session not found.");
+                ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "جلسه یافت نشد.");
 
             if (session.Station?.Group?.Kind != StationKind.Console)
             {
-                throw new ApiException(StatusCodes.Status400BadRequest, "not_console", "Game changes apply to consoles only.");
+                throw new ApiException(StatusCodes.Status400BadRequest, "not_console", "تغییر بازی فقط برای ایستگاه کنسول مجاز است.");
             }
 
             if (expectedVersion is uint version && session.RowVersion != version)
             {
-                throw new ApiException(StatusCodes.Status409Conflict, "stale_version", "Session was updated; refresh the page.");
+                throw new ApiException(StatusCodes.Status409Conflict, "stale_version", "جلسه به‌روز شده است؛ صفحه را تازه کنید.");
             }
 
             if (session.Status == SessionStatus.ManualSettle
                 || session.Status is SessionStatus.BillOpen or SessionStatus.AwaitingPayment)
             {
-                throw new ApiException(StatusCodes.Status409Conflict, "awaiting_payment", "Session already has an open bill.");
+                throw new ApiException(StatusCodes.Status409Conflict, "awaiting_payment", "برای این جلسه قبلاً صورتحساب باز شده است.");
             }
 
             if (session.CurrentGameTitleId == gameTitleId)
@@ -100,7 +100,7 @@ public static class SessionGameSupport
             long? previousHourly = null;
             long? previousNight = null;
             var openSegment = session.Segments.SingleOrDefault(s => s.EndUtc is null)
-                ?? throw new ApiException(StatusCodes.Status409Conflict, "invalid_session", "Session has no open segment.");
+                ?? throw new ApiException(StatusCodes.Status409Conflict, "invalid_session", "جلسه بخش بازی باز ندارد.");
 
             if (gameTitleId is int pick)
             {

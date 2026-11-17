@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
@@ -85,6 +86,11 @@ public static partial class GameRateTomanParser
             return false;
         }
 
+        if (!HasValidThousandsGrouping(trimmed))
+        {
+            return false;
+        }
+
         var digits = new char[trimmed.Length];
         var n = 0;
         foreach (var ch in trimmed)
@@ -121,5 +127,75 @@ public static partial class GameRateTomanParser
         }
 
         return toman > 0;
+    }
+
+    private static bool HasValidThousandsGrouping(string trimmed)
+    {
+        var groups = new List<string>();
+        var current = new StringBuilder();
+        foreach (var ch in trimmed)
+        {
+            if (ch is ',' or '\u060C' or '\u066C')
+            {
+                if (current.Length == 0)
+                {
+                    return false;
+                }
+
+                groups.Add(current.ToString());
+                current.Clear();
+            }
+            else if (ch is >= '0' and <= '9' or >= '\u06F0' and <= '\u06F9' or >= '\u0660' and <= '\u0669')
+            {
+                current.Append(ch);
+            }
+            else
+            {
+                return false;
+            }
+        }
+
+        if (current.Length == 0 && groups.Count > 0)
+        {
+            return false;
+        }
+
+        if (current.Length > 0)
+        {
+            groups.Add(current.ToString());
+        }
+
+        if (groups.Count == 0)
+        {
+            return false;
+        }
+
+        foreach (var group in groups)
+        {
+            if (group.Length == 0)
+            {
+                return false;
+            }
+        }
+
+        if (groups.Count == 1)
+        {
+            return true;
+        }
+
+        if (groups[0].Length is < 1 or > 3)
+        {
+            return false;
+        }
+
+        for (var i = 1; i < groups.Count; i++)
+        {
+            if (groups[i].Length != 3)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 }

@@ -2179,9 +2179,48 @@ function ss14FmtToman(n) {
   return num.toLocaleString("fa-IR");
 }
 
+function ss14IsRateDigitChar(ch) {
+  return /[0-9\u06F0-\u06F9\u0660-\u0669]/.test(ch);
+}
+
+function ss14IsRateSepChar(ch) {
+  return ch === "," || ch === "\u060C" || ch === "\u066C";
+}
+
+function ss14HasValidThousandsGrouping(trimmed) {
+  const groups = [];
+  let cur = "";
+  for (const ch of trimmed) {
+    if (ss14IsRateSepChar(ch)) {
+      if (cur.length === 0) return false;
+      groups.push(cur);
+      cur = "";
+    } else if (ss14IsRateDigitChar(ch)) {
+      cur += ch;
+    } else {
+      return false;
+    }
+  }
+  if (cur.length === 0 && groups.length > 0) return false;
+  if (cur.length > 0) groups.push(cur);
+  if (groups.length === 0) return false;
+  for (const g of groups) {
+    if (g.length === 0) return false;
+  }
+  if (groups.length === 1) return true;
+  if (groups[0].length < 1 || groups[0].length > 3) return false;
+  for (let i = 1; i < groups.length; i++) {
+    if (groups[i].length !== 3) return false;
+  }
+  return true;
+}
+
 function ss14IsAllowedRateInput(raw) {
   if (raw == null) return false;
-  return /^[0-9\u06F0-\u06F9\u0660-\u0669,\u060C\u066C]+$/.test(String(raw).trim());
+  const trimmed = String(raw).trim();
+  if (trimmed === "") return false;
+  if (!/^[0-9\u06F0-\u06F9\u0660-\u0669,\u060C\u066C]+$/.test(trimmed)) return false;
+  return ss14HasValidThousandsGrouping(trimmed);
 }
 
 function ss14ParseTomanInput(raw) {
@@ -2215,7 +2254,9 @@ function ss14EnsureManagerPanelStyles() {
     "#ss14GameRatesPanel #ss14GameRatesTable thead{display:none}" +
     "#ss14GameRatesPanel #ss14GameRatesTable tr{display:block;border:1px solid #ccc;margin:0.5rem 0;padding:0.5rem;box-sizing:border-box}" +
     "#ss14GameRatesPanel #ss14GameRatesTable td{display:block;width:100%;max-width:100%;box-sizing:border-box;padding:0.25rem 0}" +
-    "#ss14GameRatesPanel #ss14GameRatesTable input[type=\"text\"]{width:100%;max-width:100%;box-sizing:border-box}";
+    "#ss14GameRatesPanel #ss14GameRatesTable td.ss14-rate-cell label{display:block;font-size:0.85rem;line-height:1.35;margin:0 0 0.25rem;word-wrap:break-word;overflow-wrap:anywhere;max-width:100%}" +
+    "#ss14GameRatesPanel #ss14GameRatesTable input[type=\"text\"]{width:100%;max-width:100%;box-sizing:border-box}" +
+    "#ss14GameRatesPanel .ss14-game-rates-error{display:block;width:100%;max-width:100%;margin:0.35rem 0 0;color:#b00020;font-size:0.9rem;line-height:1.35;word-wrap:break-word;overflow-wrap:anywhere}";
   document.head.appendChild(style);
 }
 
@@ -2238,6 +2279,7 @@ function ss14EnsureManagerPanel() {
     '<table id="ss14GameRatesTable"><thead><tr><th>گزینه</th><th>نرخ عادی (تومان)</th><th>نرخ ساعت خاص (تومان)</th><th></th></tr></thead>' +
     '<tbody id="ss14GameRatesBody"></tbody></table>' +
     '<button type="button" id="ss14GameSaveBtn">ذخیره</button> ' +
+    '<p id="ss14GameRatesError" class="ss14-game-rates-error" role="alert"></p> ' +
     '<button type="button" id="ss14GameDeleteBtn">حذف</button>' +
     "</div>";
   document.getElementById("cafeSettings").parentElement.insertBefore(section, document.getElementById("cafeSettings"));
@@ -2292,20 +2334,37 @@ function ss14RenderManagerForm(title) {
     tr.dataset.playerCount = k.playerCount ?? "";
     const tdLabel = document.createElement("td");
     tdLabel.textContent = ss14OptionLabel(k.mode, k.playerCount);
+    const safeKey = key.replace(/:/g, "-");
+    const lblHourlyText = "نرخ عادی (تومان در ساعت)";
+    const lblNightText = "نرخ ساعت خاص (تومان در ساعت)";
+    const idH = `ss14RateHourly-${safeKey}`;
+    const idN = `ss14RateNight-${safeKey}`;
     const tdH = document.createElement("td");
+    tdH.className = "ss14-rate-cell";
+    const lblH = document.createElement("label");
+    lblH.htmlFor = idH;
+    lblH.textContent = lblHourlyText;
     const inH = document.createElement("input");
+    inH.id = idH;
     inH.type = "text";
     inH.inputMode = "numeric";
     inH.dataset.rate = "hourly";
+    inH.setAttribute("aria-label", lblHourlyText);
     inH.value = row?.hourlyToman != null ? ss14FmtToman(row.hourlyToman) : "";
-    tdH.appendChild(inH);
+    tdH.append(lblH, inH);
     const tdN = document.createElement("td");
+    tdN.className = "ss14-rate-cell";
+    const lblN = document.createElement("label");
+    lblN.htmlFor = idN;
+    lblN.textContent = lblNightText;
     const inN = document.createElement("input");
+    inN.id = idN;
     inN.type = "text";
     inN.inputMode = "numeric";
     inN.dataset.rate = "night";
+    inN.setAttribute("aria-label", lblNightText);
     inN.value = row?.nightHourlyToman != null ? ss14FmtToman(row.nightHourlyToman) : "";
-    tdN.appendChild(inN);
+    tdN.append(lblN, inN);
     const tdNote = document.createElement("td");
     /* temp text */
     if (title?.id && row?.hourlyToman == null) {
@@ -2372,26 +2431,33 @@ function ss14CollectManagerRates() {
   return rows;
 }
 
+function ss14ShowManagerError(msg) {
+  const el = document.getElementById("ss14GameRatesError");
+  if (el) el.textContent = msg || "";
+}
+
 async function ss14SaveManagerTitle() {
+  ss14ShowManagerError("");
   try {
     const name = document.getElementById("ss14GameName")?.value?.trim();
     if (!name) {
-      showError("نام بازی الزامی است.");
+      ss14ShowManagerError("نام بازی الزامی است.");
       return;
     }
     const enabled = !!document.getElementById("ss14GameEnabled")?.checked;
     const rates = ss14CollectManagerRates();
     const body = { name, enabled, rates };
+    const saveOpts = { method: "POST", body: JSON.stringify(body), background: true };
     if (ss14MgrSelectedId == null) {
-      const created = await api("/api/operator/game-titles", { method: "POST", body: JSON.stringify(body) });
+      const created = await api("/api/operator/game-titles", saveOpts);
       ss14MgrSelectedId = created.id;
     } else {
-      await api(`/api/operator/game-titles/${ss14MgrSelectedId}`, { method: "PUT", body: JSON.stringify(body) });
+      await api(`/api/operator/game-titles/${ss14MgrSelectedId}`, { ...saveOpts, method: "PUT" });
     }
     await ss14LoadManagerData();
+    ss14ShowManagerError("");
   } catch (e) {
-    if (e.status) return;
-    showError(String(e.message || e));
+    ss14ShowManagerError(String(e.message || e));
   }
 }
 

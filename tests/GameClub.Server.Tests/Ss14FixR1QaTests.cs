@@ -155,6 +155,7 @@ public sealed class Ss14FixR1QaTests(GameClubWebApplicationFactory factory)
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
             Assert.False(await db.GameTitles.AnyAsync(t => t.Name == "TxRoll"));
             Assert.False(await db.GameRateLines.AnyAsync());
+            Assert.False(await db.AuditLog.AnyAsync(a => a.Action.StartsWith("game_")));
         }
         finally
         {
@@ -168,7 +169,77 @@ public sealed class Ss14FixR1QaTests(GameClubWebApplicationFactory factory)
         }
     }
 
-  [Fact]
+    [Fact]
+    public async Task FixR1e_F2_second_save_failure_rolls_back_title_update_rates_and_audit()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var mgr = await factory.CreateOperatorClientAsync("owner", "5678");
+        var create = await mgr.PostAsJsonAsync(
+            "/api/operator/game-titles",
+            new { name = "BeforeName", enabled = true, rates = Fc27Rates });
+        create.EnsureSuccessStatusCode();
+        var gameId = (await create.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetInt32();
+        int auditBefore;
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            auditBefore = await db.AuditLog.CountAsync(a => a.Action.StartsWith("game_"));
+            await db.Database.ExecuteSqlRawAsync(
+                """
+                CREATE OR REPLACE FUNCTION test_block_game_title_audit()
+                RETURNS trigger LANGUAGE plpgsql AS $$
+                BEGIN
+                  IF NEW.action LIKE 'game_%' THEN
+                    RAISE EXCEPTION 'test_block_game_title_audit';
+                  END IF;
+                  RETURN NEW;
+                END;
+                $$;
+                DROP TRIGGER IF EXISTS test_block_game_title_audit ON audit_log;
+                CREATE TRIGGER test_block_game_title_audit
+                  BEFORE INSERT ON audit_log
+                  FOR EACH ROW EXECUTE FUNCTION test_block_game_title_audit();
+                """);
+        }
+
+        try
+        {
+            var res = await mgr.PutAsJsonAsync(
+                $"/api/operator/game-titles/{gameId}",
+                new
+                {
+                    name = "AfterName",
+                    enabled = false,
+                    rates = new[]
+                    {
+                        new { mode = "Offline", playerCount = (int?)1, hourlyToman = 999_000L },
+                        new { mode = "Offline", playerCount = (int?)2, hourlyToman = 888_000L },
+                    },
+                });
+            Assert.NotEqual(HttpStatusCode.OK, res.StatusCode);
+            using var scope = factory.Services.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var title = await db.GameTitles.Include(g => g.RateLines).SingleAsync(g => g.Id == gameId);
+            Assert.Equal("BeforeName", title.Name);
+            Assert.True(title.Enabled);
+            var line1 = title.RateLines.Single(r => r.PlayerCount == 1);
+            Assert.Equal(150_000L, line1.HourlyToman);
+            Assert.Equal(180_000L, line1.NightHourlyToman);
+            Assert.Equal(auditBefore, await db.AuditLog.CountAsync(a => a.Action.StartsWith("game_")));
+        }
+        finally
+        {
+            using var scope = factory.Services.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            await db.Database.ExecuteSqlRawAsync(
+                """
+                DROP TRIGGER IF EXISTS test_block_game_title_audit ON audit_log;
+                DROP FUNCTION IF EXISTS test_block_game_title_audit();
+                """);
+        }
+    }
+
+    [Fact]
     public async Task FixR1_F4_bill_and_invoice_carry_persian_game_line_with_snapshot()
     {
         await S3TestHelpers.ResetAsync(factory);

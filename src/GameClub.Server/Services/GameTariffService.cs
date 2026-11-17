@@ -272,7 +272,7 @@ public sealed class GameTariffService(AppDbContext db, AuditService audit)
         }
 
         var entity = await db.GameTitles.FirstOrDefaultAsync(g => g.Id == id, ct)
-            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Game not found.");
+            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "بازی یافت نشد.");
         db.GameTitles.Remove(entity);
         await audit.AppendAsync("game_title.delete", new { gameTitleId = id, name = entity.Name }, ct);
         await db.SaveChangesAsync(ct);

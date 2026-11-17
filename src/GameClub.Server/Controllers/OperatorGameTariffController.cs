@@ -38,7 +38,7 @@ public sealed class OperatorGameTariffController(GameTariffService gameTariff, O
     [HttpGet("selectable")]
     public async Task<IActionResult> ListSelectable([FromQuery] string mode, [FromQuery] int playerCount, CancellationToken ct)
     {
-        if (!Enum.TryParse<PlayMode>(mode, true, out var parsed))
+        if (!PlayModeNames.TryParse(mode, out var parsed))
         {
             throw new ApiException(StatusCodes.Status400BadRequest, "invalid_mode", "حالت بازی نامعتبر است.");
         }
@@ -84,7 +84,7 @@ public sealed class OperatorGameTariffController(GameTariffService gameTariff, O
         var mapped = new List<GameRateLineInput>(rows.Count);
         foreach (var r in rows)
         {
-            if (!Enum.TryParse<PlayMode>(r.Mode, true, out var mode))
+            if (!PlayModeNames.TryParse(r.Mode, out var mode))
             {
                 throw new ApiException(StatusCodes.Status400BadRequest, "invalid_mode", "حالت بازی نامعتبر است.");
             }
