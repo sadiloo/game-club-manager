@@ -2215,12 +2215,26 @@ function ss14HasValidThousandsGrouping(trimmed) {
   return true;
 }
 
+function ss14RateDigitsNoIllegalLeadingZero(trimmed) {
+  let digits = "";
+  const fa = "۰۱۲۳۴۵۶۷۸۹";
+  for (const ch of trimmed) {
+    if (ss14IsRateSepChar(ch)) continue;
+    if (!ss14IsRateDigitChar(ch)) continue;
+    if (ch >= "0" && ch <= "9") digits += ch;
+    else if (ch >= "\u06F0" && ch <= "\u06F9") digits += String(fa.indexOf(ch));
+    else digits += String("0123456789"[ch.charCodeAt(0) - 0x0660]);
+  }
+  return !(digits.length > 1 && digits[0] === "0");
+}
+
 function ss14IsAllowedRateInput(raw) {
   if (raw == null) return false;
   const trimmed = String(raw).trim();
   if (trimmed === "") return false;
   if (!/^[0-9\u06F0-\u06F9\u0660-\u0669,\u060C\u066C]+$/.test(trimmed)) return false;
-  return ss14HasValidThousandsGrouping(trimmed);
+  if (!ss14HasValidThousandsGrouping(trimmed)) return false;
+  return ss14RateDigitsNoIllegalLeadingZero(trimmed);
 }
 
 function ss14ParseTomanInput(raw) {
@@ -2233,6 +2247,7 @@ function ss14ParseTomanInput(raw) {
     .replace(/[\u06F0-\u06F9]/g, (d) => String(fa.indexOf(d)))
     .replace(/[\u0660-\u0669]/g, (d) => String("0123456789"[d.charCodeAt(0) - 0x0660]));
   if (!s || !/^[0-9]+$/.test(s)) return null;
+  if (s.length > 1 && s[0] === "0") return null;
   const n = Number(s);
   return Number.isFinite(n) && n > 0 ? n : null;
 }
@@ -2254,7 +2269,7 @@ function ss14EnsureManagerPanelStyles() {
     "#ss14GameRatesPanel #ss14GameRatesTable thead{display:none}" +
     "#ss14GameRatesPanel #ss14GameRatesTable tr{display:block;border:1px solid #ccc;margin:0.5rem 0;padding:0.5rem;box-sizing:border-box}" +
     "#ss14GameRatesPanel #ss14GameRatesTable td{display:block;width:100%;max-width:100%;box-sizing:border-box;padding:0.25rem 0}" +
-    "#ss14GameRatesPanel #ss14GameRatesTable td.ss14-rate-cell label{display:block;font-size:0.85rem;line-height:1.35;margin:0 0 0.25rem;word-wrap:break-word;overflow-wrap:anywhere;max-width:100%}" +
+    "#ss14GameRatesPanel #ss14GameRatesTable td.ss14-rate-cell label{display:block;font-size:0.85rem;line-height:1.35;margin:0 0 0.25rem;word-wrap:break-word;overflow-wrap:anywhere;max-width:100%;min-width:1px;min-height:1em}" +
     "#ss14GameRatesPanel #ss14GameRatesTable input[type=\"text\"]{width:100%;max-width:100%;box-sizing:border-box}" +
     "#ss14GameRatesPanel .ss14-game-rates-error{display:block;width:100%;max-width:100%;margin:0.35rem 0 0;color:#b00020;font-size:0.9rem;line-height:1.35;word-wrap:break-word;overflow-wrap:anywhere}";
   document.head.appendChild(style);

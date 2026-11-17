@@ -17,6 +17,9 @@ public sealed class Ss14FixR1eRateGroupingApiTests(GameClubWebApplicationFactory
     [InlineData(",150000")]
     [InlineData("150000,")]
     [InlineData("1,50,000")]
+    [InlineData("000,150")]
+    [InlineData("0,150,000")]
+    [InlineData("0150000")]
     public async Task FixR1e_invalid_grouped_rate_string_returns_400_persian_nothing_saved(string hourly)
     {
         await S3TestHelpers.ResetAsync(factory);

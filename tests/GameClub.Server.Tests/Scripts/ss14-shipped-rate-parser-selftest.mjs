@@ -40,10 +40,17 @@ expectNull("1,,5");
 expectNull(",150000");
 expectNull("150000,");
 expectNull("1,50,000");
+expectNull("000,150");
+expectNull("0,150,000");
+expectNull("0150000");
+expectNull("15،00");
+expectNull("1،50،000");
 
 expectValue("150000", 150000);
 expectValue("150,000", 150000);
 expectValue("۱۵۰٬۰۰۰", 150000);
 expectValue("1,500,000", 1500000);
+expectValue("١٬٥٠٠٬٠٠٠", 1500000);
+expectValue("1،500،000", 1500000);
 
 console.log("ss14-shipped-rate-parser-selftest: ok");

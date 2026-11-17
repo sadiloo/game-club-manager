@@ -186,19 +186,19 @@ public sealed class Ss14FixR1QaTests(GameClubWebApplicationFactory factory)
             auditBefore = await db.AuditLog.CountAsync(a => a.Action.StartsWith("game_"));
             await db.Database.ExecuteSqlRawAsync(
                 """
-                CREATE OR REPLACE FUNCTION test_block_game_title_audit()
+                CREATE OR REPLACE FUNCTION test_block_game_rate_change_audit()
                 RETURNS trigger LANGUAGE plpgsql AS $$
                 BEGIN
-                  IF NEW.action LIKE 'game_%' THEN
-                    RAISE EXCEPTION 'test_block_game_title_audit';
+                  IF NEW.action = 'game_rate.change' THEN
+                    RAISE EXCEPTION 'test_block_game_rate_change_audit';
                   END IF;
                   RETURN NEW;
                 END;
                 $$;
-                DROP TRIGGER IF EXISTS test_block_game_title_audit ON audit_log;
-                CREATE TRIGGER test_block_game_title_audit
+                DROP TRIGGER IF EXISTS test_block_game_rate_change_audit ON audit_log;
+                CREATE TRIGGER test_block_game_rate_change_audit
                   BEFORE INSERT ON audit_log
-                  FOR EACH ROW EXECUTE FUNCTION test_block_game_title_audit();
+                  FOR EACH ROW EXECUTE FUNCTION test_block_game_rate_change_audit();
                 """);
         }
 
@@ -233,8 +233,8 @@ public sealed class Ss14FixR1QaTests(GameClubWebApplicationFactory factory)
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
             await db.Database.ExecuteSqlRawAsync(
                 """
-                DROP TRIGGER IF EXISTS test_block_game_title_audit ON audit_log;
-                DROP FUNCTION IF EXISTS test_block_game_title_audit();
+                DROP TRIGGER IF EXISTS test_block_game_rate_change_audit ON audit_log;
+                DROP FUNCTION IF EXISTS test_block_game_rate_change_audit();
                 """);
         }
     }

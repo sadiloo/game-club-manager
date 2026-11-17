@@ -10,6 +10,10 @@ public sealed class GameRateTomanParserTests
     [InlineData(",150000")]
     [InlineData("150000,")]
     [InlineData("1,50,000")]
+    [InlineData("000,150")]
+    [InlineData("00,001")]
+    [InlineData("0,150,000")]
+    [InlineData("0150000")]
     public void FixR1e_invalid_thousands_grouping_rejected(string raw)
     {
         Assert.False(GameRateTomanParser.TryParseStrict(raw, out _));
@@ -24,5 +28,14 @@ public sealed class GameRateTomanParserTests
     {
         Assert.True(GameRateTomanParser.TryParseStrict(raw, out var toman));
         Assert.Equal(expected, toman);
+    }
+
+    [Theory]
+    [InlineData("0")]
+    [InlineData("۰")]
+    [InlineData("٠")]
+    public void FixR1f_plain_zero_rate_rejected(string raw)
+    {
+        Assert.False(GameRateTomanParser.TryParseStrict(raw, out _));
     }
 }

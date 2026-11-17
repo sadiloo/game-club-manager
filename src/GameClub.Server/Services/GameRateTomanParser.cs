@@ -121,6 +121,11 @@ public static partial class GameRateTomanParser
         }
 
         var ascii = new string(digits, 0, n);
+        if (ascii.Length > 1 && ascii[0] == '0')
+        {
+            return false;
+        }
+
         if (!long.TryParse(ascii, NumberStyles.None, CultureInfo.InvariantCulture, out toman))
         {
             return false;
