@@ -493,6 +493,171 @@ public sealed class KioskReconnectCoreTests
     }
 
     [Fact]
+    public void locked_kiosk_no_session_shows_no_server_response_when_heartbeats_fail()
+    {
+        var byFailures = KioskStationStatus.Resolve(
+            "PC-LOCK",
+            KioskTransportPhase.Connected,
+            hubTransportConnected: true,
+            signalRAutoReconnecting: false,
+            pairingJustFailed: false,
+            hasOpenSession: false,
+            consecutiveHeartbeatFailures: 2,
+            lastHeartbeatAckUtc: DateTime.UtcNow,
+            utcNow: DateTime.UtcNow,
+            estimatedRemainingSeconds: null,
+            lastErrorDetail: null);
+        Assert.Contains("no server response", byFailures, StringComparison.OrdinalIgnoreCase);
+        Assert.False(KioskStationStatus.ContainsConnectedWording(byFailures));
+
+        var byStaleAck = KioskStationStatus.Resolve(
+            "PC-LOCK",
+            KioskTransportPhase.Connected,
+            hubTransportConnected: true,
+            signalRAutoReconnecting: false,
+            pairingJustFailed: false,
+            hasOpenSession: false,
+            consecutiveHeartbeatFailures: 0,
+            lastHeartbeatAckUtc: DateTime.UtcNow.AddSeconds(-30),
+            utcNow: DateTime.UtcNow,
+            estimatedRemainingSeconds: null,
+            lastErrorDetail: null);
+        Assert.Contains("no server response", byStaleAck, StringComparison.OrdinalIgnoreCase);
+        Assert.False(KioskStationStatus.ContainsConnectedWording(byStaleAck));
+    }
+
+    [Fact]
+    public async Task start_async_twice_without_reset_keeps_reconnect_loop()
+    {
+        var transport = new FakeKioskHubTransport();
+        var runtime = new KioskRuntime(() => new HttpClient()) { TestDelayAsync = (_, _) => Task.CompletedTask };
+        runtime.ConfigureForTests(transport, new RecordingQueue(), "http://x", Guid.NewGuid(), "k", "PC-M-begin");
+        await runtime.StartAsync(default);
+        await runtime.WaitForTransportConnectedAsync(TimeSpan.FromSeconds(5), default);
+        await runtime.StartAsync(default);
+        transport.ForceClose(new Exception("closed"));
+        await WaitUntil(() => transport.StartCallCount >= 2 && runtime.IsTransportConnected, 5000);
+        Assert.True(transport.StartCallCount >= 2, $"BeginAsync must restart loop; StartCallCount={transport.StartCallCount}");
+    }
+
+    [Fact]
+    public async Task two_heartbeat_failures_without_stale_ack_show_no_server_response()
+    {
+        var transport = new FakeKioskHubTransport();
+        var runtime = new KioskRuntime(() => new HttpClient())
+        {
+            TestHeartbeatInterval = TimeSpan.FromMilliseconds(50),
+        };
+        runtime.ConfigureForTests(transport, new RecordingQueue(), "http://127.0.0.1:5000", Guid.NewGuid(), "key", "PC-M-hbfail");
+        var ack = new KioskHeartbeatAck { SessionStatus = "Open", Display = new KioskDisplayDto { EstimatedRemainingSeconds = 600 } };
+        transport.HeartbeatHandler = _ => Task.FromResult(ack);
+        await runtime.StartAsync(default);
+        await runtime.WaitForTransportConnectedAsync(TimeSpan.FromSeconds(5), default);
+        await Task.Delay(80);
+        transport.HeartbeatHandler = _ => throw new InvalidOperationException("hb fail");
+        var deadline = DateTime.UtcNow.AddSeconds(3);
+        while (DateTime.UtcNow < deadline && runtime.ConsecutiveHeartbeatFailures < 2)
+        {
+            await Task.Delay(20);
+        }
+
+        Assert.True(runtime.ConsecutiveHeartbeatFailures >= 2);
+        var status = KioskStationStatus.Resolve(
+            "PC-M-hbfail",
+            KioskTransportPhase.Connected,
+            runtime.IsTransportConnected,
+            false,
+            false,
+            true,
+            runtime.ConsecutiveHeartbeatFailures,
+            DateTime.UtcNow,
+            DateTime.UtcNow,
+            600L,
+            null);
+        Assert.Contains("no server response", status, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task heartbeat_failure_counter_resets_after_successful_ack()
+    {
+        var failCount = 0;
+        var transport = new FakeKioskHubTransport
+        {
+            HeartbeatHandler = _ =>
+            {
+                if (Interlocked.Increment(ref failCount) <= 2)
+                {
+                    throw new InvalidOperationException("hb fail");
+                }
+
+                return Task.FromResult(new KioskHeartbeatAck
+                {
+                    SessionStatus = "Open",
+                    Display = new KioskDisplayDto { EstimatedRemainingSeconds = 600 },
+                });
+            },
+        };
+        var runtime = new KioskRuntime(() => new HttpClient())
+        {
+            TestHeartbeatInterval = TimeSpan.FromMilliseconds(40),
+        };
+        runtime.ConfigureForTests(transport, new RecordingQueue(), "http://127.0.0.1:5000", Guid.NewGuid(), "key", "PC-Mx");
+        await runtime.StartAsync(default);
+        await runtime.WaitForTransportConnectedAsync(TimeSpan.FromSeconds(5), default);
+        await WaitUntil(() => runtime.ConsecutiveHeartbeatFailures >= 2, 3000);
+        await WaitUntil(() => runtime.ConsecutiveHeartbeatFailures == 0, 5000);
+        Assert.Equal(0, runtime.ConsecutiveHeartbeatFailures);
+        var status = KioskStationStatus.Resolve(
+            "PC-Mx",
+            KioskTransportPhase.Connected,
+            runtime.IsTransportConnected,
+            false,
+            false,
+            true,
+            runtime.ConsecutiveHeartbeatFailures,
+            DateTime.UtcNow,
+            DateTime.UtcNow,
+            600L,
+            null);
+        Assert.DoesNotContain("no server response", status, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task signalr_reconnected_publishes_connected_phase()
+    {
+        var transport = new FakeKioskHubTransport();
+        var runtime = new KioskRuntime(() => new HttpClient()) { TestDelayAsync = (_, _) => Task.CompletedTask };
+        KioskTransportPhase? last = null;
+        runtime.ConnectionStatusChanged += (phase, _) => last = phase;
+        runtime.ConfigureForTests(transport, new RecordingQueue(), "http://x", Guid.NewGuid(), "k", "PC-Ms6");
+        await runtime.StartAsync(default);
+        await runtime.WaitForTransportConnectedAsync(TimeSpan.FromSeconds(5), default);
+        transport.SimulateSignalRReconnecting();
+        Assert.Equal(KioskTransportPhase.Reconnecting, last);
+        transport.SimulateSignalRReconnected();
+        Assert.Equal(KioskTransportPhase.Connected, last);
+        Assert.Equal(KioskTransportPhase.Connected, runtime.TransportPhase);
+    }
+
+    [Fact]
+    public void connected_phase_with_signalr_auto_reconnecting_must_not_show_bare_connected()
+    {
+        var text = KioskStationStatus.Resolve(
+            "PC-SR",
+            KioskTransportPhase.Connected,
+            hubTransportConnected: true,
+            signalRAutoReconnecting: true,
+            pairingJustFailed: false,
+            hasOpenSession: false,
+            consecutiveHeartbeatFailures: 0,
+            lastHeartbeatAckUtc: DateTime.UtcNow,
+            utcNow: DateTime.UtcNow,
+            estimatedRemainingSeconds: null,
+            lastErrorDetail: null);
+        Assert.False(KioskStationStatus.ContainsConnectedWording(text));
+    }
+
+    [Fact]
     public void heartbeat_failures_show_no_server_response_until_next_ack()
     {
         var failed = KioskStationStatus.Resolve(

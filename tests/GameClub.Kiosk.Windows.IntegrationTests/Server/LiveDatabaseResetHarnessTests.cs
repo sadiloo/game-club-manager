@@ -10,6 +10,7 @@ public sealed class LiveDatabaseResetHarnessTests
     [Fact]
     public async Task harness_live_database_reset_only()
     {
+        await LiveDatabaseMigration.EnsureMigratedAsync();
         await LiveDatabaseReset.ResetAsync();
     }
 }

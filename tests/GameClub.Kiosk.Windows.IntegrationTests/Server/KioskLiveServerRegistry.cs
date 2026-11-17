@@ -12,11 +12,27 @@ internal static class KioskLiveServerRegistry
     public static void RegisterOwned(int processId, string reason)
     {
         Tracked[processId] = reason;
+        SyncPidFileForCi();
     }
 
     public static void Unregister(int processId)
     {
         Tracked.TryRemove(processId, out _);
+        SyncPidFileForCi();
+    }
+
+    public static IReadOnlyList<int> GetTrackedProcessIds()
+        => Tracked.Keys.OrderBy(id => id).ToList();
+
+    /// <summary>Writes every tracked PID (newline-separated) for the parent ci-integration.ps1 process.</summary>
+    public static void SyncPidFileForCi()
+    {
+        var repoRoot = ResolveRepoRoot();
+        var logDir = Path.Combine(repoRoot, "artifacts", "kiosk-windows-logs");
+        Directory.CreateDirectory(logDir);
+        var path = Path.Combine(logDir, "live-server.pid");
+        var pids = GetTrackedProcessIds();
+        File.WriteAllText(path, pids.Count == 0 ? "" : string.Join(Environment.NewLine, pids));
     }
 
     public static void AssertNoTrackedServersAlive()
@@ -44,6 +60,22 @@ internal static class KioskLiveServerRegistry
                 "Integration test launched GameClub.Server process(es) still alive at assembly teardown: "
                 + string.Join("; ", alive));
         }
+    }
+
+    private static string ResolveRepoRoot()
+    {
+        var dir = AppContext.BaseDirectory;
+        for (var i = 0; i < 10; i++)
+        {
+            if (File.Exists(Path.Combine(dir, "GameClub.slnx")))
+            {
+                return dir;
+            }
+
+            dir = Path.GetDirectoryName(dir) ?? dir;
+        }
+
+        throw new InvalidOperationException("Could not locate repository root.");
     }
 }
 #endif

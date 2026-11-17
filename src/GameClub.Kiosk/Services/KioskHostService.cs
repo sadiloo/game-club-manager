@@ -159,6 +159,10 @@ public sealed class KioskHostService : IAsyncDisposable
         await ApplyStationProfileAsync();
         await RefreshCatalogAsync();
         _status.Text = $"Paired to {_stationId}";
+        if (_sessionId == Guid.Empty && !_uiTick.IsEnabled)
+        {
+            _uiTick.Start();
+        }
     }
 
     public async Task LoginAsync(string loginName, string password)
@@ -240,9 +244,13 @@ public sealed class KioskHostService : IAsyncDisposable
         _runtime.BindSession(Guid.Empty);
         RunSessionCleanup();
         ShowLockLayout();
-        _uiTick.Stop();
         _replayTick.Stop();
-        _status.Text = $"Locked — {_stationId}";
+        if (_deviceId != Guid.Empty && !_uiTick.IsEnabled)
+        {
+            _uiTick.Start();
+        }
+
+        RefreshStationStatusText();
     }
 
     public void ApplyHeartbeatDisplay(KioskDisplayDto? display)
@@ -723,7 +731,11 @@ public sealed class KioskHostService : IAsyncDisposable
                 await RefreshCatalogAsync();
                 if (_sessionId == Guid.Empty)
                 {
-                    _status.Text = $"Station {_stationId} — connected";
+                    RefreshStationStatusText();
+                    if (!_uiTick.IsEnabled)
+                    {
+                        _uiTick.Start();
+                    }
                 }
             }
             else

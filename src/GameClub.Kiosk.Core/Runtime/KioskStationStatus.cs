@@ -58,6 +58,14 @@ public static class KioskStationStatus
 
         if (!hasOpenSession && hubTransportConnected && transportPhase == KioskTransportPhase.Connected)
         {
+            var noResponse = consecutiveHeartbeatFailures >= 2
+                || (lastHeartbeatAckUtc.HasValue
+                    && utcNow - lastHeartbeatAckUtc.Value > TimeSpan.FromSeconds(NoServerResponseAfterSeconds));
+            if (noResponse)
+            {
+                return $"Station {stationId} — no server response";
+            }
+
             return $"Station {stationId} — connected";
         }
 

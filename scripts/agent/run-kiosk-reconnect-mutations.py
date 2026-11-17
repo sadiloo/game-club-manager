@@ -13,6 +13,7 @@ env["PATH"] = os.environ.get("HOME", "") + "/.dotnet:" + os.environ.get("PATH", 
 
 LC = "src/GameClub.Kiosk.Core/Runtime/KioskHubLifecycle.cs"
 RT = "src/GameClub.Kiosk.Core/Runtime/KioskRuntime.cs"
+STA = "src/GameClub.Kiosk.Core/Runtime/KioskStationStatus.cs"
 HS = "src/GameClub.Kiosk/Services/KioskHostService.cs"
 INNER = """                try
                 {
@@ -32,19 +33,28 @@ M = [
     ("Ml_reverse_monotonic_every_connected_2", RT, "            _monotonicArmedForStart = false;\n            _monotonicRestartedForInstance = true;", ""),
     ("RePair_revert_runtime_configured", HS, "await _runtime.ResetForReconfigureAsync();\n        _runtime.Configure", "if (false) await _runtime.ResetForReconfigureAsync();\n        if (!_pairingJustFailed) _runtime.Configure"),
     ("RePair_revert_begin_early_return", LC, "public async Task BeginAsync(CancellationToken parentCancellation)", "public void Begin(CancellationToken parentCancellation)"),
+    ("M_begin_early_return_keeps_loop", LC, "        if (_loopTask is not null)\n        {\n            _lifecycleCts?.Cancel();", "        if (_loopTask is not null) { return; }\n        if (false && _loopTask is not null) { _lifecycleCts?.Cancel();"),
+    ("M_hbfail_no_failure_increment", RT, [
+        ("                    _consecutiveHeartbeatFailures++;", "                    _ = _consecutiveHeartbeatFailures;"),
+        ("                _consecutiveHeartbeatFailures++;", "                _ = _consecutiveHeartbeatFailures;"),
+    ]),
+    ("M_srflag_no_autoreconnect_flag", STA, "            || signalRAutoReconnecting", ""),
+    ("Mx_heartbeat_failures_never_reset", RT, "                    _consecutiveHeartbeatFailures = 0;", "                    _ = _consecutiveHeartbeatFailures;"),
+    ("Ms6_no_connected_on_signalr_reconnected", LC, "    private void OnTransportReconnected() => Publish(KioskTransportPhase.Connected, \"\");", "    private void OnTransportReconnected() { }"),
     ("P5_revert_publish_trycatch", LC, "        try\n        {\n            ConnectionStatusChanged?.Invoke(phase, detail);\n        }\n        catch\n        {\n            // Subscriber faults must not stop the reconnect loop.\n        }", "        ConnectionStatusChanged?.Invoke(phase, detail);"),
     ("P6_revert_double_dispose", LC, "        if (_disposed)\n        {\n            return;\n        }\n\n        _disposed = true;", ""),
 ]
 
 proj = "tests/GameClub.Kiosk.Core.Tests/GameClub.Kiosk.Core.Tests.csproj"
 res = {}
-for name, path, a, b in M:
+for item in M:
+    name, path = item[0], item[1]
+    if len(item) >= 3 and isinstance(item[2], list):
+        pairs = item[2]
+    else:
+        pairs = [(item[2], item[3])]
     p = os.path.join(ROOT, path)
     src = open(p, newline="").read()
-    if isinstance(a, list):
-        pairs = a
-    else:
-        pairs = [(a, b)]
     if any(not src.count(x) for x, _ in pairs):
         res[name] = "PATTERN_NOT_FOUND"
         continue

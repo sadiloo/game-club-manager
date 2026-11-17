@@ -65,8 +65,12 @@ internal sealed class KioskIntegrationBackend
             return;
         }
 
+        await LiveDatabaseMigration.EnsureMigratedAsync();
         await LiveDatabaseReset.ResetAsync();
     }
+
+    public static bool UsesCiManagedServer =>
+        IsLiveMode && int.TryParse(Environment.GetEnvironmentVariable("GAMECLUB_SERVER_PID"), out _);
 
     public HttpClient CreateApiClient()
     {
@@ -305,8 +309,24 @@ internal sealed class KioskIntegrationBackend
                 && r.PlayMode == "Offline"
                 && r.PlayerCount == 1
                 && !r.IsSpecialBand);
-            var factoryBillTotal = await db.PendingBills.SumAsync(b => b.CollectibleToman);
-            return G2BillingEvidence.Build(sessionId, checkpointCount, factoryOfflineAuditCount, checkpointMinMax.Select(c => c.AtUtc), rateLine.HourlyToman, factoryBillTotal);
+            var factoryBillTotal = await db.PendingBills
+                .Where(b => b.SessionId == sessionId)
+                .SumAsync(b => b.CollectibleToman);
+            var session = await db.Sessions.Include(s => s.Segments).AsNoTracking()
+                .SingleAsync(s => s.Id == sessionId);
+            var lastSegmentEnd = session.Segments
+                .Select(s => s.EndUtc ?? s.StartUtc)
+                .DefaultIfEmpty(session.StartedAtUtc)
+                .Max();
+            return G2BillingEvidence.Build(
+                sessionId,
+                checkpointCount,
+                factoryOfflineAuditCount,
+                checkpointMinMax.Select(c => c.AtUtc),
+                rateLine.HourlyToman,
+                factoryBillTotal,
+                session.StartedAtUtc,
+                lastSegmentEnd);
         }
         else
         {
@@ -353,12 +373,37 @@ internal sealed class KioskIntegrationBackend
         }
 
         long billTotal;
-        await using (var cmd = new NpgsqlCommand("""SELECT COALESCE(SUM("CollectibleToman"),0) FROM pending_bills""", conn))
+        await using (var cmd = new NpgsqlCommand(
+            """SELECT COALESCE(SUM("CollectibleToman"),0) FROM pending_bills WHERE "SessionId" = @id""",
+            conn))
         {
+            cmd.Parameters.AddWithValue("id", sessionId);
             billTotal = Convert.ToInt64(await cmd.ExecuteScalarAsync() ?? 0L);
         }
 
-        return G2BillingEvidence.Build(sessionId, checkpoints, offlineAuditCount, ats, hourly, billTotal);
+        DateTime sessionStart;
+        await using (var cmd = new NpgsqlCommand(
+            """SELECT "StartedAtUtc" FROM sessions WHERE "Id" = @id""",
+            conn))
+        {
+            cmd.Parameters.AddWithValue("id", sessionId);
+            sessionStart = (DateTime)(await cmd.ExecuteScalarAsync() ?? throw new InvalidOperationException("session missing"));
+        }
+
+        DateTime lastSegmentEnd;
+        await using (var cmd = new NpgsqlCommand(
+            """
+            SELECT COALESCE(MAX(COALESCE("EndUtc", "StartUtc")), @start)
+            FROM play_segments WHERE "SessionId" = @id
+            """,
+            conn))
+        {
+            cmd.Parameters.AddWithValue("id", sessionId);
+            cmd.Parameters.AddWithValue("start", sessionStart);
+            lastSegmentEnd = (DateTime)(await cmd.ExecuteScalarAsync() ?? sessionStart);
+        }
+
+        return G2BillingEvidence.Build(sessionId, checkpoints, offlineAuditCount, ats, hourly, billTotal, sessionStart, lastSegmentEnd);
         }
     }
 
@@ -470,7 +515,10 @@ internal sealed record G2BillingEvidence(
     int OfflineSegmentAuditCount,
     string OfflineSegmentMinuteSpan,
     long PcNormalOfflineHourlyToman,
-    long PendingBillCollectibleToman)
+    long PendingBillCollectibleToman,
+    int ExpectedBillableMinutes,
+    long ExpectedCollectibleToman,
+    int DuplicateCheckpointMinuteBuckets)
 {
     public static G2BillingEvidence Build(
         Guid sessionId,
@@ -478,13 +526,33 @@ internal sealed record G2BillingEvidence(
         int offlineAudits,
         IEnumerable<DateTime> checkpointTimes,
         long hourlyToman,
-        long bill)
+        long bill,
+        DateTime sessionStartedUtc,
+        DateTime lastSegmentEndUtc)
     {
         var ordered = checkpointTimes.OrderBy(t => t).ToList();
         var span = ordered.Count == 0
             ? "no-checkpoints"
             : $"{ordered[0]:O}..{ordered[^1]:O} ({ordered.Count} rows)";
-        return new(sessionId, checkpointCount, offlineAudits, span, hourlyToman, bill);
+        var elapsedSeconds = Math.Max(0, (lastSegmentEndUtc - sessionStartedUtc).TotalSeconds);
+        var expectedMinutes = (int)Math.Ceiling(elapsedSeconds / 60.0);
+        var expectedCollectible = expectedMinutes * hourlyToman / 60;
+        var minuteBuckets = ordered
+            .Select(t => new DateTime(t.Year, t.Month, t.Day, t.Hour, t.Minute, 0, DateTimeKind.Utc))
+            .ToList();
+        var duplicateMinuteBuckets = minuteBuckets
+            .GroupBy(b => b)
+            .Count(g => g.Count() > 1);
+        return new(
+            sessionId,
+            checkpointCount,
+            offlineAudits,
+            span,
+            hourlyToman,
+            bill,
+            expectedMinutes,
+            expectedCollectible,
+            duplicateMinuteBuckets);
     }
 
     public string ToDumpLine()
@@ -495,6 +563,9 @@ internal sealed record G2BillingEvidence(
             .Append("; checkpoint_span=").Append(OfflineSegmentMinuteSpan)
             .Append("; pc_normal_offline_rate_per_hour=").Append(PcNormalOfflineHourlyToman)
             .Append("; pending_bill_collectible=").Append(PendingBillCollectibleToman)
+            .Append("; g2_expected_minutes=").Append(ExpectedBillableMinutes)
+            .Append("; g2_expected_collectible=").Append(ExpectedCollectibleToman)
+            .Append("; g2_duplicate_checkpoint_minute_buckets=").Append(DuplicateCheckpointMinuteBuckets)
             .ToString();
 }
 #endif

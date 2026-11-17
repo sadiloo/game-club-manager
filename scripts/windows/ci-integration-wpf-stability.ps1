@@ -50,8 +50,9 @@ $serverErr = Join-Path $logDir "wpf-stability-server-err.log"
 $serverProc = $null
 $exitCode = 0
 
-function Stop-ServerTree([int]$pid) {
-    & taskkill.exe /T /F /PID $pid 2>$null | Out-Null
+function Stop-ServerTree([int]$processId) {
+    & taskkill.exe /T /F /PID $processId 2>$null | Out-Null
+    $global:LASTEXITCODE = 0
 }
 
 try {
@@ -84,21 +85,25 @@ try {
         $wpfProc = Start-Process -FilePath 'dotnet' -ArgumentList $wpfArgs -PassThru -NoNewWindow -WorkingDirectory $repoRoot
         $wpfDone = $wpfProc.WaitForExit(240000)
         if (-not $wpfDone) {
-            Stop-ServerTree -pid $wpfProc.Id
+            Stop-ServerTree -processId $wpfProc.Id
             throw "WPF stability run $run timed out after 240s"
         }
         if ($wpfProc.ExitCode -ne 0) {
             throw "WPF stability run $run failed with exit $($wpfProc.ExitCode); see $serverErr"
         }
+        Write-Host "WPF_STABILITY_PROGRESS $run/$runs"
     }
+    Write-Host "WPF_STABILITY_COMPLETED $runs/$runs"
 } catch {
   Write-Host "ci-integration-wpf-stability.ps1 error: $($_.Exception.Message)"
   $exitCode = 1
 } finally {
     if ($null -ne $serverProc -and -not $serverProc.HasExited) {
-        Stop-ServerTree -pid $serverProc.Id
+        Stop-ServerTree -processId $serverProc.Id
     }
+    $global:LASTEXITCODE = 0
 }
 
 if ($exitCode -ne 0) { exit $exitCode }
-Write-Host "ci-integration-wpf-stability.ps1 completed $runs runs."
+Write-Host "ci-integration-wpf-stability.ps1 completed $runs/$runs runs."
+exit 0

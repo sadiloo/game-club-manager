@@ -10,7 +10,7 @@ internal sealed class OutOfProcessLiveServer : IAsyncDisposable
     private Process? _process;
     private readonly string _repoRoot;
     private readonly string _serverDll;
-    private readonly bool _ownsProcess;
+    private bool _ownsProcess;
 
     private OutOfProcessLiveServer(string repoRoot, string serverDll, Process process, bool ownsProcess)
     {
@@ -53,15 +53,19 @@ internal sealed class OutOfProcessLiveServer : IAsyncDisposable
             return;
         }
 
+        var pid = _process.Id;
         try
         {
-            KioskLiveServerRegistry.Unregister(_process.Id);
             _process.Kill(entireProcessTree: true);
             _process.WaitForExit(15_000);
         }
         catch
         {
             // process may already be gone
+        }
+        finally
+        {
+            KioskLiveServerRegistry.Unregister(pid);
         }
     }
 
@@ -70,7 +74,19 @@ internal sealed class OutOfProcessLiveServer : IAsyncDisposable
         Stop();
         _process = null;
         await Task.Delay(TimeSpan.FromSeconds(3), ct);
+        _ownsProcess = true;
         await LaunchAndWaitReadyAsync(ct);
+    }
+
+    /// <summary>Record relaunched server PID for windows ci-integration.ps1 cleanup (net48 follow-on).</summary>
+    public void RecordCiLiveServerPidForIntegrationCleanup()
+    {
+        KioskLiveServerRegistry.SyncPidFileForCi();
+        var pid = ProcessId;
+        if (pid.HasValue && pid.Value > 0)
+        {
+            Environment.SetEnvironmentVariable("GAMECLUB_SERVER_PID", pid.Value.ToString());
+        }
     }
 
     public async ValueTask DisposeAsync()
@@ -100,10 +116,7 @@ internal sealed class OutOfProcessLiveServer : IAsyncDisposable
         CopyServerEnvironment(psi);
         psi.Environment["ASPNETCORE_URLS"] = BaseUrl;
         _process = Process.Start(psi) ?? throw new InvalidOperationException("Failed to start GameClub.Server.");
-        if (_ownsProcess)
-        {
-            KioskLiveServerRegistry.RegisterOwned(_process.Id, $"dll={_serverDll}");
-        }
+        KioskLiveServerRegistry.RegisterOwned(_process.Id, $"dll={_serverDll}");
 
         _ = Task.Run(() => File.AppendAllText(outLog, _process.StandardOutput.ReadToEnd()));
         _ = Task.Run(() => File.AppendAllText(errLog, _process.StandardError.ReadToEnd()));

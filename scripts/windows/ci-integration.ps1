@@ -69,6 +69,46 @@ function Write-ProcessTree([int]$rootProcId) {
 
 function Stop-ProcessTree([int]$rootProcId) {
     & taskkill.exe /T /F /PID $rootProcId 2>$null | Out-Null
+    # taskkill on an already-dead PID leaves a non-zero exit code; do not leak it to the GitHub pwsh wrapper.
+    $global:LASTEXITCODE = 0
+}
+
+function Write-GameClubServerProcessAudit() {
+    foreach ($p in Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -match 'GameClub\.Server\.dll' }) {
+        $cmd = if ($p.CommandLine) { $p.CommandLine } else { "" }
+        Write-PhaseLog "SERVER_PROCESS_SEEN pid=$($p.ProcessId) cmdline=$cmd"
+    }
+}
+
+function Stop-CiManagedGameClubServerPids() {
+    $stopPids = @()
+    if ($null -ne $script:serverProc -and -not $script:serverProc.HasExited) {
+        $stopPids += $script:serverProc.Id
+    }
+
+    if ($env:GAMECLUB_SERVER_PID -match '^\d+$') {
+        $stopPids += [int]$env:GAMECLUB_SERVER_PID
+    }
+
+    $pidFile = Join-Path $logDir "live-server.pid"
+    if (Test-Path $pidFile) {
+        foreach ($line in (Get-Content $pidFile -ErrorAction SilentlyContinue)) {
+            $trim = if ($null -ne $line) { $line.Trim() } else { "" }
+            if ($trim -match '^\d+$') {
+                $stopPids += [int]$trim
+            }
+        }
+    }
+
+    foreach ($managedPid in ($stopPids | Select-Object -Unique)) {
+        Write-PhaseLog "STOP_MANAGED_SERVER pid=$managedPid"
+        try {
+            Stop-ProcessTree -rootProcId $managedPid
+        } catch { }
+    }
+
+    $global:LASTEXITCODE = 0
+    Write-GameClubServerProcessAudit
 }
 
 function Stop-LeftoverCiProcesses() {
@@ -187,7 +227,7 @@ function Ensure-KioskRegistryHiveLoaded([string]$accountName, [string]$sid) {
     }
 }
 
-$serverProc = $null
+$script:serverProc = $null
 $serverTestExit = 0
 $guardTestExit = 0
 
@@ -285,9 +325,9 @@ try {
     $serverLog = Join-Path $logDir "server-out.log"
     $serverErr = Join-Path $logDir "server-err.log"
     Write-PhaseLog "START phase=server-start"
-    $serverProc = Start-Process -FilePath "dotnet" -ArgumentList @("exec", $serverDll) -PassThru -NoNewWindow -RedirectStandardOutput $serverLog -RedirectStandardError $serverErr -WorkingDirectory $repoRoot
-    $null = $serverProc.Handle
-    $env:GAMECLUB_SERVER_PID = $serverProc.Id
+    $script:serverProc = Start-Process -FilePath "dotnet" -ArgumentList @("exec", $serverDll) -PassThru -NoNewWindow -RedirectStandardOutput $serverLog -RedirectStandardError $serverErr -WorkingDirectory $repoRoot
+    $null = $script:serverProc.Handle
+    $env:GAMECLUB_SERVER_PID = $script:serverProc.Id
     $env:GAMECLUB_SERVER_DLL = $serverDll
 
     Write-PhaseLog "START phase=server-ready"
@@ -305,9 +345,9 @@ try {
     if (-not $ready) {
         Write-TimeoutLine "WATCHDOG TIMEOUT phase=server-ready after 120s"
         Write-PhaseLog "WATCHDOG: dotnet-dump not available; skipped"
-        if ($serverProc) {
-            Write-ProcessTree -rootProcId $serverProc.Id
-            Stop-ProcessTree -rootProcId $serverProc.Id
+        if ($script:serverProc) {
+            Write-ProcessTree -rootProcId $script:serverProc.Id
+            Stop-ProcessTree -rootProcId $script:serverProc.Id
         }
         $script:FinalExitCode = 124
         throw "server not ready"
@@ -370,21 +410,8 @@ try {
     if (-not [string]::IsNullOrWhiteSpace($cancelFile)) {
         try { New-Item -Force -Path $cancelFile -ItemType File | Out-Null } catch { }
     }
-    $currentServerPid = 0
-    if ($env:GAMECLUB_SERVER_PID -match '^\d+$') {
-        $currentServerPid = [int]$env:GAMECLUB_SERVER_PID
-    }
 
-    if ($null -ne $serverProc -and -not $serverProc.HasExited) {
-        try {
-            Stop-ProcessTree -rootProcId $serverProc.Id
-        } catch { }
-    }
-    elseif ($currentServerPid -gt 0) {
-        try {
-            Stop-ProcessTree -rootProcId $currentServerPid
-        } catch { }
-    }
+    Stop-CiManagedGameClubServerPids
 
     $watchdog = Join-Path $env:ProgramData "Checkpoint\guard\watchdog.log"
     if (Test-Path $watchdog) {
@@ -401,8 +428,6 @@ try {
     }
 }
 
-if ($script:FinalExitCode -ne 0) {
-    exit $script:FinalExitCode
-}
-
+Write-PhaseLog "SCRIPT_EXIT FinalExitCode=$($script:FinalExitCode) LASTEXITCODE=$LASTEXITCODE"
 Write-Host "ci-integration.ps1 completed."
+exit $script:FinalExitCode

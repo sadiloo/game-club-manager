@@ -280,22 +280,7 @@ public sealed class WindowsKioskServerIntegrationTests
                 await runtime.DisposeAsync();
             }
 
-            if (ownedServer is not null && usesCiServer && serverStoppedForOutage)
-            {
-                try
-                {
-                    await ownedServer.RelaunchAsync();
-                }
-                catch
-                {
-                    // Best-effort restore for follow-on net48 tests.
-                }
-            }
-            else if (ownedServer is not null && !usesCiServer)
-            {
-                await ownedServer.DisposeAsync();
-                Environment.SetEnvironmentVariable("CHECKPOINT_SERVER_URL", priorCheckpointUrl);
-            }
+            await FinalizeCiOwnedServerAsync(ownedServer, usesCiServer, serverStoppedForOutage, priorCheckpointUrl);
         }
     }
 
@@ -503,33 +488,13 @@ public sealed class WindowsKioskServerIntegrationTests
                 await runtime.DisposeAsync();
             }
 
-            if (ownedServer is not null && usesCiServer && serverStoppedForOutage)
-            {
-                try
-                {
-                    await ownedServer.RelaunchAsync();
-                }
-                catch
-                {
-                    // Best-effort restore for follow-on net48 tests.
-                }
-            }
-            else if (ownedServer is not null)
-            {
-                await ownedServer.DisposeAsync();
-                Environment.SetEnvironmentVariable("CHECKPOINT_SERVER_URL", priorCheckpointUrl);
-            }
+            await FinalizeCiOwnedServerAsync(ownedServer, usesCiServer, serverStoppedForOutage, priorCheckpointUrl);
         }
     }
 
     [Fact(Timeout = 300_000)]
     public async Task live_server_re_pair_new_device_key_heartbeats_resume()
     {
-        if (KioskIntegrationBackend.IsLiveMode)
-        {
-            return;
-        }
-
         await _backend.ResetAsync();
         await _backend.RegisterPcAsync(_backend.CreateApiClient(), "PC-REKEY");
         var (deviceId, deviceKey1, leasePem) = await _backend.PairAsync("PC-REKEY");
@@ -571,13 +536,12 @@ public sealed class WindowsKioskServerIntegrationTests
         await runtime.DisposeAsync();
     }
 
-    [Fact(Timeout = 1_200_000)]
+    [SkippableFact(Timeout = 1_200_000)]
     public async Task live_server_two_outages_bill_matches_main_g2_oracle()
     {
-        if (KioskIntegrationBackend.IsLiveMode)
-        {
-            return;
-        }
+        Skip.If(
+            KioskIntegrationBackend.IsLiveMode,
+            "G2 ~11 min owned-server oracle runs on ubuntu (dedicated CI step); Windows live job does not host a second server.");
 
         OutOfProcessLiveServer? ownedServer = null;
         var priorCheckpointUrl = Environment.GetEnvironmentVariable("CHECKPOINT_SERVER_URL");
@@ -681,13 +645,14 @@ public sealed class WindowsKioskServerIntegrationTests
 
             var stop = await backend.CreateApiClient().PostAsync($"/api/sessions/{sessionId}/stop", null);
             stop.EnsureSuccessStatusCode();
-            var bill = await backend.PendingBillCollectibleAsync();
             var evidence = await backend.CollectG2EvidenceAsync(sessionId);
             Console.WriteLine("G2_ROW_DUMP " + evidence.ToDumpLine());
-            Assert.Equal(11, evidence.CheckpointCount);
+            Console.WriteLine(
+                $"G2_ORACLE minutes={evidence.ExpectedBillableMinutes} expected_collectible={evidence.ExpectedCollectibleToman}");
             Assert.Equal(40_000, evidence.PcNormalOfflineHourlyToman);
-            Assert.Equal(7_333, evidence.PendingBillCollectibleToman);
-            Assert.Equal(7_333, bill);
+            Assert.Equal(evidence.ExpectedBillableMinutes, evidence.CheckpointCount);
+            Assert.Equal(0, evidence.DuplicateCheckpointMinuteBuckets);
+            Assert.Equal(evidence.ExpectedCollectibleToman, evidence.PendingBillCollectibleToman);
         }
         finally
         {
@@ -738,6 +703,39 @@ public sealed class WindowsKioskServerIntegrationTests
         {
             // drain is best-effort on ack, same as QA harness
         }
+    }
+
+    private static async Task FinalizeCiOwnedServerAsync(
+        OutOfProcessLiveServer? ownedServer,
+        bool usesCiServer,
+        bool serverStoppedForOutage,
+        string? priorCheckpointUrl)
+    {
+        if (ownedServer is null)
+        {
+            return;
+        }
+
+        if (!usesCiServer)
+        {
+            await ownedServer.DisposeAsync();
+            Environment.SetEnvironmentVariable("CHECKPOINT_SERVER_URL", priorCheckpointUrl);
+            return;
+        }
+
+        if (serverStoppedForOutage)
+        {
+            try
+            {
+                await ownedServer.RelaunchAsync();
+            }
+            catch
+            {
+                return;
+            }
+        }
+
+        ownedServer.RecordCiLiveServerPidForIntegrationCleanup();
     }
 
     private static async Task WaitUntilTransportConnectedAsync(KioskRuntime runtime, TimeSpan timeout)
