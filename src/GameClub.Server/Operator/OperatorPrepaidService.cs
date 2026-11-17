@@ -58,19 +58,52 @@ public sealed class OperatorPrepaidService(
         }
 
         var snapshot = await rates.LoadSnapshotAsync(session.RateCardSnapshotId, ct);
-        var seg = session.Segments.OrderBy(s => s.StartUtc).First();
-        var start = TimeMapping.ToTehran(session.StartedAtUtc);
-        PrepaidPlan plan;
-        try
+        var nowUtc = clock.UtcNow.UtcDateTime;
+        var openSeg = session.Segments.Single(s => s.EndUtc is null);
+        var billingSegments = session.Segments.OrderBy(s => s.StartUtc).Select(seg =>
         {
-            plan = PrepaidPlanner.ForAmount(
-                start,
-                amountToman,
+            var end = seg.EndUtc ?? nowUtc;
+            return new PlaySegment(
                 seg.SegmentKey,
-                session.StationId,
+                TimeMapping.ToTehran(seg.StartUtc),
+                TimeMapping.ToTehran(end),
+                seg.StationId,
                 seg.GroupId,
                 seg.Mode,
                 seg.PlayerCount,
+                seg.Kind,
+                seg.GameTitleId,
+                seg.GameHourlyRateToman,
+                seg.GameNightHourlyRateToman,
+                seg.SplitReason);
+        }).ToList();
+        IReadOnlyList<PauseInterval>? pauses = session.Pauses.Count > 0
+            ? session.Pauses.Select(p => new PauseInterval(
+                TimeMapping.ToTehran(p.StartUtc),
+                TimeMapping.ToTehran(p.EndUtc ?? nowUtc))).ToList()
+            : null;
+        var now = TimeMapping.ToTehran(nowUtc);
+        var continuation = new PlaySegment(
+            openSeg.SegmentKey,
+            now,
+            now,
+            openSeg.StationId,
+            openSeg.GroupId,
+            openSeg.Mode,
+            openSeg.PlayerCount,
+            openSeg.Kind,
+            openSeg.GameTitleId,
+            openSeg.GameHourlyRateToman,
+            openSeg.GameNightHourlyRateToman,
+            openSeg.SplitReason);
+        PrepaidPlan plan;
+        try
+        {
+            plan = PrepaidPlanner.ForAmountFromSegments(
+                new Session(session.Id.ToString(), billingSegments, pauses),
+                now,
+                continuation,
+                amountToman,
                 snapshot.Card);
         }
         catch (BillingException ex)
@@ -78,8 +111,11 @@ public sealed class OperatorPrepaidService(
             throw new ApiException(StatusCodes.Status400BadRequest, "billing_error", ex.Message);
         }
 
-        var seg0 = session.Segments.OrderBy(s => s.StartUtc).First();
-        var opening = RateResolver.Resolve(snapshot.Card, SpecialDayCalendar.Empty, start, seg0.GroupId, seg0.Mode, seg0.PlayerCount);
+        var seg0 = openSeg;
+        var start = TimeMapping.ToTehran(session.StartedAtUtc);
+        var opening = openSeg.GameHourlyRateToman is long gameRate
+            ? new RateQuote(gameRate, RateSource.Game, null)
+            : RateResolver.Resolve(snapshot.Card, SpecialDayCalendar.Empty, start, seg0.GroupId, seg0.Mode, seg0.PlayerCount);
         var policy = BillingPolicy.Default;
         var oneMinute = MoneyMath.ChargeForMinutes(opening.HourlyRateToman, policy.GranularityMinutes, policy.Remainder);
         if (amountToman < oneMinute)

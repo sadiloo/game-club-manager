@@ -42,6 +42,10 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
 
     public DbSet<RateLineEntity> RateLines => Set<RateLineEntity>();
 
+    public DbSet<GameTitleEntity> GameTitles => Set<GameTitleEntity>();
+
+    public DbSet<GameRateLineEntity> GameRateLines => Set<GameRateLineEntity>();
+
     public DbSet<CatalogCategoryEntity> CatalogCategories => Set<CatalogCategoryEntity>();
 
     public DbSet<CatalogItemEntity> CatalogItems => Set<CatalogItemEntity>();
@@ -128,6 +132,8 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             e.Property(x => x.Status).HasConversion<string>();
             e.Property(x => x.Mode).HasConversion<string>();
             e.Property(x => x.PrepaidKind).HasConversion<string>();
+            e.HasOne(x => x.CurrentGameTitle).WithMany().HasForeignKey(x => x.CurrentGameTitleId)
+                .OnDelete(DeleteBehavior.Restrict);
             e.HasOne(x => x.Customer).WithMany().HasForeignKey(x => x.CustomerId);
             e.HasOne(x => x.Station).WithMany().HasForeignKey(x => x.StationId);
             e.HasOne(x => x.Invoice).WithOne(x => x.Session).HasForeignKey<InvoiceEntity>(x => x.SessionId)
@@ -146,6 +152,24 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             e.Property(x => x.Mode).HasConversion<string>();
             e.Property(x => x.Kind).HasConversion<string>();
             e.HasIndex(x => new { x.SessionId, x.SegmentKey }).IsUnique();
+            e.HasOne(x => x.GameTitle).WithMany().HasForeignKey(x => x.GameTitleId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<GameTitleEntity>(e =>
+        {
+            e.ToTable("game_titles");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => x.NameNormalized).IsUnique();
+        });
+
+        modelBuilder.Entity<GameRateLineEntity>(e =>
+        {
+            e.ToTable("game_rate_lines");
+            e.HasKey(x => x.Id);
+            e.HasOne(x => x.GameTitle).WithMany(x => x.RateLines).HasForeignKey(x => x.GameTitleId)
+                .OnDelete(DeleteBehavior.Cascade);
+            e.HasIndex(x => new { x.GameTitleId, x.PlayMode, x.PlayerCount }).IsUnique();
         });
 
         modelBuilder.Entity<SessionCommandEntity>(e =>

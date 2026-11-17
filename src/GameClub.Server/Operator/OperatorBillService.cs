@@ -898,6 +898,7 @@ public sealed class OperatorGridService(AppDbContext db, SessionService sessions
         var openSessions = await db.Sessions.AsNoTracking()
             .Include(s => s.PendingBill)
             .Include(s => s.Customer)
+            .Include(s => s.CurrentGameTitle)
             .Where(s => s.Status != SessionStatus.Closed)
             .ToListAsync(ct);
         var byStation = openSessions
@@ -923,10 +924,13 @@ public sealed class OperatorGridService(AppDbContext db, SessionService sessions
                     groupKind = station.Group?.Kind.ToString(),
                     station.DefaultPlayerCount,
                     mode = station.DefaultPlayMode.ToString(),
+                    defaultPlayMode = station.DefaultPlayMode.ToString(),
                     operationalState = station.OperationalState.ToString(),
                     status = idleStatus,
                     amountToman = (long?)null,
                     sessionId = (Guid?)null,
+                    currentGameTitleId = (int?)null,
+                    currentGameTitleName = (string?)null,
                 });
                 continue;
             }
@@ -963,7 +967,10 @@ public sealed class OperatorGridService(AppDbContext db, SessionService sessions
                 station.GroupId,
                 groupKind = station.Group?.Kind.ToString(),
                 station.DefaultPlayerCount,
-                mode = station.DefaultPlayMode.ToString(),
+                mode = session.Mode.ToString(),
+                defaultPlayMode = station.DefaultPlayMode.ToString(),
+                playMode = session.Mode.ToString(),
+                playerCount = session.PlayerCount,
                 operationalState = station.OperationalState.ToString(),
                 status,
                 amountToman = amount,
@@ -971,6 +978,8 @@ public sealed class OperatorGridService(AppDbContext db, SessionService sessions
                 rowVersion = session.RowVersion,
                 openSaleId,
                 linkedCustomer = CustomerMapper.ToLinkedChip(session.Customer),
+                currentGameTitleId = session.CurrentGameTitleId,
+                currentGameTitleName = session.CurrentGameTitle?.Name,
             });
         }
 

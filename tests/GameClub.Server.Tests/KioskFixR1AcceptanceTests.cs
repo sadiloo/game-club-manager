@@ -253,7 +253,7 @@ public sealed class KioskFixR1AcceptanceTests(GameClubWebApplicationFactory fact
         await db.Database.ExecuteSqlRawAsync("UPDATE rate_lines SET \"HourlyToman\" = 60000 WHERE \"GroupId\" = 'pc-normal' AND \"PlayerCount\" = 1");
         factory.Clock.SetTehran(2026, 6, 3, 14, 0);
         var sessions = scope.ServiceProvider.GetRequiredService<SessionService>();
-        var session = await sessions.StartAsync("PC-1", 1, PlayMode.Offline, null, default);
+        var session = await sessions.StartAsync("PC-1", 1, PlayMode.Offline, null, null, default);
         await scope.ServiceProvider.GetRequiredService<OperatorCustomerService>().LinkSessionAsync(session.Id, customer.Id, default);
         factory.Clock.SetTehran(2026, 6, 3, 15, 0);
         await sessions.RecordCheckpointAsync(session.Id, S3TestHelpers.T(2026, 6, 3, 15, 0), default);

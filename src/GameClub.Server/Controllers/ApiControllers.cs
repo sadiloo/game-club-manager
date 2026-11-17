@@ -96,7 +96,7 @@ public sealed class SessionsController(SessionService sessions, IDeadPcMonitor d
             throw new ApiException(StatusCodes.Status400BadRequest, "invalid_mode", $"Unknown play mode '{body.Mode}'.");
         }
 
-        var session = await sessions.StartAsync(body.StationId, body.PlayerCount, parsed, body.StartedAt, ct);
+        var session = await sessions.StartAsync(body.StationId, body.PlayerCount, parsed, body.StartedAt, null, ct);
         return Created($"/api/sessions/{session.Id}", new { session.Id, session.StationId, session.Status });
     }
 

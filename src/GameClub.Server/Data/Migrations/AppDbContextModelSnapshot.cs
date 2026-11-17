@@ -461,6 +461,65 @@ namespace GameClub.Server.Data.Migrations
                     b.ToTable("game_catalog_entries", (string)null);
                 });
 
+            modelBuilder.Entity("GameClub.Server.Data.Entities.GameRateLineEntity", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
+                    b.Property<int>("GameTitleId")
+                        .HasColumnType("integer");
+
+                    b.Property<long>("HourlyToman")
+                        .HasColumnType("bigint");
+
+                    b.Property<long?>("NightHourlyToman")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("PlayMode")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<int?>("PlayerCount")
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("GameTitleId", "PlayMode", "PlayerCount")
+                        .IsUnique();
+
+                    b.ToTable("game_rate_lines", (string)null);
+                });
+
+            modelBuilder.Entity("GameClub.Server.Data.Entities.GameTitleEntity", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<bool>("Enabled")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("NameNormalized")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("NameNormalized")
+                        .IsUnique();
+
+                    b.ToTable("game_titles", (string)null);
+                });
+
             modelBuilder.Entity("GameClub.Server.Data.Entities.InvoiceCatalogLineEntity", b =>
                 {
                     b.Property<long>("Id")
@@ -1090,6 +1149,15 @@ namespace GameClub.Server.Data.Migrations
                     b.Property<DateTime?>("EndUtc")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<long?>("GameHourlyRateToman")
+                        .HasColumnType("bigint");
+
+                    b.Property<long?>("GameNightHourlyRateToman")
+                        .HasColumnType("bigint");
+
+                    b.Property<int?>("GameTitleId")
+                        .HasColumnType("integer");
+
                     b.Property<string>("GroupId")
                         .IsRequired()
                         .HasColumnType("text");
@@ -1124,6 +1192,8 @@ namespace GameClub.Server.Data.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("GameTitleId");
+
                     b.HasIndex("SessionId", "SegmentKey")
                         .IsUnique();
 
@@ -1138,6 +1208,9 @@ namespace GameClub.Server.Data.Migrations
 
                     b.Property<Guid?>("CarriedAtCloseRecordId")
                         .HasColumnType("uuid");
+
+                    b.Property<int?>("CurrentGameTitleId")
+                        .HasColumnType("integer");
 
                     b.Property<Guid?>("CustomerId")
                         .HasColumnType("uuid");
@@ -1195,6 +1268,8 @@ namespace GameClub.Server.Data.Migrations
                         .HasColumnType("text");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("CurrentGameTitleId");
 
                     b.HasIndex("CustomerId");
 
@@ -1658,6 +1733,17 @@ namespace GameClub.Server.Data.Migrations
                     b.Navigation("Category");
                 });
 
+            modelBuilder.Entity("GameClub.Server.Data.Entities.GameRateLineEntity", b =>
+                {
+                    b.HasOne("GameClub.Server.Data.Entities.GameTitleEntity", "GameTitle")
+                        .WithMany("RateLines")
+                        .HasForeignKey("GameTitleId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("GameTitle");
+                });
+
             modelBuilder.Entity("GameClub.Server.Data.Entities.InvoiceCatalogLineEntity", b =>
                 {
                     b.HasOne("GameClub.Server.Data.Entities.InvoiceEntity", "Invoice")
@@ -1836,17 +1922,29 @@ namespace GameClub.Server.Data.Migrations
 
             modelBuilder.Entity("GameClub.Server.Data.Entities.PlaySegmentEntity", b =>
                 {
+                    b.HasOne("GameClub.Server.Data.Entities.GameTitleEntity", "GameTitle")
+                        .WithMany()
+                        .HasForeignKey("GameTitleId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
                     b.HasOne("GameClub.Server.Data.Entities.PlaySessionEntity", "Session")
                         .WithMany("Segments")
                         .HasForeignKey("SessionId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
+                    b.Navigation("GameTitle");
+
                     b.Navigation("Session");
                 });
 
             modelBuilder.Entity("GameClub.Server.Data.Entities.PlaySessionEntity", b =>
                 {
+                    b.HasOne("GameClub.Server.Data.Entities.GameTitleEntity", "CurrentGameTitle")
+                        .WithMany()
+                        .HasForeignKey("CurrentGameTitleId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
                     b.HasOne("GameClub.Server.Data.Entities.CustomerEntity", "Customer")
                         .WithMany()
                         .HasForeignKey("CustomerId");
@@ -1866,6 +1964,8 @@ namespace GameClub.Server.Data.Migrations
                         .HasForeignKey("StationId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
+
+                    b.Navigation("CurrentGameTitle");
 
                     b.Navigation("Customer");
 
@@ -1934,6 +2034,11 @@ namespace GameClub.Server.Data.Migrations
             modelBuilder.Entity("GameClub.Server.Data.Entities.CatalogCategoryEntity", b =>
                 {
                     b.Navigation("Items");
+                });
+
+            modelBuilder.Entity("GameClub.Server.Data.Entities.GameTitleEntity", b =>
+                {
+                    b.Navigation("RateLines");
                 });
 
             modelBuilder.Entity("GameClub.Server.Data.Entities.InvoiceEntity", b =>

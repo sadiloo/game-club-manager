@@ -25,6 +25,7 @@ public partial class Program
         builder.Services.AddScoped<RateConfigService>();
         builder.Services.AddScoped<AuditService>();
         builder.Services.AddScoped<StationService>();
+        builder.Services.AddScoped<GameTariffService>();
         builder.Services.AddScoped<SessionBilling>();
         builder.Services.AddScoped<SessionCloser>();
         builder.Services.AddScoped<SessionService>();

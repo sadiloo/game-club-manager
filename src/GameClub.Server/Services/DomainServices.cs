@@ -168,6 +168,19 @@ public sealed class SessionBilling(AppDbContext db, RateConfigService rates)
         foreach (var seg in session.Segments.OrderBy(s => s.StartUtc))
         {
             var end = seg.EndUtc ?? endUtc;
+            string? gameDisplayName = null;
+            if (seg.GameTitleId is int gameId)
+            {
+                gameDisplayName = seg.GameTitle?.Name;
+                if (gameDisplayName is null)
+                {
+                    gameDisplayName = db.GameTitles.AsNoTracking()
+                        .Where(g => g.Id == gameId)
+                        .Select(g => g.Name)
+                        .FirstOrDefault();
+                }
+            }
+
             segments.Add(new PlaySegment(
                 seg.SegmentKey,
                 TimeMapping.ToTehran(seg.StartUtc),
@@ -176,7 +189,12 @@ public sealed class SessionBilling(AppDbContext db, RateConfigService rates)
                 seg.GroupId,
                 seg.Mode,
                 seg.PlayerCount,
-                seg.Kind));
+                seg.Kind,
+                seg.GameTitleId,
+                seg.GameHourlyRateToman,
+                seg.GameNightHourlyRateToman,
+                seg.SplitReason,
+                gameDisplayName));
         }
 
         IReadOnlyList<PauseInterval>? pauses = null;
@@ -431,10 +449,30 @@ public sealed class SessionService(
     AuditService audit,
     SessionBilling billing,
     RateConfigService rates,
+    GameTariffService gameTariff,
     OperatorBillService operatorBills,
     Operator.OperatorShiftGate shiftGate,
     IOperatorPanelNotifier panelNotifier)
 {
+    public Task<SessionGameChangeResult> ChangeGameAsync(
+        Guid sessionId,
+        int? gameTitleId,
+        uint? expectedVersion,
+        Guid commandId,
+        CancellationToken ct)
+        => SessionGameSupport.ChangeGameAsync(
+            db,
+            clock,
+            audit,
+            billing,
+            rates,
+            gameTariff,
+            panelNotifier,
+            sessionId,
+            gameTitleId,
+            expectedVersion,
+            commandId,
+            ct);
     public Task<SessionTransferResult> TransferAsync(
         Guid sessionId,
         string targetStationId,
@@ -456,7 +494,13 @@ public sealed class SessionService(
             commandId,
             ct);
 
-    public async Task<PlaySessionEntity> StartAsync(string stationId, int playerCount, PlayMode mode, DateTimeOffset? startedAt, CancellationToken ct)
+    public async Task<PlaySessionEntity> StartAsync(
+        string stationId,
+        int playerCount,
+        PlayMode mode,
+        DateTimeOffset? startedAt,
+        int? gameTitleId,
+        CancellationToken ct)
     {
         if (startedAt.HasValue)
         {
@@ -536,7 +580,7 @@ public sealed class SessionService(
                 OpenShiftId = openShiftId,
             };
 
-            session.Segments.Add(new PlaySegmentEntity
+            var firstSegment = new PlaySegmentEntity
             {
                 SegmentKey = "a",
                 StartUtc = startUtc,
@@ -545,7 +589,23 @@ public sealed class SessionService(
                 Mode = mode,
                 PlayerCount = playerCount,
                 Kind = station.Group.Kind,
-            });
+            };
+
+            if (gameTitleId is not null)
+            {
+                if (station.Group.Kind != StationKind.Console)
+                {
+                    throw new ApiException(StatusCodes.Status400BadRequest, "not_console", "Game selection applies to consoles only.");
+                }
+
+                var title = await gameTariff.EnsureGameForSessionAsync(gameTitleId, mode, playerCount, ct);
+                var (hourly, night) = await gameTariff.ResolveSnapshotsAsync(gameTitleId.Value, mode, playerCount, ct);
+                gameTariff.ApplySnapshots(firstSegment, gameTitleId.Value, hourly, night);
+                session.CurrentGameTitleId = gameTitleId;
+                firstSegment.GameTitle = title;
+            }
+
+            session.Segments.Add(firstSegment);
 
             db.Sessions.Add(session);
             try
@@ -787,9 +847,14 @@ public sealed class SessionService(
             var now = clock.UtcNow.UtcDateTime;
             var openSegment = session.Segments.SingleOrDefault(s => s.EndUtc is null)
                 ?? throw new ApiException(StatusCodes.Status409Conflict, "awaiting_payment", "Session already has an open bill.");
+            if (session.CurrentGameTitleId is int gameId)
+            {
+                _ = await gameTariff.ResolveSnapshotsAsync(gameId, session.Mode, playerCount, innerCt);
+            }
+
             openSegment.EndUtc = now;
             var nextKey = ((char)('a' + session.Segments.Count)).ToString();
-            session.Segments.Add(new PlaySegmentEntity
+            var newSegment = new PlaySegmentEntity
             {
                 SegmentKey = nextKey,
                 StartUtc = now,
@@ -798,8 +863,18 @@ public sealed class SessionService(
                 Mode = session.Mode,
                 PlayerCount = playerCount,
                 Kind = StationKind.Console,
-            });
+            };
+            if (session.CurrentGameTitleId is int activeGame)
+            {
+                var (hourly, night) = await gameTariff.ResolveSnapshotsAsync(activeGame, session.Mode, playerCount, innerCt);
+                gameTariff.ApplySnapshots(newSegment, activeGame, hourly, night);
+            }
+
+            session.Segments.Add(newSegment);
             session.PlayerCount = playerCount;
+
+            var snapshot = await rates.LoadSnapshotAsync(session.RateCardSnapshotId, innerCt);
+            ConsolePrepaidRecalculator.RecalcAmountPrepaid(session, newSegment, snapshot, now);
             await audit.AppendAsync("session.player_count", new { sessionId, playerCount }, innerCt);
         }, ct);
 
