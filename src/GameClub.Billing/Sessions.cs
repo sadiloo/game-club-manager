@@ -887,11 +887,18 @@ public static class PrepaidPlanner
             if (additionalMinutes > 0)
             {
                 var tailEnd = TehranTime.AddSeconds(now, additionalMinutes * 60L);
-                if (segments.Count > 0
-                    && string.Equals(segments[^1].Id, continuationSegment.Id, StringComparison.Ordinal)
-                    && segments[^1].End == now)
+                if (segments.Count > 0)
                 {
-                    segments[^1] = continuationSegment with { Start = segments[^1].Start, End = tailEnd };
+                    var lastIndex = segments.Count - 1;
+                    if (string.Equals(segments[lastIndex].Id, continuationSegment.Id, StringComparison.Ordinal)
+                        && segments[lastIndex].End == now)
+                    {
+                        segments[lastIndex] = continuationSegment with { Start = segments[lastIndex].Start, End = tailEnd };
+                    }
+                    else
+                    {
+                        segments.Add(continuationSegment with { Start = now, End = tailEnd });
+                    }
                 }
                 else
                 {
