@@ -11,7 +11,7 @@ public sealed class Ss14FixR1fVisibilityNodeTests
         "Scripts", "ss14-manager-visibility-selftest.mjs"));
 
     [Fact]
-    public async Task FixR1f_manager_visibility_node_selftest_when_playwright_available()
+    public async Task FixR1f_manager_visibility_jsdom_selftest()
     {
         var script = ScriptPath();
         var scriptDir = Path.GetDirectoryName(script)!;
