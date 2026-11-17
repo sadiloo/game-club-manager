@@ -13,6 +13,10 @@ internal sealed class FakeKioskHubTransport : IKioskHubTransport
 
     public int HeartbeatCallCount { get; private set; }
 
+    public bool IsDisposed { get; private set; }
+
+    public bool SignalRAutoReconnecting { get; private set; }
+
     public IList<TimeSpan> RecordedDelays { get; } = new List<TimeSpan>();
 
     public Func<int, CancellationToken, Task>? StartHandler { get; set; }
@@ -22,6 +26,22 @@ internal sealed class FakeKioskHubTransport : IKioskHubTransport
     public HubConnectionState State => _state;
 
     public event Func<Exception?, Task>? Closed;
+
+    public event Action? Reconnecting;
+
+    public event Action? Reconnected;
+
+    public void SimulateSignalRReconnecting()
+    {
+        SignalRAutoReconnecting = true;
+        Reconnecting?.Invoke();
+    }
+
+    public void SimulateSignalRReconnected()
+    {
+        SignalRAutoReconnecting = false;
+        Reconnected?.Invoke();
+    }
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
@@ -64,6 +84,7 @@ internal sealed class FakeKioskHubTransport : IKioskHubTransport
 
     public ValueTask DisposeAsync()
     {
+        IsDisposed = true;
         _state = HubConnectionState.Disconnected;
         return ValueTask.CompletedTask;
     }

@@ -47,7 +47,8 @@ public sealed class KioskHostService : IAsyncDisposable
     private string _stationId = "";
     private Guid _sessionId;
     private KioskDisplayDto? _lastDisplay;
-    private bool _runtimeConfigured;
+    private bool _runCatalogOnFirstConnected;
+    private bool _pairingJustFailed;
     private DateTime? _lastHeartbeatAckUtc;
 
     public string ServerBase => _serverBase;
@@ -136,9 +137,12 @@ public sealed class KioskHostService : IAsyncDisposable
             new StringContent(JsonSerializer.Serialize(new { code }), Encoding.UTF8, "application/json"));
         if (!pair.IsSuccessStatusCode)
         {
-            _status.Text = "Pairing failed";
+            _pairingJustFailed = true;
+            RefreshStationStatusText();
             return;
         }
+
+        _pairingJustFailed = false;
 
         var doc = JsonDocument.Parse(await pair.Content.ReadAsStringAsync());
         _deviceId = doc.RootElement.GetProperty("deviceId").GetGuid();
@@ -260,10 +264,7 @@ public sealed class KioskHostService : IAsyncDisposable
         _ = DrainOfflineQueueAsync();
         _shell.Dispatcher.Invoke(() =>
         {
-            if (ack.Display?.EstimatedRemainingSeconds is long seconds)
-            {
-                _status.Text = $"Station {_stationId} — ~{TimeSpan.FromSeconds(seconds):hh\\:mm\\:ss} left";
-            }
+            RefreshStationStatusText();
 
             if (phase is KioskShellPhase.LeaseExpired or KioskShellPhase.Ended
                 || ack.ManualSettle || string.Equals(ack.SessionStatus, "AwaitingPayment", StringComparison.OrdinalIgnoreCase)
@@ -352,25 +353,13 @@ public sealed class KioskHostService : IAsyncDisposable
     private void OnUiTick()
     {
         RenderDisplay();
+        _shell.Dispatcher.Invoke(RefreshStationStatusText);
         if (_sessionId == Guid.Empty)
         {
             return;
         }
 
         var transportDown = _sessionId != Guid.Empty && !_runtime.IsTransportConnected;
-        if (transportDown)
-        {
-            _shell.Dispatcher.Invoke(() =>
-            {
-                var text = _status.Text ?? "";
-                if (text.IndexOf("left", StringComparison.OrdinalIgnoreCase) >= 0
-                    || text.IndexOf("connected", StringComparison.OrdinalIgnoreCase) >= 0)
-                {
-                    _status.Text = $"Station {_stationId} — reconnecting…";
-                }
-            });
-        }
-
         var phase = _orchestrator.TickLease(_sessionId, _runtime.ClientMonotonicMs, DateTime.UtcNow, transportDown);
         if (phase == KioskShellPhase.LeaseExpired)
         {
@@ -399,36 +388,56 @@ public sealed class KioskHostService : IAsyncDisposable
     {
         _shell.Dispatcher.Invoke(() =>
         {
-            if (_sessionId != Guid.Empty && phase == KioskTransportPhase.Connected
-                && _lastHeartbeatAckUtc.HasValue
-                && DateTime.UtcNow - _lastHeartbeatAckUtc.Value < TimeSpan.FromSeconds(10))
+            try
             {
-                return;
+                if (phase == KioskTransportPhase.Connected && _runCatalogOnFirstConnected)
+                {
+                    _runCatalogOnFirstConnected = false;
+                    _ = RunStartupCatalogRefreshAsync();
+                }
+
+                RefreshStationStatusText();
             }
-
-            switch (phase)
+            catch
             {
-                case KioskTransportPhase.Connecting:
-                    _status.Text = $"Station {_stationId} — connecting…";
-                    break;
-                case KioskTransportPhase.Connected:
-                    if (_sessionId == Guid.Empty)
-                    {
-                        _status.Text = $"Station {_stationId} — connected";
-                    }
-
-                    break;
-                case KioskTransportPhase.Disconnected:
-                case KioskTransportPhase.Reconnecting:
-                    _status.Text = $"Station {_stationId} — reconnecting…";
-                    break;
-                case KioskTransportPhase.LastError:
-                    _status.Text = string.IsNullOrEmpty(detail)
-                        ? $"Station {_stationId} — reconnecting…"
-                        : $"Station {_stationId} — {detail}";
-                    break;
+                // UI status subscribers must not break transport reconnect.
             }
         });
+    }
+
+    private void RefreshStationStatusText()
+    {
+        if (string.IsNullOrEmpty(_stationId))
+        {
+            return;
+        }
+
+        _status.Text = KioskStationStatus.Resolve(
+            _stationId,
+            _runtime.TransportPhase,
+            _runtime.IsTransportConnected,
+            _runtime.SignalRAutoReconnecting,
+            _pairingJustFailed,
+            _sessionId != Guid.Empty,
+            _runtime.ConsecutiveHeartbeatFailures,
+            _lastHeartbeatAckUtc,
+            DateTime.UtcNow,
+            _lastDisplay?.EstimatedRemainingSeconds,
+            _runtime.LastTransportErrorDetail);
+    }
+
+    private async Task RunStartupCatalogRefreshAsync()
+    {
+        try
+        {
+            await ApplyStationProfileAsync();
+            await RefreshCatalogAsync();
+        }
+        catch (Exception ex)
+        {
+            _shell.Dispatcher.Invoke(() =>
+                _status.Text = $"Station {_stationId} — catalog refresh failed: {ex.Message}");
+        }
     }
 
     private void RunSessionCleanup()
@@ -682,15 +691,11 @@ public sealed class KioskHostService : IAsyncDisposable
 
         var root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "Checkpoint", "kiosk");
         Directory.CreateDirectory(root);
-        if (!_runtimeConfigured)
-        {
-            var queuePath = Path.Combine(root, "events.db");
-            _runtime.Configure(new Uri($"{_serverBase}/hubs/kiosk"), _deviceId, _deviceKey, _stationId, queuePath, legacyWindows: true);
-            _orchestrator.BindOfflineQueue(_runtime.GetQueue());
-            _runtimeConfigured = true;
-            EnsureCatalogStore();
-        }
-
+        var queuePath = Path.Combine(root, "events.db");
+        await _runtime.ResetForReconfigureAsync();
+        _runtime.Configure(new Uri($"{_serverBase}/hubs/kiosk"), _deviceId, _deviceKey, _stationId, queuePath, legacyWindows: true);
+        _orchestrator.BindOfflineQueue(_runtime.GetQueue());
+        EnsureCatalogStore();
         await _runtime.StartAsync(CancellationToken.None);
     }
 
@@ -720,6 +725,11 @@ public sealed class KioskHostService : IAsyncDisposable
                 {
                     _status.Text = $"Station {_stationId} — connected";
                 }
+            }
+            else
+            {
+                _runCatalogOnFirstConnected = true;
+                RefreshStationStatusText();
             }
         }
         catch (Exception ex)

@@ -13,6 +13,7 @@ internal sealed class KioskHubLifecycle : IAsyncDisposable
     private int _attempt;
     private readonly object _closedLock = new();
     private TaskCompletionSource<bool>? _closedSignal;
+    private bool _disposed;
 
     public Func<int, TimeSpan>? BackoffPolicy { get; set; }
 
@@ -24,17 +25,39 @@ internal sealed class KioskHubLifecycle : IAsyncDisposable
     {
         _transport = transport;
         _transport.Closed += OnTransportClosedAsync;
+        _transport.Reconnecting += OnTransportReconnecting;
+        _transport.Reconnected += OnTransportReconnected;
     }
+
+    private void OnTransportReconnecting() => Publish(KioskTransportPhase.Reconnecting, "");
+
+    private void OnTransportReconnected() => Publish(KioskTransportPhase.Connected, "");
 
     public bool IsTransportConnected => _transport.State == HubConnectionState.Connected;
 
     public KioskTransportPhase CurrentPhase { get; private set; } = KioskTransportPhase.Unconfigured;
 
-    public void Begin(CancellationToken parentCancellation)
+    public async Task BeginAsync(CancellationToken parentCancellation)
     {
+        if (_disposed)
+        {
+            throw new ObjectDisposedException(nameof(KioskHubLifecycle));
+        }
+
         if (_loopTask is not null)
         {
-            return;
+            _lifecycleCts?.Cancel();
+            try
+            {
+                await _loopTask.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+            }
+
+            _loopTask = null;
+            _lifecycleCts?.Dispose();
+            _lifecycleCts = null;
         }
 
         _lifecycleCts = CancellationTokenSource.CreateLinkedTokenSource(parentCancellation);
@@ -148,12 +171,28 @@ internal sealed class KioskHubLifecycle : IAsyncDisposable
     private void Publish(KioskTransportPhase phase, string detail)
     {
         CurrentPhase = phase;
-        ConnectionStatusChanged?.Invoke(phase, detail);
+        try
+        {
+            ConnectionStatusChanged?.Invoke(phase, detail);
+        }
+        catch
+        {
+            // Subscriber faults must not stop the reconnect loop.
+        }
     }
 
     public async ValueTask DisposeAsync()
     {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
         _transport.Closed -= OnTransportClosedAsync;
+        _transport.Reconnecting -= OnTransportReconnecting;
+        _transport.Reconnected -= OnTransportReconnected;
+        var cancellationRequested = _lifecycleCts?.IsCancellationRequested == true;
         if (_lifecycleCts is not null)
         {
             _lifecycleCts.Cancel();
@@ -166,6 +205,9 @@ internal sealed class KioskHubLifecycle : IAsyncDisposable
                 await _loopTask.ConfigureAwait(false);
             }
             catch (OperationCanceledException)
+            {
+            }
+            catch (Exception) when (cancellationRequested)
             {
             }
         }

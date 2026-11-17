@@ -2,6 +2,8 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="GameClub.Kiosk.Core.Tests" />
+    <InternalsVisibleTo Include="GameClub.Kiosk" />
+    <InternalsVisibleTo Include="GameClub.Kiosk.Windows.IntegrationTests" />
   </ItemGroup>
 
   <PropertyGroup>

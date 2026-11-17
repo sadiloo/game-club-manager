@@ -349,6 +349,43 @@ try {
 
     if ($serverTestExit -ne 0) { $script:FinalExitCode = $serverTestExit }
     if ($guardTestExit -ne 0 -and $script:FinalExitCode -eq 0) { $script:FinalExitCode = $guardTestExit }
+
+    $wpfStabilityRuns = 0
+    if ($env:WPF_STABILITY_RUNS -match '^\d+$') {
+        $wpfStabilityRuns = [int]$env:WPF_STABILITY_RUNS
+    }
+
+    if ($wpfStabilityRuns -gt 0) {
+        Write-PhaseLog "START phase=wpf-stability runs=$wpfStabilityRuns"
+        $wpfFilter = 'FullyQualifiedName~wpf_remaining_time_matches_funded_session_within_one_tick'
+        for ($run = 1; $run -le $wpfStabilityRuns; $run++) {
+            $runSw = [System.Diagnostics.Stopwatch]::StartNew()
+            Write-Host "WPF stability run $run/$wpfStabilityRuns"
+            $wpfArgs = @(
+                'test', 'tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj',
+                '-c', 'Release', '-f', 'net48', '--no-build', '--nologo',
+                '--filter', $wpfFilter,
+                '--blame-hang', '--blame-hang-timeout', '3m'
+            )
+            $wpfProc = Start-Process -FilePath 'dotnet' -ArgumentList $wpfArgs -PassThru -NoNewWindow -WorkingDirectory $repoRoot
+            $wpfDone = $wpfProc.WaitForExit(240000)
+            if (-not $wpfDone) {
+                Stop-ProcessTree -rootProcId $wpfProc.Id
+                $script:FinalExitCode = 124
+                throw "WPF stability run $run timed out after 240s"
+            }
+
+            if ($wpfProc.ExitCode -ne 0) {
+                $script:FinalExitCode = $wpfProc.ExitCode
+                throw "WPF stability run $run failed with exit $($wpfProc.ExitCode)"
+            }
+
+            $runSw.Stop()
+            Write-Host "WPF stability run $run/$wpfStabilityRuns completed in $([math]::Round($runSw.Elapsed.TotalSeconds, 1))s"
+        }
+
+        Write-PhaseLog "END phase=wpf-stability exit=0"
+    }
 } catch {
     $errMsg = $_.Exception.Message
     $stack = $_.ScriptStackTrace
@@ -361,9 +398,19 @@ try {
     if (-not [string]::IsNullOrWhiteSpace($cancelFile)) {
         try { New-Item -Force -Path $cancelFile -ItemType File | Out-Null } catch { }
     }
+    $currentServerPid = 0
+    if ($env:GAMECLUB_SERVER_PID -match '^\d+$') {
+        $currentServerPid = [int]$env:GAMECLUB_SERVER_PID
+    }
+
     if ($null -ne $serverProc -and -not $serverProc.HasExited) {
         try {
             Stop-ProcessTree -rootProcId $serverProc.Id
+        } catch { }
+    }
+    elseif ($currentServerPid -gt 0) {
+        try {
+            Stop-ProcessTree -rootProcId $currentServerPid
         } catch { }
     }
 

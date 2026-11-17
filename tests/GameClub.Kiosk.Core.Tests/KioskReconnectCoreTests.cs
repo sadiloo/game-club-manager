@@ -1,4 +1,5 @@
 using GameClub.Kiosk.Core.Connection;
+using GameClub.Kiosk.Core.Offline;
 using GameClub.Kiosk.Core.Protocol;
 using GameClub.Kiosk.Core.Runtime;
 using GameClub.Kiosk.Core.Tests.Fakes;
@@ -7,6 +8,44 @@ namespace GameClub.Kiosk.Core.Tests;
 
 public sealed class KioskReconnectCoreTests
 {
+    private sealed class RecordingQueue : IOfflineEventQueue
+    {
+        public List<string> Types { get; } = new();
+
+        public Task EnqueueAsync(Guid eventId, string type, string payloadJson, DateTime createdUtc, CancellationToken ct = default)
+        {
+            lock (Types)
+            {
+                Types.Add(type);
+            }
+
+            return Task.CompletedTask;
+        }
+
+        public Task<IReadOnlyList<QueuedEvent>> PendingAsync(CancellationToken ct = default)
+        {
+            lock (Types)
+            {
+                return Task.FromResult<IReadOnlyList<QueuedEvent>>(Types.Select(t =>
+                    new QueuedEvent(Guid.NewGuid(), t, "{}", DateTime.UtcNow)).ToList());
+            }
+        }
+
+        public Task AckAsync(Guid eventId, CancellationToken ct = default) => Task.CompletedTask;
+
+        public void Close()
+        {
+        }
+    }
+
+    private static async Task WaitUntil(Func<bool> condition, int timeoutMs)
+    {
+        var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+        while (DateTime.UtcNow < deadline && !condition())
+        {
+            await Task.Delay(20);
+        }
+    }
     [Theory]
     [InlineData(0, 2)]
     [InlineData(1, 4)]
@@ -148,5 +187,404 @@ public sealed class KioskReconnectCoreTests
         Assert.NotEqual(KioskTransportPhase.Connected, runtime.TransportPhase);
         Assert.NotEqual(KioskTransportPhase.Connected, lastPhase);
         reconnectBlocked.TrySetResult(true);
+    }
+
+    [Fact]
+    public async Task client_monotonic_increases_across_two_lifecycle_reconnects()
+    {
+        var transport = new FakeKioskHubTransport();
+        var runtime = new KioskRuntime(() => new HttpClient()) { TestDelayAsync = (_, _) => Task.CompletedTask };
+        runtime.ConfigureForTests(transport, new RecordingQueue(), "http://x", Guid.NewGuid(), "k", "PC-mono");
+        await runtime.StartAsync(default);
+        await runtime.WaitForTransportConnectedAsync(TimeSpan.FromSeconds(5), default);
+        await Task.Delay(1500);
+        var before = runtime.ClientMonotonicMs;
+        transport.ForceClose(new Exception("auto reconnect exhausted"));
+        await WaitUntil(() => transport.StartCallCount >= 2 && runtime.IsTransportConnected, 5000);
+        var mid = runtime.ClientMonotonicMs;
+        Assert.True(mid >= before, $"first reconnect lowered mono: before={before} mid={mid}");
+        transport.ForceClose(new Exception("auto reconnect exhausted"));
+        await WaitUntil(() => transport.StartCallCount >= 3 && runtime.IsTransportConnected, 5000);
+        var after = runtime.ClientMonotonicMs;
+        Assert.True(after >= mid, $"second reconnect lowered mono: mid={mid} after={after}");
+    }
+
+    [Fact]
+    public async Task offline_play_segment_still_enqueued_after_second_outage_in_same_session()
+    {
+        var transport = new FakeKioskHubTransport();
+        var queue = new RecordingQueue();
+        var sessionId = Guid.NewGuid();
+        var orchestrator = new KioskShellOrchestrator();
+        orchestrator.BindOfflineQueue(queue);
+        var runtime = new KioskRuntime(() => new HttpClient()) { TestDelayAsync = (_, _) => Task.CompletedTask };
+        runtime.ConfigureForTests(transport, queue, "http://x", Guid.NewGuid(), "k", "PC-out2");
+        runtime.BindSession(sessionId);
+        await runtime.StartAsync(default);
+        await runtime.WaitForTransportConnectedAsync(TimeSpan.FromSeconds(5), default);
+        await Task.Delay(2000);
+        var monoConnected = runtime.ClientMonotonicMs;
+        Assert.True(monoConnected >= 1000);
+        transport.ForceClose(new Exception("outage1"));
+        await WaitUntil(() => !runtime.IsTransportConnected, 5000);
+        orchestrator.EnqueuePoweredSegmentOnDisconnect(sessionId, 120_000);
+        Assert.Equal(1, queue.Types.Count(t => t == "offline_play_segment"));
+        await WaitUntil(() => runtime.IsTransportConnected, 5000);
+        Assert.True(runtime.ClientMonotonicMs >= monoConnected, "monotonic must not reset after lifecycle reconnect");
+        transport.ForceClose(new Exception("outage2"));
+        await WaitUntil(() => !runtime.IsTransportConnected, 5000);
+        orchestrator.EnqueuePoweredSegmentOnDisconnect(sessionId, 150_000);
+        Assert.Equal(2, queue.Types.Count(t => t == "offline_play_segment"));
+    }
+
+    [Fact]
+    public async Task re_pair_does_not_reset_client_monotonic_clock()
+    {
+        var transport = new FakeKioskHubTransport();
+        var runtime = new KioskRuntime(() => new HttpClient()) { TestDelayAsync = (_, _) => Task.CompletedTask };
+        runtime.ConfigureForTests(transport, new RecordingQueue(), "http://x", Guid.NewGuid(), "k", "PC-mono-re");
+        await runtime.StartAsync(default);
+        await runtime.WaitForTransportConnectedAsync(TimeSpan.FromSeconds(5), default);
+        await Task.Delay(800);
+        var beforeSecondStart = runtime.ClientMonotonicMs;
+        await runtime.ResetForReconfigureAsync();
+        runtime.ConfigureForTests(new FakeKioskHubTransport(), new RecordingQueue(), "http://x2", Guid.NewGuid(), "k2", "PC-mono-re");
+        await runtime.StartAsync(default);
+        await runtime.WaitForTransportConnectedAsync(TimeSpan.FromSeconds(5), default);
+        Assert.True(runtime.ClientMonotonicMs >= beforeSecondStart, "re-pair StartAsync must not restart monotonic");
+    }
+
+    [Fact]
+    public async Task re_pair_second_start_still_reconnects_after_transport_drop()
+    {
+        var deviceA = Guid.NewGuid();
+        var deviceB = Guid.NewGuid();
+        var transport1 = new FakeKioskHubTransport();
+        var transport2 = new FakeKioskHubTransport();
+        var runtime = new KioskRuntime(() => new HttpClient()) { TestDelayAsync = (_, _) => Task.CompletedTask };
+        runtime.ConfigureForTests(transport1, new RecordingQueue(), "http://x/pair-a", deviceA, "key-a", "PC-repair");
+        await runtime.StartAsync(default);
+        await runtime.WaitForTransportConnectedAsync(TimeSpan.FromSeconds(5), default);
+        await runtime.ResetForReconfigureAsync();
+        runtime.ConfigureForTests(transport2, new RecordingQueue(), "http://x/pair-b", deviceB, "key-b", "PC-repair");
+        await runtime.StartAsync(default);
+        Assert.True(transport1.IsDisposed, "old transport must be disposed on re-pair");
+        Assert.Equal(deviceB, runtime.DeviceId);
+        Assert.Equal("http://x/pair-b", runtime.ServerBase);
+        transport2.ForceClose(new Exception("auto reconnect exhausted"));
+        await WaitUntil(() => transport2.StartCallCount >= 2 && runtime.IsTransportConnected, 5000);
+        Assert.True(transport2.StartCallCount >= 2, $"StartCallCount={transport2.StartCallCount}");
+        Assert.True(runtime.IsTransportConnected);
+    }
+
+    [Fact]
+    public async Task re_pair_second_start_survives_two_minute_outage()
+    {
+        var serverUp = true;
+        var transport1 = new FakeKioskHubTransport
+        {
+            StartHandler = (_, _) => serverUp ? Task.CompletedTask : throw new HttpRequestException("down"),
+        };
+        var transport2 = new FakeKioskHubTransport
+        {
+            StartHandler = (_, _) => serverUp ? Task.CompletedTask : throw new HttpRequestException("down"),
+        };
+        var runtime = new KioskRuntime(() => new HttpClient()) { TestDelayAsync = (_, ct) => Task.Delay(20, ct) };
+        runtime.ConfigureForTests(transport1, new RecordingQueue(), "http://x", Guid.NewGuid(), "k", "PC-F");
+        await runtime.StartAsync(default);
+        serverUp = false;
+        await Task.Delay(3000);
+        await runtime.ResetForReconfigureAsync();
+        runtime.ConfigureForTests(transport2, new RecordingQueue(), "http://x", Guid.NewGuid(), "k2", "PC-F");
+        await runtime.StartAsync(default);
+        await Task.Delay(5000);
+        serverUp = true;
+        await WaitUntil(() => runtime.IsTransportConnected, 15_000);
+        Assert.True(runtime.IsTransportConnected, $"never reconnected; starts={transport2.StartCallCount}");
+    }
+
+    [Fact]
+    public async Task re_pair_during_backoff_connects_when_server_returns()
+    {
+        var serverUp = false;
+        var deviceA = Guid.NewGuid();
+        var transport1 = new FakeKioskHubTransport
+        {
+            StartHandler = (_, _) => serverUp ? Task.CompletedTask : throw new HttpRequestException("down"),
+        };
+        var transport2 = new FakeKioskHubTransport
+        {
+            StartHandler = (_, _) => serverUp ? Task.CompletedTask : throw new HttpRequestException("down"),
+        };
+        var runtime = new KioskRuntime(() => new HttpClient()) { TestDelayAsync = (_, ct) => Task.Delay(20, ct) };
+        runtime.ConfigureForTests(transport1, new RecordingQueue(), "http://down", deviceA, "k", "PC-repair-b");
+        await runtime.StartAsync(default);
+        await WaitUntil(() => transport1.StartCallCount >= 2, 5000);
+        await runtime.ResetForReconfigureAsync();
+        runtime.ConfigureForTests(transport2, new RecordingQueue(), "http://up", Guid.NewGuid(), "k2", "PC-repair-b");
+        await runtime.StartAsync(default);
+        serverUp = true;
+        await WaitUntil(() => runtime.IsTransportConnected, 5000);
+        Assert.True(runtime.IsTransportConnected, $"never reconnected; starts={transport2.StartCallCount}");
+        Assert.True(transport1.IsDisposed);
+    }
+
+    [Fact]
+    public async Task hub_lifecycle_recovers_after_more_than_four_consecutive_start_failures_then_resets_backoff()
+    {
+        var failUntil = 10;
+        var transport = new FakeKioskHubTransport
+        {
+            StartHandler = (n, _) => n <= failUntil ? throw new HttpRequestException("down " + n) : Task.CompletedTask,
+        };
+        var delays = new List<TimeSpan>();
+        var runtime = new KioskRuntime(() => new HttpClient())
+        {
+            TestDelayAsync = (d, _) =>
+            {
+                lock (delays)
+                {
+                    delays.Add(d);
+                }
+
+                return Task.CompletedTask;
+            },
+        };
+        runtime.ConfigureForTests(transport, new RecordingQueue(), "http://x", Guid.NewGuid(), "k", "PC-P4");
+        await runtime.StartAsync(default);
+        await runtime.WaitForTransportConnectedAsync(TimeSpan.FromSeconds(5), default);
+        Assert.Equal(failUntil + 1, transport.StartCallCount);
+        int[] expected;
+        lock (delays)
+        {
+            expected = delays.Take(failUntil).Select(d => (int)d.TotalSeconds).ToArray();
+        }
+
+        Assert.Equal(new[] { 2, 4, 8, 16, 30, 30, 30, 30, 30, 30 }, expected);
+        transport.ForceClose(new Exception("closed"));
+        await WaitUntil(() => transport.StartCallCount >= failUntil + 2 && runtime.IsTransportConnected, 5000);
+        int lastDelay;
+        lock (delays)
+        {
+            lastDelay = (int)delays[^1].TotalSeconds;
+        }
+
+        Assert.Equal(2, lastDelay);
+    }
+
+    [Fact]
+    public async Task hub_lifecycle_handles_multiple_closed_events_and_restarts()
+    {
+        var postCloseFailures = 0;
+        var transport = new FakeKioskHubTransport
+        {
+            StartHandler = (n, _) =>
+            {
+                if (postCloseFailures > 0)
+                {
+                    postCloseFailures--;
+                    throw new HttpRequestException("down");
+                }
+
+                return Task.CompletedTask;
+            },
+        };
+        var delays = new List<TimeSpan>();
+        var runtime = new KioskRuntime(() => new HttpClient())
+        {
+            TestDelayAsync = (d, _) =>
+            {
+                lock (delays)
+                {
+                    delays.Add(d);
+                }
+
+                return Task.CompletedTask;
+            },
+        };
+        runtime.ConfigureForTests(transport, new RecordingQueue(), "http://x", Guid.NewGuid(), "k", "PC-multi");
+        await runtime.StartAsync(default);
+        await runtime.WaitForTransportConnectedAsync(TimeSpan.FromSeconds(5), default);
+
+        postCloseFailures = 6;
+        transport.ForceClose(new Exception("close1"));
+        await WaitUntil(() => transport.StartCallCount >= 2 && runtime.IsTransportConnected, 5000);
+        transport.ForceClose(new Exception("close2"));
+        await WaitUntil(() => transport.StartCallCount >= 3 && runtime.IsTransportConnected, 5000);
+        transport.ForceClose(new Exception("close3"));
+        await WaitUntil(() => transport.StartCallCount >= 4 && runtime.IsTransportConnected, 8000);
+        Assert.True(transport.StartCallCount >= 4);
+        Assert.True(runtime.IsTransportConnected);
+    }
+
+    [Fact]
+    public async Task heartbeat_inner_enqueue_catch_keeps_loop_without_supervisor_restart()
+    {
+        var transport = new FakeKioskHubTransport();
+        var queue = new ThrowingOfflineEventQueue("heartbeat_error");
+        var runtime = new KioskRuntime(() => new HttpClient())
+        {
+            TestDisableHeartbeatSupervisorRestart = true,
+            TestHeartbeatInterval = TimeSpan.FromMilliseconds(200),
+        };
+        transport.HeartbeatHandler = _ => throw new InvalidOperationException("heartbeat failed");
+        runtime.ConfigureForTests(transport, queue, "http://127.0.0.1:5000", Guid.NewGuid(), "key", "PC-Mb");
+        await runtime.StartAsync(default);
+        await runtime.WaitForTransportConnectedAsync(TimeSpan.FromSeconds(5), default);
+        var deadline = DateTime.UtcNow.AddSeconds(8);
+        while (DateTime.UtcNow < deadline && transport.HeartbeatCallCount < 2)
+        {
+            await Task.Delay(100);
+        }
+
+        Assert.True(transport.HeartbeatCallCount >= 2, "inner enqueue catch must keep heartbeat loop alive without supervisor restart");
+    }
+
+    [Fact]
+    public async Task connection_status_subscriber_throw_does_not_stop_reconnect_loop()
+    {
+        var transport = new FakeKioskHubTransport();
+        var runtime = new KioskRuntime(() => new HttpClient()) { TestDelayAsync = (_, _) => Task.CompletedTask };
+        runtime.ConfigureForTests(transport, new RecordingQueue(), "http://x", Guid.NewGuid(), "k", "PC-P5");
+        var throwOnce = true;
+        runtime.ConnectionStatusChanged += (phase, _) =>
+        {
+            if (phase == KioskTransportPhase.Disconnected && throwOnce)
+            {
+                throwOnce = false;
+                throw new InvalidOperationException("subscriber fault");
+            }
+        };
+        await runtime.StartAsync(default);
+        await runtime.WaitForTransportConnectedAsync(TimeSpan.FromSeconds(5), default);
+        transport.ForceClose(new Exception("closed"));
+        await WaitUntil(() => transport.StartCallCount >= 2 && runtime.IsTransportConnected, 5000);
+        Assert.True(transport.StartCallCount >= 2, $"loop died; StartCallCount={transport.StartCallCount}");
+    }
+
+    [Fact]
+    public async Task runtime_double_dispose_does_not_throw()
+    {
+        var transport = new FakeKioskHubTransport();
+        var runtime = new KioskRuntime(() => new HttpClient());
+        runtime.ConfigureForTests(transport, new RecordingQueue(), "http://x", Guid.NewGuid(), "k", "PC-P6");
+        await runtime.StartAsync(default);
+        await runtime.DisposeAsync();
+        await runtime.DisposeAsync();
+    }
+
+    [Fact]
+    public void locked_kiosk_status_not_connected_during_signalr_reconnecting_phase()
+    {
+        var text = KioskStationStatus.Resolve(
+            "PC-A",
+            KioskTransportPhase.Reconnecting,
+            hubTransportConnected: true,
+            signalRAutoReconnecting: true,
+            pairingJustFailed: false,
+            hasOpenSession: false,
+            consecutiveHeartbeatFailures: 0,
+            lastHeartbeatAckUtc: null,
+            utcNow: DateTime.UtcNow,
+            estimatedRemainingSeconds: null,
+            lastErrorDetail: null);
+        Assert.DoesNotContain("connected", text, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("reconnecting", text, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void heartbeat_failures_show_no_server_response_until_next_ack()
+    {
+        var failed = KioskStationStatus.Resolve(
+            "PC-B",
+            KioskTransportPhase.Connected,
+            hubTransportConnected: true,
+            signalRAutoReconnecting: false,
+            pairingJustFailed: false,
+            hasOpenSession: true,
+            consecutiveHeartbeatFailures: 2,
+            lastHeartbeatAckUtc: DateTime.UtcNow.AddSeconds(-20),
+            utcNow: DateTime.UtcNow,
+            estimatedRemainingSeconds: 3600L,
+            lastErrorDetail: null);
+        Assert.Contains("no server response", failed, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("left", failed, StringComparison.OrdinalIgnoreCase);
+
+        var recovered = KioskStationStatus.Resolve(
+            "PC-B",
+            KioskTransportPhase.Connected,
+            hubTransportConnected: true,
+            signalRAutoReconnecting: false,
+            pairingJustFailed: false,
+            hasOpenSession: true,
+            consecutiveHeartbeatFailures: 0,
+            lastHeartbeatAckUtc: DateTime.UtcNow,
+            utcNow: DateTime.UtcNow,
+            estimatedRemainingSeconds: 3500L,
+            lastErrorDetail: null);
+        Assert.Contains("left", recovered, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void re_pair_failure_status_not_connected()
+    {
+        var text = KioskStationStatus.Resolve(
+            "PC-C",
+            KioskTransportPhase.Connected,
+            hubTransportConnected: true,
+            signalRAutoReconnecting: false,
+            pairingJustFailed: true,
+            hasOpenSession: false,
+            consecutiveHeartbeatFailures: 0,
+            lastHeartbeatAckUtc: null,
+            utcNow: DateTime.UtcNow,
+            estimatedRemainingSeconds: null,
+            lastErrorDetail: null);
+        Assert.Contains("not connected", text, StringComparison.OrdinalIgnoreCase);
+        Assert.False(KioskStationStatus.ContainsConnectedWording(text));
+    }
+
+    [Fact]
+    public async Task transport_signalr_reconnecting_publishes_reconnecting_phase_with_no_session()
+    {
+        var transport = new FakeKioskHubTransport();
+        var runtime = new KioskRuntime(() => new HttpClient()) { TestDelayAsync = (_, _) => Task.CompletedTask };
+        KioskTransportPhase? last = null;
+        runtime.ConnectionStatusChanged += (phase, _) => last = phase;
+        runtime.ConfigureForTests(transport, new RecordingQueue(), "http://x", Guid.NewGuid(), "k", "PC-Rh");
+        await runtime.StartAsync(default);
+        transport.SimulateSignalRReconnecting();
+        Assert.Equal(KioskTransportPhase.Reconnecting, last);
+        var status = KioskStationStatus.Resolve(
+            "PC-Rh",
+            runtime.TransportPhase,
+            runtime.IsTransportConnected,
+            transport.SignalRAutoReconnecting,
+            false,
+            false,
+            0,
+            null,
+            DateTime.UtcNow,
+            null,
+            null);
+        Assert.False(KioskStationStatus.ContainsConnectedWording(status));
+    }
+
+    [Fact]
+    public async Task dispose_during_failed_start_does_not_throw_non_cancellation_error()
+    {
+        var transport = new FakeKioskHubTransport
+        {
+            StartHandler = async (_, ct) =>
+            {
+                await Task.Delay(100, ct);
+                throw new HttpRequestException("down");
+            },
+        };
+        var runtime = new KioskRuntime(() => new HttpClient()) { TestDelayAsync = (_, ct) => Task.Delay(5, ct) };
+        runtime.ConfigureForTests(transport, new RecordingQueue(), "http://x", Guid.NewGuid(), "k", "PC-P9");
+        await runtime.StartAsync(default);
+        await Task.Delay(20);
+        await runtime.DisposeAsync();
     }
 }

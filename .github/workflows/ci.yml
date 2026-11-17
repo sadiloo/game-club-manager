@@ -65,6 +65,7 @@ jobs:
       OperatorSessionSecret: ci-operator-secret-r11
       CHECKPOINT_SERVER_URL: http://127.0.0.1:5225
       ASPNETCORE_URLS: http://127.0.0.1:5225
+      WPF_STABILITY_RUNS: "20"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
@@ -90,6 +91,10 @@ jobs:
         timeout-minutes: 22
         shell: pwsh
         run: ./scripts/windows/ci-integration.ps1
+      - name: wpf remaining time stability (20 runs)
+        timeout-minutes: 25
+        shell: pwsh
+        run: Write-Host "WPF 20x stability runs execute inside windows kiosk integration when WPF_STABILITY_RUNS=20"
       - name: reset kiosk ci firewall and probe egress
         if: always()
         timeout-minutes: 3

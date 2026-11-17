@@ -4,8 +4,10 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
+using GameClub.Kiosk.Core.Offline;
 using GameClub.Kiosk.Core.Protocol;
 using GameClub.Kiosk.Core.Runtime;
+using GameClub.Server.Kiosk;
 using GameClub.Server.Tests;
 
 namespace GameClub.Kiosk.Windows.IntegrationTests.Server;
@@ -109,11 +111,21 @@ public sealed class WindowsKioskServerIntegrationTests
         OutOfProcessLiveServer? ownedServer = null;
         KioskIntegrationBackend backend;
         var priorCheckpointUrl = Environment.GetEnvironmentVariable("CHECKPOINT_SERVER_URL");
+        var ciPid = 0;
+        var usesCiServer = KioskIntegrationBackend.IsLiveMode
+            && int.TryParse(Environment.GetEnvironmentVariable("GAMECLUB_SERVER_PID"), out ciPid);
+        KioskRuntime? runtime = null;
+        using var leaseCts = new CancellationTokenSource();
+        var serverStoppedForOutage = false;
+        var failedStarts = 0;
+        KioskHeartbeatAck? lastAck = null;
         try
         {
             if (KioskIntegrationBackend.IsLiveMode)
             {
+                Assert.True(usesCiServer, "GAMECLUB_SERVER_PID must be set on windows-2022 kiosk integration.");
                 backend = KioskIntegrationBackend.Create(null);
+                ownedServer = OutOfProcessLiveServer.AttachExisting(ciPid, priorCheckpointUrl!);
             }
             else
             {
@@ -124,15 +136,31 @@ public sealed class WindowsKioskServerIntegrationTests
 
             await backend.ResetAsync();
             await backend.RegisterPcAsync(backend.CreateApiClient(), "PC-UNREACH");
-            var (deviceId, deviceKey, _) = await backend.PairAsync("PC-UNREACH");
+            await backend.SeedCustomerWithCredentialAsync("unreach", "pass", 200_000);
+            var (deviceId, deviceKey, leasePem) = await backend.PairAsync("PC-UNREACH");
             var kioskHttp = backend.CreateKioskHttpClient(deviceId, deviceKey);
-            if (ownedServer is not null)
+            var login = await kioskHttp.PostAsJsonAsync(
+                "/api/kiosk/auth/login",
+                new { loginName = "unreach", password = "pass", stationId = "PC-UNREACH" });
+            login.EnsureSuccessStatusCode();
+            var sessionId = await backend.OpenSessionIdAsync();
+            var fundedRemaining = 200_000;
+
+            if (usesCiServer)
             {
-                ownedServer.Stop();
+                Process.GetProcessById(ciPid).Kill(entireProcessTree: true);
+            }
+            else
+            {
+                ownedServer!.Stop();
             }
 
+            serverStoppedForOutage = true;
+
             var queuePath = Path.Combine(Path.GetTempPath(), $"kiosk-unreach-{Guid.NewGuid():N}.db");
-            var runtime = new KioskRuntime(() => kioskHttp);
+            var orchestrator = new KioskShellOrchestrator();
+            orchestrator.ConfigureLeaseVerifier(leasePem);
+            runtime = new KioskRuntime(() => kioskHttp);
             runtime.Configure(
                 backend.HubUri,
                 deviceId,
@@ -141,35 +169,114 @@ public sealed class WindowsKioskServerIntegrationTests
                 queuePath,
                 legacyWindows: true,
                 testHubHandler: backend.TestHubHandler);
-            await runtime.StartAsync(default);
-
-            if (ownedServer is not null)
+            orchestrator.BindOfflineQueue(runtime.GetQueue());
+            runtime.BindSession(sessionId);
+            runtime.ConnectionStatusChanged += (phase, _) =>
             {
-                var reconnectDeadline = DateTime.UtcNow.AddSeconds(30);
-                await ownedServer.RelaunchAsync();
-                while (DateTime.UtcNow < reconnectDeadline)
+                if (phase == KioskTransportPhase.LastError)
                 {
-                    if (runtime.IsTransportConnected)
+                    Interlocked.Increment(ref failedStarts);
+                }
+            };
+            runtime.HeartbeatAcknowledged += ack =>
+            {
+                lastAck = ack;
+                orchestrator.OnHeartbeatAck(ack, sessionId, runtime.ClientMonotonicMs);
+            };
+            runtime.HeartbeatTransportFailed += () =>
+                orchestrator.EnqueuePoweredSegmentOnDisconnect(sessionId, runtime.ClientMonotonicMs);
+
+            _ = Task.Run(async () =>
+            {
+                while (!leaseCts.IsCancellationRequested)
+                {
+                    orchestrator.TickLease(
+                        sessionId,
+                        runtime.ClientMonotonicMs,
+                        DateTime.UtcNow,
+                        transportDown: sessionId != Guid.Empty && !runtime.IsTransportConnected);
+                    try
+                    {
+                        await Task.Delay(TimeSpan.FromSeconds(1), leaseCts.Token);
+                    }
+                    catch (OperationCanceledException)
                     {
                         break;
                     }
-
-                    await Task.Delay(250);
                 }
-            }
-            else
+            }, leaseCts.Token);
+
+            await runtime.StartAsync(default);
+            await Task.Delay(TimeSpan.FromSeconds(20));
+            Assert.True(failedStarts >= 2, $"expected >=2 failed starts while server down, saw {failedStarts}");
+
+            await ownedServer!.RelaunchAsync();
+            serverStoppedForOutage = false;
+
+            await WaitUntilTransportConnectedAsync(runtime, TimeSpan.FromSeconds(30));
+            Assert.True(runtime.IsTransportConnected, "Transport must connect within 30 seconds after server returns.");
+
+            var ackDeadline = DateTime.UtcNow.AddSeconds(30);
+            while (DateTime.UtcNow < ackDeadline)
             {
-                await WaitUntilTransportConnectedAsync(runtime, TimeSpan.FromSeconds(30));
+                if (lastAck?.Lease is not null
+                    && lastAck.Display?.EstimatedRemainingSeconds is > 0
+                    && orchestrator.Phase == KioskShellPhase.Playing)
+                {
+                    break;
+                }
+
+                await Task.Delay(500);
             }
 
-            Assert.True(runtime.IsTransportConnected, "Transport must connect within 30 seconds after server returns.");
-            var heartbeatBefore = await backend.CountHeartbeatsAsync();
-            await WaitForHeartbeatAdvanceAsync(backend, deviceId, heartbeatBefore, await backend.DeviceLastSeenUtcAsync(deviceId));
+            Assert.NotNull(lastAck);
+            Assert.NotNull(lastAck.Lease);
+            Assert.True(lastAck.Display!.EstimatedRemainingSeconds > 0);
+            Assert.True(lastAck.Display.EstimatedRemainingSeconds <= fundedRemaining / 1000 + 60);
+            Assert.Equal(KioskShellPhase.Playing, orchestrator.Phase);
+
+            var stop = await backend.CreateApiClient().PostAsync($"/api/sessions/{sessionId}/stop", null);
+            stop.EnsureSuccessStatusCode();
+            var lockDeadline = DateTime.UtcNow.AddSeconds(20);
+            while (DateTime.UtcNow < lockDeadline)
+            {
+                if (lastAck?.SessionStatus == "AwaitingPayment"
+                    && lastAck.Lease is null
+                    && orchestrator.Phase is KioskShellPhase.Ended or KioskShellPhase.Locked)
+                {
+                    break;
+                }
+
+                await Task.Delay(500);
+            }
+
+            Assert.Equal("AwaitingPayment", lastAck?.SessionStatus);
+            Assert.Null(lastAck?.Lease);
+            Assert.True(orchestrator.Phase is KioskShellPhase.Ended or KioskShellPhase.Locked);
+
             await runtime.DisposeAsync();
+            runtime = null;
         }
         finally
         {
-            if (ownedServer is not null)
+            leaseCts.Cancel();
+            if (runtime is not null)
+            {
+                await runtime.DisposeAsync();
+            }
+
+            if (ownedServer is not null && usesCiServer && serverStoppedForOutage)
+            {
+                try
+                {
+                    await ownedServer.RelaunchAsync();
+                }
+                catch
+                {
+                    // Best-effort restore for follow-on net48 tests.
+                }
+            }
+            else if (ownedServer is not null && !usesCiServer)
             {
                 await ownedServer.DisposeAsync();
                 Environment.SetEnvironmentVariable("CHECKPOINT_SERVER_URL", priorCheckpointUrl);
@@ -393,6 +500,172 @@ public sealed class WindowsKioskServerIntegrationTests
                 }
             }
             else if (ownedServer is not null)
+            {
+                await ownedServer.DisposeAsync();
+                Environment.SetEnvironmentVariable("CHECKPOINT_SERVER_URL", priorCheckpointUrl);
+            }
+        }
+    }
+
+    [Fact(Timeout = 300_000)]
+    public async Task live_server_re_pair_new_device_key_heartbeats_resume()
+    {
+        if (KioskIntegrationBackend.IsLiveMode)
+        {
+            return;
+        }
+
+        await _backend.ResetAsync();
+        await _backend.RegisterPcAsync(_backend.CreateApiClient(), "PC-REKEY");
+        var (deviceId, deviceKey1, leasePem) = await _backend.PairAsync("PC-REKEY");
+        var kioskHttp = _backend.CreateKioskHttpClient(deviceId, deviceKey1);
+        var queuePath = Path.Combine(Path.GetTempPath(), $"kiosk-rekey-{Guid.NewGuid():N}.db");
+        var runtime = new KioskRuntime(() => kioskHttp);
+        runtime.Configure(_backend.HubUri, deviceId, deviceKey1, "PC-REKEY", queuePath, legacyWindows: true, testHubHandler: _backend.TestHubHandler);
+        var acks = 0;
+        runtime.HeartbeatAcknowledged += _ => Interlocked.Increment(ref acks);
+        await runtime.StartAsync(default);
+        await WaitUntilTransportConnectedAsync(runtime, TimeSpan.FromSeconds(45));
+        await Task.Delay(TimeSpan.FromSeconds(8));
+        var acksBefore = acks;
+        Assert.True(acksBefore >= 1, "heartbeats must work before re-pair");
+
+        var op = await _backend.CreateOperatorClientAsync();
+        var codeBody = await op.PostAsync("/api/operator/stations/PC-REKEY/pairing-code", null);
+        codeBody.EnsureSuccessStatusCode();
+        var code = (await codeBody.Content.ReadFromJsonAsync<JsonElement>())!.GetProperty("code").GetString()!;
+        var pair = await _backend.CreateApiClient().PostAsJsonAsync("/api/kiosk/pair", new { code });
+        pair.EnsureSuccessStatusCode();
+        var pairDoc = JsonDocument.Parse(await pair.Content.ReadAsStringAsync());
+        var deviceKey2 = pairDoc.RootElement.GetProperty("deviceKey").GetString()!;
+        Assert.Equal(deviceId, pairDoc.RootElement.GetProperty("deviceId").GetGuid());
+        Assert.NotEqual(deviceKey1, deviceKey2);
+
+        kioskHttp = _backend.CreateKioskHttpClient(deviceId, deviceKey2);
+        await runtime.ResetForReconfigureAsync();
+        runtime.Configure(_backend.HubUri, deviceId, deviceKey2, "PC-REKEY", queuePath, legacyWindows: true, testHubHandler: _backend.TestHubHandler);
+        await runtime.StartAsync(default);
+        await WaitUntilTransportConnectedAsync(runtime, TimeSpan.FromSeconds(45));
+        var deadline = DateTime.UtcNow.AddSeconds(30);
+        while (DateTime.UtcNow < deadline && acks <= acksBefore)
+        {
+            await Task.Delay(500);
+        }
+
+        Assert.True(acks > acksBefore, "heartbeats must resume after re-pair with new device key");
+        await runtime.DisposeAsync();
+    }
+
+    [Fact(Timeout = 1_200_000)]
+    public async Task live_server_two_outages_bill_matches_main_g2_oracle()
+    {
+        if (KioskIntegrationBackend.IsLiveMode)
+        {
+            return;
+        }
+
+        OutOfProcessLiveServer? ownedServer = null;
+        var priorCheckpointUrl = Environment.GetEnvironmentVariable("CHECKPOINT_SERVER_URL");
+        try
+        {
+            ownedServer = await OutOfProcessLiveServer.StartNewAsync();
+            Environment.SetEnvironmentVariable("CHECKPOINT_SERVER_URL", ownedServer.BaseUrl);
+            var backend = KioskIntegrationBackend.CreateForBaseUrl(ownedServer.BaseUrl);
+            await backend.ResetAsync();
+            await backend.RegisterPcAsync(backend.CreateApiClient(), "PC-G2");
+            var customerId = await backend.SeedCustomerWithCredentialAsync("g2user", "pass", 500_000);
+            var (deviceId, deviceKey, leasePem) = await backend.PairAsync("PC-G2");
+            var kioskHttp = backend.CreateKioskHttpClient(deviceId, deviceKey);
+            var login = await kioskHttp.PostAsJsonAsync(
+                "/api/kiosk/auth/login",
+                new { loginName = "g2user", password = "pass", stationId = "PC-G2" });
+            login.EnsureSuccessStatusCode();
+            var sessionId = await backend.OpenSessionIdAsync();
+            var queuePath = Path.Combine(Path.GetTempPath(), $"kiosk-g2-{Guid.NewGuid():N}.db");
+            var orchestrator = new KioskShellOrchestrator();
+            orchestrator.ConfigureLeaseVerifier(leasePem);
+            var runtime = new KioskRuntime(() => kioskHttp);
+            runtime.Configure(backend.HubUri, deviceId, deviceKey, "PC-G2", queuePath, legacyWindows: true, testHubHandler: backend.TestHubHandler);
+            orchestrator.BindOfflineQueue(runtime.GetQueue());
+            runtime.BindSession(sessionId);
+            runtime.HeartbeatTransportFailed += () =>
+                orchestrator.EnqueuePoweredSegmentOnDisconnect(sessionId, runtime.ClientMonotonicMs);
+            using var leaseCts = new CancellationTokenSource();
+            _ = Task.Run(async () =>
+            {
+                while (!leaseCts.IsCancellationRequested)
+                {
+                    orchestrator.TickLease(
+                        sessionId,
+                        runtime.ClientMonotonicMs,
+                        DateTime.UtcNow,
+                        transportDown: !runtime.IsTransportConnected);
+                    try
+                    {
+                        await Task.Delay(TimeSpan.FromSeconds(1), leaseCts.Token);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        break;
+                    }
+                }
+            }, leaseCts.Token);
+            await runtime.StartAsync(default);
+            await WaitUntilTransportConnectedAsync(runtime, TimeSpan.FromSeconds(60));
+            await Task.Delay(TimeSpan.FromMinutes(6));
+
+            ownedServer.Stop();
+            await Task.Delay(TimeSpan.FromSeconds(120));
+            await ownedServer.RelaunchAsync();
+            await WaitUntilTransportConnectedAsync(runtime, TimeSpan.FromSeconds(180));
+            await Task.Delay(TimeSpan.FromSeconds(90));
+
+            var afterOutage1 = (await runtime.GetQueue().PendingAsync()).Count(e => e.Type == "offline_play_segment");
+
+            ownedServer.Stop();
+            await Task.Delay(TimeSpan.FromSeconds(120));
+            var afterOutage2 = (await runtime.GetQueue().PendingAsync()).Count(e => e.Type == "offline_play_segment");
+            Assert.True(afterOutage2 > afterOutage1, "outage 2 must enqueue offline_play_segment evidence");
+
+            leaseCts.Cancel();
+            await runtime.DisposeAsync();
+            await ownedServer.RelaunchAsync();
+            await Task.Delay(TimeSpan.FromSeconds(3));
+
+            var queueOnly = new SqliteOfflineEventQueue(queuePath);
+            orchestrator.BindOfflineQueue(queueOnly);
+            var drained = await orchestrator.DrainOfflineQueueAsync(async events =>
+            {
+                var payload = JsonSerializer.Serialize(events.Select(e => new KioskOutboundEvent
+                {
+                    EventId = e.EventId,
+                    Type = e.Type,
+                    PayloadJson = e.PayloadJson,
+                    CreatedUtc = e.CreatedUtc,
+                }));
+                var response = await kioskHttp.PostAsync(
+                    "/api/kiosk/devices/events",
+                    new StringContent(payload, Encoding.UTF8, "application/json"));
+                if (!response.IsSuccessStatusCode)
+                {
+                    return Array.Empty<Guid>();
+                }
+
+                var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+                return body.RootElement.TryGetProperty("ackedEventIds", out var ids)
+                    ? ids.EnumerateArray().Select(x => x.GetGuid()).ToList()
+                    : (IReadOnlyList<Guid>)Array.Empty<Guid>();
+            }, default);
+            Assert.True(drained > 0);
+
+            var stop = await backend.CreateApiClient().PostAsync($"/api/sessions/{sessionId}/stop", null);
+            stop.EnsureSuccessStatusCode();
+            var bill = await backend.PendingBillCollectibleAsync();
+            Assert.Equal(7_333, bill);
+        }
+        finally
+        {
+            if (ownedServer is not null)
             {
                 await ownedServer.DisposeAsync();
                 Environment.SetEnvironmentVariable("CHECKPOINT_SERVER_URL", priorCheckpointUrl);

@@ -105,18 +105,19 @@ public sealed class WindowsKioskWpfTransportTests
             ?? Environment.GetEnvironmentVariable("GAMECLUB_DATABASE");
         using var conn = new NpgsqlConnection(connString);
         await conn.OpenAsync();
+        // Same normalization as GameClub.Server.Kiosk.KioskCrypto.NormalizeLoginName (Trim + ToUpperInvariant).
+        var normalizedLogin = loginName.Trim().ToUpperInvariant();
         using var cmd = new NpgsqlCommand(
             """
-            SELECT s."SessionId"
+            SELECT s."Id"
             FROM sessions s
-            INNER JOIN customers c ON c."CustomerId" = s."CustomerId"
-            INNER JOIN customer_credentials cc ON cc."CustomerId" = c."CustomerId"
-            WHERE cc."LoginName" = @login AND s."Status" = 'Open'
-            ORDER BY s."OpenedUtc" DESC
+            INNER JOIN customer_credentials cc ON cc."CustomerId" = s."CustomerId"
+            WHERE cc."LoginNameNormalized" = @login AND s."Status" = 'Open'
+            ORDER BY s."StartedAtUtc" DESC
             LIMIT 1
             """,
             conn);
-        cmd.Parameters.AddWithValue("login", loginName);
+        cmd.Parameters.AddWithValue("login", normalizedLogin);
         var value = await cmd.ExecuteScalarAsync();
         return value is Guid g ? g : Guid.Empty;
     }

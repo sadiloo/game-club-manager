@@ -34,8 +34,9 @@ internal sealed class OutOfProcessLiveServer : IAsyncDisposable
     {
         var root = ResolveRepoRoot();
         var dll = ResolveServerDll(root);
+        var defaultPort = 5200 + Random.Shared.Next(200, 800);
         var baseUrl = Environment.GetEnvironmentVariable("CHECKPOINT_SERVER_URL")?.TrimEnd('/')
-            ?? "http://127.0.0.1:5225";
+            ?? $"http://127.0.0.1:{defaultPort}";
         var instance = new OutOfProcessLiveServer(root, dll, null!) { BaseUrl = baseUrl };
         await instance.LaunchAndWaitReadyAsync(ct);
         return instance;
@@ -110,6 +111,11 @@ internal sealed class OutOfProcessLiveServer : IAsyncDisposable
                 var response = await http.GetAsync($"{BaseUrl}/api/stations", ct);
                 if (response.IsSuccessStatusCode)
                 {
+                    if (_process is not null)
+                    {
+                        Environment.SetEnvironmentVariable("GAMECLUB_SERVER_PID", _process.Id.ToString());
+                    }
+
                     return;
                 }
             }
@@ -145,6 +151,13 @@ internal sealed class OutOfProcessLiveServer : IAsyncDisposable
             || string.IsNullOrWhiteSpace(psi.Environment["OperatorSessionSecret"]))
         {
             psi.Environment["OperatorSessionSecret"] = "ci-operator-secret-r11";
+        }
+
+        if ((!psi.Environment.ContainsKey("GAMECLUB_DATABASE")
+            || string.IsNullOrWhiteSpace(psi.Environment["GAMECLUB_DATABASE"]))
+            && !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("GAMECLUB_TEST_DATABASE")))
+        {
+            psi.Environment["GAMECLUB_DATABASE"] = Environment.GetEnvironmentVariable("GAMECLUB_TEST_DATABASE")!;
         }
     }
 
