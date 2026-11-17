@@ -1973,8 +1973,9 @@ function ss14EnsureGamePicker() {
   const el = document.createElement("div");
   el.id = "ss14GamePicker";
   el.className = "panel hidden";
+  // temp text
   el.innerHTML =
-    '<h3>انتخاب بازی /* متن موقت */</h3><p id="ss14GamePickerHint"></p><select id="ss14GameSelect" size="8"></select><div><button type="button" id="ss14GameOkBtn">تأیید</button><button type="button" id="ss14GameCancelBtn">انصراف</button></div>';
+    '<h3>انتخاب بازی</h3><p id="ss14GamePickerHint"></p><select id="ss14GameSelect" size="8"></select><div><button type="button" id="ss14GameOkBtn">تأیید</button><button type="button" id="ss14GameCancelBtn">انصراف</button></div>';
   document.body.appendChild(el);
   ss14GamePickerEl = el;
   return el;
@@ -2046,7 +2047,8 @@ function ss14EnsureSessionGameControls() {
     btn = document.createElement("button");
     btn.type = "button";
     btn.id = "ss14GameChangeBtn";
-    btn.textContent = "تغییر بازی /* متن موقت */";
+    // temp text
+    btn.textContent = "تغییر بازی";
     const host = document.getElementById("sessionActions");
     const anchor = document.getElementById("playerCountBtn");
     host.insertBefore(btn, anchor);
@@ -2177,10 +2179,12 @@ function ss14EnsureManagerPanel() {
   section = document.createElement("section");
   section.id = "ss14GameRatesPanel";
   section.className = "panel";
+  // temp text
   section.innerHTML =
-    '<h2>نرخ بازی /* متن موقت */</h2>' +
+    '<h2>نرخ بازی</h2>' +
     '<ul id="ss14GameTitleList"></ul>' +
-    '<button type="button" id="ss14GameNewBtn">بازی جدید /* متن موقت */</button>' +
+    // temp text
+    '<button type="button" id="ss14GameNewBtn">بازی جدید</button>' +
     '<div id="ss14GameEditForm">' +
     '<label>نام <input id="ss14GameName" type="text" autocomplete="off"></label> ' +
     '<label><input type="checkbox" id="ss14GameEnabled" checked> فعال</label>' +

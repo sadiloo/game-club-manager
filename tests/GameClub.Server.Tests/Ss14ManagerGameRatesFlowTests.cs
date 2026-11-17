@@ -26,6 +26,71 @@ public sealed class Ss14ManagerGameRatesFlowTests(GameClubWebApplicationFactory 
         Assert.DoesNotContain("window.alert", block, StringComparison.Ordinal);
         Assert.DoesNotContain("window.confirm", block, StringComparison.Ordinal);
         Assert.Contains("data-rate=\"hourly\"", block, StringComparison.Ordinal);
+        foreach (var lit in Ss14ExtractJsStringLiterals(block))
+        {
+            Assert.DoesNotContain("/*", lit, StringComparison.Ordinal);
+            Assert.DoesNotContain("متن موقت", lit, StringComparison.Ordinal);
+        }
+    }
+
+    private static IEnumerable<string> Ss14ExtractJsStringLiterals(string js)
+    {
+        var i = 0;
+        while (i < js.Length)
+        {
+            var c = js[i];
+            if (c is '"' or '\'' or '`')
+            {
+                var quote = c;
+                var start = i + 1;
+                i++;
+                while (i < js.Length)
+                {
+                    if (js[i] == '\\')
+                    {
+                        i += 2;
+                        continue;
+                    }
+                    if (js[i] == quote)
+                    {
+                        yield return js[start..i];
+                        i++;
+                        break;
+                    }
+                    if (quote == '`' && js[i] == '$' && i + 1 < js.Length && js[i + 1] == '{')
+                    {
+                        i += 2;
+                        var depth = 1;
+                        while (i < js.Length && depth > 0)
+                        {
+                            if (js[i] == '{') depth++;
+                            else if (js[i] == '}') depth--;
+                            i++;
+                        }
+                        continue;
+                    }
+                    i++;
+                }
+                continue;
+            }
+            if (c == '/' && i + 1 < js.Length)
+            {
+                if (js[i + 1] == '/')
+                {
+                    i += 2;
+                    while (i < js.Length && js[i] != '\n') i++;
+                    continue;
+                }
+                if (js[i + 1] == '*')
+                {
+                    i += 2;
+                    while (i + 1 < js.Length && !(js[i] == '*' && js[i + 1] == '/')) i++;
+                    i = Math.Min(i + 2, js.Length);
+                    continue;
+                }
+            }
+            i++;
+        }
     }
 
     [Fact]
