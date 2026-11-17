@@ -133,11 +133,11 @@ internal static class WpfLiveServerTestHelper
         credential.EnsureSuccessStatusCode();
 
         var codeResponse = await op.PostAsync($"/api/operator/stations/{stationId}/pairing-code", null);
-        codeResponse.EnsureSuccessStatusCode();
+        await EnsureSuccessWithBodyAsync(codeResponse, $"POST /api/operator/stations/{stationId}/pairing-code");
         var codeJson = await codeResponse.Content.ReadAsStringAsync();
         var pairingCode = ParseStringProperty(codeJson, "code");
         var pair = await api.PostAsJsonAsync("/api/kiosk/pair", new { code = pairingCode });
-        pair.EnsureSuccessStatusCode();
+        await EnsureSuccessWithBodyAsync(pair, "POST /api/kiosk/pair");
         var pairJson = await pair.Content.ReadAsStringAsync();
         var deviceId = ParseGuidProperty(pairJson, "deviceId");
         var deviceKey = ParseStringProperty(pairJson, "deviceKey");
@@ -166,6 +166,18 @@ internal static class WpfLiveServerTestHelper
             leaseVerifyPublicKeyPem = leasePem,
         });
         File.WriteAllText(Path.Combine(root, "device.json"), json);
+    }
+
+    private static async Task EnsureSuccessWithBodyAsync(HttpResponseMessage response, string operation)
+    {
+        if (response.IsSuccessStatusCode)
+        {
+            return;
+        }
+
+        var body = await response.Content.ReadAsStringAsync();
+        throw new HttpRequestException(
+            $"{operation} failed: HTTP {(int)response.StatusCode} {response.ReasonPhrase}. Body: {body}");
     }
 
     private static string ResolveConnectionString() =>

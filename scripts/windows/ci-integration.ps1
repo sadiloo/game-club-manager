@@ -356,35 +356,7 @@ try {
     }
 
     if ($wpfStabilityRuns -gt 0) {
-        Write-PhaseLog "START phase=wpf-stability runs=$wpfStabilityRuns"
-        $wpfFilter = 'FullyQualifiedName~wpf_remaining_time_matches_funded_session_within_one_tick'
-        for ($run = 1; $run -le $wpfStabilityRuns; $run++) {
-            $runSw = [System.Diagnostics.Stopwatch]::StartNew()
-            Write-Host "WPF stability run $run/$wpfStabilityRuns"
-            $wpfArgs = @(
-                'test', 'tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj',
-                '-c', 'Release', '-f', 'net48', '--no-build', '--nologo',
-                '--filter', $wpfFilter,
-                '--blame-hang', '--blame-hang-timeout', '3m'
-            )
-            $wpfProc = Start-Process -FilePath 'dotnet' -ArgumentList $wpfArgs -PassThru -NoNewWindow -WorkingDirectory $repoRoot
-            $wpfDone = $wpfProc.WaitForExit(240000)
-            if (-not $wpfDone) {
-                Stop-ProcessTree -rootProcId $wpfProc.Id
-                $script:FinalExitCode = 124
-                throw "WPF stability run $run timed out after 240s"
-            }
-
-            if ($wpfProc.ExitCode -ne 0) {
-                $script:FinalExitCode = $wpfProc.ExitCode
-                throw "WPF stability run $run failed with exit $($wpfProc.ExitCode)"
-            }
-
-            $runSw.Stop()
-            Write-Host "WPF stability run $run/$wpfStabilityRuns completed in $([math]::Round($runSw.Elapsed.TotalSeconds, 1))s"
-        }
-
-        Write-PhaseLog "END phase=wpf-stability exit=0"
+        Write-Host "WPF stability runs=$wpfStabilityRuns execute in scripts/windows/ci-integration-wpf-stability.ps1 (not in this step)."
     }
 } catch {
     $errMsg = $_.Exception.Message
@@ -421,10 +393,10 @@ try {
         } catch { }
     }
 
-    $evidence = Join-Path $env:ProgramData "Checkpoint\evidence"
-    if (Test-Path $evidence) {
+    $checkpointEvidenceDir = Join-Path $env:ProgramData "Checkpoint\evidence"
+    if (Test-Path $checkpointEvidenceDir) {
         try {
-            Copy-Item $evidence (Join-Path $artifactDir "evidence") -Recurse -Force -ErrorAction SilentlyContinue
+            Copy-Item $checkpointEvidenceDir (Join-Path $artifactDir "evidence") -Recurse -Force -ErrorAction SilentlyContinue
         } catch { }
     }
 }

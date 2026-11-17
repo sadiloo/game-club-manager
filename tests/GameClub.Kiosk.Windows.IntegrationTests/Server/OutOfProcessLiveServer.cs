@@ -10,12 +10,14 @@ internal sealed class OutOfProcessLiveServer : IAsyncDisposable
     private Process? _process;
     private readonly string _repoRoot;
     private readonly string _serverDll;
+    private readonly bool _ownsProcess;
 
-    private OutOfProcessLiveServer(string repoRoot, string serverDll, Process process)
+    private OutOfProcessLiveServer(string repoRoot, string serverDll, Process process, bool ownsProcess)
     {
         _repoRoot = repoRoot;
         _serverDll = serverDll;
         _process = process;
+        _ownsProcess = ownsProcess;
     }
 
     public string BaseUrl { get; private set; } = "";
@@ -27,7 +29,7 @@ internal sealed class OutOfProcessLiveServer : IAsyncDisposable
         var proc = Process.GetProcessById(processId);
         var dll = Environment.GetEnvironmentVariable("GAMECLUB_SERVER_DLL") ?? "";
         var root = ResolveRepoRoot();
-        return new OutOfProcessLiveServer(root, dll, proc) { BaseUrl = baseUrl.TrimEnd('/') };
+        return new OutOfProcessLiveServer(root, dll, proc, ownsProcess: false) { BaseUrl = baseUrl.TrimEnd('/') };
     }
 
     public static async Task<OutOfProcessLiveServer> StartNewAsync(CancellationToken ct = default)
@@ -37,12 +39,12 @@ internal sealed class OutOfProcessLiveServer : IAsyncDisposable
         var defaultPort = 5200 + Random.Shared.Next(200, 800);
         var baseUrl = Environment.GetEnvironmentVariable("CHECKPOINT_SERVER_URL")?.TrimEnd('/')
             ?? $"http://127.0.0.1:{defaultPort}";
-        var instance = new OutOfProcessLiveServer(root, dll, null!) { BaseUrl = baseUrl };
+        var instance = new OutOfProcessLiveServer(root, dll, null!, ownsProcess: true) { BaseUrl = baseUrl };
         await instance.LaunchAndWaitReadyAsync(ct);
         return instance;
     }
 
-    public bool IsOwnedProcess(int pid) => _process is not null && _process.Id == pid;
+    public bool IsOwnedProcess(int pid) => _ownsProcess && _process is not null && _process.Id == pid;
 
     public void Stop()
     {
@@ -53,6 +55,7 @@ internal sealed class OutOfProcessLiveServer : IAsyncDisposable
 
         try
         {
+            KioskLiveServerRegistry.Unregister(_process.Id);
             _process.Kill(entireProcessTree: true);
             _process.WaitForExit(15_000);
         }
@@ -72,7 +75,7 @@ internal sealed class OutOfProcessLiveServer : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        if (_process is not null && !_process.HasExited && Environment.GetEnvironmentVariable("GAMECLUB_SERVER_PID") is null)
+        if (_ownsProcess && _process is not null && !_process.HasExited)
         {
             Stop();
         }
@@ -97,6 +100,11 @@ internal sealed class OutOfProcessLiveServer : IAsyncDisposable
         CopyServerEnvironment(psi);
         psi.Environment["ASPNETCORE_URLS"] = BaseUrl;
         _process = Process.Start(psi) ?? throw new InvalidOperationException("Failed to start GameClub.Server.");
+        if (_ownsProcess)
+        {
+            KioskLiveServerRegistry.RegisterOwned(_process.Id, $"dll={_serverDll}");
+        }
+
         _ = Task.Run(() => File.AppendAllText(outLog, _process.StandardOutput.ReadToEnd()));
         _ = Task.Run(() => File.AppendAllText(errLog, _process.StandardError.ReadToEnd()));
 

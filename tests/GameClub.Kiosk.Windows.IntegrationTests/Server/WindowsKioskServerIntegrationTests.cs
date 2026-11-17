@@ -4,6 +4,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
+using GameClub.Billing;
 using GameClub.Kiosk.Core.Offline;
 using GameClub.Kiosk.Core.Protocol;
 using GameClub.Kiosk.Core.Runtime;
@@ -144,7 +145,18 @@ public sealed class WindowsKioskServerIntegrationTests
                 new { loginName = "unreach", password = "pass", stationId = "PC-UNREACH" });
             login.EnsureSuccessStatusCode();
             var sessionId = await backend.OpenSessionIdAsync();
-            var fundedRemaining = 200_000;
+            const long startWalletToman = 200_000;
+            var sessionStartedUtc = DateTime.UtcNow;
+            var rateCard = new RateCardBuilder().AddBase(PilotSeed.PcNormalGroupId, PlayMode.Offline, 1, PilotSeed.PcNormalHourly).Build();
+            var fundedPlaySeconds = (int)TimeSpan.FromMinutes(
+                RemainingTimeEstimator.Estimate(
+                    new PcAccount("unreach", startWalletToman),
+                    PilotSeed.PcNormalGroupId,
+                    PlayMode.Offline,
+                    1,
+                    DateTime.UtcNow,
+                    rateCard,
+                    graceMinuteEnabled: true).MoneyMinutes!.Value).TotalSeconds;
 
             if (usesCiServer)
             {
@@ -231,8 +243,11 @@ public sealed class WindowsKioskServerIntegrationTests
 
             Assert.NotNull(lastAck);
             Assert.NotNull(lastAck.Lease);
+            // Upper bound = funded play seconds (RemainingTimeEstimator + RateCardBuilder on real wallet/rate) + 5 s one heartbeat tick.
             Assert.True(lastAck.Display!.EstimatedRemainingSeconds > 0);
-            Assert.True(lastAck.Display.EstimatedRemainingSeconds <= fundedRemaining / 1000 + 60);
+            var elapsedSeconds = (int)(DateTime.UtcNow - sessionStartedUtc).TotalSeconds;
+            Assert.True(lastAck.Display.EstimatedRemainingSeconds <= fundedPlaySeconds + 5);
+            Assert.True(lastAck.Display.EstimatedRemainingSeconds >= fundedPlaySeconds - elapsedSeconds - 60);
             Assert.Equal(KioskShellPhase.Playing, orchestrator.Phase);
 
             var stop = await backend.CreateApiClient().PostAsync($"/api/sessions/{sessionId}/stop", null);
@@ -572,6 +587,7 @@ public sealed class WindowsKioskServerIntegrationTests
             Environment.SetEnvironmentVariable("CHECKPOINT_SERVER_URL", ownedServer.BaseUrl);
             var backend = KioskIntegrationBackend.CreateForBaseUrl(ownedServer.BaseUrl);
             await backend.ResetAsync();
+            await backend.SetPcNormalOfflineRate40000Async();
             await backend.RegisterPcAsync(backend.CreateApiClient(), "PC-G2");
             var customerId = await backend.SeedCustomerWithCredentialAsync("g2user", "pass", 500_000);
             var (deviceId, deviceKey, leasePem) = await backend.PairAsync("PC-G2");
@@ -588,6 +604,11 @@ public sealed class WindowsKioskServerIntegrationTests
             runtime.Configure(backend.HubUri, deviceId, deviceKey, "PC-G2", queuePath, legacyWindows: true, testHubHandler: backend.TestHubHandler);
             orchestrator.BindOfflineQueue(runtime.GetQueue());
             runtime.BindSession(sessionId);
+            runtime.HeartbeatAcknowledged += ack =>
+            {
+                orchestrator.OnHeartbeatAck(ack, sessionId, runtime.ClientMonotonicMs);
+                _ = DrainG2QueueOnAckAsync(orchestrator, kioskHttp, runtime);
+            };
             runtime.HeartbeatTransportFailed += () =>
                 orchestrator.EnqueuePoweredSegmentOnDisconnect(sessionId, runtime.ClientMonotonicMs);
             using var leaseCts = new CancellationTokenSource();
@@ -661,6 +682,11 @@ public sealed class WindowsKioskServerIntegrationTests
             var stop = await backend.CreateApiClient().PostAsync($"/api/sessions/{sessionId}/stop", null);
             stop.EnsureSuccessStatusCode();
             var bill = await backend.PendingBillCollectibleAsync();
+            var evidence = await backend.CollectG2EvidenceAsync(sessionId);
+            Console.WriteLine("G2_ROW_DUMP " + evidence.ToDumpLine());
+            Assert.Equal(11, evidence.CheckpointCount);
+            Assert.Equal(40_000, evidence.PcNormalOfflineHourlyToman);
+            Assert.Equal(7_333, evidence.PendingBillCollectibleToman);
             Assert.Equal(7_333, bill);
         }
         finally
@@ -670,6 +696,47 @@ public sealed class WindowsKioskServerIntegrationTests
                 await ownedServer.DisposeAsync();
                 Environment.SetEnvironmentVariable("CHECKPOINT_SERVER_URL", priorCheckpointUrl);
             }
+        }
+    }
+
+    private static async Task DrainG2QueueOnAckAsync(
+        KioskShellOrchestrator orchestrator,
+        HttpClient kioskHttp,
+        KioskRuntime runtime)
+    {
+        if (!runtime.IsTransportConnected)
+        {
+            return;
+        }
+
+        try
+        {
+            await orchestrator.DrainOfflineQueueAsync(async events =>
+            {
+                var payload = JsonSerializer.Serialize(events.Select(e => new KioskOutboundEvent
+                {
+                    EventId = e.EventId,
+                    Type = e.Type,
+                    PayloadJson = e.PayloadJson,
+                    CreatedUtc = e.CreatedUtc,
+                }));
+                var response = await kioskHttp.PostAsync(
+                    "/api/kiosk/devices/events",
+                    new StringContent(payload, Encoding.UTF8, "application/json"));
+                if (!response.IsSuccessStatusCode)
+                {
+                    return Array.Empty<Guid>();
+                }
+
+                var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+                return body.RootElement.TryGetProperty("ackedEventIds", out var ids)
+                    ? ids.EnumerateArray().Select(x => x.GetGuid()).ToList()
+                    : (IReadOnlyList<Guid>)Array.Empty<Guid>();
+            }, default);
+        }
+        catch
+        {
+            // drain is best-effort on ack, same as QA harness
         }
     }
 
@@ -719,6 +786,7 @@ public sealed class WindowsKioskServerIntegrationTests
 public sealed class WindowsIntegrationApplicationFactory : GameClubWebApplicationFactory;
 
 [CollectionDefinition("windows-kiosk-server")]
-public sealed class WindowsKioskServerCollection : ICollectionFixture<WindowsIntegrationApplicationFactory>;
+public sealed class WindowsKioskServerCollection
+    : ICollectionFixture<WindowsIntegrationApplicationFactory>, ICollectionFixture<KioskLiveServerAssemblyFixture>;
 
 #endif
