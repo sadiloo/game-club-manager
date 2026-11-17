@@ -953,11 +953,13 @@ function renderBill(bill) {
   document.getElementById("bill").classList.remove("hidden");
   const d = document.getElementById("billDetail");
   const segText = (bill.segments || [])
-    .map(
-      (s) =>
-        `${s.segmentKey}: ${s.playerCount}p ${s.mode} @ ${s.hourlyToman ?? "?"} ` +
-        `${fmtTehran(s.startUtc)}–${fmtTehran(s.endUtc)}`,
-    )
+    .map((s) => {
+      if (s.displayLine) {
+        return `${s.segmentKey}: ${s.displayLine}`;
+      }
+      const rate = typeof ss14FmtToman === "function" ? ss14FmtToman(s.hourlyToman) : s.hourlyToman ?? "?";
+      return `${s.segmentKey}: ${s.playerCount}p ${s.mode} @ ${rate} ` + `${fmtTehran(s.startUtc)}–${fmtTehran(s.endUtc)}`;
+    })
     .join("\n");
   const levelDisc = bill.levelDiscountToman ?? 0;
   const bdayDisc = bill.birthdayDiscountToman ?? 0;
@@ -2017,8 +2019,12 @@ async function ss14ShowGamePicker({ hint, mode, playerCount, onConfirm }) {
       const raw = select.value;
       const gameTitleId = raw === "" ? null : Number(raw);
       cleanup();
-      if (onConfirm) await onConfirm(gameTitleId);
-      resolve(gameTitleId);
+      try {
+        if (onConfirm) await onConfirm(gameTitleId);
+        resolve(gameTitleId);
+      } catch (_) {
+        resolve(null);
+      }
     };
   });
 }
@@ -2086,8 +2092,25 @@ function ss14EnsureSessionGameControls() {
 
 async function ss14FilterPlayerCountSelect(tile) {
   const select = document.getElementById("playerCountSelect");
-  if (!select || !tile?.currentGameTitleId) return;
-  const mode = tile.playMode || "Offline";
+  if (!select) return;
+  const mode = tile?.playMode || "Offline";
+  if (!tile?.currentGameTitleId) {
+    for (const opt of select.options) {
+      opt.disabled = false;
+      opt.hidden = false;
+    }
+    return;
+  }
+  const rated = tile.currentGameRatedPlayerCounts;
+  if (Array.isArray(rated) && rated.length >= 0) {
+    for (const opt of select.options) {
+      const count = Number(opt.value);
+      const ok = rated.length === 0 ? false : rated.includes(count);
+      opt.disabled = !ok;
+      opt.hidden = !ok;
+    }
+    return;
+  }
   for (const opt of select.options) {
     const count = Number(opt.value);
     const games = await ss14FetchGamesForOption(mode, count).catch(() => []);
@@ -2160,8 +2183,9 @@ function ss14ParseTomanInput(raw) {
   if (raw == null) return null;
   const fa = "۰۱۲۳۴۵۶۷۸۹";
   const s = String(raw)
-    .replace(/[,\u066C\u060C\s]/g, "")
-    .replace(/[۰-۹]/g, (d) => String(fa.indexOf(d)));
+    .replace(/[,\u066C\u060C\u00a0\s]/g, "")
+    .replace(/[\u06F0-\u06F9]/g, (d) => String(fa.indexOf(d)))
+    .replace(/[\u0660-\u0669]/g, (d) => String("0123456789"[d.charCodeAt(0) - 0x0660]));
   if (!s) return null;
   const n = Number(s);
   return Number.isFinite(n) ? n : null;
@@ -2294,10 +2318,19 @@ function ss14CollectManagerRates() {
   const body = document.getElementById("ss14GameRatesBody");
   if (!body) return rows;
   for (const tr of body.querySelectorAll("tr")) {
-    const hourly = ss14ParseTomanInput(tr.querySelector('input[data-rate="hourly"]')?.value);
+    const hourlyRaw = tr.querySelector('input[data-rate="hourly"]')?.value;
+    const hourlyTrim = hourlyRaw != null ? String(hourlyRaw).trim() : "";
+    if (hourlyTrim === "") continue;
+    const hourly = ss14ParseTomanInput(hourlyTrim);
+    if (hourly == null) {
+      throw new Error("مقدار نرخ عادی نامعتبر است.");
+    }
     const nightRaw = tr.querySelector('input[data-rate="night"]')?.value;
-    const night = nightRaw != null && String(nightRaw).trim() !== "" ? ss14ParseTomanInput(nightRaw) : null;
-    if (hourly == null) continue;
+    const nightTrim = nightRaw != null ? String(nightRaw).trim() : "";
+    const night = nightTrim === "" ? null : ss14ParseTomanInput(nightTrim);
+    if (nightTrim !== "" && night == null) {
+      throw new Error("مقدار نرخ ساعت خاص نامعتبر است.");
+    }
     if (hourly <= 0) {
       throw new Error("نرخ عادی باید بیشتر از صفر باشد.");
     }

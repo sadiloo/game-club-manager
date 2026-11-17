@@ -713,6 +713,34 @@ namespace GameClub.Server.Data.Migrations
                     b.ToTable("invoice_number_sequence", (string)null);
                 });
 
+            modelBuilder.Entity("GameClub.Server.Data.Entities.InvoiceTimeLineEntity", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
+                    b.Property<long>("AmountToman")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("Description")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("GameTitleNameSnapshot")
+                        .HasColumnType("text");
+
+                    b.Property<Guid>("InvoiceId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("InvoiceId");
+
+                    b.ToTable("invoice_time_lines", (string)null);
+                });
+
             modelBuilder.Entity("GameClub.Server.Data.Entities.KioskDeviceEntity", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1799,6 +1827,17 @@ namespace GameClub.Server.Data.Migrations
                     b.Navigation("Invoice");
                 });
 
+            modelBuilder.Entity("GameClub.Server.Data.Entities.InvoiceTimeLineEntity", b =>
+                {
+                    b.HasOne("GameClub.Server.Data.Entities.InvoiceEntity", "Invoice")
+                        .WithMany("TimeLines")
+                        .HasForeignKey("InvoiceId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Invoice");
+                });
+
             modelBuilder.Entity("GameClub.Server.Data.Entities.KioskDeviceEntity", b =>
                 {
                     b.HasOne("GameClub.Server.Data.Entities.StationEntity", "Station")
@@ -2048,6 +2087,8 @@ namespace GameClub.Server.Data.Migrations
                     b.Navigation("MemberEffect");
 
                     b.Navigation("PaymentLines");
+
+                    b.Navigation("TimeLines");
                 });
 
             modelBuilder.Entity("GameClub.Server.Data.Entities.OpenSaleEntity", b =>

@@ -170,6 +170,7 @@ public sealed class OperatorPrepaidService(
     {
         var session = await db.Sessions
             .Include(s => s.Segments)
+            .Include(s => s.Pauses)
             .Include(s => s.Station)!.ThenInclude(st => st!.Group)
             .FirstOrDefaultAsync(s => s.Id == sessionId, ct)
             ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Session not found.");

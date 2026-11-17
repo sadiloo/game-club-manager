@@ -66,10 +66,10 @@ public sealed class GameTariffService(AppDbContext db, AuditService audit)
         CancellationToken ct)
     {
         var line = await TryGetLineAsync(gameTitleId, mode, playerCount, allowDisabled: true, ct)
-            ?? throw new ApiException(StatusCodes.Status409Conflict, "game_tariff_not_found", "No game rate for this option.");
+            ?? throw new ApiException(StatusCodes.Status409Conflict, "game_tariff_not_found", "برای این گزینه نرخ بازی تعریف نشده است.");
         if (line.HourlyToman <= 0)
         {
-            throw new ApiException(StatusCodes.Status409Conflict, "game_tariff_not_found", "No game rate for this option.");
+            throw new ApiException(StatusCodes.Status409Conflict, "game_tariff_not_found", "برای این گزینه نرخ بازی تعریف نشده است.");
         }
 
         if (line.NightHourlyToman is long night && night <= 0)
@@ -91,7 +91,10 @@ public sealed class GameTariffService(AppDbContext db, AuditService audit)
             ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Game not found.");
         if (!title.Enabled)
         {
-            throw new ApiException(StatusCodes.Status409Conflict, "game_disabled", "Game is disabled.");
+            throw new ApiException(
+                StatusCodes.Status409Conflict,
+                "game_disabled",
+                $"بازی «{title.Name}» غیرفعال است.");
         }
 
         _ = await ResolveSnapshotsAsync(id, mode, playerCount, ct);
@@ -184,16 +187,24 @@ public sealed class GameTariffService(AppDbContext db, AuditService audit)
             throw new ApiException(StatusCodes.Status409Conflict, "duplicate_name", "A game with this name already exists.");
         }
 
+        ValidateRates(rateLines);
+        await ValidateConsoleOptionRowsAsync(rateLines, ct);
+
         GameTitleEntity entity;
+        Dictionary<string, (long Hourly, long? Night)> oldRates;
+        string? oldName = null;
         if (id is int updateId)
         {
             entity = await db.GameTitles.Include(g => g.RateLines).FirstOrDefaultAsync(g => g.Id == updateId, ct)
                 ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Game not found.");
-            var oldName = entity.Name;
+            oldName = entity.Name;
+            oldRates = entity.RateLines.ToDictionary(
+                r => RateLineKey(Enum.Parse<PlayMode>(r.PlayMode, true), r.PlayerCount),
+                r => (Hourly: r.HourlyToman, Night: r.NightHourlyToman));
             entity.Name = name.Trim();
             entity.NameNormalized = normalized;
             entity.Enabled = enabled;
-            await audit.AppendAsync("game_title.update", new { gameTitleId = entity.Id, oldName, name = entity.Name, enabled }, ct);
+            audit.Stage("game_title.update", new { gameTitleId = entity.Id, oldName, name = entity.Name, enabled });
         }
         else
         {
@@ -204,14 +215,9 @@ public sealed class GameTariffService(AppDbContext db, AuditService audit)
                 Enabled = enabled,
             };
             db.GameTitles.Add(entity);
-            await audit.AppendAsync("game_title.create", new { name = entity.Name, enabled }, ct);
+            oldRates = new Dictionary<string, (long Hourly, long? Night)>();
+            audit.Stage("game_title.create", new { name = entity.Name, enabled });
         }
-
-        ValidateRates(rateLines);
-
-        var oldRates = entity.RateLines.ToDictionary(
-            r => RateLineKey(Enum.Parse<PlayMode>(r.PlayMode, true), r.PlayerCount),
-            r => (Hourly: r.HourlyToman, Night: r.NightHourlyToman));
 
         entity.RateLines.Clear();
         foreach (var row in rateLines)
@@ -226,7 +232,8 @@ public sealed class GameTariffService(AppDbContext db, AuditService audit)
         }
 
         await db.SaveChangesAsync(ct);
-        await AuditRateChangesAsync(entity.Id, oldRates, rateLines, ct);
+        await AuditRateChangesStagedAsync(entity.Id, oldRates, rateLines, ct);
+        await db.SaveChangesAsync(ct);
         return entity;
     }
 
@@ -248,11 +255,47 @@ public sealed class GameTariffService(AppDbContext db, AuditService audit)
     private static string RateLineKey(PlayMode mode, int? playerCount)
         => $"{mode}:{playerCount?.ToString() ?? "-"}";
 
-    private async Task AuditRateChangesAsync(
+    private async Task ValidateConsoleOptionRowsAsync(IReadOnlyList<GameRateLineInput> rateLines, CancellationToken ct)
+    {
+        var allowed = (await ConsoleRateKeysAsync(ct))
+            .Select(k => (k.Mode, k.PlayerCount))
+            .ToHashSet();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var row in rateLines)
+        {
+            var playerCount = row.Mode == PlayMode.Offline ? row.PlayerCount : null;
+            if (row.Mode == PlayMode.Offline && playerCount is not int)
+            {
+                throw new ApiException(StatusCodes.Status400BadRequest, "invalid_option", "Offline game rates require a player count.");
+            }
+
+            if (!allowed.Contains((row.Mode, playerCount)))
+            {
+                throw new ApiException(StatusCodes.Status400BadRequest, "unknown_console_option", "Game rate option is not a console station option.");
+            }
+
+            var key = RateLineKey(row.Mode, playerCount);
+            if (!seen.Add(key))
+            {
+                throw new ApiException(StatusCodes.Status400BadRequest, "duplicate_option", "Duplicate rate rows for the same console option.");
+            }
+        }
+    }
+
+    private Task AuditRateChangesStagedAsync(
         int gameTitleId,
         Dictionary<string, (long Hourly, long? Night)> oldRates,
         IReadOnlyList<GameRateLineInput> newRates,
         CancellationToken ct)
+    {
+        AuditRateChangesCore(gameTitleId, oldRates, newRates);
+        return Task.CompletedTask;
+    }
+
+    private void AuditRateChangesCore(
+        int gameTitleId,
+        Dictionary<string, (long Hourly, long? Night)> oldRates,
+        IReadOnlyList<GameRateLineInput> newRates)
     {
         var newMap = newRates.ToDictionary(
             r => RateLineKey(r.Mode, r.Mode == PlayMode.Offline ? r.PlayerCount : null),
@@ -274,7 +317,7 @@ public sealed class GameTariffService(AppDbContext db, AuditService audit)
             }
 
             ParseRateLineKey(key, out var mode, out var playerCount);
-            await audit.AppendAsync(
+            audit.Stage(
                 "game_rate.change",
                 new
                 {
@@ -285,8 +328,7 @@ public sealed class GameTariffService(AppDbContext db, AuditService audit)
                     newHourlyToman = hasNew ? newVal.Hourly : (long?)null,
                     oldNightHourlyToman = hasOld ? oldVal.Night : null,
                     newNightHourlyToman = hasNew ? newVal.Night : null,
-                },
-                ct);
+                });
         }
     }
 

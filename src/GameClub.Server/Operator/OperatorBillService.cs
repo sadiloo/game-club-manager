@@ -149,6 +149,11 @@ public sealed class OperatorBillService(
             return direct.HourlyRateToman;
         }
 
+        if (segment.GameTitleId is not null && segment.GameHourlyRateToman is long gameRate and > 0)
+        {
+            return gameRate;
+        }
+
         var sameGroup = charge.Lines.FirstOrDefault(l => l.GroupId == segment.GroupId);
         if (sameGroup is not null)
         {
@@ -617,7 +622,7 @@ public sealed class OperatorBillService(
     {
         var session = await db.Sessions.AsNoTracking()
             .Include(s => s.Customer)
-            .Include(s => s.Segments)
+            .Include(s => s.Segments).ThenInclude(seg => seg.GameTitle)
             .Include(s => s.PendingBill)
             .Include(s => s.Station)!.ThenInclude(st => st!.Group)
             .FirstOrDefaultAsync(s => s.Id == sessionId, ct)
@@ -643,14 +648,20 @@ public sealed class OperatorBillService(
             : await rates.LoadAsync(ct);
         var segments = session.Segments
             .OrderBy(s => s.StartUtc)
-            .Select(s => new
+            .Select(s =>
             {
-                s.SegmentKey,
-                s.PlayerCount,
-                mode = s.Mode.ToString(),
-                hourlyToman = DisplayHourlyToman(s, charge, snapshot),
-                startUtc = s.StartUtc,
-                endUtc = s.EndUtc,
+                var hourly = DisplayHourlyToman(s, charge, snapshot);
+                return new
+                {
+                    s.SegmentKey,
+                    s.PlayerCount,
+                    mode = s.Mode.ToString(),
+                    hourlyToman = hourly,
+                    gameTitleName = s.GameTitle?.Name,
+                    displayLine = Ss14BillDisplay.FormatBillSegment(s, hourly, charge),
+                    startUtc = s.StartUtc,
+                    endUtc = s.EndUtc,
+                };
             })
             .ToList();
         var sale = await db.OpenSales.AsNoTracking()
@@ -692,7 +703,7 @@ public sealed class OperatorBillService(
     {
         var session = await db.Sessions.AsNoTracking()
             .Include(s => s.Customer)
-            .Include(s => s.Segments)
+            .Include(s => s.Segments).ThenInclude(seg => seg.GameTitle)
             .Include(s => s.PendingBill)
             .Include(s => s.Station)!.ThenInclude(st => st!.Group)
             .FirstOrDefaultAsync(s => s.Id == sessionId, ct)
@@ -705,14 +716,20 @@ public sealed class OperatorBillService(
             : await rates.LoadAsync(ct);
         var segments = session.Segments
             .OrderBy(s => s.StartUtc)
-            .Select(s => new
+            .Select(s =>
             {
-                s.SegmentKey,
-                s.PlayerCount,
-                mode = s.Mode.ToString(),
-                hourlyToman = DisplayHourlyToman(s, charge, snapshot),
-                startUtc = s.StartUtc,
-                endUtc = s.EndUtc,
+                var hourly = DisplayHourlyToman(s, charge, snapshot);
+                return new
+                {
+                    s.SegmentKey,
+                    s.PlayerCount,
+                    mode = s.Mode.ToString(),
+                    hourlyToman = hourly,
+                    gameTitleName = s.GameTitle?.Name,
+                    displayLine = Ss14BillDisplay.FormatBillSegment(s, hourly, charge),
+                    startUtc = s.StartUtc,
+                    endUtc = s.EndUtc,
+                };
             })
             .ToList();
         var sale = await db.OpenSales.AsNoTracking()
@@ -980,6 +997,7 @@ public sealed class OperatorGridService(AppDbContext db, SessionService sessions
                 linkedCustomer = CustomerMapper.ToLinkedChip(session.Customer),
                 currentGameTitleId = session.CurrentGameTitleId,
                 currentGameTitleName = session.CurrentGameTitle?.Name,
+                currentGameRatedPlayerCounts = await ResolveGameRatedPlayerCountsAsync(session, ct),
             });
         }
 
@@ -997,6 +1015,35 @@ public sealed class OperatorGridService(AppDbContext db, SessionService sessions
         });
 
         return tiles;
+    }
+
+    private async Task<int[]?> ResolveGameRatedPlayerCountsAsync(PlaySessionEntity session, CancellationToken ct)
+    {
+        if (session.CurrentGameTitleId is not int gameId)
+        {
+            return null;
+        }
+
+        var mode = session.Mode.ToString();
+        var lines = await db.GameRateLines.AsNoTracking()
+            .Where(r => r.GameTitleId == gameId && r.PlayMode == mode && r.HourlyToman > 0)
+            .ToListAsync(ct);
+        if (lines.Count == 0)
+        {
+            return Array.Empty<int>();
+        }
+
+        if (session.Mode == PlayMode.Online)
+        {
+            return [session.PlayerCount];
+        }
+
+        return lines
+            .Where(r => r.PlayerCount is int)
+            .Select(r => r.PlayerCount!.Value)
+            .Distinct()
+            .OrderBy(x => x)
+            .ToArray();
     }
 
     private static PlaySessionEntity PickTileSession(IReadOnlyList<PlaySessionEntity> onStation)

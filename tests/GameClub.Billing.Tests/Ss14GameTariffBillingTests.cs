@@ -50,6 +50,26 @@ public sealed class Ss14GameTariffBillingTests
     }
 
     [Fact]
+    public void FixR1_F8_M2_same_rate_different_game_ids_stay_separate_lines_with_game_change_split()
+    {
+        var start = T.At(2026, 8, 8, 14, 0);
+        var hop = T.At(2026, 8, 8, 14, 10);
+        var end = T.At(2026, 8, 8, 14, 20);
+        var charge = Price(
+            Ss14Fc27Rates.WithGame(CafeFixture.Play("a", start, hop, "ps5-1", CafeFixture.Ps5, 2) with { SplitReason = "تغییر بازی" }),
+            CafeFixture.Play("b", hop, end, "ps5-1", CafeFixture.Ps5, 2) with
+            {
+                SplitReason = "تغییر بازی",
+                GameTitleId = 2,
+                GameDisplayName = "PES",
+                GameHourlyRateToman = 170_000,
+                GameNightHourlyRateToman = 200_000,
+            });
+        Assert.Equal(2, charge.Lines.Count);
+        Assert.NotEqual(charge.Lines[0].GameTitleId, charge.Lines[1].GameTitleId);
+    }
+
+    [Fact]
     public void Ss14Example03_FractionalHop_129333()
     {
         var start = T.At(2026, 8, 8, 14, 0, 0);

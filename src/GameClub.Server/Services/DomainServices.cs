@@ -24,6 +24,12 @@ public sealed class AuditService(AppDbContext db, IClock clock, Operator.Operato
 {
     public async Task AppendAsync(string action, object details, CancellationToken ct = default)
     {
+        Stage(action, details);
+        await db.SaveChangesAsync(ct);
+    }
+
+    public void Stage(string action, object details)
+    {
         db.AuditLog.Add(new AuditLogEntry
         {
             AtUtc = clock.UtcNow.UtcDateTime,
@@ -31,7 +37,6 @@ public sealed class AuditService(AppDbContext db, IClock clock, Operator.Operato
             DetailsJson = JsonSerializer.Serialize(details),
             ActorUserId = operatorContext.UserId,
         });
-        await db.SaveChangesAsync(ct);
     }
 }
 
@@ -240,7 +245,17 @@ public sealed class SessionCloser(
         var shiftId = await shiftGate.RequireOpenShiftIdAsync(ct);
         var openSale = await db.OpenSales.Include(o => o.Lines).ThenInclude(l => l.CatalogItem)
             .FirstOrDefaultAsync(o => o.SessionId == session.Id, ct);
-        var invoice = await CreateInvoiceAsync(amounts, bill, payments, session.Id, openSale?.Id, session.CustomerId, shiftId, ct);
+        var chargeForLines = await billing.BuildChargeAsync(session, bill.FrozenAtUtc, ct);
+        var invoice = await CreateInvoiceAsync(
+            amounts,
+            bill,
+            payments,
+            session.Id,
+            openSale?.Id,
+            session.CustomerId,
+            shiftId,
+            chargeForLines,
+            ct);
         if (openSale is not null)
         {
             CopyCatalogLines(invoice, openSale.Lines);
@@ -284,7 +299,7 @@ public sealed class SessionCloser(
     {
         await shiftGate.EnsureOpenShiftForMoneyAsync(ct);
         var shiftId = await shiftGate.RequireOpenShiftIdAsync(ct);
-        var invoice = await CreateInvoiceAsync(amounts, bill, payments, null, sale.Id, sale.CustomerId, shiftId, ct);
+        var invoice = await CreateInvoiceAsync(amounts, bill, payments, null, sale.Id, sale.CustomerId, shiftId, null, ct);
         CopyCatalogLines(invoice, sale.Lines);
         db.OpenSaleLines.RemoveRange(sale.Lines);
         db.OpenSales.Remove(sale);
@@ -319,6 +334,7 @@ public sealed class SessionCloser(
         Guid? openSaleId,
         Guid? customerId,
         Guid? shiftId,
+        SessionCharge? sessionCharge,
         CancellationToken ct)
     {
         var number = await NextInvoiceNumberAsync(ct);
@@ -377,6 +393,14 @@ public sealed class SessionCloser(
                 WalletRealDrawnToman = method == PaymentMethod.Wallet ? walletDraw?.RealDrawnToman ?? 0 : 0,
                 WalletGiftDrawnToman = method == PaymentMethod.Wallet ? walletDraw?.GiftDrawnToman ?? 0 : 0,
             });
+        }
+
+        if (sessionCharge is not null)
+        {
+            foreach (var line in sessionCharge.Lines.Where(l => l.AmountToman > 0))
+            {
+                invoice.TimeLines.Add(Operator.Ss14BillDisplay.ToInvoiceTimeLine(invoice.Id, line));
+            }
         }
 
         return invoice;

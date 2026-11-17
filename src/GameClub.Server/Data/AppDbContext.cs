@@ -56,6 +56,8 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
 
     public DbSet<InvoiceCatalogLineEntity> InvoiceCatalogLines => Set<InvoiceCatalogLineEntity>();
 
+    public DbSet<InvoiceTimeLineEntity> InvoiceTimeLines => Set<InvoiceTimeLineEntity>();
+
     public DbSet<CustomerEntity> Customers => Set<CustomerEntity>();
 
     public DbSet<BranchMemberSettingsEntity> BranchMemberSettings => Set<BranchMemberSettingsEntity>();
@@ -250,6 +252,14 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             e.HasKey(x => x.Id);
             e.Property(x => x.Kind).HasConversion<string>();
             e.HasOne(x => x.Invoice).WithMany(x => x.CatalogLines).HasForeignKey(x => x.InvoiceId);
+        });
+
+        modelBuilder.Entity<InvoiceTimeLineEntity>(e =>
+        {
+            e.ToTable("invoice_time_lines");
+            e.HasKey(x => x.Id);
+            e.HasOne(x => x.Invoice).WithMany(x => x.TimeLines).HasForeignKey(x => x.InvoiceId);
+            e.HasIndex(x => x.InvoiceId);
         });
 
         modelBuilder.Entity<PaymentLineEntity>(e =>

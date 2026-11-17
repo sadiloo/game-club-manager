@@ -5,6 +5,7 @@ using GameClub.Server.Operator;
 using GameClub.Server.Services;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace GameClub.Server.Controllers;
 
@@ -311,6 +312,13 @@ public sealed class OperatorPanelController(
     public async Task<IActionResult> GetInvoice(long number, CancellationToken ct)
     {
         var invoice = await invoices.GetAsync(number, ct);
+        await using var scope = HttpContext.RequestServices.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<Data.AppDbContext>();
+        var timeLines = await db.InvoiceTimeLines.AsNoTracking()
+            .Where(t => t.InvoiceId == invoice.Id)
+            .OrderBy(t => t.Id)
+            .Select(t => new { t.Description, t.AmountToman, gameTitleName = t.GameTitleNameSnapshot })
+            .ToListAsync(ct);
         return Ok(new
         {
             invoice.Number,
@@ -348,6 +356,7 @@ public sealed class OperatorPanelController(
                 p.Reference,
                 status = p.ConfirmationStatus.ToString(),
             }),
+            timeLines,
         });
     }
 

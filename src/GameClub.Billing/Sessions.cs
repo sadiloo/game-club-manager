@@ -981,6 +981,7 @@ public static class PrepaidPlanner
         IReadOnlyList<PricedSlice> lines = prefix.Lines;
         var end = prefixEnd;
         GraceLine? grace = null;
+        var grantCharge = prefix;
 
         if (graceMinuteEnabled && unused > 0 && bestMinutes < maxMinutes)
         {
@@ -992,6 +993,7 @@ public static class PrepaidPlanner
                 grace = new GraceLine(1, marginal, minuteStart, continuationSegment.Id);
                 lines = probe.Lines;
                 end = TehranTime.AddSeconds(minuteStart, 60);
+                grantCharge = probe;
             }
             else if (marginal > unused)
             {
@@ -1008,10 +1010,11 @@ public static class PrepaidPlanner
 
                 lines = probe.Lines;
                 end = TehranTime.AddSeconds(minuteStart, 60);
+                grantCharge = probe;
             }
         }
 
-        var granted = TehranTime.WholeSeconds(clockStart, end);
+        var granted = grantCharge.TotalActiveSeconds;
         return new PrepaidPlan(
             PrepaidKind.Amount,
             clockStart,

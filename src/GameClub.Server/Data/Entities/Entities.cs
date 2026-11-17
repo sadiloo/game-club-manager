@@ -298,6 +298,8 @@ public sealed class InvoiceEntity
 
     public List<InvoiceCatalogLineEntity> CatalogLines { get; set; } = [];
 
+    public List<InvoiceTimeLineEntity> TimeLines { get; set; } = [];
+
     public InvoiceMemberEffectEntity? MemberEffect { get; set; }
 
     public long DiscountToman { get; set; }
@@ -576,6 +578,22 @@ public sealed class OpenSaleLineEntity
     public long UnitPriceToman { get; set; }
 
     public long LineTotalToman { get; set; }
+}
+
+public sealed class InvoiceTimeLineEntity
+{
+    public long Id { get; set; }
+
+    public Guid InvoiceId { get; set; }
+
+    public InvoiceEntity? Invoice { get; set; }
+
+    public string Description { get; set; } = string.Empty;
+
+    public long AmountToman { get; set; }
+
+  /// <summary>Game name frozen at invoice issue (B5).</summary>
+    public string? GameTitleNameSnapshot { get; set; }
 }
 
 public sealed class InvoiceCatalogLineEntity
