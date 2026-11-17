@@ -11,6 +11,11 @@ public sealed class GameTariffService(AppDbContext db, AuditService audit)
 {
     public const string SplitReasonGameChange = "تغییر بازی";
 
+    public static string FormatConsoleOption(PlayMode mode, int? playerCount)
+        => mode == PlayMode.Online
+            ? "آنلاین"
+            : $"آفلاین {playerCount ?? 1} دسته";
+
     public static string NormalizeName(string name)
     {
         var trimmed = name.Trim();
@@ -65,16 +70,25 @@ public sealed class GameTariffService(AppDbContext db, AuditService audit)
         int playerCount,
         CancellationToken ct)
     {
+        var title = await db.GameTitles.AsNoTracking().FirstOrDefaultAsync(g => g.Id == gameTitleId, ct);
+        var gameName = title?.Name ?? "؟";
+        var option = FormatConsoleOption(mode, playerCount);
         var line = await TryGetLineAsync(gameTitleId, mode, playerCount, allowDisabled: true, ct)
-            ?? throw new ApiException(StatusCodes.Status409Conflict, "game_tariff_not_found", "برای این گزینه نرخ بازی تعریف نشده است.");
+            ?? throw new ApiException(
+                StatusCodes.Status409Conflict,
+                "game_tariff_not_found",
+                $"برای بازی «{gameName}» و گزینه «{option}» نرخ تعریف نشده است.");
         if (line.HourlyToman <= 0)
         {
-            throw new ApiException(StatusCodes.Status409Conflict, "game_tariff_not_found", "برای این گزینه نرخ بازی تعریف نشده است.");
+            throw new ApiException(
+                StatusCodes.Status409Conflict,
+                "game_tariff_not_found",
+                $"برای بازی «{gameName}» و گزینه «{option}» نرخ تعریف نشده است.");
         }
 
         if (line.NightHourlyToman is long night && night <= 0)
         {
-            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_rate", "Night game rate must be empty or positive.");
+            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_rate", "نرخ شبانه بازی باید خالی یا بیشتر از صفر باشد.");
         }
 
         return (line.HourlyToman, line.NightHourlyToman);
@@ -84,17 +98,18 @@ public sealed class GameTariffService(AppDbContext db, AuditService audit)
     {
         if (gameTitleId is not int id)
         {
-            throw new ApiException(StatusCodes.Status400BadRequest, "game_required", "Game is required.");
+            throw new ApiException(StatusCodes.Status400BadRequest, "game_required", "انتخاب بازی الزامی است.");
         }
 
         var title = await db.GameTitles.AsNoTracking().FirstOrDefaultAsync(g => g.Id == id, ct)
-            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Game not found.");
+            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "بازی یافت نشد.");
+        var option = FormatConsoleOption(mode, playerCount);
         if (!title.Enabled)
         {
             throw new ApiException(
                 StatusCodes.Status409Conflict,
                 "game_disabled",
-                $"بازی «{title.Name}» غیرفعال است.");
+                $"بازی «{title.Name}» برای گزینه «{option}» غیرفعال است.");
         }
 
         _ = await ResolveSnapshotsAsync(id, mode, playerCount, ct);
@@ -172,7 +187,7 @@ public sealed class GameTariffService(AppDbContext db, AuditService audit)
         var normalized = NormalizeName(name);
         if (string.IsNullOrWhiteSpace(normalized))
         {
-            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_name", "Game name is required.");
+            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_name", "نام بازی الزامی است.");
         }
 
         var dupQuery = db.GameTitles.Where(g => g.NameNormalized == normalized);
@@ -184,7 +199,7 @@ public sealed class GameTariffService(AppDbContext db, AuditService audit)
         var dup = await dupQuery.AnyAsync(ct);
         if (dup)
         {
-            throw new ApiException(StatusCodes.Status409Conflict, "duplicate_name", "A game with this name already exists.");
+            throw new ApiException(StatusCodes.Status409Conflict, "duplicate_name", "بازی‌ای با این نام قبلاً ثبت شده است.");
         }
 
         ValidateRates(rateLines);
@@ -196,7 +211,7 @@ public sealed class GameTariffService(AppDbContext db, AuditService audit)
         if (id is int updateId)
         {
             entity = await db.GameTitles.Include(g => g.RateLines).FirstOrDefaultAsync(g => g.Id == updateId, ct)
-                ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Game not found.");
+                ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "بازی یافت نشد.");
             oldName = entity.Name;
             oldRates = entity.RateLines.ToDictionary(
                 r => RateLineKey(Enum.Parse<PlayMode>(r.PlayMode, true), r.PlayerCount),
@@ -231,9 +246,20 @@ public sealed class GameTariffService(AppDbContext db, AuditService audit)
             });
         }
 
-        await db.SaveChangesAsync(ct);
-        await AuditRateChangesStagedAsync(entity.Id, oldRates, rateLines, ct);
-        await db.SaveChangesAsync(ct);
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        try
+        {
+            await db.SaveChangesAsync(ct);
+            await AuditRateChangesStagedAsync(entity.Id, oldRates, rateLines, ct);
+            await db.SaveChangesAsync(ct);
+            await tx.CommitAsync(ct);
+        }
+        catch
+        {
+            await tx.RollbackAsync(ct);
+            throw;
+        }
+
         return entity;
     }
 
@@ -242,7 +268,7 @@ public sealed class GameTariffService(AppDbContext db, AuditService audit)
         var used = await db.Segments.AnyAsync(s => s.GameTitleId == id, ct);
         if (used)
         {
-            throw new ApiException(StatusCodes.Status409Conflict, "in_use", "Game was used in a session; disable instead of delete.");
+            throw new ApiException(StatusCodes.Status409Conflict, "in_use", "این بازی در جلسه استفاده شده؛ حذف نکنید و غیرفعال کنید.");
         }
 
         var entity = await db.GameTitles.FirstOrDefaultAsync(g => g.Id == id, ct)
@@ -266,18 +292,18 @@ public sealed class GameTariffService(AppDbContext db, AuditService audit)
             var playerCount = row.Mode == PlayMode.Offline ? row.PlayerCount : null;
             if (row.Mode == PlayMode.Offline && playerCount is not int)
             {
-                throw new ApiException(StatusCodes.Status400BadRequest, "invalid_option", "Offline game rates require a player count.");
+                throw new ApiException(StatusCodes.Status400BadRequest, "invalid_option", "برای حالت آفلاین باید تعداد بازیکن مشخص شود.");
             }
 
             if (!allowed.Contains((row.Mode, playerCount)))
             {
-                throw new ApiException(StatusCodes.Status400BadRequest, "unknown_console_option", "Game rate option is not a console station option.");
+                throw new ApiException(StatusCodes.Status400BadRequest, "unknown_console_option", "این گزینه در نرخ ایستگاه کنسول تعریف نشده است.");
             }
 
             var key = RateLineKey(row.Mode, playerCount);
             if (!seen.Add(key))
             {
-                throw new ApiException(StatusCodes.Status400BadRequest, "duplicate_option", "Duplicate rate rows for the same console option.");
+                throw new ApiException(StatusCodes.Status400BadRequest, "duplicate_option", "برای یک گزینه کنسول بیش از یک نرخ ثبت شده است.");
             }
         }
     }
@@ -345,12 +371,12 @@ public sealed class GameTariffService(AppDbContext db, AuditService audit)
         {
             if (row.HourlyToman <= 0)
             {
-                throw new ApiException(StatusCodes.Status400BadRequest, "invalid_rate", "Game hourly rate must be positive.");
+                throw new ApiException(StatusCodes.Status400BadRequest, "invalid_rate", "نرخ ساعتی بازی باید بیشتر از صفر باشد.");
             }
 
             if (row.NightHourlyToman is long night && night <= 0)
             {
-                throw new ApiException(StatusCodes.Status400BadRequest, "invalid_rate", "Night game rate must be empty or positive.");
+                throw new ApiException(StatusCodes.Status400BadRequest, "invalid_rate", "نرخ شبانه بازی باید خالی یا بیشتر از صفر باشد.");
             }
         }
     }

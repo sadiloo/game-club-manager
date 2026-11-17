@@ -24,6 +24,8 @@ public sealed class Ss14FixR1QaTests(GameClubWebApplicationFactory factory)
         var body = new { name = "BrokenGame", enabled = true, rates = new[] { new { mode = "Offline", playerCount = (int?)1, hourlyToman = 0L, nightHourlyToman = 180_000L } } };
         var bad = await mgr.PostAsJsonAsync("/api/operator/game-titles", body);
         Assert.Equal(HttpStatusCode.BadRequest, bad.StatusCode);
+        var badBody = await bad.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Contains("نرخ ساعتی بازی", badBody.GetProperty("message").GetString()!, StringComparison.Ordinal);
         using (var scope = factory.Services.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
@@ -53,6 +55,8 @@ public sealed class Ss14FixR1QaTests(GameClubWebApplicationFactory factory)
         };
         var res = await mgr.PostAsJsonAsync("/api/operator/game-titles", body);
         Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
+        var err = await res.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Contains("این گزینه در نرخ ایستگاه کنسول", err.GetProperty("message").GetString()!, StringComparison.Ordinal);
         using var scope = factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         Assert.False(await db.GameTitles.AnyAsync());
@@ -73,7 +77,95 @@ public sealed class Ss14FixR1QaTests(GameClubWebApplicationFactory factory)
                 new { mode = "Offline", playerCount = (int?)1, hourlyToman = 160_000L },
             },
         };
-        Assert.Equal(HttpStatusCode.BadRequest, (await mgr.PostAsJsonAsync("/api/operator/game-titles", body)).StatusCode);
+        var dup = await mgr.PostAsJsonAsync("/api/operator/game-titles", body);
+        Assert.Equal(HttpStatusCode.BadRequest, dup.StatusCode);
+        var dupMsg = await dup.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Contains("برای یک گزینه کنسول", dupMsg.GetProperty("message").GetString()!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task FixR1_N3_invalid_rate_mode_returns_400_persian_not_500()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var mgr = await factory.CreateOperatorClientAsync("owner", "5678");
+        var res = await mgr.PostAsJsonAsync(
+            "/api/operator/game-titles",
+            new
+            {
+                name = "BadMode",
+                enabled = true,
+                rates = new[] { new { mode = "NotAPlayMode", playerCount = (int?)1, hourlyToman = 150_000L } },
+            });
+        Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
+        var json = await res.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Contains("حالت بازی نامعتبر", json.GetProperty("message").GetString()!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task FixR1_F2_invalid_night_rate_message_persian()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var mgr = await factory.CreateOperatorClientAsync("owner", "5678");
+        var res = await mgr.PostAsJsonAsync(
+            "/api/operator/game-titles",
+            new
+            {
+                name = "BadNight",
+                enabled = true,
+                rates = new[] { new { mode = "Offline", playerCount = (int?)1, hourlyToman = 150_000L, nightHourlyToman = 0L } },
+            });
+        Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
+        var json = await res.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Contains("نرخ شبانه بازی", json.GetProperty("message").GetString()!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task FixR1_F2_audit_failure_rolls_back_title_create()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var mgr = await factory.CreateOperatorClientAsync("owner", "5678");
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            await db.Database.ExecuteSqlRawAsync(
+                """
+                CREATE OR REPLACE FUNCTION test_block_game_title_audit()
+                RETURNS trigger LANGUAGE plpgsql AS $$
+                BEGIN
+                  IF NEW.action LIKE 'game_%' THEN
+                    RAISE EXCEPTION 'test_block_game_title_audit';
+                  END IF;
+                  RETURN NEW;
+                END;
+                $$;
+                DROP TRIGGER IF EXISTS test_block_game_title_audit ON audit_log;
+                CREATE TRIGGER test_block_game_title_audit
+                  BEFORE INSERT ON audit_log
+                  FOR EACH ROW EXECUTE FUNCTION test_block_game_title_audit();
+                """);
+        }
+
+        try
+        {
+            var res = await mgr.PostAsJsonAsync(
+                "/api/operator/game-titles",
+                new { name = "TxRoll", enabled = true, rates = Fc27Rates });
+            Assert.NotEqual(HttpStatusCode.Created, res.StatusCode);
+            using var scope = factory.Services.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            Assert.False(await db.GameTitles.AnyAsync(t => t.Name == "TxRoll"));
+            Assert.False(await db.GameRateLines.AnyAsync());
+        }
+        finally
+        {
+            using var scope = factory.Services.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            await db.Database.ExecuteSqlRawAsync(
+                """
+                DROP TRIGGER IF EXISTS test_block_game_title_audit ON audit_log;
+                DROP FUNCTION IF EXISTS test_block_game_title_audit();
+                """);
+        }
     }
 
   [Fact]
@@ -170,7 +262,8 @@ public sealed class Ss14FixR1QaTests(GameClubWebApplicationFactory factory)
         }
         await mgr.PutAsJsonAsync($"/api/operator/game-titles/{gameId}", new { name = "FC27", enabled = false, rates = Fc27Rates });
         var tiles = await op.GetFromJsonAsync<JsonElement>("/api/operator/grid");
-        var tile = tiles.EnumerateArray().First(t => t.GetProperty("sessionId").GetGuid() == sessionId);
+        var tile = tiles.EnumerateArray().First(t =>
+            t.TryGetProperty("name", out var stationName) && stationName.GetString() == "PS5-F6");
         var counts = tile.GetProperty("currentGameRatedPlayerCounts").EnumerateArray().Select(e => e.GetInt32()).OrderBy(x => x).ToArray();
         Assert.Equal([1, 2], counts);
     }
@@ -191,6 +284,7 @@ public sealed class Ss14FixR1QaTests(GameClubWebApplicationFactory factory)
         var json = await start.Content.ReadFromJsonAsync<JsonElement>();
         var msg = json.GetProperty("message").GetString();
         Assert.Contains("غیرفعال", msg, StringComparison.Ordinal);
+        Assert.Contains("گزینه", msg, StringComparison.Ordinal);
         Assert.DoesNotContain("Game is disabled", msg, StringComparison.Ordinal);
     }
 

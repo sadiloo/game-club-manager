@@ -56,10 +56,9 @@ public sealed class Ss14GameTariffBillingTests
         var hop = T.At(2026, 8, 8, 14, 10);
         var end = T.At(2026, 8, 8, 14, 20);
         var charge = Price(
-            Ss14Fc27Rates.WithGame(CafeFixture.Play("a", start, hop, "ps5-1", CafeFixture.Ps5, 2) with { SplitReason = "تغییر بازی" }),
+            Ss14Fc27Rates.WithGame(CafeFixture.Play("a", start, hop, "ps5-1", CafeFixture.Ps5, 2)),
             CafeFixture.Play("b", hop, end, "ps5-1", CafeFixture.Ps5, 2) with
             {
-                SplitReason = "تغییر بازی",
                 GameTitleId = 2,
                 GameDisplayName = "PES",
                 GameHourlyRateToman = 170_000,
@@ -67,6 +66,8 @@ public sealed class Ss14GameTariffBillingTests
             });
         Assert.Equal(2, charge.Lines.Count);
         Assert.NotEqual(charge.Lines[0].GameTitleId, charge.Lines[1].GameTitleId);
+        Assert.Equal(170_000, charge.Lines[0].HourlyRateToman);
+        Assert.Equal(170_000, charge.Lines[1].HourlyRateToman);
     }
 
     [Fact]

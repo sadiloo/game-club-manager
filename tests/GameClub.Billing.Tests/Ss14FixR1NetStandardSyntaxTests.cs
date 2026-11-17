@@ -48,7 +48,7 @@ public sealed class Ss14FixR1NetStandardSyntaxTests
             var close = text.IndexOf(']', i + 1);
             if (close < 0)
                 continue;
-            if (text.AsSpan(i + 1, close - i - 1).Contains("..", StringComparison.Ordinal))
+            if (text.IndexOf("..", i + 1, close - i - 1, StringComparison.Ordinal) >= 0)
                 return true;
         }
 

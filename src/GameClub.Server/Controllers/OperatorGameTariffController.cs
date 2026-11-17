@@ -3,6 +3,7 @@ using GameClub.Server;
 using GameClub.Server.Data.Entities;
 using GameClub.Server.Operator;
 using GameClub.Server.Services;
+using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 
 namespace GameClub.Server.Controllers;
@@ -15,7 +16,7 @@ public sealed class OperatorGameTariffController(GameTariffService gameTariff, O
     {
         if (context.Role is not UserRole.Manager and not UserRole.Owner)
         {
-            throw new ApiException(StatusCodes.Status403Forbidden, "forbidden", "Only a manager may edit game rates.");
+            throw new ApiException(StatusCodes.Status403Forbidden, "forbidden", "فقط مدیر می‌تواند نرخ بازی را ویرایش کند.");
         }
     }
 
@@ -39,7 +40,7 @@ public sealed class OperatorGameTariffController(GameTariffService gameTariff, O
     {
         if (!Enum.TryParse<PlayMode>(mode, true, out var parsed))
         {
-            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_mode", "Play mode is required.");
+            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_mode", "حالت بازی نامعتبر است.");
         }
 
         return Ok(await gameTariff.ListSelectableAsync(parsed, playerCount, ct));
@@ -50,7 +51,7 @@ public sealed class OperatorGameTariffController(GameTariffService gameTariff, O
         bool Enabled,
         IReadOnlyList<RateRowBody> Rates);
 
-    public sealed record RateRowBody(string Mode, int? PlayerCount, long HourlyToman, long? NightHourlyToman);
+    public sealed record RateRowBody(string Mode, int? PlayerCount, JsonElement HourlyToman, JsonElement? NightHourlyToman);
 
     [HttpPost]
     public async Task<IActionResult> Create(SaveGameTitleBody body, CancellationToken ct)
@@ -79,9 +80,27 @@ public sealed class OperatorGameTariffController(GameTariffService gameTariff, O
     }
 
     private static IReadOnlyList<GameRateLineInput> MapRates(IReadOnlyList<RateRowBody> rows)
-        => rows.Select(r => new GameRateLineInput(
-            Enum.Parse<PlayMode>(r.Mode, true),
-            r.PlayerCount,
-            r.HourlyToman,
-            r.NightHourlyToman)).ToList();
+    {
+        var mapped = new List<GameRateLineInput>(rows.Count);
+        foreach (var r in rows)
+        {
+            if (!Enum.TryParse<PlayMode>(r.Mode, true, out var mode))
+            {
+                throw new ApiException(StatusCodes.Status400BadRequest, "invalid_mode", "حالت بازی نامعتبر است.");
+            }
+
+            var hourly = GameRateTomanParser.ParseRequired(r.HourlyToman);
+            long? night = null;
+            if (r.NightHourlyToman is JsonElement nightEl)
+            {
+                night = GameRateTomanParser.ParseOptional(
+                    nightEl,
+                    "نرخ شبانه بازی باید خالی یا بیشتر از صفر باشد.");
+            }
+
+            mapped.Add(new GameRateLineInput(mode, r.PlayerCount, hourly, night));
+        }
+
+        return mapped;
+    }
 }

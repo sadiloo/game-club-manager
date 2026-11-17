@@ -25,7 +25,30 @@ public sealed class Ss14FixR1AppJsTests
         var js = File.ReadAllText(AppJsPath());
         Assert.Contains("مقدار نرخ عادی نامعتبر است", js, StringComparison.Ordinal);
         Assert.Contains("if (hourlyTrim === \"\") continue", js, StringComparison.Ordinal);
+        Assert.Contains("ss14IsAllowedRateInput", js, StringComparison.Ordinal);
         Assert.Contains(@"\u0660-\u0669", js, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("120.000")]
+    [InlineData("1.5")]
+    [InlineData("1e5")]
+    [InlineData("0x1F")]
+    [InlineData("12 000")]
+    public void FixR1_R2_client_rate_chars_helper_rejects_invalid_literals(string invalid)
+    {
+        const string pattern = "^[0-9\\u06F0-\\u06F9\\u0660-\\u0669,\\u060C\\u066C]+$";
+        Assert.DoesNotMatch(pattern, invalid.Trim());
+    }
+
+    [Fact]
+    public void FixR1_R2_manager_rates_panel_fits_narrow_viewport()
+    {
+        var js = File.ReadAllText(AppJsPath());
+        Assert.Contains("ss14EnsureManagerPanelStyles", js, StringComparison.Ordinal);
+        Assert.Contains("#ss14GameRatesPanel #ss14GameRatesTable td{display:block", js, StringComparison.Ordinal);
+        Assert.Contains("max-width:100%", js, StringComparison.Ordinal);
+        Assert.Contains("overflow-x:hidden", js, StringComparison.Ordinal);
     }
 
     [Fact]

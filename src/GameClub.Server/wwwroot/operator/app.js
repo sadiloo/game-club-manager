@@ -2179,16 +2179,23 @@ function ss14FmtToman(n) {
   return num.toLocaleString("fa-IR");
 }
 
+function ss14IsAllowedRateInput(raw) {
+  if (raw == null) return false;
+  return /^[0-9\u06F0-\u06F9\u0660-\u0669,\u060C\u066C]+$/.test(String(raw).trim());
+}
+
 function ss14ParseTomanInput(raw) {
   if (raw == null) return null;
+  const trimmed = String(raw).trim();
+  if (trimmed === "" || !ss14IsAllowedRateInput(trimmed)) return null;
   const fa = "۰۱۲۳۴۵۶۷۸۹";
-  const s = String(raw)
-    .replace(/[,\u066C\u060C\u00a0\s]/g, "")
+  const s = trimmed
+    .replace(/[,\u060C\u066C]/g, "")
     .replace(/[\u06F0-\u06F9]/g, (d) => String(fa.indexOf(d)))
     .replace(/[\u0660-\u0669]/g, (d) => String("0123456789"[d.charCodeAt(0) - 0x0660]));
-  if (!s) return null;
+  if (!s || !/^[0-9]+$/.test(s)) return null;
   const n = Number(s);
-  return Number.isFinite(n) ? n : null;
+  return Number.isFinite(n) && n > 0 ? n : null;
 }
 
 function ss14OptionLabel(mode, playerCount) {
@@ -2197,9 +2204,25 @@ function ss14OptionLabel(mode, playerCount) {
   return `آفلاین ${p.toLocaleString("fa-IR")} دسته`;
 }
 
+function ss14EnsureManagerPanelStyles() {
+  if (document.getElementById("ss14GameRatesStyle")) return;
+  const style = document.createElement("style");
+  style.id = "ss14GameRatesStyle";
+  style.textContent =
+    "#ss14GameRatesPanel{max-width:100%;overflow-x:hidden;box-sizing:border-box}" +
+    "#ss14GameRatesPanel #ss14GameEditForm{display:flex;flex-direction:column;gap:0.5rem;max-width:100%}" +
+    "#ss14GameRatesPanel #ss14GameRatesTable{width:100%;max-width:100%;border-collapse:collapse}" +
+    "#ss14GameRatesPanel #ss14GameRatesTable thead{display:none}" +
+    "#ss14GameRatesPanel #ss14GameRatesTable tr{display:block;border:1px solid #ccc;margin:0.5rem 0;padding:0.5rem;box-sizing:border-box}" +
+    "#ss14GameRatesPanel #ss14GameRatesTable td{display:block;width:100%;max-width:100%;box-sizing:border-box;padding:0.25rem 0}" +
+    "#ss14GameRatesPanel #ss14GameRatesTable input[type=\"text\"]{width:100%;max-width:100%;box-sizing:border-box}";
+  document.head.appendChild(style);
+}
+
 function ss14EnsureManagerPanel() {
   let section = document.getElementById("ss14GameRatesPanel");
   if (section) return section;
+  ss14EnsureManagerPanelStyles();
   section = document.createElement("section");
   section.id = "ss14GameRatesPanel";
   section.className = "panel";
