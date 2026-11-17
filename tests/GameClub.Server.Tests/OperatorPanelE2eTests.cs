@@ -1427,4 +1427,468 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
         var errText = await page.TextContentAsync("#error");
         Assert.Contains("خطای شبکه", errText ?? "", StringComparison.Ordinal);
     }
+
+    [Fact]
+    public async Task pr37_fix_r6_background_poll_and_prepaid_refresh_preserves_error_banner()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var mgr = await LoginOperatorClientAsync("manager", "1234");
+        var op = await LoginOperatorClientAsync();
+        await S3TestHelpers.EnableShiftsAsync(mgr, true);
+        await S3TestHelpers.OpenShiftAsync(op, 0);
+        await mgr.PutAsJsonAsync("/api/operator/destination-cards/e2e-r6-bg", new { label = "bg" });
+
+        var tag = Guid.NewGuid().ToString("N")[..8];
+        var created = await op.PostAsJsonAsync("/api/operator/customers", new { name = "r6bg", mobile = "0915" + tag });
+        created.EnsureSuccessStatusCode();
+        var customerId = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetGuid();
+        (await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up",
+            WalletTopUpTestJson.CardToCard(40_000, 0, "e2e-r6-bg", "bg"))).EnsureSuccessStatusCode();
+
+        var context = await _browser!.NewContextAsync();
+        await context.AddInitScriptAsync(
+            "window.__operatorPollIntervalMs = 400; window.__prepaidRefreshIntervalMs = 400;");
+        var page = await context.NewPageAsync();
+        await page.RouteAsync("**/*", async route =>
+        {
+            var request = route.Request;
+            var pathAndQuery = request.Url.StartsWith(PanelOrigin, StringComparison.OrdinalIgnoreCase)
+                ? request.Url[PanelOrigin.Length..]
+                : request.Url;
+            using var message = new HttpRequestMessage(new HttpMethod(request.Method), pathAndQuery);
+            if (request.Headers.TryGetValue("cookie", out var cookie))
+            {
+                message.Headers.TryAddWithoutValidation("Cookie", cookie);
+            }
+
+            var postBytes = request.PostDataBuffer;
+            if (request.Method is "POST" or "PUT" or "PATCH")
+            {
+                if (postBytes is { Length: > 0 })
+                {
+                    var mediaType = request.Headers.TryGetValue("content-type", out var contentType)
+                        ? contentType.Split(';')[0]
+                        : "application/json";
+                    message.Content = new ByteArrayContent(postBytes);
+                    message.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue(mediaType);
+                }
+                else
+                {
+                    message.Content = new StringContent("", System.Text.Encoding.UTF8, "application/json");
+                }
+            }
+
+            var response = await op.SendAsync(message);
+            var body = await response.Content.ReadAsByteArrayAsync();
+            var headers = response.Headers
+                .Concat(response.Content.Headers)
+                .GroupBy(h => h.Key, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => string.Join(", ", g.SelectMany(x => x.Value)), StringComparer.OrdinalIgnoreCase);
+            await route.FulfillAsync(new()
+            {
+                Status = (int)response.StatusCode,
+                BodyBytes = body,
+                Headers = headers,
+            });
+        });
+        await page.GotoAsync($"{PanelOrigin}/operator/index.html");
+        await page.FillAsync("#username", "operator");
+        await page.FillAsync("#pin", "1111");
+        await page.ClickAsync("#loginBtn");
+        await page.WaitForSelectorAsync("#grid .tile");
+
+        await page.EvaluateAsync("() => refreshPendingWalletTopups()");
+        await page.WaitForSelectorAsync("#pendingWalletList li");
+
+        await page.RouteAsync(
+            url => url.Contains("/members/wallet/pending/", StringComparison.Ordinal)
+                && url.Contains("/confirm", StringComparison.Ordinal),
+            route => route.AbortAsync());
+
+        var confirmBtn = page.Locator("#pendingWalletList li").First
+            .GetByRole(AriaRole.Button, new() { Name = "تأیید" });
+        await confirmBtn.ClickAsync();
+        await page.WaitForFunctionAsync(
+            "() => document.getElementById('error').textContent.includes('خطای شبکه')",
+            null,
+            new() { Timeout = 10_000 });
+
+        await page.WaitForTimeoutAsync(1_200);
+        var errText = await page.TextContentAsync("#error");
+        Assert.Contains("خطای شبکه", errText ?? "", StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task pr37_fix_r6_wallet_pending_list_rerender_keeps_buttons_disabled_until_confirm_finishes()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var mgr = await LoginOperatorClientAsync("manager", "1234");
+        var op = await LoginOperatorClientAsync();
+        await S3TestHelpers.EnableShiftsAsync(mgr, true);
+        await S3TestHelpers.OpenShiftAsync(op, 0);
+        await mgr.PutAsJsonAsync("/api/operator/destination-cards/e2e-r6w", new { label = "w" });
+
+        var tag = Guid.NewGuid().ToString("N")[..8];
+        var created = await op.PostAsJsonAsync("/api/operator/customers", new { name = "r6w", mobile = "0916" + tag });
+        created.EnsureSuccessStatusCode();
+        var customerId = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetGuid();
+        (await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up",
+            WalletTopUpTestJson.CardToCard(70_000, 0, "e2e-r6w", "hold"))).EnsureSuccessStatusCode();
+
+        var page = await LoginAsync(op);
+        await page.EvaluateAsync("() => refreshPendingWalletTopups()");
+        await page.WaitForSelectorAsync("#pendingWalletList li");
+
+        var confirmAttempts = 0;
+        var slowEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await page.RouteAsync(
+            url => url.Contains("/members/wallet/pending/", StringComparison.Ordinal)
+                && url.Contains("/confirm", StringComparison.Ordinal),
+            async route =>
+            {
+                if (!string.Equals(route.Request.Method, "POST", StringComparison.OrdinalIgnoreCase))
+                {
+                    await route.FallbackAsync();
+                    return;
+                }
+
+                confirmAttempts++;
+                slowEntered.TrySetResult();
+                await Task.Delay(900);
+                await route.FallbackAsync();
+            });
+
+        var row = page.Locator("#pendingWalletList li").First;
+        var confirmBtn = row.GetByRole(AriaRole.Button, new() { Name = "تأیید" });
+        var rejectBtn = row.GetByRole(AriaRole.Button, new() { Name = "رد" });
+        var confirmTask = confirmBtn.ClickAsync();
+        await slowEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await page.EvaluateAsync("() => refreshPendingWalletTopups()");
+        await page.WaitForFunctionAsync(
+            "() => { const li = document.querySelector('#pendingWalletList li'); if (!li) return false; const btns = li.querySelectorAll('button'); return btns.length >= 2 && [...btns].every(b => b.disabled); }");
+
+        Assert.False(await confirmBtn.IsEnabledAsync());
+        Assert.False(await rejectBtn.IsEnabledAsync());
+        await rejectBtn.ClickAsync(new() { Force = true });
+        await confirmBtn.ClickAsync(new() { Force = true });
+        await confirmTask;
+        await page.WaitForFunctionAsync("() => !document.querySelector('#pendingWalletList li')");
+        Assert.Equal(1, confirmAttempts);
+    }
+
+    [Fact]
+    public async Task pr37_fix_r6_c2c_pending_list_rerender_keeps_buttons_disabled_until_confirm_finishes()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var manager = await LoginOperatorClientAsync("manager", "1234");
+        await manager.PutAsJsonAsync("/api/operator/destination-cards/card-r6c2c", new { label = "A" });
+        await S3TestHelpers.RegisterPc(_api, "PC-R6C2C", PilotSeed.PcNormalGroupId);
+        factory.Clock.SetTehran(2026, 6, 3, 14, 0);
+        var sessionId = await S3TestHelpers.StartSession(_api, "PC-R6C2C");
+        factory.Clock.SetTehran(2026, 6, 3, 15, 0);
+        await S3TestHelpers.CheckpointAsync(_api, sessionId, S3TestHelpers.T(2026, 6, 3, 15, 0));
+        await _api.PostAsync($"/api/sessions/{sessionId}/stop", null);
+
+        var opClient = await LoginOperatorClientAsync();
+        var page = await LoginAsync(opClient);
+        var prompts = new Queue<string>(["80000", "", ""]);
+        page.Dialog += async (_, d) =>
+        {
+            var v = prompts.Count > 0 ? prompts.Dequeue() : "";
+            await d.AcceptAsync(v);
+        };
+
+        await page.ClickAsync(".tile[data-station-id='PC-R6C2C']");
+        await page.ClickAsync("#addC2cLineBtn");
+        await page.ClickAsync("#confirmBtn");
+        await page.WaitForSelectorAsync("#pendingC2cList li");
+
+        var confirmAttempts = 0;
+        var slowEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await page.RouteAsync(
+            url => url.Contains("/api/operator/payments/", StringComparison.Ordinal)
+                && url.Contains("/confirm", StringComparison.Ordinal),
+            async route =>
+            {
+                if (!string.Equals(route.Request.Method, "POST", StringComparison.OrdinalIgnoreCase))
+                {
+                    await route.FallbackAsync();
+                    return;
+                }
+
+                confirmAttempts++;
+                slowEntered.TrySetResult();
+                await Task.Delay(900);
+                await route.FallbackAsync();
+            });
+
+        var row = page.Locator("#pendingC2cList li").First;
+        var confirmBtn = row.GetByRole(AriaRole.Button, new() { Name = "تأیید" });
+        var rejectBtn = row.GetByRole(AriaRole.Button, new() { Name = "رد" });
+        var confirmTask = confirmBtn.ClickAsync();
+        await slowEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await page.EvaluateAsync("() => refreshPendingC2c()");
+        await page.WaitForFunctionAsync(
+            "() => { const li = document.querySelector('#pendingC2cList li'); if (!li) return false; const btns = li.querySelectorAll('button'); return btns.length >= 2 && [...btns].every(b => b.disabled); }");
+
+        Assert.False(await confirmBtn.IsEnabledAsync());
+        Assert.False(await rejectBtn.IsEnabledAsync());
+        await rejectBtn.ClickAsync(new() { Force = true });
+        await confirmBtn.ClickAsync(new() { Force = true });
+        await confirmTask;
+        await page.WaitForFunctionAsync("() => !document.querySelector('#pendingC2cList li')");
+        Assert.Equal(1, confirmAttempts);
+    }
+
+    [Fact]
+    public async Task pr37_fix_r6_wallet_pending_opposite_action_while_confirm_in_flight_sends_no_second_post()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var mgr = await LoginOperatorClientAsync("manager", "1234");
+        var op = await LoginOperatorClientAsync();
+        await S3TestHelpers.EnableShiftsAsync(mgr, true);
+        await S3TestHelpers.OpenShiftAsync(op, 0);
+        await mgr.PutAsJsonAsync("/api/operator/destination-cards/e2e-r6wo", new { label = "o" });
+
+        var tag = Guid.NewGuid().ToString("N")[..8];
+        var created = await op.PostAsJsonAsync("/api/operator/customers", new { name = "r6wo", mobile = "0917" + tag });
+        created.EnsureSuccessStatusCode();
+        var customerId = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetGuid();
+        (await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up",
+            WalletTopUpTestJson.CardToCard(55_000, 0, "e2e-r6wo", "one"))).EnsureSuccessStatusCode();
+
+        var page = await LoginAsync(op);
+        await page.EvaluateAsync("() => refreshPendingWalletTopups()");
+        await page.WaitForSelectorAsync("#pendingWalletList li");
+
+        var postCount = 0;
+        var slowEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await page.RouteAsync(
+            url => url.Contains("/members/wallet/pending/", StringComparison.Ordinal)
+                && (url.Contains("/confirm", StringComparison.Ordinal) || url.Contains("/reject", StringComparison.Ordinal)),
+            async route =>
+            {
+                if (!string.Equals(route.Request.Method, "POST", StringComparison.OrdinalIgnoreCase))
+                {
+                    await route.FallbackAsync();
+                    return;
+                }
+
+                postCount++;
+                slowEntered.TrySetResult();
+                await Task.Delay(900);
+                await route.FallbackAsync();
+            });
+
+        var row = page.Locator("#pendingWalletList li").First;
+        var confirmBtn = row.GetByRole(AriaRole.Button, new() { Name = "تأیید" });
+        var rejectBtn = row.GetByRole(AriaRole.Button, new() { Name = "رد" });
+        var confirmTask = confirmBtn.ClickAsync();
+        await slowEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await rejectBtn.ClickAsync(new() { Force = true });
+        await confirmTask;
+        await page.WaitForFunctionAsync("() => !document.querySelector('#pendingWalletList li')");
+        Assert.Equal(1, postCount);
+    }
+
+    [Fact]
+    public async Task pr37_fix_r6_c2c_pending_opposite_action_while_confirm_in_flight_sends_no_second_post()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var manager = await LoginOperatorClientAsync("manager", "1234");
+        await manager.PutAsJsonAsync("/api/operator/destination-cards/card-r6opp", new { label = "A" });
+        await S3TestHelpers.RegisterPc(_api, "PC-R6OPP", PilotSeed.PcNormalGroupId);
+        factory.Clock.SetTehran(2026, 6, 3, 14, 0);
+        var sessionId = await S3TestHelpers.StartSession(_api, "PC-R6OPP");
+        factory.Clock.SetTehran(2026, 6, 3, 15, 0);
+        await S3TestHelpers.CheckpointAsync(_api, sessionId, S3TestHelpers.T(2026, 6, 3, 15, 0));
+        await _api.PostAsync($"/api/sessions/{sessionId}/stop", null);
+
+        var opClient = await LoginOperatorClientAsync();
+        var page = await LoginAsync(opClient);
+        var prompts = new Queue<string>(["80000", "", ""]);
+        page.Dialog += async (_, d) =>
+        {
+            var v = prompts.Count > 0 ? prompts.Dequeue() : "";
+            await d.AcceptAsync(v);
+        };
+
+        await page.ClickAsync(".tile[data-station-id='PC-R6OPP']");
+        await page.ClickAsync("#addC2cLineBtn");
+        await page.ClickAsync("#confirmBtn");
+        await page.WaitForSelectorAsync("#pendingC2cList li");
+
+        var postCount = 0;
+        var slowEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await page.RouteAsync(
+            url => url.Contains("/api/operator/payments/", StringComparison.Ordinal)
+                && (url.Contains("/confirm", StringComparison.Ordinal) || url.Contains("/reject", StringComparison.Ordinal)),
+            async route =>
+            {
+                if (!string.Equals(route.Request.Method, "POST", StringComparison.OrdinalIgnoreCase))
+                {
+                    await route.FallbackAsync();
+                    return;
+                }
+
+                postCount++;
+                slowEntered.TrySetResult();
+                await Task.Delay(900);
+                await route.FallbackAsync();
+            });
+
+        var row = page.Locator("#pendingC2cList li").First;
+        var confirmBtn = row.GetByRole(AriaRole.Button, new() { Name = "تأیید" });
+        var rejectBtn = row.GetByRole(AriaRole.Button, new() { Name = "رد" });
+        var confirmTask = confirmBtn.ClickAsync();
+        await slowEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await rejectBtn.ClickAsync(new() { Force = true });
+        await confirmTask;
+        await page.WaitForFunctionAsync("() => !document.querySelector('#pendingC2cList li')");
+        Assert.Equal(1, postCount);
+    }
+
+    [Fact]
+    public async Task pr37_fix_r6_wallet_pending_already_actioned_shows_persian_message_and_refreshes()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var mgr = await LoginOperatorClientAsync("manager", "1234");
+        var op = await LoginOperatorClientAsync();
+        await S3TestHelpers.EnableShiftsAsync(mgr, true);
+        await S3TestHelpers.OpenShiftAsync(op, 0);
+        await mgr.PutAsJsonAsync("/api/operator/destination-cards/e2e-r6ad", new { label = "ad" });
+
+        var tag = Guid.NewGuid().ToString("N")[..8];
+        var created = await op.PostAsJsonAsync("/api/operator/customers", new { name = "r6ad", mobile = "0918" + tag });
+        created.EnsureSuccessStatusCode();
+        var customerId = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetGuid();
+        (await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up",
+            WalletTopUpTestJson.CardToCard(45_000, 0, "e2e-r6ad", "ad1"))).EnsureSuccessStatusCode();
+
+        var page = await LoginAsync(op);
+        await page.EvaluateAsync("() => refreshPendingWalletTopups()");
+        await page.WaitForSelectorAsync("#pendingWalletList li");
+
+        var pending = await op.GetFromJsonAsync<JsonElement[]>("/api/operator/members/wallet/pending");
+        Assert.NotNull(pending);
+        var pendingId = pending![0].GetProperty("id").GetInt64();
+        (await op.PostAsync($"/api/operator/members/wallet/pending/{pendingId}/confirm", null)).EnsureSuccessStatusCode();
+
+        var confirmBtn = page.Locator("#pendingWalletList li").First
+            .GetByRole(AriaRole.Button, new() { Name = "تأیید" });
+        await confirmBtn.ClickAsync();
+        await page.WaitForFunctionAsync(
+            "() => document.getElementById('error').textContent.includes('قبلاً انجام شده')",
+            null,
+            new() { Timeout = 10_000 });
+        var errAfterConfirm = await page.TextContentAsync("#error");
+        Assert.Contains("این مورد قبلاً انجام شده است.", errAfterConfirm ?? "", StringComparison.Ordinal);
+        Assert.DoesNotContain("Top-up is not pending", errAfterConfirm ?? "", StringComparison.OrdinalIgnoreCase);
+        await page.WaitForFunctionAsync("() => !document.querySelector('#pendingWalletList li')");
+        await page.WaitForTimeoutAsync(500);
+        var errAfterRefresh = await page.TextContentAsync("#error");
+        Assert.Contains("این مورد قبلاً انجام شده است.", errAfterRefresh ?? "", StringComparison.Ordinal);
+
+        (await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up",
+            WalletTopUpTestJson.CardToCard(35_000, 0, "e2e-r6ad", "ad2"))).EnsureSuccessStatusCode();
+        await page.EvaluateAsync("() => refreshPendingWalletTopups()");
+        await page.WaitForSelectorAsync("#pendingWalletList li");
+        pending = await op.GetFromJsonAsync<JsonElement[]>("/api/operator/members/wallet/pending");
+        var rejectId = pending![0].GetProperty("id").GetInt64();
+        (await op.PostAsync($"/api/operator/members/wallet/pending/{rejectId}/reject", null)).EnsureSuccessStatusCode();
+
+        var rejectBtn = page.Locator("#pendingWalletList li").First
+            .GetByRole(AriaRole.Button, new() { Name = "رد" });
+        await rejectBtn.ClickAsync();
+        await page.WaitForFunctionAsync(
+            "() => document.getElementById('error').textContent.includes('قبلاً انجام شده')",
+            null,
+            new() { Timeout = 10_000 });
+        var errAfterReject = await page.TextContentAsync("#error");
+        Assert.Contains("این مورد قبلاً انجام شده است.", errAfterReject ?? "", StringComparison.Ordinal);
+        Assert.DoesNotContain("Top-up is not pending", errAfterReject ?? "", StringComparison.OrdinalIgnoreCase);
+        await page.WaitForFunctionAsync("() => !document.querySelector('#pendingWalletList li')");
+    }
+
+    [Fact]
+    public async Task pr37_fix_r6_c2c_pending_already_actioned_shows_persian_message_and_refreshes()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var manager = await LoginOperatorClientAsync("manager", "1234");
+        await manager.PutAsJsonAsync("/api/operator/destination-cards/card-r6ad", new { label = "A" });
+        await S3TestHelpers.RegisterPc(_api, "PC-R6AD", PilotSeed.PcNormalGroupId);
+        await S3TestHelpers.RegisterPc(_api, "PC-R6AD2", PilotSeed.PcNormalGroupId);
+        factory.Clock.SetTehran(2026, 6, 3, 14, 0);
+        var sessionId = await S3TestHelpers.StartSession(_api, "PC-R6AD");
+        factory.Clock.SetTehran(2026, 6, 3, 15, 0);
+        await S3TestHelpers.CheckpointAsync(_api, sessionId, S3TestHelpers.T(2026, 6, 3, 15, 0));
+        await _api.PostAsync($"/api/sessions/{sessionId}/stop", null);
+
+        factory.Clock.SetTehran(2026, 6, 3, 14, 30);
+        var sessionId2 = await S3TestHelpers.StartSession(_api, "PC-R6AD2");
+        factory.Clock.SetTehran(2026, 6, 3, 15, 30);
+        await S3TestHelpers.CheckpointAsync(_api, sessionId2, S3TestHelpers.T(2026, 6, 3, 15, 30));
+        await _api.PostAsync($"/api/sessions/{sessionId2}/stop", null);
+
+        var opClient = await LoginOperatorClientAsync();
+        var page = await LoginAsync(opClient);
+        var prompts = new Queue<string>(["80000", "", "", "80000", "", ""]);
+        page.Dialog += async (_, d) =>
+        {
+            var v = prompts.Count > 0 ? prompts.Dequeue() : "";
+            await d.AcceptAsync(v);
+        };
+
+        await page.ClickAsync(".tile[data-station-id='PC-R6AD']");
+        await page.ClickAsync("#addC2cLineBtn");
+        await page.ClickAsync("#confirmBtn");
+        await page.WaitForSelectorAsync("#pendingC2cList li");
+
+        long confirmLineId;
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            confirmLineId = (await db.PaymentLines.SingleAsync(p => p.ConfirmationStatus == PaymentConfirmationStatus.Pending)).Id;
+        }
+
+        (await opClient.PostAsync($"/api/operator/payments/{confirmLineId}/confirm", null)).EnsureSuccessStatusCode();
+
+        var confirmBtn = page.Locator("#pendingC2cList li").First
+            .GetByRole(AriaRole.Button, new() { Name = "تأیید" });
+        await confirmBtn.ClickAsync();
+        await page.WaitForFunctionAsync(
+            "() => document.getElementById('error').textContent.includes('قبلاً انجام شده')",
+            null,
+            new() { Timeout = 10_000 });
+        var errAfterConfirm = await page.TextContentAsync("#error");
+        Assert.Contains("این مورد قبلاً انجام شده است.", errAfterConfirm ?? "", StringComparison.Ordinal);
+        Assert.DoesNotContain("Payment is not pending", errAfterConfirm ?? "", StringComparison.OrdinalIgnoreCase);
+        await page.WaitForFunctionAsync("() => !document.querySelector('#pendingC2cList li')");
+
+        await page.ClickAsync(".tile[data-station-id='PC-R6AD2']");
+        await page.ClickAsync("#addC2cLineBtn");
+        await page.ClickAsync("#confirmBtn");
+        await page.WaitForSelectorAsync("#pendingC2cList li");
+
+        long rejectLineId;
+        using (var scope2 = factory.Services.CreateScope())
+        {
+            var db = scope2.ServiceProvider.GetRequiredService<AppDbContext>();
+            rejectLineId = (await db.PaymentLines.SingleAsync(p => p.ConfirmationStatus == PaymentConfirmationStatus.Pending)).Id;
+        }
+
+        (await opClient.PostAsync($"/api/operator/payments/{rejectLineId}/reject", null)).EnsureSuccessStatusCode();
+
+        var rejectBtn = page.Locator("#pendingC2cList li").First
+            .GetByRole(AriaRole.Button, new() { Name = "رد" });
+        await rejectBtn.ClickAsync();
+        await page.WaitForFunctionAsync(
+            "() => document.getElementById('error').textContent.includes('قبلاً انجام شده')",
+            null,
+            new() { Timeout = 10_000 });
+        var errAfterReject = await page.TextContentAsync("#error");
+        Assert.Contains("این مورد قبلاً انجام شده است.", errAfterReject ?? "", StringComparison.Ordinal);
+        Assert.DoesNotContain("Payment is not pending", errAfterReject ?? "", StringComparison.OrdinalIgnoreCase);
+        await page.WaitForFunctionAsync("() => !document.querySelector('#pendingC2cList li')");
+    }
 }
