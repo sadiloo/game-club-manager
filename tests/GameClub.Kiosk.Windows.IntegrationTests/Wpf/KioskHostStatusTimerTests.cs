@@ -932,6 +932,24 @@ public sealed class KioskHostStatusTimerTests
                     Display = new KioskDisplayDto { EstimatedRemainingSeconds = 3600 },
                 },
             });
+            Assert.Equal(Visibility.Visible, lockPanel.Visibility);
+            Assert.Equal(Visibility.Collapsed, playingPanel.Visibility);
+            Assert.Equal(sessionS2, GetField(host, "_sessionId"));
+            Assert.NotEqual(sessionS1, GetField(host, "_sessionId"));
+
+            onAck.Invoke(host, new object[]
+            {
+                new KioskHeartbeatAck
+                {
+                    SessionStatus = "Open",
+                    Lease = HostTestLeaseSigning.SignLease(
+                        sessionS2,
+                        stationId,
+                        DateTime.UtcNow.AddHours(1),
+                        leaseVersion: 3),
+                    Display = new KioskDisplayDto { EstimatedRemainingSeconds = 3600 },
+                },
+            });
             Assert.Equal(Visibility.Collapsed, lockPanel.Visibility);
             Assert.Equal(Visibility.Visible, playingPanel.Visibility);
             Assert.Equal(sessionS2, GetField(host, "_sessionId"));
