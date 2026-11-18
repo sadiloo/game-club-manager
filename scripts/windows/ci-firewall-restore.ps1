@@ -21,14 +21,19 @@ function Get-CiArtifactLogDir {
 }
 
 function Get-CiFirewallProfilesSnapshot {
+    param([string]$PolicyStore = $null)
     $profiles = @()
     try {
-        foreach ($prof in Get-NetFirewallProfile -ErrorAction Continue) {
+        $args = @{}
+        if ($PolicyStore) { $args["PolicyStore"] = $PolicyStore }
+        foreach ($profName in @('Domain','Private','Public')) {
+            $p = Get-NetFirewallProfile -Name $profName @args -ErrorAction SilentlyContinue
+            if (-not $p) { continue }
             $profiles += [ordered]@{
-                Name                  = $prof.Name
-                Enabled               = $prof.Enabled
-                DefaultInboundAction  = $prof.DefaultInboundAction.ToString()
-                DefaultOutboundAction = $prof.DefaultOutboundAction.ToString()
+                Name                  = $profName
+                Enabled               = $p.Enabled
+                DefaultInboundAction  = $p.DefaultInboundAction.ToString()
+                DefaultOutboundAction = $p.DefaultOutboundAction.ToString()
             }
         }
     } catch {
@@ -49,6 +54,7 @@ function Save-CiFirewallInitialState {
         $payload = @{
             CapturedUtc = (Get-Date).ToUniversalTime().ToString("o")
             Profiles    = Get-CiFirewallProfilesSnapshot
+            LocalhostProfiles = (Get-CiFirewallProfilesSnapshot -PolicyStore "localhost")
         }
         $payload | ConvertTo-Json -Depth 6 | Set-Content -Path $path -Encoding UTF8
     } catch {
@@ -169,13 +175,34 @@ function Invoke-CiFirewallRestore {
         Write-CiFirewallEvidence -Path $FirewallLog -Label "before-restore"
     } catch { }
 
+    $guardDir = Join-Path $env:ProgramData "Checkpoint\guard"
+    try {
+        if (Test-Path $guardDir) {
+            Get-ChildItem -Path $guardDir -Filter "internet*.json" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+        }
+    } catch { }
+
     try {
         foreach ($rule in Get-CiMatchingFirewallRules) {
             try {
                 Remove-NetFirewallRule -Name $rule.Name -ErrorAction Continue | Out-Null
             } catch { }
         }
+        try {
+            Get-NetFirewallRule -PolicyStore localhost -Group "Checkpoint Internet Off" -ErrorAction SilentlyContinue |
+                Remove-NetFirewallRule -PolicyStore localhost -ErrorAction SilentlyContinue
+        } catch { }
     } catch { }
+
+    $localhostProfiles = @{}
+    if (Test-Path $initialPath) {
+        try {
+            $json = Get-Content $initialPath -Raw | ConvertFrom-Json
+            foreach ($prof in $json.LocalhostProfiles) {
+                $localhostProfiles[$prof.Name] = $prof
+            }
+        } catch { }
+    }
 
     foreach ($profName in @("Domain", "Private", "Public")) {
         try {
@@ -198,6 +225,21 @@ function Invoke-CiFirewallRestore {
         } catch {
             Write-Host "Invoke-CiFirewallRestore profile $profName failed: $($_.Exception.Message)"
         }
+    }
+
+    foreach ($profName in @("Domain", "Private", "Public")) {
+        try {
+            $saved = $localhostProfiles[$profName]
+            if (-not $saved) { continue }
+            $targetOutbound = if ($saved.DefaultOutboundAction) { [string]$saved.DefaultOutboundAction } else { "NotConfigured" }
+            Set-NetFirewallProfile -PolicyStore localhost -Name $profName -DefaultOutboundAction $targetOutbound -ErrorAction SilentlyContinue | Out-Null
+            if ($saved.DefaultInboundAction) {
+                Set-NetFirewallProfile -PolicyStore localhost -Name $profName -DefaultInboundAction ([string]$saved.DefaultInboundAction) -ErrorAction SilentlyContinue | Out-Null
+            }
+            if ($null -ne $saved.Enabled) {
+                Set-NetFirewallProfile -PolicyStore localhost -Name $profName -Enabled ([bool]$saved.Enabled) -ErrorAction SilentlyContinue | Out-Null
+            }
+        } catch { }
     }
 
     try {

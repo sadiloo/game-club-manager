@@ -83,7 +83,7 @@ public sealed class StationInternetStateService(AppDbContext db, IClock clock)
         row.AppliedVersion = version;
         row.AppliedOn = on;
         row.AppliedAtUtc = appliedAtUtc;
-        row.LastError = error;
+        row.LastError = string.IsNullOrEmpty(error) ? null : error;
         row.LastReportUtc = clock.UtcNow.UtcDateTime;
     }
 }

@@ -1416,7 +1416,18 @@ public sealed class KioskHostStatusTimerTests
         lockPanel = new Border();
         var launcher = new Border();
         playingPanel = new Border();
-        return new KioskHostService(window, status, balance, elapsed, freeBand, lockPanel, launcher, playingPanel, testSeam: testSeam);
+        return new KioskHostService(
+            window,
+            status,
+            balance,
+            elapsed,
+            freeBand,
+            null,
+            null,
+            lockPanel,
+            launcher,
+            playingPanel,
+            testSeam: testSeam);
     }
 
     private static KioskRuntime GetRuntime(KioskHostService host)

@@ -1,7 +1,9 @@
 using System.Diagnostics;
 using GameClub.Kiosk.Core.Connection;
+using GameClub.Kiosk.Core.Guard;
 using GameClub.Kiosk.Core.Offline;
 using GameClub.Kiosk.Core.Protocol;
+using System.Text.Json;
 using Microsoft.AspNetCore.SignalR.Client;
 
 namespace GameClub.Kiosk.Core.Runtime;
@@ -31,8 +33,12 @@ public sealed class KioskRuntime : IAsyncDisposable
     private bool _monotonicRestartedForInstance;
     private bool _disposed;
     private int _consecutiveHeartbeatFailures;
+    private readonly GuardInternetClient _guardInternet = new();
+    private KioskInternetAppliedReport? _lastInternetReport;
+    private bool _internetOffApplied;
 
     public KioskRuntimeState State { get; private set; } = KioskRuntimeState.Unpaired;
+    public bool InternetOffBadgeVisible => _internetOffApplied;
     public string ServerBase { get; private set; } = "";
     public string StationId { get; private set; } = "";
     public Guid DeviceId { get; private set; }
@@ -292,8 +298,10 @@ public sealed class KioskRuntime : IAsyncDisposable
                         {
                             SessionId = _sessionId == Guid.Empty ? null : _sessionId,
                             ClientMonotonicMs = _monotonic.ElapsedMilliseconds,
+                            InternetApplied = _lastInternetReport,
                         },
                         ct);
+                    await ApplyInternetCommandAsync(ack.Internet, ct).ConfigureAwait(false);
                     ApplyAcknowledgement(ack);
                     _consecutiveHeartbeatFailures = 0;
                     LastSuccessfulHeartbeatAckUtc = DateTime.UtcNow;
@@ -343,6 +351,48 @@ public sealed class KioskRuntime : IAsyncDisposable
 
         HeartbeatTransportFailed?.Invoke();
         _lastTransportFailedSignalMs = ms;
+    }
+
+    private async Task ApplyInternetCommandAsync(SignedInternetCommand? command, CancellationToken ct)
+    {
+        if (command is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var raw = await _guardInternet.ApplyAsync(command, ct).ConfigureAwait(false);
+            using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(raw) ? "{}" : raw);
+            var root = doc.RootElement;
+            if (root.TryGetProperty("error", out var err))
+            {
+                _lastInternetReport = new KioskInternetAppliedReport
+                {
+                    Epoch = command.Payload.Epoch,
+                    Version = command.Payload.Version,
+                    On = command.Payload.On,
+                    AppliedAtUtc = DateTime.UtcNow,
+                    Error = err.GetString(),
+                };
+                return;
+            }
+
+            var on = root.TryGetProperty("on", out var onEl) && onEl.GetBoolean();
+            _internetOffApplied = !on;
+            _lastInternetReport = new KioskInternetAppliedReport
+            {
+                Epoch = command.Payload.Epoch,
+                Version = command.Payload.Version,
+                On = on,
+                AppliedAtUtc = root.TryGetProperty("appliedAtUtc", out var at) && at.ValueKind == JsonValueKind.String
+                    ? DateTime.Parse(at.GetString()!).ToUniversalTime()
+                    : DateTime.UtcNow,
+            };
+        }
+        catch
+        {
+        }
     }
 
     private void ApplyAcknowledgement(KioskHeartbeatAck ack)

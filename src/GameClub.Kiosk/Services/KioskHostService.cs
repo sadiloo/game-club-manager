@@ -24,6 +24,8 @@ public sealed class KioskHostService : IAsyncDisposable
     private readonly TextBlock _balance;
     private readonly TextBlock _elapsed;
     private readonly TextBlock _freeBand;
+    private readonly UIElement? _internetOffLockNotice;
+    private readonly UIElement? _internetOffPlayingNotice;
     private readonly UIElement _lockPanel;
     private readonly UIElement _launcherPanel;
     private readonly UIElement _playingPanel;
@@ -62,6 +64,8 @@ public sealed class KioskHostService : IAsyncDisposable
         TextBlock balance,
         TextBlock elapsed,
         TextBlock freeBand,
+        UIElement? internetOffLockNotice,
+        UIElement? internetOffPlayingNotice,
         UIElement lockPanel,
         UIElement launcherPanel,
         UIElement playingPanel,
@@ -76,6 +80,8 @@ public sealed class KioskHostService : IAsyncDisposable
         _balance = balance;
         _elapsed = elapsed;
         _freeBand = freeBand;
+        _internetOffLockNotice = internetOffLockNotice;
+        _internetOffPlayingNotice = internetOffPlayingNotice;
         _lockPanel = lockPanel;
         _launcherPanel = launcherPanel;
         _playingPanel = playingPanel;
@@ -337,6 +343,7 @@ public sealed class KioskHostService : IAsyncDisposable
         _shell.Dispatcher.Invoke(() =>
         {
             RefreshStationStatusText();
+            RefreshInternetOffNotices();
 
             if (phase is KioskShellPhase.LeaseExpired or KioskShellPhase.Ended
                 || ack.ManualSettle || string.Equals(ack.SessionStatus, "AwaitingPayment", StringComparison.OrdinalIgnoreCase)
@@ -442,10 +449,28 @@ public sealed class KioskHostService : IAsyncDisposable
         _gameList.ItemsSource = games.Select(g => g.Name).ToList();
     }
 
+    private void RefreshInternetOffNotices()
+    {
+        var show = _runtime.InternetOffBadgeVisible ? Visibility.Visible : Visibility.Collapsed;
+        if (_internetOffPlayingNotice is not null)
+        {
+            _internetOffPlayingNotice.Visibility = show;
+        }
+
+        if (_internetOffLockNotice is not null)
+        {
+            _internetOffLockNotice.Visibility = show;
+        }
+    }
+
     private void OnUiTick()
     {
         RenderDisplay();
-        _shell.Dispatcher.Invoke(RefreshStationStatusText);
+        _shell.Dispatcher.Invoke(() =>
+        {
+            RefreshStationStatusText();
+            RefreshInternetOffNotices();
+        });
         if (_locallyLockedSessionId != Guid.Empty || _sessionId == Guid.Empty)
         {
             return;

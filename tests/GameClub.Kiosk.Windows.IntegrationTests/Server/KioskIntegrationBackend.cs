@@ -275,28 +275,21 @@ internal sealed class KioskIntegrationBackend
 
     private async Task PutPcNormalOfflineRateAsync(long hourlyToman)
     {
-        var client = CreateApiClient();
-        var ratesDoc = await client.GetFromJsonAsync<JsonElement>("/api/rates");
-        var put = await client.PutAsJsonAsync(
-            "/api/rates",
+        if (_factory is null)
+        {
+            throw new InvalidOperationException("Factory required for pc-rates setup.");
+        }
+        var mgr = await _factory.CreateOperatorClientAsync("manager", "1234");
+        var put = await mgr.PutAsJsonAsync(
+            $"/api/operator/pc-rates/{PilotSeed.PcNormalGroupId}",
             new
             {
-                roundingStepToman = ratesDoc.GetProperty("roundingStepToman").GetInt64(),
-                roundingDirection = ratesDoc.GetProperty("roundingDirection").GetString(),
-                pcSpecialBandSurchargeToman = 0L,
-                lines = new[]
-                {
-                    new
-                    {
-                        groupId = PilotSeed.PcNormalGroupId,
-                        playMode = "Offline",
-                        playerCount = (int?)1,
-                        isSpecialBand = false,
-                        hourlyToman,
-                    },
-                },
+                onlineDay = PilotSeed.PcNormalHourly,
+                onlineNight = PilotSeed.PcNormalSpecialHourly,
+                offlineDay = hourlyToman,
+                offlineNight = hourlyToman,
             });
-        await put.EnsureSuccessStatusCodeWithBodyAsync($"PUT /api/rates (pc-normal {hourlyToman}/h, surcharge 0)");
+        await put.EnsureSuccessStatusCodeWithBodyAsync($"PUT /api/operator/pc-rates (offline {hourlyToman}/h)");
     }
 
     public async Task<G2BillingEvidence> CollectG2EvidenceAsync(Guid sessionId, double oraclePoweredSpanSeconds)
@@ -313,8 +306,8 @@ internal sealed class KioskIntegrationBackend
                 .ToListAsync();
             var rateLine = await db.RateLines.SingleAsync(r =>
                 r.GroupId == PilotSeed.PcNormalGroupId
-                && r.PlayMode == "Offline"
-                && r.PlayerCount == 1
+                && r.PlayMode == "Online"
+                && r.PlayerCount == null
                 && !r.IsSpecialBand);
             var factoryBillTotal = await db.PendingBills
                 .Where(b => b.SessionId == sessionId)

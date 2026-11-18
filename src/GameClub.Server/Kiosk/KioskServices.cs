@@ -582,6 +582,8 @@ public sealed class KioskCheckpointCoordinator(
                     error = internetApplied.Error,
                 }, ct);
             }
+
+            await db.SaveChangesAsync(ct);
         }
 
         PlaySessionEntity? session = null;

@@ -74,7 +74,7 @@ public sealed class OperatorPcRatesController(
     {
         if (context.Role is not (UserRole.Manager or UserRole.Owner))
         {
-            throw new ApiException(StatusCodes.Status403Forbidden, "forbidden", "فقط مدیر.");
+            throw new ApiException(StatusCodes.Status403Forbidden, "forbidden", "فقط مدیر می‌تواند نرخ‌های PC را ببیند.");
         }
     }
 

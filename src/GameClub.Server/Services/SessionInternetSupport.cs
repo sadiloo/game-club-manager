@@ -17,7 +17,8 @@ public sealed record SessionInternetChangeResult(
     long HourlyToman,
     long DesiredVersion,
     bool Pending,
-    bool KioskConnected);
+    bool KioskConnected,
+    string? NextBand);
 
 public static class SessionInternetSupport
 {
@@ -261,7 +262,14 @@ public static class SessionInternetSupport
     {
         var row = await db.StationInternetStates.AsNoTracking()
             .FirstOrDefaultAsync(s => s.StationId == session.StationId, ct);
-        var hourly = ResolveHourly(snapshot, session, clock.UtcNow.UtcDateTime);
+        var nowUtc = clock.UtcNow.UtcDateTime;
+        var hourly = ResolveHourly(snapshot, session, nowUtc);
+        var nextTarget = session.Mode == PlayMode.Online ? PlayMode.Offline : PlayMode.Online;
+        var (_, nextBand) = PcInternetRatePreview.Resolve(
+            snapshot.Card,
+            session.Station!.GroupId,
+            nextTarget,
+            nowUtc);
         return new SessionInternetChangeResult(
             session.Id,
             session.Mode == PlayMode.Online,
@@ -269,6 +277,7 @@ public static class SessionInternetSupport
             hourly,
             row?.DesiredVersion ?? 0,
             row is not null && StationInternetStateService.IsPending(row),
-            await IsKioskConnectedAsync(db, session.StationId, clock, ct));
+            await IsKioskConnectedAsync(db, session.StationId, clock, ct),
+            nextBand);
     }
 }

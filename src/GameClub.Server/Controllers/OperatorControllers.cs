@@ -155,6 +155,7 @@ public sealed class OperatorPanelController(
             desiredVersion = result.DesiredVersion,
             pending = result.Pending,
             kioskConnected = result.KioskConnected,
+            nextBand = result.NextBand,
         });
     }
 

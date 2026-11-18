@@ -29,7 +29,7 @@ internal static class WpfLiveServerTestHelper
         using (var cmd = new NpgsqlCommand(
             """
             UPDATE rate_lines SET "HourlyToman" = 80000
-            WHERE "GroupId" = 'pc-normal' AND "IsSpecialBand" = false AND "PlayMode" = 'Offline' AND "PlayerCount" = 1
+            WHERE "GroupId" = 'pc-normal' AND "IsSpecialBand" = false AND "PlayMode" = 'Online' AND "PlayerCount" IS NULL
             """,
             conn))
         {
@@ -37,19 +37,7 @@ internal static class WpfLiveServerTestHelper
             if (rateRows != 1)
             {
                 throw new InvalidOperationException(
-                    $"Expected exactly one pc-normal offline rate line update (IsSpecialBand = false), but {rateRows} row(s) were affected.");
-            }
-        }
-
-        using (var cmd = new NpgsqlCommand(
-            """UPDATE branch_rounding SET "PcSpecialBandSurchargeToman" = 0""",
-            conn))
-        {
-            var roundingRows = await cmd.ExecuteNonQueryAsync();
-            if (roundingRows < 1)
-            {
-                throw new InvalidOperationException(
-                    $"Expected at least one branch_rounding row update for PcSpecialBandSurchargeToman, but {roundingRows} row(s) were affected.");
+                    $"Expected exactly one pc-normal online day rate line update, but {rateRows} row(s) were affected.");
             }
         }
     }

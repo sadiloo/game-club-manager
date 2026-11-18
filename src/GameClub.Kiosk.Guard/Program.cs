@@ -5,8 +5,23 @@ namespace GameClub.Kiosk.Guard;
 
 internal static class Program
 {
-    private static void Main()
+    private static void Main(string[] args)
     {
+        if (args.Length > 0)
+        {
+            if (string.Equals(args[0], "internet-configure", StringComparison.OrdinalIgnoreCase))
+            {
+                Environment.Exit(Internet.InternetGuardCli.RunConfigure(args));
+                return;
+            }
+
+            if (string.Equals(args[0], "internet-reset", StringComparison.OrdinalIgnoreCase))
+            {
+                Environment.Exit(Internet.InternetGuardCli.RunReset());
+                return;
+            }
+        }
+
         if (Environment.UserInteractive)
         {
             RunWatchdogLoop();
