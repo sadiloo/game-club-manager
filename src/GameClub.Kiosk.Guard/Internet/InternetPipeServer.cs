@@ -141,7 +141,7 @@ internal sealed class InternetPipeServer
             var code = _config.ServerIps.Length == 0 && !p.On
                 ? "firewall_not_configured"
                 : _firewall.Apply(_config, p.On);
-            if (code.StartsWith("apply_failed", StringComparison.Ordinal) || code == "firewall_not_configured")
+            if (!string.Equals(code, "applied", StringComparison.Ordinal))
             {
                 return JsonSerializer.Serialize(new { error = code, on = _on, version = _appliedVersion });
             }

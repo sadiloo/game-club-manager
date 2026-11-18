@@ -130,13 +130,15 @@ public sealed class WindowsKioskServerIntegrationTests
             }
             else
             {
+                Environment.SetEnvironmentVariable("GAMECLUB_ALLOW_TEST_CLOCK", "1");
                 ownedServer = await OutOfProcessLiveServer.StartNewAsync();
                 Environment.SetEnvironmentVariable("CHECKPOINT_SERVER_URL", ownedServer.BaseUrl);
                 backend = KioskIntegrationBackend.CreateForBaseUrl(ownedServer.BaseUrl);
             }
 
             await backend.ResetAsync();
-            await backend.SetPcNormalOfflineRatesAsync(PilotSeed.PcNormalHourly, PilotSeed.PcNormalHourly);
+            await backend.PinDaytimeTestClockAsync();
+            await backend.SetPcNormalOfflineRatesAsync();
             await backend.RegisterPcAsync(backend.CreateApiClient(), "PC-UNREACH");
             await backend.SeedCustomerWithCredentialAsync("unreach", "pass", 200_000);
             var (deviceId, deviceKey, leasePem) = await backend.PairAsync("PC-UNREACH");
@@ -300,6 +302,7 @@ public sealed class WindowsKioskServerIntegrationTests
     public async Task live_server_dead_pc_sweep_after_checkpoint_gap()
     {
         await _backend.ResetAsync();
+        await _backend.PinDaytimeTestClockAsync();
         await _backend.RegisterPcAsync(_backend.CreateApiClient(), "PC-10M");
         var api = _backend.CreateApiClient();
         if (_backend.UsesMutableClock)
@@ -360,6 +363,7 @@ public sealed class WindowsKioskServerIntegrationTests
         try
         {
             await backend.ResetAsync();
+            await backend.PinDaytimeTestClockAsync();
             await backend.RegisterPcAsync(backend.CreateApiClient(), "PC-DISC");
             var customerId = await backend.SeedCustomerWithCredentialAsync("disc", "pass", 200_000);
             var (deviceId, deviceKey, leasePem) = await backend.PairAsync("PC-DISC");
@@ -570,10 +574,12 @@ public sealed class WindowsKioskServerIntegrationTests
         var priorCheckpointUrl = Environment.GetEnvironmentVariable("CHECKPOINT_SERVER_URL");
         try
         {
+            Environment.SetEnvironmentVariable("GAMECLUB_ALLOW_TEST_CLOCK", "1");
             ownedServer = await OutOfProcessLiveServer.StartNewAsync();
             Environment.SetEnvironmentVariable("CHECKPOINT_SERVER_URL", ownedServer.BaseUrl);
             var backend = KioskIntegrationBackend.CreateForBaseUrl(ownedServer.BaseUrl);
             await backend.ResetAsync();
+            await backend.PinDaytimeTestClockAsync();
             await backend.SetPcNormalOfflineRate40000Async();
             await backend.RegisterPcAsync(backend.CreateApiClient(), "PC-G2");
             var customerId = await backend.SeedCustomerWithCredentialAsync("g2user", "pass", 500_000);
@@ -835,6 +841,7 @@ public sealed class WindowsKioskServerIntegrationTests
             var backend = KioskIntegrationBackend.Create(null);
             ownedServer = OutOfProcessLiveServer.AttachExisting(ciPid, priorCheckpointUrl!);
             await backend.ResetAsync();
+            await backend.PinDaytimeTestClockAsync();
             await backend.SetPcNormalOfflineRatesAsync();
             await backend.RegisterPcAsync(backend.CreateApiClient(), "PC-OUTAGE");
             await backend.SeedCustomerWithCredentialAsync("inetout", "pass", 200_000);
@@ -911,6 +918,7 @@ public sealed class WindowsKioskServerIntegrationTests
             var backend = KioskIntegrationBackend.Create(null);
             ownedServer = OutOfProcessLiveServer.AttachExisting(ciPid, priorCheckpointUrl!);
             await backend.ResetAsync();
+            await backend.PinDaytimeTestClockAsync();
             await backend.SetPcNormalOfflineRatesAsync();
             await backend.RegisterPcAsync(backend.CreateApiClient(), "PC-KILL");
             await backend.SeedCustomerWithCredentialAsync("inetkill", "pass", 200_000);
@@ -975,12 +983,10 @@ public sealed class WindowsKioskServerIntegrationTests
             Assert.False(afterPress.GetProperty("kioskConnected").GetBoolean());
             Assert.True(afterPress.GetProperty("internetOn").GetBoolean());
 
-            var billOpen = await op.PostAsync($"/api/operator/sessions/{sessionId}/bill/open", null);
-            billOpen.EnsureSuccessStatusCode();
-            var billJson = await billOpen.Content.ReadFromJsonAsync<JsonElement>();
-            var lines = billJson!.GetProperty("lines").EnumerateArray().ToList();
-            Assert.True(lines.Exists(l =>
-                string.Equals(l.GetProperty("mode").GetString(), nameof(PlayMode.Online), StringComparison.Ordinal)));
+            var segmentsBeforeReconnect = await backend.ReadPlaySegmentsAsync(sessionId);
+            Assert.Contains(
+                segmentsBeforeReconnect,
+                s => string.Equals(s.Mode, nameof(PlayMode.Online), StringComparison.Ordinal));
 
             runtime = new KioskRuntime(() => kioskHttp);
             runtime.Configure(
@@ -1012,9 +1018,9 @@ public sealed class WindowsKioskServerIntegrationTests
 
             Assert.NotNull(lastTile);
             Assert.True(lastTile!.Value.GetProperty("internetOn").GetBoolean());
-            var onLineStart = DateTime.Parse(
-                lines.Single(l => string.Equals(l.GetProperty("mode").GetString(), nameof(PlayMode.Online), StringComparison.Ordinal))
-                    .GetProperty("startUtc").GetString()!).ToUniversalTime();
+            var onLineStart = segmentsBeforeReconnect
+                .Single(s => string.Equals(s.Mode, nameof(PlayMode.Online), StringComparison.Ordinal))
+                .StartUtc.ToUniversalTime();
             Assert.True(onLineStart >= pressAt.AddSeconds(-5), "ON segment must start at toggle press time.");
             _ = deviceKey;
         }
@@ -1053,6 +1059,7 @@ public sealed class WindowsKioskServerIntegrationTests
         }
 
         await _backend.ResetAsync();
+        await _backend.PinDaytimeTestClockAsync();
         await _backend.SetPcNormalOfflineRatesAsync();
         await _backend.RegisterPcAsync(_backend.CreateApiClient(), "PC-INET");
         await _backend.SeedCustomerWithCredentialAsync("inete2e", "pass", 200_000);

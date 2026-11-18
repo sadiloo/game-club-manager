@@ -103,14 +103,57 @@ internal sealed class KioskIntegrationBackend
 
     public HttpMessageHandler? TestHubHandler => _factory?.Server.CreateHandler();
 
-    public void SetTehran(int year, int month, int day, int hour, int minute, int second = 0)
+    public async Task SetTehranAsync(int year, int month, int day, int hour, int minute, int second = 0)
     {
-        if (_factory is null)
+        if (_factory is not null)
         {
-            throw new InvalidOperationException("MutableClock is only available in factory mode.");
+            _factory.Clock.SetTehran(year, month, day, hour, minute, second);
+            return;
         }
 
-        _factory.Clock.SetTehran(year, month, day, hour, minute, second);
+        var api = CreateApiClient();
+        var response = await api.PostAsJsonAsync(
+            "/api/internal/test-clock",
+            new { year, month, day, hour, minute, second });
+        await response.EnsureSuccessStatusCodeWithBodyAsync("POST /api/internal/test-clock");
+    }
+
+    public void SetTehran(int year, int month, int day, int hour, int minute, int second = 0)
+        => SetTehranAsync(year, month, day, hour, minute, second).GetAwaiter().GetResult();
+
+    public Task PinDaytimeTestClockAsync()
+        => SetTehranAsync(2026, 6, 3, 14, 0);
+
+    public async Task<IReadOnlyList<(string Mode, DateTime StartUtc)>> ReadPlaySegmentsAsync(Guid sessionId)
+    {
+        if (_factory is not null)
+        {
+            await using var scope = _factory.Services.CreateAsyncScope();
+            var rows = await scope.ServiceProvider.GetRequiredService<AppDbContext>().Segments
+                .Where(s => s.SessionId == sessionId)
+                .OrderBy(s => s.StartUtc)
+                .Select(s => new { Mode = s.Mode.ToString(), s.StartUtc })
+                .ToListAsync();
+            return rows.Select(r => (r.Mode, r.StartUtc)).ToList();
+        }
+
+        await using var conn = new NpgsqlConnection(ResolveConnectionString());
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            """
+            SELECT "Mode", "StartUtc" FROM play_segments
+            WHERE "SessionId" = @id ORDER BY "StartUtc"
+            """,
+            conn);
+        cmd.Parameters.AddWithValue("id", sessionId);
+        var list = new List<(string, DateTime)>();
+        await using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            list.Add((reader.GetString(0), reader.GetDateTime(1)));
+        }
+
+        return list;
     }
 
     public async Task<int> CountHeartbeatsAsync()
@@ -287,11 +330,9 @@ internal sealed class KioskIntegrationBackend
 
     private async Task PutPcNormalOfflineRateAsync(long hourlyToman)
     {
-        if (_factory is null)
-        {
-            throw new InvalidOperationException("Factory required for pc-rates setup.");
-        }
-        var mgr = await _factory.CreateOperatorClientAsync("manager", "1234");
+        var mgr = _factory is not null
+            ? await _factory.CreateOperatorClientAsync("manager", "1234")
+            : await CreateOperatorClientAsync("manager", "1234");
         var put = await mgr.PutAsJsonAsync(
             $"/api/operator/pc-rates/{PilotSeed.PcNormalGroupId}",
             new

@@ -22,24 +22,16 @@ internal static class WpfLiveServerTestHelper
         return url!.TrimEnd('/');
     }
 
-    public static async Task EnsurePcNormalRate80000Async()
+    public static async Task PinServerTestClockTehranAsync(int year, int month, int day, int hour, int minute, int second = 0)
     {
-        await using var conn = new NpgsqlConnection(ResolveConnectionString());
-        await conn.OpenAsync();
-        using (var cmd = new NpgsqlCommand(
-            """
-            UPDATE rate_lines SET "HourlyToman" = 80000
-            WHERE "GroupId" = 'pc-normal' AND "IsSpecialBand" = false AND "PlayMode" = 'Online' AND "PlayerCount" IS NULL
-            """,
-            conn))
-        {
-            var rateRows = await cmd.ExecuteNonQueryAsync();
-            if (rateRows != 1)
-            {
-                throw new InvalidOperationException(
-                    $"Expected exactly one pc-normal online day rate line update, but {rateRows} row(s) were affected.");
-            }
-        }
+        var baseUrl = RequireServerUrl();
+        var apiKey = Environment.GetEnvironmentVariable("GAMECLUB_API_KEY") ?? "ci-test-key";
+        var api = new HttpClient { BaseAddress = new Uri(baseUrl + "/") };
+        api.DefaultRequestHeaders.Add("X-Api-Key", apiKey);
+        var response = await api.PostAsJsonAsync(
+            "/api/internal/test-clock",
+            new { year, month, day, hour, minute, second });
+        await EnsureSuccessWithBodyAsync(response, "POST /api/internal/test-clock");
     }
 
     public static async Task<Guid> LookupCustomerIdByLoginAsync(string loginName)
@@ -101,7 +93,6 @@ internal static class WpfLiveServerTestHelper
         var api = new HttpClient { BaseAddress = new Uri(baseUrl + "/") };
         api.DefaultRequestHeaders.Add("X-Api-Key", apiKey);
 
-        await EnsurePcNormalRate80000Async();
         var stationId = "PC-WPF-" + Guid.NewGuid().ToString("N").Substring(0, 8);
         var register = await api.PostAsJsonAsync("/api/stations", new { id = stationId, name = stationId, groupId = "pc-normal" });
         register.EnsureSuccessStatusCode();

@@ -42,7 +42,14 @@ public partial class Program
         builder.Services.AddEndpointsApiExplorer();
         builder.Services.AddSwaggerGen();
         builder.Services.AddSingleton<IOperatorPanelNotifier, OperatorPanelNotifier>();
-        builder.Services.AddSingleton<IClock, SystemClock>();
+        if (TestClockBootstrap.TryRegister(builder.Services))
+        {
+            // MutableClock registered for CI / integration when GAMECLUB_ALLOW_TEST_CLOCK is set.
+        }
+        else
+        {
+            builder.Services.AddSingleton<IClock, SystemClock>();
+        }
         builder.Services.AddScoped<OperatorContext>();
         builder.Services.AddSingleton<OperatorPolicies>();
         builder.Services.Configure<DeadPcSweepOptions>(builder.Configuration.GetSection(DeadPcSweepOptions.SectionName));

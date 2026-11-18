@@ -355,6 +355,52 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
         Assert.Equal(60_000, InternetDriftWatchdog.ProductionDriftIntervalMs);
     }
 
+    [Fact]
+    public void internet_off_missing_server_config_returns_firewall_not_configured()
+    {
+        var applier = new InternetFirewallApplier();
+        var config = new InternetGuardConfig
+        {
+            StationId = "CI-NOCONF",
+            ServerHost = "api.github.com",
+            ServerPort = 0,
+            ServerIps = Array.Empty<string>(),
+        };
+        Assert.Equal("firewall_not_configured", applier.Apply(config, on: false));
+    }
+
+    [Fact]
+    public void internet_off_apply_result_is_applied_only_after_verified_localhost_block()
+    {
+        RequireWindowsAdmin();
+        var ips = ResolveServerIps();
+        Assert.True(ips.Length > 0, "Could not resolve api.github.com for server allow-list.");
+
+        var applier = new InternetFirewallApplier();
+        var config = new InternetGuardConfig
+        {
+            StationId = "CI-VERIFY",
+            ServerHost = "api.github.com",
+            ServerPort = 443,
+            ServerIps = ips,
+            ExtraAllowPrograms = CiExtraPrograms(),
+        };
+        try
+        {
+            var result = applier.Apply(config, on: false);
+            Assert.Equal("applied", result);
+            Assert.False(TryTcp("1.1.1.1", 443, 2_000));
+            var profileJson = RunPowerShell(
+                "Get-NetFirewallProfile -PolicyStore localhost | Select-Object Name,DefaultOutboundAction | ConvertTo-Json");
+            Assert.Contains("Block", profileJson, StringComparison.OrdinalIgnoreCase);
+            AssertCheckpointOffRuleGroupPresent();
+        }
+        finally
+        {
+            applier.RunResetScript();
+        }
+    }
+
     private static string RunPowerShell(string script)
     {
         var encoded = Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes(script));

@@ -160,7 +160,7 @@ internal sealed class OutOfProcessLiveServer : IAsyncDisposable
 
     private static void CopyServerEnvironment(ProcessStartInfo psi)
     {
-        foreach (var key in new[] { "GAMECLUB_DATABASE", "GAMECLUB_TEST_DATABASE", "GAMECLUB_API_KEY", "OperatorSessionSecret", "ASPNETCORE_ENVIRONMENT" })
+        foreach (var key in new[] { "GAMECLUB_DATABASE", "GAMECLUB_TEST_DATABASE", "GAMECLUB_API_KEY", "GAMECLUB_ALLOW_TEST_CLOCK", "GAMECLUB_TEST_CLOCK_UTC", "OperatorSessionSecret", "ASPNETCORE_ENVIRONMENT" })
         {
             var value = Environment.GetEnvironmentVariable(key);
             if (!string.IsNullOrWhiteSpace(value))

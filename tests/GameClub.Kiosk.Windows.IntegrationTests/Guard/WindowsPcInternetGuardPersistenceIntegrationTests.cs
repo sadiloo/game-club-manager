@@ -12,6 +12,7 @@ using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
+using System.Threading.Tasks;
 using GameClub.Kiosk.Core.Guard;
 using GameClub.Kiosk.Core.Lease;
 using GameClub.Kiosk.Core.Protocol;
@@ -74,7 +75,7 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
     }
 
     [Fact(Timeout = 120_000)]
-    public void internet_off_guard_process_restart_reasserts_before_pipe_ready()
+    public async Task internet_off_guard_process_restart_reasserts_before_pipe_ready()
     {
         RequireWindowsAdmin();
         using var rsa = RSA.Create(2048);
@@ -88,7 +89,7 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
 
             WriteInternetConfig(config);
             using var guard = GuardProcessStart.StartGuard();
-            Thread.Sleep(2_000);
+            await Task.Delay(2_000);
 
             Assert.False(TryTcp("1.1.1.1", 443, 2_000), "OFF must persist while Guard is running.");
             guard.Kill();
@@ -105,7 +106,7 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
                     return;
                 }
 
-                Thread.Sleep(500);
+                await Task.Delay(500);
             }
 
             Assert.Fail("Guard restart must re-assert OFF rules before serving pipe (egress still blocked within 10s).");
@@ -119,7 +120,7 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
     }
 
     [Fact(Timeout = 90_000)]
-    public void internet_off_drift_restores_deleted_rule_within_harness_interval()
+    public async Task internet_off_drift_restores_deleted_rule_within_harness_interval()
     {
         RequireWindowsAdmin();
         var prior = Environment.GetEnvironmentVariable("CHECKPOINT_INTERNET_DRIFT_INTERVAL_MS");
@@ -155,7 +156,7 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
             var deadline = DateTime.UtcNow.AddSeconds(15);
             while (DateTime.UtcNow < deadline)
             {
-                Thread.Sleep(500);
+                await Task.Delay(500);
                 if (!TryTcp("1.1.1.1", 443, 500))
                 {
                     return;
@@ -175,7 +176,7 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
     }
 
     [Fact(Timeout = 90_000)]
-    public void internet_off_egress_stays_blocked_when_checkpoint_server_process_killed()
+    public async Task internet_off_egress_stays_blocked_when_checkpoint_server_process_killed()
     {
         RequireWindowsAdmin();
         if (!int.TryParse(Environment.GetEnvironmentVariable("GAMECLUB_SERVER_PID"), out var serverPid)
@@ -194,7 +195,7 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
             var server = Process.GetProcessById(serverPid);
             server.Kill();
             server.WaitForExit(15_000);
-            Thread.Sleep(2_000);
+            await Task.Delay(2_000);
             Assert.False(TryTcp("1.1.1.1", 443, 2_000), "L3: OFF rule must stay on the PC when Checkpoint server is unreachable.");
 
             var dll = Environment.GetEnvironmentVariable("GAMECLUB_SERVER_DLL");
@@ -227,7 +228,7 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
     }
 
     [Fact(Timeout = 60_000)]
-    public void internet_pipe_rejects_older_signed_on_while_still_off()
+    public async Task internet_pipe_rejects_older_signed_on_while_still_off()
     {
         RequireWindowsAdmin();
         using var rsa = RSA.Create(2048);
@@ -255,7 +256,7 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
             var server = new InternetPipeServer(config);
             pipeThread = new Thread(() => server.Run(cts.Token)) { IsBackground = true };
             pipeThread.Start();
-            Thread.Sleep(1_000);
+            await Task.Delay(1_000);
 
             var staleOn = Sign(rsa, new InternetCommandPayload
             {
@@ -266,7 +267,7 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
                 IssuedAtUtc = DateTime.UtcNow.AddMinutes(-5),
             });
             var client = new GuardInternetClient();
-            var response = client.ApplyAsync(staleOn).GetAwaiter().GetResult();
+            var response = await client.ApplyAsync(staleOn);
             Assert.Contains("rejected_stale", response, StringComparison.OrdinalIgnoreCase);
             Assert.False(TryTcp("1.1.1.1", 443, 2_000), "Stale ON must be rejected; firewall stays OFF.");
         }
