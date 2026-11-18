@@ -1,5 +1,6 @@
 #if NET10_0_OR_GREATER
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Diagnostics;
 
 namespace GameClub.Kiosk.Windows.IntegrationTests.Server;
@@ -42,7 +43,22 @@ internal static class KioskLiveServerRegistry
         var repoRoot = ResolveRepoRoot();
         var logDir = Path.Combine(repoRoot, "artifacts", "kiosk-windows-logs");
         Directory.CreateDirectory(logDir);
-        File.WriteAllText(Path.Combine(logDir, "live-server.pid"), processId.ToString());
+        var path = Path.Combine(logDir, "live-server.pid");
+        var pids = new HashSet<int>();
+        if (File.Exists(path))
+        {
+            foreach (var line in File.ReadAllLines(path))
+            {
+                var trim = line.Trim();
+                if (int.TryParse(trim, out var existing) && existing > 0)
+                {
+                    pids.Add(existing);
+                }
+            }
+        }
+
+        pids.Add(processId);
+        File.WriteAllText(path, string.Join(Environment.NewLine, pids.OrderBy(id => id)));
         TraceWrite($"HANDOVER_TO_CI pid={processId} reason={reason}");
     }
 

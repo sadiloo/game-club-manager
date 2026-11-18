@@ -78,9 +78,33 @@ M = [
         "Host_logout_cleanup_first",
         HS,
         "var sessionForLogout = _sessionId;\n        ShowLockLayout();",
-        "var sessionForLogout = _sessionId;\n        try\n        {\n            RunSessionCleanup();\n        }\n        catch (Exception ex)\n        {\n            Trace.WriteLine($\"RunSessionCleanup failed during logout: {ex.Message}\");\n        }\n        ShowLockLayout();",
+        "var sessionForLogout = _sessionId;\n        RunSessionCleanup();\n        ShowLockLayout();",
         "host-d5",
         "host_logout_shows_layout_when_session_cleanup_throws",
+    ),
+    (
+        "Host_logout_http_before_lock",
+        HS,
+        r"var sessionForLogout = _sessionId;\n        ShowLockLayout\(\);\n        _replayTick\.Stop\(\);\n        EnsureStatusUiTickRunning\(\);",
+        "var sessionForLogout = _sessionId;",
+        "host-d5",
+        "host_logout_open_ack_during_slow_post_stays_locked_without_session",
+    ),
+    (
+        "Host_logout_no_guard_before_http",
+        HS,
+        r"if \(sessionForLogout != Guid\.Empty\)\n        \{\n            _locallyLockedSessionId = sessionForLogout;\n            _localLockLeaseExpired = false;\n            RefreshStationStatusText\(\);\n        \}\n\n        if \(sessionForLogout",
+        "if (sessionForLogout",
+        "host-d5",
+        "host_logout_open_ack_during_slow_post_stays_locked_without_session",
+    ),
+    (
+        "Host_logout_no_post_await_relock",
+        HS,
+        "        ShowLockLayout();\n        if (!logoutHttpSucceeded)",
+        "        if (!logoutHttpSucceeded)",
+        "host-d5",
+        "host_logout_open_ack_during_slow_post_stays_locked_without_session",
     ),
     (
         "Host_no_top_up_unlock",
@@ -226,6 +250,8 @@ REGEX_MUTANTS = {
     "Host_stops_tick_on_ack_lock",
     "Host_d7_clears_session_on_local_lock",
     "Host_no_top_up_unlock",
+    "Host_logout_http_before_lock",
+    "Host_logout_no_guard_before_http",
 }
 
 res = {}

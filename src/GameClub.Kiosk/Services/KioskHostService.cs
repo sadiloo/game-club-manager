@@ -47,6 +47,7 @@ public sealed class KioskHostService : IAsyncDisposable
     private Guid _sessionId;
     private Guid _locallyLockedSessionId;
     private bool _localLockLeaseExpired;
+    private bool _logoutInProgress;
     private KioskDisplayDto? _lastDisplay;
     private bool _runCatalogOnFirstConnected;
     private bool _pairingJustFailed;
@@ -242,23 +243,58 @@ public sealed class KioskHostService : IAsyncDisposable
         ShowLockLayout();
         _replayTick.Stop();
         EnsureStatusUiTickRunning();
-        RefreshStationStatusText();
+
+        var logoutHttpSucceeded = sessionForLogout == Guid.Empty || _testSeam?.SkipLogoutHttp == true;
+        if (sessionForLogout != Guid.Empty)
+        {
+            _locallyLockedSessionId = sessionForLogout;
+            _localLockLeaseExpired = false;
+            RefreshStationStatusText();
+        }
 
         if (sessionForLogout != Guid.Empty && _testSeam?.SkipLogoutHttp != true)
         {
+            _logoutInProgress = true;
             try
             {
-                await _http.PostAsync($"{_serverBase}/api/kiosk/sessions/{sessionForLogout}/logout", null);
+                if (_testSeam?.LogoutHttpDelay is TimeSpan logoutDelay)
+                {
+                    await Task.Delay(logoutDelay);
+                }
+
+                if (_testSeam?.SimulateSuccessfulLogoutHttp == true)
+                {
+                    logoutHttpSucceeded = true;
+                }
+                else if (_testSeam?.LogoutHttpThrows == true)
+                {
+                    throw new HttpRequestException("simulated logout HTTP failure");
+                }
+                else
+                {
+                    await _http.PostAsync($"{_serverBase}/api/kiosk/sessions/{sessionForLogout}/logout", null);
+                    logoutHttpSucceeded = true;
+                }
             }
             catch (Exception ex)
             {
-                Trace.WriteLine($"Logout HTTP failed during logout: {ex.Message}");
+                Trace.TraceWarning($"Logout HTTP failed during logout: {ex.Message}");
+            }
+            finally
+            {
+                _logoutInProgress = false;
             }
         }
 
+        ShowLockLayout();
+        if (!logoutHttpSucceeded)
+        {
+            _locallyLockedSessionId = Guid.Empty;
+        }
+
         _sessionId = Guid.Empty;
-        _locallyLockedSessionId = Guid.Empty;
         _runtime.BindSession(Guid.Empty);
+        RefreshStationStatusText();
         try
         {
             RunSessionCleanup();
@@ -303,7 +339,7 @@ public sealed class KioskHostService : IAsyncDisposable
                     && ackLeaseSession is Guid leasedWhileLocked
                     && leasedWhileLocked != Guid.Empty
                     && leasedWhileLocked == _locallyLockedSessionId;
-                if (sameLockedSession && phase == KioskShellPhase.Playing)
+                if (sameLockedSession && phase == KioskShellPhase.Playing && !_logoutInProgress)
                 {
                     _locallyLockedSessionId = Guid.Empty;
                 }
@@ -317,14 +353,17 @@ public sealed class KioskHostService : IAsyncDisposable
                     _runtime.BindSession(differentSession);
                     _ = ApplyStationProfileAsync();
                 }
-                else if (_sessionId == Guid.Empty && ackLeaseSession is Guid leased && leased != Guid.Empty)
+                else if (_sessionId == Guid.Empty
+                    && ackLeaseSession is Guid leased
+                    && leased != Guid.Empty
+                    && _locallyLockedSessionId == Guid.Empty)
                 {
                     _sessionId = leased;
                     _runtime.BindSession(leased);
                     _ = ApplyStationProfileAsync();
                 }
 
-                if (_sessionId != Guid.Empty && _locallyLockedSessionId == Guid.Empty && phase == KioskShellPhase.Playing)
+                if (_sessionId != Guid.Empty && _locallyLockedSessionId == Guid.Empty && phase == KioskShellPhase.Playing && !_logoutInProgress)
                 {
                     ShowPlayingLayout();
                     if (!_uiTick.IsEnabled)
