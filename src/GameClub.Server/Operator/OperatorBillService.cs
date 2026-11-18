@@ -144,6 +144,73 @@ public sealed class OperatorBillService(
         SessionCharge charge,
         BranchRatesSnapshot snapshot)
     {
+        var isPcSession = session.Station?.Group?.Kind == StationKind.Pc
+            || session.Segments.Any(s => s.Kind == StationKind.Pc);
+        if (!isPcSession)
+        {
+            return BuildBillSegmentsByPlaySegment(session, charge, snapshot);
+        }
+
+        var segmentsByKey = session.Segments.ToDictionary(s => s.SegmentKey, StringComparer.Ordinal);
+        return charge.Lines
+            .OrderBy(l => l.Start)
+            .Select(line =>
+            {
+                segmentsByKey.TryGetValue(line.SegmentId, out var segment);
+                var hourly = line.HourlyRateToman;
+                var minutes = line.BilledMinutes;
+                var amount = line.AmountToman;
+                var billedMinutes = (int)Math.Min(int.MaxValue, minutes);
+                var startUtc = line.Start.UtcDateTime;
+                var endUtc = line.End.UtcDateTime;
+                string? displayLine;
+                if (segment?.Kind == StationKind.Pc)
+                {
+                    var view = new PlaySegmentEntity
+                    {
+                        SegmentKey = segment.SegmentKey,
+                        StationId = segment.StationId,
+                        GroupId = segment.GroupId,
+                        Mode = line.Mode,
+                        PlayerCount = line.PlayerCount,
+                        Kind = StationKind.Pc,
+                        StartUtc = startUtc,
+                        EndUtc = endUtc,
+                        GameTitle = segment.GameTitle,
+                    };
+                    displayLine = PcInternetBillDisplay.FormatBillSegment(view, hourly, charge, billedMinutes, amount);
+                }
+                else if (segment is not null)
+                {
+                    displayLine = Ss14BillDisplay.FormatBillSegment(segment, hourly, charge);
+                }
+                else
+                {
+                    displayLine = null;
+                }
+
+                return (object)new
+                {
+                    segmentKey = line.SegmentId,
+                    playerCount = line.PlayerCount,
+                    mode = line.Mode.ToString(),
+                    hourlyToman = hourly,
+                    gameTitleName = segment?.GameTitle?.Name,
+                    displayLine,
+                    startUtc,
+                    endUtc,
+                    billedMinutes = minutes,
+                    amountToman = amount,
+                };
+            })
+            .ToList();
+    }
+
+    private static IReadOnlyList<object> BuildBillSegmentsByPlaySegment(
+        PlaySessionEntity session,
+        SessionCharge charge,
+        BranchRatesSnapshot snapshot)
+    {
         return session.Segments
             .OrderBy(s => s.StartUtc)
             .Select(s =>

@@ -126,10 +126,17 @@ internal static class S3TestHelpers
             return;
         }
 
-        var owner = new OperatorUserEntity { Id = Guid.NewGuid(), Username = "owner", Role = UserRole.Owner };
-        owner.PinHash = OperatorAuthService.HashPin(owner, "5678");
-        db.OperatorUsers.Add(owner);
-        await db.SaveChangesAsync();
+        try
+        {
+            var owner = new OperatorUserEntity { Id = Guid.NewGuid(), Username = "owner", Role = UserRole.Owner };
+            owner.PinHash = OperatorAuthService.HashPin(owner, "5678");
+            db.OperatorUsers.Add(owner);
+            await db.SaveChangesAsync();
+        }
+        catch (Microsoft.EntityFrameworkCore.DbUpdateException ex)
+            when (ex.InnerException is Npgsql.PostgresException { SqlState: "23505" })
+        {
+        }
     }
 
     /// <summary>Test fixture only — category id 2 for operator catalog PUT (freeze PC-5 / case 8).</summary>

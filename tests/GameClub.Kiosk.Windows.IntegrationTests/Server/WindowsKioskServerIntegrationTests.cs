@@ -136,7 +136,7 @@ public sealed class WindowsKioskServerIntegrationTests
             }
 
             await backend.ResetAsync();
-            await backend.SetPcNormalOfflineRate80000WithZeroSurchargeAsync();
+            await backend.SetPcNormalOfflineRatesAsync(PilotSeed.PcNormalHourly, PilotSeed.PcNormalHourly);
             await backend.RegisterPcAsync(backend.CreateApiClient(), "PC-UNREACH");
             await backend.SeedCustomerWithCredentialAsync("unreach", "pass", 200_000);
             var (deviceId, deviceKey, leasePem) = await backend.PairAsync("PC-UNREACH");

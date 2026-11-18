@@ -280,6 +280,13 @@ try {
     $env:CHECKPOINT_SECOND_USER = $guestUser
     $env:CHECKPOINT_SECOND_PASSWORD = $guestPassword
     $env:CHECKPOINT_GUARD_CI_RUNNER_LAUNCH = "1"
+    if ($env:RUNNER_ROOT) {
+        $listener = Join-Path $env:RUNNER_ROOT "bin\Runner.Listener.exe"
+        $worker = Join-Path $env:RUNNER_ROOT "bin\Runner.Worker.exe"
+        if ((Test-Path $listener) -and (Test-Path $worker)) {
+            $env:CHECKPOINT_INTERNET_EXTRA_ALLOW = "$listener;$worker"
+        }
+    }
 
     $env:PGPASSWORD = "postgres"
 

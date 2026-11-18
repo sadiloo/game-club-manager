@@ -116,7 +116,7 @@ public sealed class PcInternetBillOracleTests(GameClubWebApplicationFactory fact
         factory.Clock.SetTehran(2026, 6, 3, 0, 20);
         await S3TestHelpers.CheckpointAsync(api, sessionId, factory.Clock.UtcNow);
         var bill = await BillAfterStopAsync(op, api, sessionId);
-        AssertBill(bill, 103_334, (50, 66_667L), (30, 36_667L));
+        AssertBill(bill, 103_334, (50, 66_667L), (10, 10_000L), (20, 26_667L));
     }
 
     [Fact]
@@ -217,7 +217,7 @@ public sealed class PcInternetBillOracleTests(GameClubWebApplicationFactory fact
         factory.Clock.SetTehran(2026, 6, 2, 20, 30);
         await S3TestHelpers.CheckpointAsync(api, sessionId, factory.Clock.UtcNow);
         var bill = await BillAfterStopAsync(op, api, sessionId);
-        AssertBill(bill, 30_000, (0, 0L), (30, 30_000L));
+        AssertBill(bill, 30_000, (30, 30_000L));
     }
 
     [Fact]
@@ -259,9 +259,9 @@ public sealed class PcInternetBillOracleTests(GameClubWebApplicationFactory fact
         factory.Clock.SetTehran(2026, 6, 2, 20, 8);
         await ToggleAsync(op, sessionId, false);
         factory.Clock.SetTehran(2026, 6, 2, 20, 15);
-        (await api.PostAsync("/api/internal/dead-pc-sweep", null)).EnsureSuccessStatusCode();
+        (await factory.CreateClientWithKey().PostAsync("/api/internal/dead-pc-sweep", null)).EnsureSuccessStatusCode();
         var bill = await op.GetFromJsonAsync<JsonElement>($"/api/operator/sessions/{sessionId}/bill");
-        AssertBill(bill, 6_667, (5, 6_667L), (0, 0L));
+        AssertBill(bill, 6_667, (5, 6_667L));
     }
 
     [Fact]
@@ -331,7 +331,7 @@ public sealed class PcInternetBillOracleTests(GameClubWebApplicationFactory fact
         factory.Clock.SetTehran(2026, 6, 3, 0, 42);
         await S3TestHelpers.CheckpointAsync(api, sessionId, factory.Clock.UtcNow);
         var bill = await BillAfterStopAsync(op, api, sessionId);
-        AssertBill(bill, 89_333, (10, 13_333L), (62, 76_000L));
+        AssertBill(bill, 89_333, (10, 13_333L), (20, 20_000L), (42, 56_000L));
     }
 
     [Fact]

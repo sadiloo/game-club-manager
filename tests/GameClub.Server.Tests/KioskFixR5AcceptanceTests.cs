@@ -121,7 +121,7 @@ public sealed class KioskFixR5AcceptanceTests(GameClubWebApplicationFactory fact
                 EndUtc = session.StartedAtUtc.AddMinutes(2),
                 StationId = session.StationId,
                 GroupId = session.Station!.GroupId,
-                Mode = PlayMode.Offline,
+                Mode = PlayMode.Online,
                 PlayerCount = 1,
                 Kind = StationKind.Pc,
             });

@@ -129,8 +129,8 @@ public sealed class KioskFixR3AcceptanceTests(GameClubWebApplicationFactory fact
         {
             var ack = await scope.ServiceProvider.GetRequiredService<KioskCheckpointCoordinator>().OnHeartbeatAsync(deviceId, sessionId, 60_000, default);
             Assert.NotNull(ack.Display);
-            Assert.Equal(98_333, ack.Display!.WalletBalanceToman);
-            Assert.Equal(4380, ack.Display.EstimatedRemainingSeconds!.Value);
+            Assert.Equal(98_667, ack.Display!.WalletBalanceToman);
+            Assert.Equal(4440, ack.Display.EstimatedRemainingSeconds!.Value);
         }
     }
 
@@ -209,7 +209,7 @@ public sealed class KioskFixR3AcceptanceTests(GameClubWebApplicationFactory fact
                 EndUtc = session.StartedAtUtc.AddMinutes(3),
                 StationId = session.StationId,
                 GroupId = session.Station!.GroupId,
-                Mode = PlayMode.Offline,
+                Mode = PlayMode.Online,
                 PlayerCount = 1,
                 Kind = StationKind.Pc,
             });

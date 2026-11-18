@@ -11,7 +11,7 @@ using Npgsql;
 
 namespace GameClub.Server.Tests;
 
-[CollectionDefinition("server")]
+[CollectionDefinition("server", DisableParallelization = true)]
 public sealed class ServerCollection : ICollectionFixture<GameClubWebApplicationFactory>;
 
 [Collection("server")]
@@ -28,8 +28,13 @@ public sealed class AcceptanceScenarioTests(GameClubWebApplicationFactory factor
             TRUNCATE operator_users RESTART IDENTITY CASCADE;
             SELECT setval('invoice_number_seq', 1, false);
             UPDATE invoice_number_sequence SET "NextNumber" = 1;
+            DELETE FROM rate_lines WHERE "GroupId" IN ('pc-normal', 'pc-vip') AND "PlayMode" = 'Offline';
             UPDATE rate_lines SET "HourlyToman" = 80000
               WHERE "GroupId" = 'pc-normal' AND "IsSpecialBand" = false AND "PlayMode" = 'Online' AND "PlayerCount" IS NULL;
+            UPDATE rate_lines SET "HourlyToman" = 100000
+              WHERE "GroupId" = 'pc-normal' AND "IsSpecialBand" = true AND "PlayMode" = 'Online' AND "PlayerCount" IS NULL;
+            UPDATE rate_lines SET "HourlyToman" = 130000
+              WHERE "GroupId" = 'pc-vip' AND "IsSpecialBand" = true AND "PlayMode" = 'Online' AND "PlayerCount" IS NULL;
             """);
         await DatabaseSeed.EnsureAsync(db);
     }

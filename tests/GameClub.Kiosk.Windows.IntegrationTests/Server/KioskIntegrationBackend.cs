@@ -270,8 +270,25 @@ internal sealed class KioskIntegrationBackend
     public async Task SetPcNormalOfflineRate40000Async()
         => await PutPcNormalOfflineRateAsync(40_000L);
 
-    public async Task SetPcNormalOfflineRate80000WithZeroSurchargeAsync()
-        => await PutPcNormalOfflineRateAsync(PilotSeed.PcNormalHourly);
+    public async Task SetPcNormalOfflineRatesAsync(long offlineDay = 60_000L, long offlineNight = 80_000L)
+    {
+        if (_factory is null)
+        {
+            throw new InvalidOperationException("Factory required for pc-rates setup.");
+        }
+
+        var mgr = await _factory.CreateOperatorClientAsync("manager", "1234");
+        var put = await mgr.PutAsJsonAsync(
+            $"/api/operator/pc-rates/{PilotSeed.PcNormalGroupId}",
+            new
+            {
+                onlineDay = PilotSeed.PcNormalHourly,
+                onlineNight = PilotSeed.PcNormalSpecialHourly,
+                offlineDay,
+                offlineNight,
+            });
+        await put.EnsureSuccessStatusCodeWithBodyAsync("PUT /api/operator/pc-rates (pc-normal four rates)");
+    }
 
     private async Task PutPcNormalOfflineRateAsync(long hourlyToman)
     {

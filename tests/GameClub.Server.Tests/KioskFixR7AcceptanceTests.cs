@@ -68,7 +68,7 @@ public sealed class KioskFixR7AcceptanceTests(GameClubWebApplicationFactory fact
             .Invoices.Where(i => i.SessionId == sessionId).Select(i => i.Number).SingleAsync();
         var inv = await op.GetFromJsonAsync<JsonElement>($"/api/operator/invoices/{invoiceNumber}");
         Assert.Equal(500, inv.GetProperty("collectibleToman").GetInt64());
-        Assert.Equal(1_500, inv.GetProperty("writeOffToman").GetInt64());
+        Assert.Equal(2_167, inv.GetProperty("writeOffToman").GetInt64());
     }
 
     [Fact]
@@ -90,7 +90,7 @@ public sealed class KioskFixR7AcceptanceTests(GameClubWebApplicationFactory fact
             .Invoices.Where(i => i.SessionId == sessionId).Select(i => i.Number).SingleAsync();
         var inv = await op.GetFromJsonAsync<JsonElement>($"/api/operator/invoices/{invoiceNumber}");
         Assert.Equal(15_500, inv.GetProperty("collectibleToman").GetInt64());
-        Assert.Equal(1_500, inv.GetProperty("writeOffToman").GetInt64());
+        Assert.Equal(2_167, inv.GetProperty("writeOffToman").GetInt64());
     }
 
     private async Task<Guid> SeedPartialGraceSessionAsync()
@@ -172,7 +172,7 @@ public sealed class KioskFixR7AcceptanceTests(GameClubWebApplicationFactory fact
                 EndUtc = session.StartedAtUtc.AddMinutes(2),
                 StationId = session.StationId,
                 GroupId = session.Station!.GroupId,
-                Mode = PlayMode.Offline,
+                Mode = PlayMode.Online,
                 PlayerCount = 1,
                 Kind = StationKind.Pc,
             });
