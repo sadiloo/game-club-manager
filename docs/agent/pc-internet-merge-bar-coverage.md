@@ -33,9 +33,9 @@
 
 | Brief item | Reason |
 |---|---|
-| Migration open-session bill parity (B1) before `PcInternetRates` | Pre-migration schema has no `station_internet_state`; API `StartAsync` requires post-migration table |
-| Migration down/up round-trip | Not automated on Linux (destructive; Windows/manual) |
-| §10.4.7 (b)(c) server outage + kiosk kill + reconnect | Needs live Guard + process control on `windows-2022` |
-| §10.4.5 Guard service stop/start + drift 70s | Windows service timing; `ReassertPersisted` covered indirectly by Guard unit path on runner |
+| Migration open-session bill parity (B1) before `PcInternetRates` | `PcInternetMigration_OpenPcSessionBillUnchanged_AfterUp` |
+| Migration down/up round-trip | `PcInternetMigration_DownThenUp_round_trip_restores_pre_state_and_reapplies_up` |
+| §10.4.7 (b)(c) server outage + kiosk kill + reconnect | `live_server_pc_internet_off_unaffected_by_server_outage`, `live_server_pc_internet_on_while_kiosk_killed_shows_pending_then_applied_on_reconnect`, `internet_off_egress_stays_blocked_when_checkpoint_server_process_killed` |
+| §10.4.5 Guard service stop/start + drift 70s | `WindowsPcInternetGuardPersistenceIntegrationTests` (restart, drift, pipe replay) |
 | §10.4.7 replay on pipe | Covered by `InternetCommandAdmission` (Core); full pipe replay on `windows-2022` optional |
 | Real cafe network / reboot | Brief §10.5 |

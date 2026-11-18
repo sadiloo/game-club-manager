@@ -815,6 +815,234 @@ public sealed class WindowsKioskServerIntegrationTests
         Assert.Fail("Expected at least 3 advancing kiosk heartbeats on the server.");
     }
 
+    /// <summary>Brief §10.4.7 (b) — server outage while internet OFF; station desired stays OFF (L3 firewall proof in net48 guard tests).</summary>
+    [Fact(Timeout = 180_000)]
+    public async Task live_server_pc_internet_off_unaffected_by_server_outage()
+    {
+        if (!KioskIntegrationBackend.IsLiveMode)
+        {
+            return;
+        }
+
+        OutOfProcessLiveServer? ownedServer = null;
+        var priorCheckpointUrl = Environment.GetEnvironmentVariable("CHECKPOINT_SERVER_URL");
+        var ciPid = 0;
+        var usesCiServer = KioskIntegrationBackend.IsLiveMode
+            && int.TryParse(Environment.GetEnvironmentVariable("GAMECLUB_SERVER_PID"), out ciPid);
+        var serverStopped = false;
+        try
+        {
+            var backend = KioskIntegrationBackend.Create(null);
+            ownedServer = OutOfProcessLiveServer.AttachExisting(ciPid, priorCheckpointUrl!);
+            await backend.ResetAsync();
+            await backend.SetPcNormalOfflineRatesAsync();
+            await backend.RegisterPcAsync(backend.CreateApiClient(), "PC-OUTAGE");
+            await backend.SeedCustomerWithCredentialAsync("inetout", "pass", 200_000);
+            var (deviceId, deviceKey, _) = await backend.PairAsync("PC-OUTAGE");
+            var kioskHttp = backend.CreateKioskHttpClient(deviceId, deviceKey);
+            (await kioskHttp.PostAsJsonAsync(
+                "/api/kiosk/auth/login",
+                new { loginName = "inetout", password = "pass", stationId = "PC-OUTAGE" })).EnsureSuccessStatusCode();
+            var sessionId = await backend.OpenSessionIdAsync();
+            var op = await backend.CreateOperatorClientAsync();
+            var rv = (await op.GetFromJsonAsync<JsonElement[]>("/api/operator/grid"))!
+                .Single(t => t.GetProperty("id").GetString() == "PC-OUTAGE").GetProperty("rowVersion").GetUInt32();
+            (await op.PostAsJsonAsync($"/api/operator/sessions/{sessionId}/internet", new
+            {
+                on = false,
+                expectedVersion = rv,
+                commandId = Guid.NewGuid(),
+            })).EnsureSuccessStatusCode();
+
+            KioskLiveServerRegistry.LogServerKill(ciPid, "live_server_pc_internet_off_outage_b");
+            KioskLiveServerRegistry.Unregister(ciPid);
+            Process.GetProcessById(ciPid).Kill(entireProcessTree: true);
+            serverStopped = true;
+
+            await ownedServer.RelaunchAsync();
+            serverStopped = false;
+
+            op = await backend.CreateOperatorClientAsync();
+            var tile = (await op.GetFromJsonAsync<JsonElement[]>("/api/operator/grid"))!
+                .Single(t => t.GetProperty("id").GetString() == "PC-OUTAGE");
+            Assert.False(tile.GetProperty("internetOn").GetBoolean());
+            Assert.False(tile.GetProperty("internetDesiredOn").GetBoolean());
+            _ = deviceKey;
+            _ = sessionId;
+        }
+        finally
+        {
+            if (usesCiServer && ownedServer is not null && serverStopped)
+            {
+                try
+                {
+                    await ownedServer.RelaunchAsync();
+                }
+                catch
+                {
+                    /* best-effort */
+                }
+            }
+            else if (usesCiServer && ownedServer is not null)
+            {
+                await FinalizeCiOwnedServerAsync(ownedServer, usesCiServer, false, priorCheckpointUrl);
+            }
+        }
+    }
+
+    /// <summary>Brief §10.4.7 (c) — kiosk killed while disconnected; ON press queues until reconnect, segment at press.</summary>
+    [Fact(Timeout = 240_000)]
+    public async Task live_server_pc_internet_on_while_kiosk_killed_shows_pending_then_applied_on_reconnect()
+    {
+        if (!KioskIntegrationBackend.IsLiveMode)
+        {
+            return;
+        }
+
+        OutOfProcessLiveServer? ownedServer = null;
+        var priorCheckpointUrl = Environment.GetEnvironmentVariable("CHECKPOINT_SERVER_URL");
+        var ciPid = 0;
+        var usesCiServer = KioskIntegrationBackend.IsLiveMode
+            && int.TryParse(Environment.GetEnvironmentVariable("GAMECLUB_SERVER_PID"), out ciPid);
+        KioskRuntime? runtime = null;
+        var serverStopped = false;
+        try
+        {
+            var backend = KioskIntegrationBackend.Create(null);
+            ownedServer = OutOfProcessLiveServer.AttachExisting(ciPid, priorCheckpointUrl!);
+            await backend.ResetAsync();
+            await backend.SetPcNormalOfflineRatesAsync();
+            await backend.RegisterPcAsync(backend.CreateApiClient(), "PC-KILL");
+            await backend.SeedCustomerWithCredentialAsync("inetkill", "pass", 200_000);
+            var (deviceId, deviceKey, _) = await backend.PairAsync("PC-KILL");
+            var kioskHttp = backend.CreateKioskHttpClient(deviceId, deviceKey);
+            var login = await kioskHttp.PostAsJsonAsync(
+                "/api/kiosk/auth/login",
+                new { loginName = "inetkill", password = "pass", stationId = "PC-KILL" });
+            login.EnsureSuccessStatusCode();
+            var sessionId = (await login.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("sessionId").GetGuid();
+
+            var queuePath = Path.Combine(Path.GetTempPath(), $"kiosk-inet-kill-{Guid.NewGuid():N}.db");
+            runtime = new KioskRuntime(() => kioskHttp);
+            runtime.Configure(
+                backend.HubUri,
+                deviceId,
+                deviceKey,
+                "PC-KILL",
+                queuePath,
+                legacyWindows: true,
+                testHubHandler: backend.TestHubHandler);
+            runtime.BindSession(sessionId);
+            await runtime.StartAsync(default);
+            await WaitUntilTransportConnectedAsync(runtime, TimeSpan.FromSeconds(45));
+
+            var op = await backend.CreateOperatorClientAsync();
+            var rv0 = (await op.GetFromJsonAsync<JsonElement[]>("/api/operator/grid"))!
+                .Single(t => t.GetProperty("id").GetString() == "PC-KILL").GetProperty("rowVersion").GetUInt32();
+            (await op.PostAsJsonAsync($"/api/operator/sessions/{sessionId}/internet", new
+            {
+                on = false,
+                expectedVersion = rv0,
+                commandId = Guid.NewGuid(),
+            })).EnsureSuccessStatusCode();
+
+            KioskLiveServerRegistry.LogServerKill(ciPid, "live_server_pc_internet_kiosk_kill_c");
+            KioskLiveServerRegistry.Unregister(ciPid);
+            Process.GetProcessById(ciPid).Kill(entireProcessTree: true);
+            serverStopped = true;
+            await runtime.DisposeAsync();
+            runtime = null;
+
+            await ownedServer.RelaunchAsync();
+            serverStopped = false;
+            await Task.Delay(TimeSpan.FromSeconds(3));
+
+            op = await backend.CreateOperatorClientAsync();
+            var tile = (await op.GetFromJsonAsync<JsonElement[]>("/api/operator/grid"))!
+                .Single(t => t.GetProperty("id").GetString() == "PC-KILL");
+            var rv = tile.GetProperty("rowVersion").GetUInt32();
+            var pressAt = DateTime.UtcNow;
+            (await op.PostAsJsonAsync($"/api/operator/sessions/{sessionId}/internet", new
+            {
+                on = true,
+                expectedVersion = rv,
+                commandId = Guid.NewGuid(),
+            })).EnsureSuccessStatusCode();
+
+            var afterPress = (await op.GetFromJsonAsync<JsonElement[]>("/api/operator/grid"))!
+                .Single(t => t.GetProperty("id").GetString() == "PC-KILL");
+            Assert.True(afterPress.GetProperty("internetPending").GetBoolean());
+            Assert.False(afterPress.GetProperty("kioskConnected").GetBoolean());
+            Assert.True(afterPress.GetProperty("internetOn").GetBoolean());
+
+            var billOpen = await op.PostAsync($"/api/operator/sessions/{sessionId}/bill/open", null);
+            billOpen.EnsureSuccessStatusCode();
+            var billJson = await billOpen.Content.ReadFromJsonAsync<JsonElement>();
+            var lines = billJson!.GetProperty("lines").EnumerateArray().ToList();
+            Assert.True(lines.Exists(l =>
+                string.Equals(l.GetProperty("mode").GetString(), nameof(PlayMode.Online), StringComparison.Ordinal)));
+
+            runtime = new KioskRuntime(() => kioskHttp);
+            runtime.Configure(
+                backend.HubUri,
+                deviceId,
+                deviceKey,
+                "PC-KILL",
+                queuePath,
+                legacyWindows: true,
+                testHubHandler: backend.TestHubHandler);
+            runtime.BindSession(sessionId);
+            await runtime.StartAsync(default);
+            await WaitUntilTransportConnectedAsync(runtime, TimeSpan.FromSeconds(45));
+
+            var appliedDeadline = DateTime.UtcNow.AddSeconds(45);
+            JsonElement? lastTile = null;
+            while (DateTime.UtcNow < appliedDeadline)
+            {
+                var grid = await op.GetFromJsonAsync<JsonElement[]>("/api/operator/grid");
+                lastTile = grid!.Single(t => t.GetProperty("id").GetString() == "PC-KILL");
+                if (!lastTile.Value.GetProperty("internetPending").GetBoolean()
+                    && lastTile.Value.GetProperty("internetOn").GetBoolean())
+                {
+                    break;
+                }
+
+                await Task.Delay(1_000);
+            }
+
+            Assert.NotNull(lastTile);
+            Assert.True(lastTile!.Value.GetProperty("internetOn").GetBoolean());
+            var onLineStart = DateTime.Parse(
+                lines.Single(l => string.Equals(l.GetProperty("mode").GetString(), nameof(PlayMode.Online), StringComparison.Ordinal))
+                    .GetProperty("startUtc").GetString()!).ToUniversalTime();
+            Assert.True(onLineStart >= pressAt.AddSeconds(-5), "ON segment must start at toggle press time.");
+            _ = deviceKey;
+        }
+        finally
+        {
+            if (runtime is not null)
+            {
+                await runtime.DisposeAsync();
+            }
+
+            if (usesCiServer && ownedServer is not null && serverStopped)
+            {
+                try
+                {
+                    await ownedServer.RelaunchAsync();
+                }
+                catch
+                {
+                    /* best-effort */
+                }
+            }
+            else if (usesCiServer && ownedServer is not null)
+            {
+                await FinalizeCiOwnedServerAsync(ownedServer, usesCiServer, false, priorCheckpointUrl);
+            }
+        }
+    }
+
     /// <summary>Brief §10.4.7 (a),(d),(e) — live server internet desired/applied without cafe hardware.</summary>
     [Fact(Timeout = 120_000)]
     public async Task live_server_pc_internet_toggle_off_report_applied_then_session_end_on()

@@ -53,7 +53,7 @@ internal sealed class InternetPipeServer
             {
                 try
                 {
-                    Thread.Sleep(60_000);
+                    Thread.Sleep(InternetDriftWatchdog.ResolveIntervalMs());
                     if (!_on)
                     {
                         ReassertPersisted();

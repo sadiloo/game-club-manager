@@ -1,4 +1,5 @@
 #if NET48
+#nullable disable
 using System;
 using System.Diagnostics;
 using System.IO;
@@ -10,6 +11,7 @@ using System.Security.Principal;
 using System.Threading;
 using GameClub.Kiosk.Guard.Internet;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace GameClub.Kiosk.Windows.IntegrationTests.Guard;
 
@@ -18,16 +20,20 @@ namespace GameClub.Kiosk.Windows.IntegrationTests.Guard;
 [Trait("Category", "PcInternetFirewall")]
 public sealed class WindowsPcInternetFirewallIntegrationTests
 {
-    private static void SkipUnlessWindowsAdmin()
+    private readonly ITestOutputHelper _output;
+
+    public WindowsPcInternetFirewallIntegrationTests(ITestOutputHelper output) => _output = output;
+
+    private void RequireWindowsAdmin()
     {
         if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
         {
-            throw new SkipTestException("Windows-only firewall integration.");
+            Assert.Fail("Windows-only firewall integration.");
         }
 
         if (!new WindowsPrincipal(WindowsIdentity.GetCurrent()).IsInRole(WindowsBuiltInRole.Administrator))
         {
-            throw new SkipTestException("Administrator elevation required for firewall integration.");
+            Assert.Fail("Administrator elevation required for firewall integration.");
         }
     }
 
@@ -80,17 +86,65 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
         }
     }
 
+    private static bool TryTcpV6(string host, int port, int timeoutMs)
+    {
+        try
+        {
+            using var client = new TcpClient(AddressFamily.InterNetworkV6);
+            var task = client.ConnectAsync(host, port);
+            return task.Wait(timeoutMs) && client.Connected;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool RunnerIpv6EgressProbe()
+    {
+        if (!Socket.OSSupportsIPv6)
+        {
+            return false;
+        }
+
+        try
+        {
+            using var tcp = new TcpClient(AddressFamily.InterNetworkV6);
+            var connect = tcp.ConnectAsync("2606:4700:4700::1111", 443);
+            return connect.Wait(2_000) && tcp.Connected;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static void AssertLocalhostOffStoreActive(string json)
+    {
+        Assert.Contains("Block", json, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("False", json, StringComparison.Ordinal);
+    }
+
+    private static void AssertCheckpointOffRuleGroupPresent()
+    {
+        var script =
+            """
+            $rules = Get-NetFirewallRule -PolicyStore localhost -Group 'Checkpoint Internet Off' -ErrorAction SilentlyContinue
+            if (-not $rules) { throw 'missing Checkpoint Internet Off rules' }
+            ($rules | Measure-Object).Count
+            """;
+        var countText = RunPowerShell(script).Trim();
+        Assert.True(int.TryParse(countText, out var count) && count > 0, "Checkpoint Internet Off rule group must be installed.");
+    }
+
     [Fact]
     public void internet_off_blocks_second_resolved_host_and_reports_local_profiles()
     {
-        SkipUnlessWindowsAdmin();
+        RequireWindowsAdmin();
         var ips = ResolveServerIps();
-        if (ips.Length == 0)
-        {
-            throw new SkipTestException("Could not resolve api.github.com for server allow-list.");
-        }
+        Assert.True(ips.Length > 0, "Could not resolve api.github.com for server allow-list.");
 
-        string[]? secondHostIps = null;
+        string[] secondHostIps = null;
         try
         {
             secondHostIps = Dns.GetHostAddresses("example.com")
@@ -120,8 +174,7 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
             Thread.Sleep(1_500);
             var script = "Get-NetFirewallProfile -PolicyStore ActiveStore | Select-Object Name,DefaultOutboundAction,AllowLocalFirewallRules | ConvertTo-Json";
             var json = RunPowerShell(script);
-            Assert.Contains("Block", json, StringComparison.OrdinalIgnoreCase);
-            Assert.Contains("False", json, StringComparison.Ordinal);
+            AssertLocalhostOffStoreActive(json);
             Assert.True(TryTcp("127.0.0.1", 80, 1_000), "loopback must remain reachable while OFF.");
             if (secondHostIps is { Length: > 0 })
             {
@@ -137,34 +190,14 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
     [Fact]
     public void internet_off_ipv6_egress_blocked_when_available()
     {
-        SkipUnlessWindowsAdmin();
-        if (!Socket.OSSupportsIPv6)
-        {
-            throw new SkipTestException("IPv6 not supported on runner.");
-        }
-
-        try
-        {
-            using var tcp = new TcpClient(AddressFamily.InterNetworkV6);
-            var connect = tcp.ConnectAsync("2606:4700:4700::1111", 443);
-            if (!connect.Wait(2_000) || !tcp.Connected)
-            {
-                throw new SkipTestException("Runner has no working IPv6 egress path to probe.");
-            }
-        }
-        catch (SkipTestException)
-        {
-            throw;
-        }
-        catch
-        {
-            throw new SkipTestException("Runner has no working IPv6 egress path to probe.");
-        }
-
+        RequireWindowsAdmin();
         var ips = ResolveServerIps();
-        if (ips.Length == 0)
+        Assert.True(ips.Length > 0, "Could not resolve api.github.com for server allow-list.");
+
+        var hadIpv6Egress = RunnerIpv6EgressProbe();
+        if (!hadIpv6Egress)
         {
-            throw new SkipTestException("Could not resolve api.github.com for server allow-list.");
+            _output.WriteLine("ipv6_probe_absent: runner has no working IPv6 egress; asserting localhost OFF store and rule group only.");
         }
 
         var applier = new InternetFirewallApplier();
@@ -179,7 +212,14 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
         try
         {
             Assert.Equal("applied", applier.Apply(config, on: false));
-            Assert.False(TryTcpV6("2606:4700:4700::1111", 443, 3_000), "IPv6 egress must be blocked while OFF.");
+            var profileJson = RunPowerShell(
+                "Get-NetFirewallProfile -PolicyStore localhost | Select-Object Name,DefaultOutboundAction | ConvertTo-Json");
+            Assert.Contains("Block", profileJson, StringComparison.OrdinalIgnoreCase);
+            AssertCheckpointOffRuleGroupPresent();
+            if (hadIpv6Egress)
+            {
+                Assert.False(TryTcpV6("2606:4700:4700::1111", 443, 3_000), "IPv6 egress must be blocked while OFF.");
+            }
         }
         finally
         {
@@ -187,29 +227,12 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
         }
     }
 
-    private static bool TryTcpV6(string host, int port, int timeoutMs)
-    {
-        try
-        {
-            using var client = new TcpClient(AddressFamily.InterNetworkV6);
-            var task = client.ConnectAsync(host, port);
-            return task.Wait(timeoutMs) && client.Connected;
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
     [Fact]
     public void internet_off_allows_github_blocks_public_then_reset_restores()
     {
-        SkipUnlessWindowsAdmin();
+        RequireWindowsAdmin();
         var ips = ResolveServerIps();
-        if (ips.Length == 0)
-        {
-            throw new SkipTestException("Could not resolve api.github.com for server allow-list.");
-        }
+        Assert.True(ips.Length > 0, "Could not resolve api.github.com for server allow-list.");
 
         var applier = new InternetFirewallApplier();
         var config = new InternetGuardConfig
@@ -239,12 +262,9 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
     [Fact]
     public void internet_configure_cli_writes_config_with_extra_allow()
     {
-        SkipUnlessWindowsAdmin();
+        RequireWindowsAdmin();
         var guardExe = Path.Combine(AppContext.BaseDirectory, "GameClub.Kiosk.Guard.exe");
-        if (!File.Exists(guardExe))
-        {
-            throw new SkipTestException("GameClub.Kiosk.Guard.exe not found beside test output.");
-        }
+        Assert.True(File.Exists(guardExe), "GameClub.Kiosk.Guard.exe not found beside test output.");
 
         var kioskDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "Checkpoint", "kiosk");
         Directory.CreateDirectory(kioskDir);
@@ -271,12 +291,9 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
     [Fact]
     public void internet_off_third_party_allow_in_default_store_does_not_bypass_localhost_off()
     {
-        SkipUnlessWindowsAdmin();
+        RequireWindowsAdmin();
         var ips = ResolveServerIps();
-        if (ips.Length == 0)
-        {
-            throw new SkipTestException("Could not resolve api.github.com for server allow-list.");
-        }
+        Assert.True(ips.Length > 0, "Could not resolve api.github.com for server allow-list.");
 
         var applier = new InternetFirewallApplier();
         var config = new InternetGuardConfig
@@ -306,12 +323,9 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
     [Fact]
     public void internet_on_restores_public_egress_after_off_cycle()
     {
-        SkipUnlessWindowsAdmin();
+        RequireWindowsAdmin();
         var ips = ResolveServerIps();
-        if (ips.Length == 0)
-        {
-            throw new SkipTestException("Could not resolve api.github.com for server allow-list.");
-        }
+        Assert.True(ips.Length > 0, "Could not resolve api.github.com for server allow-list.");
 
         var applier = new InternetFirewallApplier();
         var config = new InternetGuardConfig
@@ -333,6 +347,12 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
         {
             applier.RunResetScript();
         }
+    }
+
+    [Fact]
+    public void internet_drift_production_default_interval_is_60_seconds()
+    {
+        Assert.Equal(60_000, InternetDriftWatchdog.ProductionDriftIntervalMs);
     }
 
     private static string RunPowerShell(string script)
