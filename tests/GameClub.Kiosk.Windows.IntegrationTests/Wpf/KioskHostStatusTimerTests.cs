@@ -97,6 +97,10 @@ public sealed class KioskHostStatusTimerTests
         => RunLogoutOpenAckDuringSlowPostScenario();
 
     [Fact]
+    public void host_logout_session_adopt_during_slow_post_relocks_after_await()
+        => RunLogoutSessionAdoptDuringSlowPostRelockScenario();
+
+    [Fact]
     public void host_logout_failed_http_re_adopts_open_session_on_next_ack()
         => RunLogoutFailedHttpReAdoptScenario();
 
@@ -288,6 +292,7 @@ public sealed class KioskHostStatusTimerTests
             var sawNoResponse = false;
             var sawBareConnected = false;
             var pastFailureThreshold = false;
+            var staleConnectedWatchActive = false;
             while (DateTime.UtcNow < deadline)
             {
                 await Task.Delay(500);
@@ -295,20 +300,37 @@ public sealed class KioskHostStatusTimerTests
                 if (text.IndexOf("no server response", StringComparison.OrdinalIgnoreCase) >= 0)
                 {
                     sawNoResponse = true;
-                    pastFailureThreshold = true;
+                    if (operatorStopLock)
+                    {
+                        staleConnectedWatchActive = true;
+                    }
+                    else
+                    {
+                        pastFailureThreshold = true;
+                    }
                 }
 
-                var failures = (int)runtime.GetType()
-                    .GetField("_consecutiveHeartbeatFailures", BindingFlags.Instance | BindingFlags.NonPublic)!
-                    .GetValue(runtime)!;
-                if (failures >= 2)
+                if (operatorStopLock)
                 {
-                    pastFailureThreshold = true;
+                    if (staleConnectedWatchActive && KioskStationStatus.ContainsConnectedWording(text))
+                    {
+                        sawBareConnected = true;
+                    }
                 }
-
-                if (pastFailureThreshold && KioskStationStatus.ContainsConnectedWording(text))
+                else
                 {
-                    sawBareConnected = true;
+                    var failures = (int)runtime.GetType()
+                        .GetField("_consecutiveHeartbeatFailures", BindingFlags.Instance | BindingFlags.NonPublic)!
+                        .GetValue(runtime)!;
+                    if (failures >= 2)
+                    {
+                        pastFailureThreshold = true;
+                    }
+
+                    if (pastFailureThreshold && KioskStationStatus.ContainsConnectedWording(text))
+                    {
+                        sawBareConnected = true;
+                    }
                 }
             }
 
@@ -637,6 +659,27 @@ public sealed class KioskHostStatusTimerTests
         }
     }
 
+    private void RunLogoutSessionAdoptDuringSlowPostRelockScenario()
+    {
+        Exception error = null;
+        _wpf.RunAsync(async () =>
+        {
+            try
+            {
+                await RunLogoutSessionAdoptDuringSlowPostRelockOnDispatcherAsync();
+            }
+            catch (Exception ex)
+            {
+                error = ex;
+            }
+        }, TimeSpan.FromMinutes(2));
+
+        if (error is not null)
+        {
+            Assert.Fail(error.ToString());
+        }
+    }
+
     private static async Task RunLogoutOpenAckDuringSlowPostOnDispatcherAsync()
     {
         WritePairedDeviceState("PC-HOST-LOGOUT-RACE");
@@ -702,6 +745,87 @@ public sealed class KioskHostStatusTimerTests
             Assert.Equal(Guid.Empty, GetField(host, "_sessionId"));
             var text = status.Text ?? "";
             Assert.StartsWith("Locked — PC-HOST-LOGOUT-RACE · ", text, StringComparison.Ordinal);
+        }
+        finally
+        {
+            await host.DisposeAsync();
+        }
+    }
+
+    private static async Task RunLogoutSessionAdoptDuringSlowPostRelockOnDispatcherAsync()
+    {
+        const string stationId = "PC-HOST-LOGOUT-ADOPT";
+        WritePairedDeviceState(stationId);
+        var sessionA = Guid.NewGuid();
+        var sessionB = Guid.NewGuid();
+        var seam = new KioskHostTestSeam
+        {
+            LogoutHttpDelay = TimeSpan.FromMilliseconds(800),
+            LogoutHttpSimulatedStatusCode = 503,
+        };
+        var host = CreateHost(out var status, out var lockPanel, out var playingPanel, seam);
+        try
+        {
+            SetField(host, "_sessionId", sessionA);
+            GetRuntime(host).BindSession(sessionA);
+            var onAck = typeof(KioskHostService).GetMethod("OnHeartbeatAcknowledged", BindingFlags.Instance | BindingFlags.NonPublic)!;
+            onAck.Invoke(host, new object[]
+            {
+                new KioskHeartbeatAck
+                {
+                    SessionStatus = "Open",
+                    Lease = HostTestLeaseSigning.SignLease(
+                        sessionA,
+                        stationId,
+                        DateTime.UtcNow.AddHours(1)),
+                    Display = new KioskDisplayDto { EstimatedRemainingSeconds = 3600 },
+                },
+            });
+            Assert.Equal(Visibility.Collapsed, lockPanel.Visibility);
+            Assert.Equal(Visibility.Visible, playingPanel.Visibility);
+
+            var logoutTask = host.LogoutAsync();
+            await Task.Delay(50);
+            Assert.Equal(Visibility.Visible, lockPanel.Visibility);
+            Assert.Equal(Visibility.Collapsed, playingPanel.Visibility);
+            Assert.Equal(sessionA, GetField(host, "_locallyLockedSessionId"));
+            Assert.True((bool)GetField(host, "_logoutInProgress")!);
+
+            onAck.Invoke(host, new object[]
+            {
+                new KioskHeartbeatAck
+                {
+                    SessionStatus = "Open",
+                    Lease = HostTestLeaseSigning.SignLease(
+                        sessionB,
+                        stationId,
+                        DateTime.UtcNow.AddHours(1)),
+                    Display = new KioskDisplayDto { EstimatedRemainingSeconds = 3600 },
+                },
+            });
+            Assert.Equal(Visibility.Visible, lockPanel.Visibility);
+            Assert.Equal(Visibility.Collapsed, playingPanel.Visibility);
+            Assert.Equal(sessionB, GetField(host, "_sessionId"));
+
+            await logoutTask;
+            Assert.Equal(Visibility.Visible, lockPanel.Visibility);
+            Assert.Equal(Visibility.Collapsed, playingPanel.Visibility);
+            Assert.Equal(Guid.Empty, GetField(host, "_sessionId"));
+            Assert.Equal(Guid.Empty, GetField(host, "_locallyLockedSessionId"));
+            Assert.False((bool)GetField(host, "_logoutInProgress")!);
+            var text = status.Text ?? "";
+            Assert.StartsWith($"Locked — {stationId} · ", text, StringComparison.Ordinal);
+            Assert.DoesNotContain("no server response", text, StringComparison.OrdinalIgnoreCase);
+
+            var settleEnd = DateTime.UtcNow.AddSeconds(2);
+            while (DateTime.UtcNow < settleEnd)
+            {
+                await Task.Delay(250);
+                Assert.Equal(Visibility.Visible, lockPanel.Visibility);
+                Assert.Equal(Visibility.Collapsed, playingPanel.Visibility);
+                var refreshed = status.Text ?? "";
+                Assert.StartsWith($"Locked — {stationId} · ", refreshed, StringComparison.Ordinal);
+            }
         }
         finally
         {
@@ -787,6 +911,11 @@ public sealed class KioskHostStatusTimerTests
         var host = CreateHost(out _, out var lockPanel, out var playingPanel);
         var httpField = typeof(KioskHostService).GetField("_http", BindingFlags.Instance | BindingFlags.NonPublic);
         Assert.NotNull(httpField);
+        if (httpField.GetValue(host) is HttpClient replaced)
+        {
+            replaced.Dispose();
+        }
+
         var httpClient = new HttpClient(handler);
         httpField.SetValue(host, httpClient);
         typeof(KioskHostService).GetMethod("ApplyDeviceHeaders", BindingFlags.Instance | BindingFlags.NonPublic)!
