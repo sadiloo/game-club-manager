@@ -2,7 +2,9 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Net.Http;
 using System.Reflection;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
@@ -101,6 +103,10 @@ public sealed class KioskHostStatusTimerTests
     [Fact]
     public void host_logout_http_409_re_adopts_open_session_on_next_ack()
         => RunLogoutHttp409ReAdoptScenario();
+
+    [Fact]
+    public void host_logout_real_http_409_re_adopts_open_session_on_next_ack()
+        => RunLogoutRealHttp409ReAdoptScenario();
 
     [Fact]
     public void host_logout_http_503_re_adopts_open_session_on_next_ack()
@@ -727,6 +733,27 @@ public sealed class KioskHostStatusTimerTests
     private void RunLogoutHttp409ReAdoptScenario()
         => RunLogoutHttpStatusReAdoptScenario(409);
 
+    private void RunLogoutRealHttp409ReAdoptScenario()
+    {
+        Exception error = null;
+        _wpf.RunAsync(async () =>
+        {
+            try
+            {
+                await RunLogoutRealHttp409ReAdoptOnDispatcherAsync();
+            }
+            catch (Exception ex)
+            {
+                error = ex;
+            }
+        }, TimeSpan.FromMinutes(2));
+
+        if (error is not null)
+        {
+            Assert.Fail(error.ToString());
+        }
+    }
+
     private void RunLogoutHttp503ReAdoptScenario()
         => RunLogoutHttpStatusReAdoptScenario(503);
 
@@ -748,6 +775,102 @@ public sealed class KioskHostStatusTimerTests
         if (error is not null)
         {
             Assert.Fail(error.ToString());
+        }
+    }
+
+    private static async Task RunLogoutRealHttp409ReAdoptOnDispatcherAsync()
+    {
+        const string stationId = "PC-HOST-LOGOUT-REAL-HTTP";
+        WritePairedDeviceState(stationId);
+        var sessionId = Guid.NewGuid();
+        var handler = new LogoutConflictCountingHandler(TimeSpan.FromMilliseconds(400));
+        var host = CreateHost(out _, out var lockPanel, out var playingPanel);
+        var httpField = typeof(KioskHostService).GetField("_http", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(httpField);
+        var httpClient = new HttpClient(handler);
+        httpField.SetValue(host, httpClient);
+        typeof(KioskHostService).GetMethod("ApplyDeviceHeaders", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .Invoke(host, new object[] { httpClient });
+        try
+        {
+            SetField(host, "_sessionId", sessionId);
+            GetRuntime(host).BindSession(sessionId);
+            var onAck = typeof(KioskHostService).GetMethod("OnHeartbeatAcknowledged", BindingFlags.Instance | BindingFlags.NonPublic)!;
+            onAck.Invoke(host, new object[]
+            {
+                new KioskHeartbeatAck
+                {
+                    SessionStatus = "Open",
+                    Lease = HostTestLeaseSigning.SignLease(
+                        sessionId,
+                        stationId,
+                        DateTime.UtcNow.AddHours(1)),
+                    Display = new KioskDisplayDto { EstimatedRemainingSeconds = 3600 },
+                },
+            });
+            Assert.Equal(Visibility.Collapsed, lockPanel.Visibility);
+            Assert.Equal(Visibility.Visible, playingPanel.Visibility);
+
+            var logoutTask = host.LogoutAsync();
+            await Task.Delay(50);
+            Assert.Equal(Visibility.Visible, lockPanel.Visibility);
+            Assert.Equal(Visibility.Collapsed, playingPanel.Visibility);
+            Assert.Equal(sessionId, GetField(host, "_locallyLockedSessionId"));
+            Assert.True((bool)GetField(host, "_logoutInProgress")!);
+
+            var duringEnd = DateTime.UtcNow.AddMilliseconds(300);
+            while (DateTime.UtcNow < duringEnd && !logoutTask.IsCompleted)
+            {
+                Assert.Equal(Visibility.Visible, lockPanel.Visibility);
+                Assert.Equal(Visibility.Collapsed, playingPanel.Visibility);
+                await Task.Delay(50);
+            }
+
+            await logoutTask;
+            Assert.Equal(Visibility.Visible, lockPanel.Visibility);
+            Assert.Equal(Visibility.Collapsed, playingPanel.Visibility);
+            Assert.Equal(Guid.Empty, GetField(host, "_sessionId"));
+            Assert.Equal(Guid.Empty, GetField(host, "_locallyLockedSessionId"));
+            Assert.False((bool)GetField(host, "_logoutInProgress")!);
+            Assert.Equal(1, handler.PostCount);
+
+            onAck.Invoke(host, new object[]
+            {
+                new KioskHeartbeatAck
+                {
+                    SessionStatus = "Open",
+                    Lease = HostTestLeaseSigning.SignLease(
+                        sessionId,
+                        stationId,
+                        DateTime.UtcNow.AddMinutes(-1)),
+                },
+            });
+            Assert.Equal(Visibility.Visible, lockPanel.Visibility);
+            Assert.Equal(Visibility.Collapsed, playingPanel.Visibility);
+            Assert.Equal(sessionId, GetField(host, "_sessionId"));
+
+            onAck.Invoke(host, new object[]
+            {
+                new KioskHeartbeatAck
+                {
+                    SessionStatus = "Open",
+                    Lease = HostTestLeaseSigning.SignLease(
+                        sessionId,
+                        stationId,
+                        DateTime.UtcNow.AddHours(1),
+                        leaseVersion: 2),
+                    Display = new KioskDisplayDto { EstimatedRemainingSeconds = 3600 },
+                },
+            });
+            Assert.Equal(Visibility.Collapsed, lockPanel.Visibility);
+            Assert.Equal(Visibility.Visible, playingPanel.Visibility);
+            Assert.Equal(sessionId, GetField(host, "_sessionId"));
+        }
+        finally
+        {
+            httpClient.Dispose();
+            handler.Dispose();
+            await host.DisposeAsync();
         }
     }
 
@@ -1226,6 +1349,36 @@ public sealed class KioskHostStatusTimerTests
     private static async Task WaitForTransportConnectedAsync(KioskRuntime runtime, TimeSpan timeout)
     {
         await runtime.WaitForTransportConnectedAsync(timeout, CancellationToken.None);
+    }
+
+    private sealed class LogoutConflictCountingHandler : HttpMessageHandler
+    {
+        private readonly TimeSpan? _delay;
+
+        public LogoutConflictCountingHandler(TimeSpan? delay = null) => _delay = delay;
+
+        public int PostCount { get; private set; }
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            if (request.Method == HttpMethod.Post
+                && request.RequestUri is not null
+                && request.RequestUri.AbsolutePath.EndsWith("/logout", StringComparison.OrdinalIgnoreCase))
+            {
+                PostCount++;
+                if (_delay is TimeSpan d)
+                {
+                    await Task.Delay(d, cancellationToken);
+                }
+
+                return new HttpResponseMessage(System.Net.HttpStatusCode.Conflict)
+                {
+                    Content = new StringContent("{\"error\":\"session_busy\"}", Encoding.UTF8, "application/json"),
+                };
+            }
+
+            return new HttpResponseMessage(System.Net.HttpStatusCode.NotFound);
+        }
     }
 
     private sealed class HostTestHubTransport : IKioskHubTransport

@@ -107,6 +107,14 @@ M = [
         "host_logout_open_ack_during_slow_post_stays_locked_without_session",
     ),
     (
+        "Host_logout_real_http_always_success",
+        HS,
+        "logoutHttpSucceeded = response.IsSuccessStatusCode;",
+        "logoutHttpSucceeded = true;",
+        "host-d5",
+        "host_logout_real_http_409_re_adopts_open_session_on_next_ack",
+    ),
+    (
         "Host_no_top_up_unlock",
         HS,
         r"if \(sameLockedSession && phase == KioskShellPhase\.Playing && !_logoutInProgress\)\s*\{\s*_locallyLockedSessionId = Guid\.Empty;\s*\}",
@@ -115,6 +123,14 @@ M = [
         "host_top_up_open_ack_after_lease_lock_resumes_playing",
     ),
 ]
+
+REGEX_MUTANTS = {
+    "Host_stops_tick_on_ack_lock",
+    "Host_d7_clears_session_on_local_lock",
+    "Host_no_top_up_unlock",
+    "Host_logout_http_before_lock",
+    "Host_logout_no_guard_before_http",
+}
 
 CORE_PROJ = "tests/GameClub.Kiosk.Core.Tests/GameClub.Kiosk.Core.Tests.csproj"
 HOST_PROJ = "tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj"
@@ -135,6 +151,37 @@ def read_src(path):
 def write_src(path, text):
     with open(path, "w", newline="") as f:
         f.write(text)
+
+
+def count_pattern_in_src(src, item):
+    name = item[0]
+    regex = name in REGEX_MUTANTS
+    if len(item) >= 3 and isinstance(item[2], list):
+        text_n = norm_newlines(src)
+        counts = []
+        for x, _y in item[2]:
+            xn = norm_newlines(x)
+            counts.append(text_n.count(xn))
+        return counts, all(c == 1 for c in counts)
+    pattern_n = norm_newlines(item[2])
+    text_n = norm_newlines(src)
+    if regex:
+        return [len(re.findall(pattern_n, text_n, flags=re.MULTILINE | re.DOTALL))], len(re.findall(pattern_n, text_n, flags=re.MULTILINE | re.DOTALL)) == 1
+    return [text_n.count(pattern_n)], text_n.count(pattern_n) == 1
+
+
+def print_host_mutant_pattern_table():
+    hs_path = os.path.join(ROOT, HS)
+    hs_src = read_src(hs_path)
+    print("=== Host mutant pattern match counts (expect 1) ===", flush=True)
+    for item in M:
+        tag = item[4] if len(item) > 4 else "core"
+        if tag != "host-d5":
+            continue
+        counts, ok = count_pattern_in_src(hs_src, item)
+        killer = item[5] if len(item) > 5 else ""
+        flag = "ok" if ok else "MISMATCH"
+        print(f"{item[0]:40} counts={counts} killer={killer} {flag}", flush=True)
 
 
 def ws_apply(text, pattern, replacement, regex=False):
@@ -246,14 +293,6 @@ def run_core_tests(test_filter=None):
     return "PASS", out, []
 
 
-REGEX_MUTANTS = {
-    "Host_stops_tick_on_ack_lock",
-    "Host_d7_clears_session_on_local_lock",
-    "Host_no_top_up_unlock",
-    "Host_logout_http_before_lock",
-    "Host_logout_no_guard_before_http",
-}
-
 res = {}
 failed_names = []
 
@@ -261,6 +300,8 @@ failed_names = []
 def write_mutations_json():
     open(os.path.join(OUT, "mutations-r1d.json"), "w").write(json.dumps(res, indent=2))
 
+
+print_host_mutant_pattern_table()
 
 if host_only:
     baseline_status, _, baseline_failed = run_host_tests("KioskHostStatusTimerTests")
