@@ -161,6 +161,7 @@ public sealed class WindowsKioskServerIntegrationTests
 
             if (usesCiServer)
             {
+                KioskLiveServerRegistry.LogServerKill(ciPid, "live_server_unreachable_ci_outage");
                 KioskLiveServerRegistry.Unregister(ciPid);
                 Process.GetProcessById(ciPid).Kill(entireProcessTree: true);
             }
@@ -416,6 +417,7 @@ public sealed class WindowsKioskServerIntegrationTests
 
             if (usesCiServer)
             {
+                KioskLiveServerRegistry.LogServerKill(ciPid, "live_server_z_disconnect_ci_outage");
                 KioskLiveServerRegistry.Unregister(ciPid);
                 Process.GetProcessById(ciPid).Kill(entireProcessTree: true);
             }
@@ -453,32 +455,50 @@ public sealed class WindowsKioskServerIntegrationTests
             await WaitUntilTransportConnectedAsync(runtime, TimeSpan.FromSeconds(60));
             Assert.True(runtime.IsTransportConnected, "IsTransportConnected must be true after the server restarts.");
 
-            var drained = await orchestrator.DrainOfflineQueueAsync(async events =>
+            async Task<int> SubmitDrainAsync()
             {
-                var payload = JsonSerializer.Serialize(events.Select(e => new KioskOutboundEvent
+                return await orchestrator.DrainOfflineQueueAsync(async events =>
                 {
-                    EventId = e.EventId,
-                    Type = e.Type,
-                    PayloadJson = e.PayloadJson,
-                    CreatedUtc = e.CreatedUtc,
-                }));
-                var response = await kioskHttp.PostAsync(
-                    "/api/kiosk/devices/events",
-                    new StringContent(payload, Encoding.UTF8, "application/json"));
-                if (!response.IsSuccessStatusCode)
+                    var payload = JsonSerializer.Serialize(events.Select(e => new KioskOutboundEvent
+                    {
+                        EventId = e.EventId,
+                        Type = e.Type,
+                        PayloadJson = e.PayloadJson,
+                        CreatedUtc = e.CreatedUtc,
+                    }));
+                    var response = await kioskHttp.PostAsync(
+                        "/api/kiosk/devices/events",
+                        new StringContent(payload, Encoding.UTF8, "application/json"));
+                    if (!response.IsSuccessStatusCode)
+                    {
+                        return Array.Empty<Guid>();
+                    }
+
+                    var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+                    if (!body.RootElement.TryGetProperty("ackedEventIds", out var ids))
+                    {
+                        return Array.Empty<Guid>();
+                    }
+
+                    return ids.EnumerateArray().Select(e => e.GetGuid()).ToList();
+                }, default);
+            }
+
+            var totalDrained = 0;
+            var drainDeadline = DateTime.UtcNow.AddSeconds(90);
+            while (DateTime.UtcNow < drainDeadline)
+            {
+                totalDrained += await SubmitDrainAsync();
+                var stillPending = await runtime.GetQueue().PendingAsync();
+                if (!stillPending.Any(p => p.Type == "offline_play_segment"))
                 {
-                    return Array.Empty<Guid>();
+                    break;
                 }
 
-                var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
-                if (!body.RootElement.TryGetProperty("ackedEventIds", out var ids))
-                {
-                    return Array.Empty<Guid>();
-                }
+                await Task.Delay(500);
+            }
 
-                return ids.EnumerateArray().Select(e => e.GetGuid()).ToList();
-            }, default);
-            Assert.True(drained > 0, "Offline queue must drain through production /api/kiosk/devices/events after reconnect.");
+            Assert.True(totalDrained > 0, "Offline queue must drain through production /api/kiosk/devices/events after reconnect.");
 
             Assert.Equal(sessionId, await backend.OpenSessionIdAsync());
             Assert.Equal(debitBefore, await backend.WalletDebitTotalAsync(customerId));

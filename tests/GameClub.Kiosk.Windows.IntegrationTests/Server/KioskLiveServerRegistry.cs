@@ -43,34 +43,8 @@ internal static class KioskLiveServerRegistry
         TraceWrite($"HANDOVER_TO_CI pid={processId} reason={reason}");
     }
 
-    public static void StopAllTrackedOwnedServers()
-    {
-        foreach (var pid in GetTrackedProcessIds())
-        {
-            try
-            {
-                var proc = Process.GetProcessById(pid);
-                if (!proc.HasExited)
-                {
-                    TraceWrite($"KILL_TRACKED_SERVER pid={pid} reason=owner-test-cleanup");
-                    proc.Kill(entireProcessTree: true);
-                    proc.WaitForExit(15_000);
-                }
-            }
-            catch (ArgumentException)
-            {
-                // already exited
-            }
-            catch
-            {
-                // best-effort test cleanup
-            }
-            finally
-            {
-                Unregister(pid);
-            }
-        }
-    }
+    public static void LogServerKill(int processId, string reason)
+        => TraceWrite($"KILL_SERVER pid={processId} reason={reason}");
 
     private static void TraceWrite(string message)
     {

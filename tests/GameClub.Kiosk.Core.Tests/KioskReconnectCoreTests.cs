@@ -1,4 +1,6 @@
+using System.Security.Cryptography;
 using GameClub.Kiosk.Core.Connection;
+using GameClub.Kiosk.Core.Lease;
 using GameClub.Kiosk.Core.Offline;
 using GameClub.Kiosk.Core.Protocol;
 using GameClub.Kiosk.Core.Runtime;
@@ -729,40 +731,51 @@ public sealed class KioskReconnectCoreTests
     }
 
     [Fact]
-    public void lease_grants_fresh_play_time_when_top_up_extends_same_session()
+    public void open_ack_with_expired_signed_lease_stays_lease_expired_until_top_up_verified()
     {
         var sessionId = Guid.NewGuid();
-        var ack = new KioskHeartbeatAck
+        var rsa = RSA.Create(2048);
+        var orchestrator = new KioskShellOrchestrator();
+        orchestrator.ConfigureLeaseVerifier(rsa.ExportRSAPublicKeyPem());
+        var stalePayload = new SessionLeasePayload
+        {
+            SessionId = sessionId,
+            StationId = "PC-D7",
+            AuthorizedUntilUtc = DateTime.UtcNow.AddMinutes(-2),
+            IssuedAtUtc = DateTime.UtcNow.AddHours(-1),
+        };
+        var staleLease = SignLease(rsa, stalePayload);
+        var staleAck = new KioskHeartbeatAck { SessionStatus = "Open", Lease = staleLease };
+        var stalePhase = orchestrator.OnHeartbeatAck(staleAck, sessionId, clientMonotonicMs: 0);
+        Assert.Equal(KioskShellPhase.LeaseExpired, stalePhase);
+
+        var freshPayload = new SessionLeasePayload
+        {
+            SessionId = sessionId,
+            StationId = "PC-D7",
+            AuthorizedUntilUtc = DateTime.UtcNow.AddHours(1),
+            IssuedAtUtc = DateTime.UtcNow,
+            LeaseVersion = 2,
+        };
+        var freshAck = new KioskHeartbeatAck
         {
             SessionStatus = "Open",
-            Lease = new SignedSessionLease
-            {
-                Payload = new SessionLeasePayload
-                {
-                    SessionId = sessionId,
-                    StationId = "PC-TU",
-                    AuthorizedUntilUtc = DateTime.UtcNow.AddHours(1),
-                },
-            },
+            Lease = SignLease(rsa, freshPayload),
             Display = new KioskDisplayDto { EstimatedRemainingSeconds = 120 },
         };
-        Assert.True(KioskStationStatus.LeaseGrantsFreshPlayTime(ack, sessionId, DateTime.UtcNow));
+        var playingPhase = orchestrator.OnHeartbeatAck(freshAck, sessionId, clientMonotonicMs: 1000);
+        Assert.Equal(KioskShellPhase.Playing, playingPhase);
+    }
 
-        var stale = new KioskHeartbeatAck
+    private static SignedSessionLease SignLease(RSA rsa, SessionLeasePayload payload)
+    {
+        var data = System.Text.Encoding.UTF8.GetBytes(LeaseVerifier.CanonicalJson(payload));
+        return new SignedSessionLease
         {
-            SessionStatus = "Open",
-            Lease = new SignedSessionLease
-            {
-                Payload = new SessionLeasePayload
-                {
-                    SessionId = sessionId,
-                    StationId = "PC-TU",
-                    AuthorizedUntilUtc = DateTime.UtcNow.AddMinutes(-5),
-                },
-            },
-            Display = new KioskDisplayDto { EstimatedRemainingSeconds = 0 },
+            Payload = payload,
+            SignatureBase64 = Convert.ToBase64String(
+                rsa.SignData(data, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1)),
         };
-        Assert.False(KioskStationStatus.LeaseGrantsFreshPlayTime(stale, sessionId, DateTime.UtcNow));
     }
 
     [Fact]

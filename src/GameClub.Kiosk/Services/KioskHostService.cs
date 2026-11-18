@@ -16,9 +16,6 @@ namespace GameClub.Kiosk.Services;
 
 public sealed class KioskHostService : IAsyncDisposable
 {
-    internal static bool TestSessionCleanupThrowsForHostTests { get; set; }
-    internal static bool TestSkipLogoutHttpForHostTests { get; set; }
-
     public const string DeviceIdHeader = "X-Device-Id";
     public const string DeviceKeyHeader = "X-Device-Key";
 
@@ -54,6 +51,7 @@ public sealed class KioskHostService : IAsyncDisposable
     private bool _runCatalogOnFirstConnected;
     private bool _pairingJustFailed;
     private DateTime? _lastHeartbeatAckUtc;
+    private readonly KioskHostTestSeam? _testSeam;
 
     public string ServerBase => _serverBase;
 
@@ -68,8 +66,10 @@ public sealed class KioskHostService : IAsyncDisposable
         UIElement playingPanel,
         ListBox? gameList = null,
         TextBox? gameSearch = null,
-        ComboBox? gameCategory = null)
+        ComboBox? gameCategory = null,
+        KioskHostTestSeam? testSeam = null)
     {
+        _testSeam = testSeam;
         _shell = shell;
         _status = status;
         _balance = balance;
@@ -238,7 +238,7 @@ public sealed class KioskHostService : IAsyncDisposable
 
     public async Task LogoutAsync()
     {
-        if (_sessionId != Guid.Empty && !TestSkipLogoutHttpForHostTests)
+        if (_sessionId != Guid.Empty && _testSeam?.SkipLogoutHttp != true)
         {
             await _http.PostAsync($"{_serverBase}/api/kiosk/sessions/{_sessionId}/logout", null);
         }
@@ -246,11 +246,18 @@ public sealed class KioskHostService : IAsyncDisposable
         _sessionId = Guid.Empty;
         _locallyLockedSessionId = Guid.Empty;
         _runtime.BindSession(Guid.Empty);
-        RunSessionCleanup();
         ShowLockLayout();
         _replayTick.Stop();
         EnsureStatusUiTickRunning();
         RefreshStationStatusText();
+        try
+        {
+            RunSessionCleanup();
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"RunSessionCleanup failed during logout: {ex.Message}");
+        }
     }
 
     public void ApplyHeartbeatDisplay(KioskDisplayDto? display)
@@ -287,48 +294,38 @@ public sealed class KioskHostService : IAsyncDisposable
                     && ackLeaseSession is Guid leasedWhileLocked
                     && leasedWhileLocked != Guid.Empty
                     && leasedWhileLocked == _locallyLockedSessionId;
-                if (sameLockedSession
-                    && !KioskStationStatus.LeaseGrantsFreshPlayTime(ack, _locallyLockedSessionId, DateTime.UtcNow))
+                if (sameLockedSession && phase == KioskShellPhase.Playing)
                 {
-                    ShowLockLayout();
-                    RefreshStationStatusText();
+                    _locallyLockedSessionId = Guid.Empty;
                 }
-                else
+                else if (_locallyLockedSessionId != Guid.Empty
+                    && ackLeaseSession is Guid differentSession
+                    && differentSession != Guid.Empty
+                    && differentSession != _locallyLockedSessionId)
                 {
-                    if (sameLockedSession
-                        && KioskStationStatus.LeaseGrantsFreshPlayTime(ack, _locallyLockedSessionId, DateTime.UtcNow))
+                    _locallyLockedSessionId = Guid.Empty;
+                    _sessionId = differentSession;
+                    _runtime.BindSession(differentSession);
+                    _ = ApplyStationProfileAsync();
+                }
+                else if (_sessionId == Guid.Empty && ackLeaseSession is Guid leased && leased != Guid.Empty)
+                {
+                    _sessionId = leased;
+                    _runtime.BindSession(leased);
+                    _ = ApplyStationProfileAsync();
+                }
+
+                if (_sessionId != Guid.Empty && _locallyLockedSessionId == Guid.Empty && phase == KioskShellPhase.Playing)
+                {
+                    ShowPlayingLayout();
+                    if (!_uiTick.IsEnabled)
                     {
-                        _locallyLockedSessionId = Guid.Empty;
-                    }
-                    else if (_locallyLockedSessionId != Guid.Empty
-                        && ackLeaseSession is Guid differentSession
-                        && differentSession != Guid.Empty
-                        && differentSession != _locallyLockedSessionId)
-                    {
-                        _locallyLockedSessionId = Guid.Empty;
-                        _sessionId = differentSession;
-                        _runtime.BindSession(differentSession);
-                        _ = ApplyStationProfileAsync();
-                    }
-                    else if (_sessionId == Guid.Empty && ackLeaseSession is Guid leased && leased != Guid.Empty)
-                    {
-                        _sessionId = leased;
-                        _runtime.BindSession(leased);
-                        _ = ApplyStationProfileAsync();
+                        _uiTick.Start();
                     }
 
-                    if (_sessionId != Guid.Empty && _locallyLockedSessionId == Guid.Empty)
+                    if (!_replayTick.IsEnabled)
                     {
-                        ShowPlayingLayout();
-                        if (!_uiTick.IsEnabled)
-                        {
-                            _uiTick.Start();
-                        }
-
-                        if (!_replayTick.IsEnabled)
-                        {
-                            _replayTick.Start();
-                        }
+                        _replayTick.Start();
                     }
                 }
             }
@@ -520,7 +517,7 @@ public sealed class KioskHostService : IAsyncDisposable
 
     private void RunSessionCleanup()
     {
-        if (TestSessionCleanupThrowsForHostTests)
+        if (_testSeam?.SessionCleanupThrows == true)
         {
             throw new UnauthorizedAccessException("host test session cleanup failure");
         }
@@ -550,6 +547,23 @@ public sealed class KioskHostService : IAsyncDisposable
             }
 
             DeleteTreeContentsBestEffort(dir);
+        }
+    }
+
+    private static bool IsReparsePoint(string path)
+    {
+        try
+        {
+            var attrs = File.GetAttributes(path);
+            return (attrs & FileAttributes.ReparsePoint) != 0;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return true;
+        }
+        catch (IOException)
+        {
+            return true;
         }
     }
 
@@ -594,6 +608,11 @@ public sealed class KioskHostService : IAsyncDisposable
 
         foreach (var sub in subdirs)
         {
+            if (IsReparsePoint(sub))
+            {
+                continue;
+            }
+
             DeleteTreeContentsBestEffort(sub);
             try
             {

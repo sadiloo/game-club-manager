@@ -54,6 +54,7 @@ internal sealed class OutOfProcessLiveServer : IAsyncDisposable
         }
 
         var pid = _process.Id;
+        KioskLiveServerRegistry.LogServerKill(pid, "out_of_process_live_server_stop");
         try
         {
             _process.Kill(entireProcessTree: true);

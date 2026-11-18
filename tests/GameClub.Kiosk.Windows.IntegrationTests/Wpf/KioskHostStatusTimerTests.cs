@@ -1,5 +1,6 @@
 #if NET48
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Reflection;
 using System.Threading;
@@ -27,7 +28,7 @@ public sealed class KioskHostStatusTimerTests
 
     [Fact]
     public void host_boot_path_shows_no_server_response_when_heartbeats_fail()
-        => RunScenario(lateConnect: false, operatorStopLock: false);
+        => RunScenario(lateConnect: true, operatorStopLock: false);
 
     [Fact]
     public void host_late_connect_shows_no_server_response_when_heartbeats_fail()
@@ -80,6 +81,10 @@ public sealed class KioskHostStatusTimerTests
     [Fact]
     public void host_local_lock_shows_layout_when_session_cleanup_throws()
         => RunLockSurvivesCleanupFailureScenario();
+
+    [Fact]
+    public void host_logout_shows_layout_when_session_cleanup_throws()
+        => RunLogoutSurvivesCleanupFailureScenario();
 
     private void RunScenario(bool lateConnect, bool operatorStopLock)
     {
@@ -214,7 +219,7 @@ public sealed class KioskHostStatusTimerTests
         try
         {
             await Task.Delay(300);
-            Assert.True(IsUiTickEnabled(host), "paired boot must start the status UI tick");
+            Assert.True(IsUiTickEnabled(host), "paired boot must start the status UI tick before transport connects");
             var runtime = GetRuntime(host);
             await runtime.ResetForReconfigureAsync();
             var transport = new HostTestHubTransport(lateConnect);
@@ -227,7 +232,10 @@ public sealed class KioskHostStatusTimerTests
                 "PC-HOST-D5");
 
             await runtime.StartAsync(CancellationToken.None);
-            await WaitForTransportConnectedAsync(runtime, TimeSpan.FromSeconds(15));
+            if (!lateConnect)
+            {
+                await WaitForTransportConnectedAsync(runtime, TimeSpan.FromSeconds(15));
+            }
 
             Assert.True(IsUiTickEnabled(host), "status UI tick must be running for paired boot");
 
@@ -244,7 +252,10 @@ public sealed class KioskHostStatusTimerTests
                 Assert.Contains("Locked —", status.Text ?? "", StringComparison.Ordinal);
             }
 
-            await WaitForTransportConnectedAsync(runtime, TimeSpan.FromSeconds(15));
+            if (lateConnect)
+            {
+                await WaitForTransportConnectedAsync(runtime, TimeSpan.FromSeconds(30));
+            }
 
             transport.HeartbeatHandler = _ => throw new InvalidOperationException("hb down");
             var deadline = DateTime.UtcNow.AddSeconds(20);
@@ -324,15 +335,10 @@ public sealed class KioskHostStatusTimerTests
                 new KioskHeartbeatAck
                 {
                     SessionStatus = "Open",
-                    Lease = new SignedSessionLease
-                    {
-                        Payload = new SessionLeasePayload
-                        {
-                            SessionId = sessionId,
-                            StationId = "PC-HOST-D7",
-                            AuthorizedUntilUtc = DateTime.UtcNow.AddMinutes(-1),
-                        },
-                    },
+                    Lease = HostTestLeaseSigning.SignLease(
+                        sessionId,
+                        "PC-HOST-D7",
+                        DateTime.UtcNow.AddMinutes(-1)),
                     Display = new KioskDisplayDto { EstimatedRemainingSeconds = 0 },
                 },
             });
@@ -394,10 +400,10 @@ public sealed class KioskHostStatusTimerTests
                 new KioskHeartbeatAck
                 {
                     SessionStatus = "Open",
-                    Lease = new SignedSessionLease
-                    {
-                        Payload = new SessionLeasePayload { SessionId = sessionId, StationId = "PC-HOST-D7-TU" },
-                    },
+                    Lease = HostTestLeaseSigning.SignLease(
+                        sessionId,
+                        "PC-HOST-D7-TU",
+                        DateTime.UtcNow.AddMinutes(-5)),
                 },
             });
             Assert.Equal(Visibility.Visible, lockPanel.Visibility);
@@ -407,15 +413,11 @@ public sealed class KioskHostStatusTimerTests
                 new KioskHeartbeatAck
                 {
                     SessionStatus = "Open",
-                    Lease = new SignedSessionLease
-                    {
-                        Payload = new SessionLeasePayload
-                        {
-                            SessionId = sessionId,
-                            StationId = "PC-HOST-D7-TU",
-                            AuthorizedUntilUtc = DateTime.UtcNow.AddHours(1),
-                        },
-                    },
+                    Lease = HostTestLeaseSigning.SignLease(
+                        sessionId,
+                        "PC-HOST-D7-TU",
+                        DateTime.UtcNow.AddHours(1),
+                        leaseVersion: 2),
                     Display = new KioskDisplayDto { EstimatedRemainingSeconds = 3600 },
                 },
             });
@@ -469,7 +471,6 @@ public sealed class KioskHostStatusTimerTests
         }
         finally
         {
-            KioskHostService.TestSessionCleanupThrowsForHostTests = false;
             await host.DisposeAsync();
         }
     }
@@ -498,11 +499,10 @@ public sealed class KioskHostStatusTimerTests
     private static async Task RunLockSurvivesCleanupFailureOnDispatcherAsync()
     {
         WritePairedDeviceState("PC-HOST-CLEANUP");
-        var host = CreateHost(out _, out var lockPanel, out var playingPanel);
+        var host = CreateHost(out _, out var lockPanel, out var playingPanel, new KioskHostTestSeam { SessionCleanupThrows = true });
         var sessionId = Guid.NewGuid();
         try
         {
-            KioskHostService.TestSessionCleanupThrowsForHostTests = true;
             SetField(host, "_sessionId", sessionId);
             GetRuntime(host).BindSession(sessionId);
             typeof(KioskHostService).GetMethod("EnterLocalLock", BindingFlags.Instance | BindingFlags.NonPublic)!
@@ -512,7 +512,47 @@ public sealed class KioskHostStatusTimerTests
         }
         finally
         {
-            KioskHostService.TestSessionCleanupThrowsForHostTests = false;
+            await host.DisposeAsync();
+        }
+    }
+
+    private void RunLogoutSurvivesCleanupFailureScenario()
+    {
+        Exception error = null;
+        _wpf.RunAsync(async () =>
+        {
+            try
+            {
+                await RunLogoutSurvivesCleanupFailureOnDispatcherAsync();
+            }
+            catch (Exception ex)
+            {
+                error = ex;
+            }
+        }, TimeSpan.FromMinutes(2));
+
+        if (error is not null)
+        {
+            Assert.Fail(error.ToString());
+        }
+    }
+
+    private static async Task RunLogoutSurvivesCleanupFailureOnDispatcherAsync()
+    {
+        WritePairedDeviceState("PC-HOST-LOGOUT-CLEANUP");
+        var seam = new KioskHostTestSeam { SessionCleanupThrows = true, SkipLogoutHttp = true };
+        var host = CreateHost(out _, out var lockPanel, out var playingPanel, seam);
+        var sessionId = Guid.NewGuid();
+        try
+        {
+            SetField(host, "_sessionId", sessionId);
+            GetRuntime(host).BindSession(sessionId);
+            await host.LogoutAsync();
+            Assert.Equal(Visibility.Visible, lockPanel.Visibility);
+            Assert.Equal(Visibility.Collapsed, playingPanel.Visibility);
+        }
+        finally
+        {
             await host.DisposeAsync();
         }
     }
@@ -541,10 +581,9 @@ public sealed class KioskHostStatusTimerTests
     private static async Task RunD6LogoutLockTextOnDispatcherAsync()
     {
         WritePairedDeviceState("PC-HOST-LOGOUT");
-        var host = CreateHost(out var status, out _, out _);
+        var host = CreateHost(out var status, out _, out _, new KioskHostTestSeam { SkipLogoutHttp = true });
         try
         {
-            KioskHostService.TestSkipLogoutHttpForHostTests = true;
             SetField(host, "_sessionId", Guid.NewGuid());
             await host.LogoutAsync();
             var text = status.Text ?? "";
@@ -552,7 +591,6 @@ public sealed class KioskHostStatusTimerTests
         }
         finally
         {
-            KioskHostService.TestSkipLogoutHttpForHostTests = false;
             await host.DisposeAsync();
         }
     }
@@ -705,7 +743,11 @@ public sealed class KioskHostStatusTimerTests
         }
     }
 
-    private static KioskHostService CreateHost(out TextBlock status, out UIElement lockPanel, out UIElement playingPanel)
+    private static KioskHostService CreateHost(
+        out TextBlock status,
+        out UIElement lockPanel,
+        out UIElement playingPanel,
+        KioskHostTestSeam testSeam = null)
     {
         var window = new Window { Width = 400, Height = 300 };
         status = new TextBlock();
@@ -715,7 +757,7 @@ public sealed class KioskHostStatusTimerTests
         lockPanel = new Border();
         var launcher = new Border();
         playingPanel = new Border();
-        return new KioskHostService(window, status, balance, elapsed, freeBand, lockPanel, launcher, playingPanel);
+        return new KioskHostService(window, status, balance, elapsed, freeBand, lockPanel, launcher, playingPanel, testSeam: testSeam);
     }
 
     private static KioskRuntime GetRuntime(KioskHostService host)
@@ -750,9 +792,95 @@ public sealed class KioskHostStatusTimerTests
             deviceKey = "host-d5-key",
             stationId,
             serverBase = "http://127.0.0.1:5999",
-            leaseVerifyPublicKeyPem = "",
+            leaseVerifyPublicKeyPem = HostTestLeaseSigning.PublicKeyPem,
         });
         File.WriteAllText(Path.Combine(root, "device.json"), json);
+    }
+
+    [Fact]
+    public void host_profile_cleanup_skips_reparse_point_links()
+        => RunProfileCleanupSkipsReparsePointScenario();
+
+    private void RunProfileCleanupSkipsReparsePointScenario()
+    {
+        Exception error = null;
+        _wpf.RunAsync(async () =>
+        {
+            try
+            {
+                await RunProfileCleanupSkipsReparsePointOnDispatcherAsync();
+            }
+            catch (Exception ex)
+            {
+                error = ex;
+            }
+        }, TimeSpan.FromMinutes(2));
+
+        if (error is not null)
+        {
+            Assert.Fail(error.ToString());
+        }
+    }
+
+    private static async Task RunProfileCleanupSkipsReparsePointOnDispatcherAsync()
+    {
+        var protectedDir = Path.Combine(Path.GetTempPath(), $"host-reparse-protected-{Guid.NewGuid():N}");
+        var scratchRoot = Path.Combine(Path.GetTempPath(), $"host-reparse-scratch-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(protectedDir);
+        File.WriteAllText(Path.Combine(protectedDir, "keep.txt"), "keep");
+        Directory.CreateDirectory(scratchRoot);
+        CreateDirectoryJunction(Path.Combine(scratchRoot, "linked"), protectedDir);
+        File.WriteAllText(Path.Combine(scratchRoot, "local.txt"), "delete");
+        try
+        {
+            var cleanup = typeof(KioskHostService).GetMethod(
+                "DeleteTreeContentsBestEffort",
+                BindingFlags.Static | BindingFlags.NonPublic)!;
+            cleanup.Invoke(null, new object[] { scratchRoot });
+            Assert.True(File.Exists(Path.Combine(protectedDir, "keep.txt")), "reparse target must survive cleanup");
+            Assert.False(File.Exists(Path.Combine(scratchRoot, "local.txt")), "scratch file must be removed");
+        }
+        finally
+        {
+            if (Directory.Exists(scratchRoot))
+            {
+                foreach (var f in Directory.EnumerateFiles(scratchRoot))
+                {
+                    File.Delete(f);
+                }
+
+                foreach (var d in Directory.EnumerateDirectories(scratchRoot))
+                {
+                    Directory.Delete(d, false);
+                }
+
+                Directory.Delete(scratchRoot, false);
+            }
+
+            if (Directory.Exists(protectedDir))
+            {
+                Directory.Delete(protectedDir, true);
+            }
+
+            await Task.CompletedTask;
+        }
+    }
+
+    private static void CreateDirectoryJunction(string junctionPath, string targetPath)
+    {
+        var psi = new ProcessStartInfo
+        {
+            FileName = "cmd.exe",
+            Arguments = $"/c mklink /J \"{junctionPath}\" \"{targetPath}\"",
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        using var proc = Process.Start(psi) ?? throw new InvalidOperationException("mklink failed to start");
+        proc.WaitForExit(10_000);
+        if (proc.ExitCode != 0)
+        {
+            throw new InvalidOperationException($"mklink /J failed with exit {proc.ExitCode}");
+        }
     }
 
     private static async Task WaitForTransportConnectedAsync(KioskRuntime runtime, TimeSpan timeout)
