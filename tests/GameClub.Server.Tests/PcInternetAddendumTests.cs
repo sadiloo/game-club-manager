@@ -84,6 +84,8 @@ public sealed class PcInternetAddendumTests(GameClubWebApplicationFactory factor
         await S3TestHelpers.ResetAsync(factory);
         var api = factory.CreateClientWithKey();
         await S3TestHelpers.RegisterPc(api, "PC-HE", PilotSeed.PcNormalGroupId);
+        factory.Clock.SetTehran(2026, 6, 2, 12, 0);
+        await S3TestHelpers.StartSession(api, "PC-HE");
         var op = await factory.CreateOperatorClientAsync();
         var codeRes = await op.PostAsync("/api/operator/stations/PC-HE/pairing-code", null);
         codeRes.EnsureSuccessStatusCode();

@@ -132,7 +132,7 @@ public sealed class KioskFixR1AcceptanceTests(GameClubWebApplicationFactory fact
         await using (var scope = factory.Services.CreateAsyncScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            await db.Database.ExecuteSqlRawAsync("UPDATE rate_lines SET \"HourlyToman\" = 600000 WHERE \"GroupId\" = 'pc-normal' AND \"PlayerCount\" = 1");
+            await db.Database.ExecuteSqlRawAsync("UPDATE rate_lines SET \"HourlyToman\" = 600000 WHERE \"GroupId\" = 'pc-normal' AND \"PlayMode\" = 'Online' AND \"PlayerCount\" IS NULL");
         }
 
         factory.Clock.SetTehran(2026, 6, 3, 14, 0);
@@ -181,7 +181,7 @@ public sealed class KioskFixR1AcceptanceTests(GameClubWebApplicationFactory fact
         await using (var scope = factory.Services.CreateAsyncScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            await db.Database.ExecuteSqlRawAsync("UPDATE rate_lines SET \"HourlyToman\" = 600000 WHERE \"GroupId\" = 'pc-normal' AND \"PlayerCount\" = 1");
+            await db.Database.ExecuteSqlRawAsync("UPDATE rate_lines SET \"HourlyToman\" = 600000 WHERE \"GroupId\" = 'pc-normal' AND \"PlayMode\" = 'Online' AND \"PlayerCount\" IS NULL");
         }
 
         factory.Clock.SetTehran(2026, 6, 3, 14, 0);
@@ -250,10 +250,10 @@ public sealed class KioskFixR1AcceptanceTests(GameClubWebApplicationFactory fact
         db.Customers.Add(customer);
         db.CustomerMembers.Add(new CustomerMemberEntity { CustomerId = customer.Id, RealToman = 1_000_000, LifetimePlayMinutes = 10_000 });
         await db.SaveChangesAsync();
-        await db.Database.ExecuteSqlRawAsync("UPDATE rate_lines SET \"HourlyToman\" = 60000 WHERE \"GroupId\" = 'pc-normal' AND \"PlayerCount\" = 1");
+        await db.Database.ExecuteSqlRawAsync("UPDATE rate_lines SET \"HourlyToman\" = 60000 WHERE \"GroupId\" = 'pc-normal' AND \"PlayMode\" = 'Online' AND \"PlayerCount\" IS NULL");
         factory.Clock.SetTehran(2026, 6, 3, 14, 0);
         var sessions = scope.ServiceProvider.GetRequiredService<SessionService>();
-        var session = await sessions.StartAsync("PC-1", 1, PlayMode.Offline, null, null, default);
+        var session = await sessions.StartAsync("PC-1", 1, PlayMode.Online, null, null, default);
         await scope.ServiceProvider.GetRequiredService<OperatorCustomerService>().LinkSessionAsync(session.Id, customer.Id, default);
         factory.Clock.SetTehran(2026, 6, 3, 15, 0);
         await sessions.RecordCheckpointAsync(session.Id, S3TestHelpers.T(2026, 6, 3, 15, 0), default);

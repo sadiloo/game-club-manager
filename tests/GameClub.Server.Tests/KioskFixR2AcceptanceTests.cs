@@ -131,7 +131,7 @@ public sealed class KioskFixR2AcceptanceTests(GameClubWebApplicationFactory fact
         await using (var scope = factory.Services.CreateAsyncScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            await db.Database.ExecuteSqlRawAsync("UPDATE rate_lines SET \"HourlyToman\" = 600000 WHERE \"GroupId\" = 'pc-normal' AND \"PlayerCount\" = 1");
+            await db.Database.ExecuteSqlRawAsync("UPDATE rate_lines SET \"HourlyToman\" = 600000 WHERE \"GroupId\" = 'pc-normal' AND \"PlayMode\" = 'Online' AND \"PlayerCount\" IS NULL");
         }
 
         factory.Clock.SetTehran(2026, 6, 3, 14, 0);
@@ -160,7 +160,7 @@ public sealed class KioskFixR2AcceptanceTests(GameClubWebApplicationFactory fact
         await using (var rateScope = factory.Services.CreateAsyncScope())
         {
             var db = rateScope.ServiceProvider.GetRequiredService<AppDbContext>();
-            await db.Database.ExecuteSqlRawAsync("UPDATE rate_lines SET \"HourlyToman\" = 480000 WHERE \"GroupId\" = 'pc-normal' AND \"PlayerCount\" = 1");
+            await db.Database.ExecuteSqlRawAsync("UPDATE rate_lines SET \"HourlyToman\" = 480000 WHERE \"GroupId\" = 'pc-normal' AND \"PlayMode\" = 'Online' AND \"PlayerCount\" IS NULL");
         }
 
         factory.Clock.SetTehran(2026, 6, 3, 14, 0);
@@ -201,7 +201,7 @@ public sealed class KioskFixR2AcceptanceTests(GameClubWebApplicationFactory fact
         await using (var scope = factory.Services.CreateAsyncScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            await db.Database.ExecuteSqlRawAsync("UPDATE rate_lines SET \"HourlyToman\" = 80000 WHERE \"GroupId\" = 'pc-normal' AND \"PlayerCount\" = 1");
+            await db.Database.ExecuteSqlRawAsync("UPDATE rate_lines SET \"HourlyToman\" = 80000 WHERE \"GroupId\" = 'pc-normal' AND \"PlayMode\" = 'Online' AND \"PlayerCount\" IS NULL");
         }
 
         await using (var scope2 = factory.Services.CreateAsyncScope())
@@ -394,7 +394,7 @@ public sealed class KioskFixR2AcceptanceTests(GameClubWebApplicationFactory fact
         var wallet = MemberSettingsMapper.LoadWalletSettings(settings);
         var member = await db.CustomerMembers.SingleAsync(m => m.CustomerId == customer.Id);
         var account = KioskPlayEstimate.BuildAccount(member, wallet);
-        await db.Database.ExecuteSqlRawAsync("UPDATE rate_lines SET \"HourlyToman\" = 0 WHERE \"GroupId\" = 'pc-normal' AND \"PlayerCount\" = 1");
+        await db.Database.ExecuteSqlRawAsync("UPDATE rate_lines SET \"HourlyToman\" = 0 WHERE \"GroupId\" = 'pc-normal' AND \"PlayMode\" = 'Online' AND \"PlayerCount\" IS NULL");
         var reloaded = await scope.ServiceProvider.GetRequiredService<RateConfigService>().LoadAsync(default);
         var text = KioskPlayEstimate.FormatFreeBandText(reloaded.Card, account, session.Station!.GroupId!, session, factory.Clock.UtcNow);
         if (!string.IsNullOrWhiteSpace(text))

@@ -29,7 +29,7 @@ public sealed class AcceptanceScenarioTests(GameClubWebApplicationFactory factor
             SELECT setval('invoice_number_seq', 1, false);
             UPDATE invoice_number_sequence SET "NextNumber" = 1;
             UPDATE rate_lines SET "HourlyToman" = 80000
-              WHERE "GroupId" = 'pc-normal' AND "IsSpecialBand" = false AND "PlayMode" = 'Offline' AND "PlayerCount" = 1;
+              WHERE "GroupId" = 'pc-normal' AND "IsSpecialBand" = false AND "PlayMode" = 'Online' AND "PlayerCount" IS NULL;
             """);
         await DatabaseSeed.EnsureAsync(db);
     }

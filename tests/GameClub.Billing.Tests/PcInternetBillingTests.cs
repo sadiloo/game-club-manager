@@ -10,10 +10,13 @@ public sealed class PcInternetBillingTests
         const long offNight = 80_000;
         return new RateCardBuilder()
             .AddBand(PilotSeed.PcNormalSpecialHours)
+            .AddBand(PilotSeed.PcVipSpecialHours)
             .AddBase(PilotSeed.PcNormalGroupId, PlayMode.Online, null, PilotSeed.PcNormalHourly)
             .AddBandRate(PilotSeed.PcNormalBandId, PilotSeed.PcNormalGroupId, PlayMode.Online, null, PilotSeed.PcNormalSpecialHourly)
             .AddBase(PilotSeed.PcNormalGroupId, PlayMode.Offline, 1, offDay)
             .AddBandRate(PilotSeed.PcNormalBandId, PilotSeed.PcNormalGroupId, PlayMode.Offline, 1, offNight)
+            .AddBase(PilotSeed.PcVipGroupId, PlayMode.Online, null, PilotSeed.PcVipHourly)
+            .AddBandRate(PilotSeed.PcVipBandId, PilotSeed.PcVipGroupId, PlayMode.Online, null, PilotSeed.PcVipSpecialHourly)
             .Build();
     }
 
@@ -184,5 +187,129 @@ public sealed class PcInternetBillingTests
             CafeFixture.Play("a", start, off, "pc-1", PilotSeed.PcNormalGroupId, 1, PlayMode.Online),
             CafeFixture.Play("b", off, end, "pc-1", PilotSeed.PcNormalGroupId, 1, PlayMode.Offline));
         Assert.Equal(11, charge.Lines[0].BilledMinutes);
+    }
+
+    [Fact]
+    public void PcInternet_E6b_amount_prepaid_transfer_25_min()
+    {
+        var card = SamplePcCard();
+        var start = T.At(2026, 6, 2, 10, 0);
+        var initial = PrepaidPlanner.ForAmount(start, 40_000, "a", "pc-1", PilotSeed.PcNormalGroupId, PlayMode.Online, 1, card);
+        Assert.Equal(30 * 60, initial.GrantedActiveSeconds);
+        var after15 = start.AddMinutes(15);
+        var spent = SessionPricer.Price(
+            CafeFixture.Session("s", CafeFixture.Play("a", start, after15, "pc-1", PilotSeed.PcNormalGroupId, 1, PlayMode.Online)),
+            card).TotalAmountToman;
+        Assert.Equal(20_000, spent);
+        var cont = PrepaidPlanner.ForAmount(
+            after15,
+            20_000,
+            "b",
+            "pc-vip-1",
+            PilotSeed.PcVipGroupId,
+            PlayMode.Online,
+            1,
+            card,
+            graceMinuteEnabled: false);
+        Assert.Equal(10 * 60, cont.GrantedActiveSeconds);
+        Assert.Equal(25 * 60, 15 * 60 + cont.GrantedActiveSeconds);
+    }
+
+    [Fact]
+    public void PcInternet_E8a_disconnect_reconnect_pricing_total_42667()
+    {
+        var start = T.At(2026, 6, 2, 20, 0);
+        var off = start.AddMinutes(8);
+        var end = T.At(2026, 6, 2, 20, 40);
+        var charge = Price(
+            CafeFixture.Play("a", start, off, "pc-1", PilotSeed.PcNormalGroupId, 1, PlayMode.Online),
+            CafeFixture.Play("b", off, end, "pc-1", PilotSeed.PcNormalGroupId, 1, PlayMode.Offline));
+        Assert.Equal(42_667, charge.TotalAmountToman);
+        Assert.Equal(40, charge.TotalBilledMinutes);
+        Assert.Equal(10_667, charge.Lines[0].AmountToman);
+        Assert.Equal(32_000, charge.Lines[1].AmountToman);
+    }
+
+    [Fact]
+    public void PcInternet_E8b_dead_pc_clamp_on_segment_6667()
+    {
+        var card = SamplePcCard();
+        var start = T.At(2026, 6, 2, 20, 0);
+        var billEnd = start.AddMinutes(5);
+        var off = start.AddMinutes(8);
+        var charge = SessionPricer.Price(
+            new Session("e8b", [
+                CafeFixture.Play("a", start, billEnd, "pc-1", PilotSeed.PcNormalGroupId, 1, PlayMode.Online),
+                CafeFixture.Play("b", off, off, "pc-1", PilotSeed.PcNormalGroupId, 1, PlayMode.Offline),
+            ]),
+            card);
+        Assert.Equal(6_667, charge.TotalAmountToman);
+        Assert.Equal(5, charge.TotalBilledMinutes);
+    }
+
+    [Fact]
+    public void PcInternet_E11_duration_toggle_60_more_min()
+    {
+        var card = SamplePcCard();
+        var start = T.At(2026, 6, 2, 20, 0);
+        var booked = PrepaidPlanner.ForDuration(
+            start,
+            TimeSpan.FromMinutes(60),
+            "a",
+            "pc-1",
+            PilotSeed.PcNormalGroupId,
+            PlayMode.Online,
+            1,
+            card);
+        Assert.Equal(80_000, booked.ConsumedToman);
+        var after15 = start.AddMinutes(15);
+        var session = CafeFixture.Session("e11", CafeFixture.Play("a", start, after15, "pc-1", PilotSeed.PcNormalGroupId, 1, PlayMode.Online));
+        var tail = CafeFixture.Play("b", after15, after15, "pc-1", PilotSeed.PcNormalGroupId, 1, PlayMode.Offline);
+        var plan = PrepaidPlanner.ForAmountFromSegments(session, after15, tail, 80_000, card, graceMinuteEnabled: false);
+        Assert.Equal(75 * 60, plan.GrantedActiveSeconds);
+    }
+
+    [Fact]
+    public void PcInternet_E12_duration_midnight_62_more_min()
+    {
+        var card = SamplePcCard();
+        var start = T.At(2026, 6, 2, 23, 30);
+        var booked = PrepaidPlanner.ForDuration(
+            start,
+            TimeSpan.FromMinutes(60),
+            "a",
+            "pc-1",
+            PilotSeed.PcNormalGroupId,
+            PlayMode.Online,
+            1,
+            card);
+        Assert.Equal(90_000, booked.ConsumedToman);
+        var after10 = start.AddMinutes(10);
+        var session = CafeFixture.Session("e12", CafeFixture.Play("a", start, after10, "pc-1", PilotSeed.PcNormalGroupId, 1, PlayMode.Online));
+        var tail = CafeFixture.Play("b", after10, after10, "pc-1", PilotSeed.PcNormalGroupId, 1, PlayMode.Offline);
+        var plan = PrepaidPlanner.ForAmountFromSegments(session, after10, tail, 90_000, card, graceMinuteEnabled: false);
+        Assert.Equal(72 * 60, plan.GrantedActiveSeconds);
+    }
+
+    [Fact]
+    public void PcInternet_E13_duration_transfer_32_more_min()
+    {
+        var card = SamplePcCard();
+        var start = T.At(2026, 6, 2, 20, 0);
+        var booked = PrepaidPlanner.ForDuration(
+            start,
+            TimeSpan.FromMinutes(60),
+            "a",
+            "pc-1",
+            PilotSeed.PcNormalGroupId,
+            PlayMode.Online,
+            1,
+            card);
+        Assert.Equal(80_000, booked.ConsumedToman);
+        var after15 = start.AddMinutes(15);
+        var session = CafeFixture.Session("e13", CafeFixture.Play("a", start, after15, "pc-1", PilotSeed.PcNormalGroupId, 1, PlayMode.Online));
+        var tail = CafeFixture.Play("b", after15, after15, "pc-vip-1", PilotSeed.PcVipGroupId, 1, PlayMode.Online);
+        var plan = PrepaidPlanner.ForAmountFromSegments(session, after15, tail, 80_000, card, graceMinuteEnabled: false);
+        Assert.Equal(47 * 60, plan.GrantedActiveSeconds);
     }
 }

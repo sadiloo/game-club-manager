@@ -105,7 +105,7 @@ public class Round3Tests
         Assert.Equal(BillingErrors.PcPause, markedError.Code);
 
         var console = new Session("ps", [
-            new PlaySegment("a", start, start.AddMinutes(10), "ps5-1", CafeFixture.Ps5, PlayMode.Online, 1),
+            new PlaySegment("a", start, start.AddMinutes(10), "ps5-1", CafeFixture.Ps5, PlayMode.Offline, 1),
         ], [pause]);
         var priced = SessionPricer.Price(console, CafeFixture.Card(), stations: stations);
         Assert.Equal(9, priced.TotalBilledMinutes);

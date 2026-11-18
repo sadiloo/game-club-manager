@@ -65,9 +65,13 @@ public static class PilotSeed
             .AddBand(PcNormalSpecialHours)
             .AddBase(PcNormalGroupId, PlayMode.Online, null, PcNormalHourly)
             .AddBandRate(PcNormalBandId, PcNormalGroupId, PlayMode.Online, null, PcNormalSpecialHourly)
+            .AddBase(PcNormalGroupId, PlayMode.Offline, 1, PcNormalHourly)
+            .AddBandRate(PcNormalBandId, PcNormalGroupId, PlayMode.Offline, 1, PcNormalSpecialHourly)
             .AddBand(PcVipSpecialHours)
             .AddBase(PcVipGroupId, PlayMode.Online, null, PcVipHourly)
             .AddBandRate(PcVipBandId, PcVipGroupId, PlayMode.Online, null, PcVipSpecialHourly)
+            .AddBase(PcVipGroupId, PlayMode.Offline, 1, PcVipHourly)
+            .AddBandRate(PcVipBandId, PcVipGroupId, PlayMode.Offline, 1, PcVipSpecialHourly)
             .Build();
     }
 }

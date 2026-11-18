@@ -101,7 +101,7 @@ public sealed class KioskFixR7AcceptanceTests(GameClubWebApplicationFactory fact
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
             await db.Database.ExecuteSqlRawAsync(
-                "UPDATE rate_lines SET \"HourlyToman\" = 80000 WHERE \"GroupId\" = 'pc-normal' AND \"PlayerCount\" = 1");
+                "UPDATE rate_lines SET \"HourlyToman\" = 80000 WHERE \"GroupId\" = 'pc-normal' AND \"PlayMode\" = 'Online' AND \"PlayerCount\" IS NULL");
             var customer = new CustomerEntity { Id = Guid.NewGuid(), Name = "PartialGrace", Mobile = "09128881333", CreatedAtUtc = DateTime.UtcNow };
             db.Customers.Add(customer);
             db.CustomerMembers.Add(new CustomerMemberEntity { CustomerId = customer.Id, RealToman = 1_833 });
