@@ -86,6 +86,10 @@ public sealed class KioskHostStatusTimerTests
     public void host_logout_shows_layout_when_session_cleanup_throws()
         => RunLogoutSurvivesCleanupFailureScenario();
 
+    [Fact]
+    public void host_logout_shows_layout_when_logout_http_fails()
+        => RunLogoutSurvivesLogoutHttpFailureScenario();
+
     private void RunScenario(bool lateConnect, bool operatorStopLock)
     {
         Exception error = null;
@@ -260,7 +264,7 @@ public sealed class KioskHostStatusTimerTests
             transport.HeartbeatHandler = _ => throw new InvalidOperationException("hb down");
             var deadline = DateTime.UtcNow.AddSeconds(20);
             var sawNoResponse = false;
-            var sawBareConnected = false;
+            var sawStaleConnectedAfterHbFailures = false;
             while (DateTime.UtcNow < deadline)
             {
                 await Task.Delay(500);
@@ -268,16 +272,19 @@ public sealed class KioskHostStatusTimerTests
                 if (text.IndexOf("no server response", StringComparison.OrdinalIgnoreCase) >= 0)
                 {
                     sawNoResponse = true;
-                }
-
-                if (KioskStationStatus.ContainsConnectedWording(text))
-                {
-                    sawBareConnected = true;
+                    if (KioskStationStatus.ContainsConnectedWording(text))
+                    {
+                        sawStaleConnectedAfterHbFailures = true;
+                    }
                 }
             }
 
             Assert.True(sawNoResponse, $"expected 'no server response' within timer window; last status={status.Text}");
-            Assert.False(sawBareConnected, $"must not show bare connected while heartbeats fail; last status={status.Text}");
+            var finalText = status.Text ?? "";
+            Assert.Contains("no server response", finalText, StringComparison.OrdinalIgnoreCase);
+            Assert.False(
+                sawStaleConnectedAfterHbFailures,
+                $"must not show stale connected after heartbeats fail; last status={finalText}");
         }
         finally
         {
@@ -537,6 +544,46 @@ public sealed class KioskHostStatusTimerTests
         }
     }
 
+    private void RunLogoutSurvivesLogoutHttpFailureScenario()
+    {
+        Exception error = null;
+        _wpf.RunAsync(async () =>
+        {
+            try
+            {
+                await RunLogoutSurvivesLogoutHttpFailureOnDispatcherAsync();
+            }
+            catch (Exception ex)
+            {
+                error = ex;
+            }
+        }, TimeSpan.FromMinutes(2));
+
+        if (error is not null)
+        {
+            Assert.Fail(error.ToString());
+        }
+    }
+
+    private static async Task RunLogoutSurvivesLogoutHttpFailureOnDispatcherAsync()
+    {
+        WritePairedDeviceState("PC-HOST-LOGOUT-HTTP");
+        var host = CreateHost(out _, out var lockPanel, out var playingPanel);
+        var sessionId = Guid.NewGuid();
+        try
+        {
+            SetField(host, "_sessionId", sessionId);
+            GetRuntime(host).BindSession(sessionId);
+            await host.LogoutAsync();
+            Assert.Equal(Visibility.Visible, lockPanel.Visibility);
+            Assert.Equal(Visibility.Collapsed, playingPanel.Visibility);
+        }
+        finally
+        {
+            await host.DisposeAsync();
+        }
+    }
+
     private static async Task RunLogoutSurvivesCleanupFailureOnDispatcherAsync()
     {
         WritePairedDeviceState("PC-HOST-LOGOUT-CLEANUP");
@@ -634,24 +681,33 @@ public sealed class KioskHostStatusTimerTests
             Assert.False(replayTick.IsEnabled);
 
             SetField(host, "_locallyLockedSessionId", oldSession);
-            typeof(KioskHostService).GetMethod("OnHeartbeatAcknowledged", BindingFlags.Instance | BindingFlags.NonPublic)!
-                .Invoke(host, new object[]
+            var onAck = typeof(KioskHostService).GetMethod("OnHeartbeatAcknowledged", BindingFlags.Instance | BindingFlags.NonPublic)!;
+            onAck.Invoke(host, new object[]
+            {
+                new KioskHeartbeatAck
                 {
-                    new KioskHeartbeatAck
-                    {
-                        SessionStatus = "Open",
-                        Lease = new SignedSessionLease
-                        {
-                            Payload = new SessionLeasePayload
-                            {
-                                SessionId = newSession,
-                                StationId = "PC-HOST-REPLAY",
-                                AuthorizedUntilUtc = DateTime.UtcNow.AddHours(1),
-                            },
-                        },
-                        Display = new KioskDisplayDto { EstimatedRemainingSeconds = 120 },
-                    },
-                });
+                    SessionStatus = "Open",
+                    Lease = HostTestLeaseSigning.SignLease(
+                        newSession,
+                        "PC-HOST-REPLAY",
+                        DateTime.UtcNow.AddMinutes(-1)),
+                    Display = new KioskDisplayDto { EstimatedRemainingSeconds = 120 },
+                },
+            });
+            Assert.False(replayTick.IsEnabled, "replay tick must wait for verified lease on the next ack");
+
+            onAck.Invoke(host, new object[]
+            {
+                new KioskHeartbeatAck
+                {
+                    SessionStatus = "Open",
+                    Lease = HostTestLeaseSigning.SignLease(
+                        newSession,
+                        "PC-HOST-REPLAY",
+                        DateTime.UtcNow.AddHours(1)),
+                    Display = new KioskDisplayDto { EstimatedRemainingSeconds = 120 },
+                },
+            });
 
             Assert.True(replayTick.IsEnabled, "replay tick must start when playing resumes even if status tick was already on");
             Assert.True(uiTick.IsEnabled);
@@ -801,6 +857,10 @@ public sealed class KioskHostStatusTimerTests
     public void host_profile_cleanup_skips_reparse_point_links()
         => RunProfileCleanupSkipsReparsePointScenario();
 
+    [Fact]
+    public void host_profile_cleanup_skips_reparse_point_scratch_root()
+        => RunProfileCleanupSkipsReparseScratchRootScenario();
+
     private void RunProfileCleanupSkipsReparsePointScenario()
     {
         Exception error = null;
@@ -819,6 +879,65 @@ public sealed class KioskHostStatusTimerTests
         if (error is not null)
         {
             Assert.Fail(error.ToString());
+        }
+    }
+
+    private void RunProfileCleanupSkipsReparseScratchRootScenario()
+    {
+        Exception error = null;
+        _wpf.RunAsync(async () =>
+        {
+            try
+            {
+                await RunProfileCleanupSkipsReparseScratchRootOnDispatcherAsync();
+            }
+            catch (Exception ex)
+            {
+                error = ex;
+            }
+        }, TimeSpan.FromMinutes(2));
+
+        if (error is not null)
+        {
+            Assert.Fail(error.ToString());
+        }
+    }
+
+    private static async Task RunProfileCleanupSkipsReparseScratchRootOnDispatcherAsync()
+    {
+        var protectedDir = Path.Combine(Path.GetTempPath(), $"host-reparse-protected-root-{Guid.NewGuid():N}");
+        var profileRoot = Path.Combine(Path.GetTempPath(), $"host-reparse-profile-{Guid.NewGuid():N}");
+        var scratchRel = "Downloads";
+        Directory.CreateDirectory(protectedDir);
+        Directory.CreateDirectory(profileRoot);
+        File.WriteAllText(Path.Combine(protectedDir, "keep.txt"), "keep");
+        CreateDirectoryJunction(Path.Combine(profileRoot, scratchRel), protectedDir);
+        try
+        {
+            var clear = typeof(KioskHostService).GetMethod(
+                "ClearKioskProfileScratchUnder",
+                BindingFlags.Static | BindingFlags.NonPublic)!;
+            clear.Invoke(null, new object[] { profileRoot, new[] { scratchRel } });
+            Assert.True(File.Exists(Path.Combine(protectedDir, "keep.txt")), "reparse scratch root must not empty link target");
+        }
+        finally
+        {
+            if (Directory.Exists(profileRoot))
+            {
+                foreach (var d in Directory.EnumerateDirectories(profileRoot))
+                {
+                    Directory.Delete(d, false);
+                }
+
+                Directory.Delete(profileRoot, false);
+            }
+
+            if (Directory.Exists(protectedDir))
+            {
+                Directory.Delete(protectedDir, true);
+            }
+
+            await Task.CompletedTask;
         }
     }
 

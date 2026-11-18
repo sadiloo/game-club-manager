@@ -77,8 +77,8 @@ M = [
     (
         "Host_logout_cleanup_first",
         HS,
-        "_runtime.BindSession(Guid.Empty);\n        ShowLockLayout();\n        _replayTick.Stop();\n        EnsureStatusUiTickRunning();\n        RefreshStationStatusText();\n        try\n        {\n            RunSessionCleanup();\n        }\n        catch (Exception ex)\n        {\n            Trace.WriteLine($\"RunSessionCleanup failed during logout: {ex.Message}\");\n        }",
-        "_runtime.BindSession(Guid.Empty);\n        RunSessionCleanup();\n        ShowLockLayout();\n        _replayTick.Stop();\n        EnsureStatusUiTickRunning();\n        RefreshStationStatusText();",
+        "var sessionForLogout = _sessionId;\n        ShowLockLayout();",
+        "var sessionForLogout = _sessionId;\n        try\n        {\n            RunSessionCleanup();\n        }\n        catch (Exception ex)\n        {\n            Trace.WriteLine($\"RunSessionCleanup failed during logout: {ex.Message}\");\n        }\n        ShowLockLayout();",
         "host-d5",
         "host_logout_shows_layout_when_session_cleanup_throws",
     ),
@@ -231,17 +231,26 @@ REGEX_MUTANTS = {
 res = {}
 failed_names = []
 
+
+def write_mutations_json():
+    open(os.path.join(OUT, "mutations-r1d.json"), "w").write(json.dumps(res, indent=2))
+
+
 if host_only:
     baseline_status, _, baseline_failed = run_host_tests("KioskHostStatusTimerTests")
     print("BASELINE", baseline_status, baseline_failed, flush=True)
+    res["baseline"] = {"scope": "host", "status": baseline_status, "failed_tests": baseline_failed}
     if baseline_status != "PASS" or baseline_failed:
         print("BASELINE_FAILED", baseline_status, baseline_failed, file=sys.stderr, flush=True)
+        write_mutations_json()
         sys.exit(1)
 else:
     baseline_status, _, baseline_failed = run_core_tests()
     print("CORE_BASELINE", baseline_status, baseline_failed, flush=True)
+    res["baseline"] = {"scope": "core", "status": baseline_status, "failed_tests": baseline_failed}
     if baseline_status != "PASS" or baseline_failed:
         print("CORE_BASELINE_FAILED", baseline_status, baseline_failed, file=sys.stderr, flush=True)
+        write_mutations_json()
         sys.exit(1)
 
 for item in M:
@@ -316,7 +325,7 @@ for item in M:
     finally:
         write_src(p, src)
 
-open(os.path.join(OUT, "mutations-r1d.json"), "w").write(json.dumps(res, indent=2))
+write_mutations_json()
 
 if host_only and failed_names:
     print("HOST_MUTATION_SURVIVORS", sorted(set(failed_names)), file=sys.stderr)

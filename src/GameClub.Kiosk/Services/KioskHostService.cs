@@ -238,18 +238,27 @@ public sealed class KioskHostService : IAsyncDisposable
 
     public async Task LogoutAsync()
     {
-        if (_sessionId != Guid.Empty && _testSeam?.SkipLogoutHttp != true)
+        var sessionForLogout = _sessionId;
+        ShowLockLayout();
+        _replayTick.Stop();
+        EnsureStatusUiTickRunning();
+        RefreshStationStatusText();
+
+        if (sessionForLogout != Guid.Empty && _testSeam?.SkipLogoutHttp != true)
         {
-            await _http.PostAsync($"{_serverBase}/api/kiosk/sessions/{_sessionId}/logout", null);
+            try
+            {
+                await _http.PostAsync($"{_serverBase}/api/kiosk/sessions/{sessionForLogout}/logout", null);
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"Logout HTTP failed during logout: {ex.Message}");
+            }
         }
 
         _sessionId = Guid.Empty;
         _locallyLockedSessionId = Guid.Empty;
         _runtime.BindSession(Guid.Empty);
-        ShowLockLayout();
-        _replayTick.Stop();
-        EnsureStatusUiTickRunning();
-        RefreshStationStatusText();
         try
         {
             RunSessionCleanup();
@@ -527,21 +536,25 @@ public sealed class KioskHostService : IAsyncDisposable
         ClearKioskProfileScratch();
     }
 
-    private static void ClearKioskProfileScratch()
+    private static readonly string[] KioskProfileScratchRelativeDirs =
     {
-        var root = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        foreach (var relative in new[]
-                 {
-                     "Downloads",
-                     @"AppData\Local\Temp",
-                     @"AppData\Local\Microsoft\Windows\INetCache",
-                     @"AppData\Local\Microsoft\Edge\User Data\Default\Cache",
-                     @"AppData\Local\Google\Chrome\User Data\Default\Cache",
-                     @"AppData\Local\Mozilla\Firefox\Profiles",
-                 })
+        "Downloads",
+        @"AppData\Local\Temp",
+        @"AppData\Local\Microsoft\Windows\INetCache",
+        @"AppData\Local\Microsoft\Edge\User Data\Default\Cache",
+        @"AppData\Local\Google\Chrome\User Data\Default\Cache",
+        @"AppData\Local\Mozilla\Firefox\Profiles",
+    };
+
+    private static void ClearKioskProfileScratch()
+        => ClearKioskProfileScratchUnder(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), KioskProfileScratchRelativeDirs);
+
+    private static void ClearKioskProfileScratchUnder(string profileRoot, IEnumerable<string> relativeDirs)
+    {
+        foreach (var relative in relativeDirs)
         {
-            var dir = Path.Combine(root, relative);
-            if (!Directory.Exists(dir))
+            var dir = Path.Combine(profileRoot, relative);
+            if (!Directory.Exists(dir) || IsReparsePoint(dir))
             {
                 continue;
             }

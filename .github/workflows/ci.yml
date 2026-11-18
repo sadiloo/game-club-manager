@@ -137,6 +137,17 @@ jobs:
         timeout-minutes: 3
         shell: pwsh
         run: ./scripts/windows/ci-firewall-restore.ps1 -Restore -Evidence
+      - name: print live-server-registry log
+        if: always()
+        shell: pwsh
+        run: |
+          $registryLog = "artifacts/kiosk-windows-logs/live-server-registry.log"
+          if (Test-Path $registryLog) {
+            Write-Host "--- live-server-registry.log ---"
+            Get-Content $registryLog
+          } else {
+            Write-Host "live-server-registry.log not found"
+          }
       - name: print kiosk integration evidence
         if: always()
         shell: pwsh
