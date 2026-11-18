@@ -116,7 +116,7 @@ public sealed class PcInternetBillOracleTests(GameClubWebApplicationFactory fact
         factory.Clock.SetTehran(2026, 6, 3, 0, 20);
         await S3TestHelpers.CheckpointAsync(api, sessionId, factory.Clock.UtcNow);
         var bill = await BillAfterStopAsync(op, api, sessionId);
-        AssertBill(bill, 103_334, (50, 66_667), (10, 10_000), (20, 26_667));
+        AssertBill(bill, 103_334, (50, 66_667L), (30, 36_667L));
     }
 
     [Fact]
@@ -217,7 +217,7 @@ public sealed class PcInternetBillOracleTests(GameClubWebApplicationFactory fact
         factory.Clock.SetTehran(2026, 6, 2, 20, 30);
         await S3TestHelpers.CheckpointAsync(api, sessionId, factory.Clock.UtcNow);
         var bill = await BillAfterStopAsync(op, api, sessionId);
-        AssertBill(bill, 30_000, (30, 30_000));
+        AssertBill(bill, 30_000, (0, 0L), (30, 30_000L));
     }
 
     [Fact]
@@ -261,7 +261,7 @@ public sealed class PcInternetBillOracleTests(GameClubWebApplicationFactory fact
         factory.Clock.SetTehran(2026, 6, 2, 20, 15);
         (await api.PostAsync("/api/internal/dead-pc-sweep", null)).EnsureSuccessStatusCode();
         var bill = await op.GetFromJsonAsync<JsonElement>($"/api/operator/sessions/{sessionId}/bill");
-        AssertBill(bill, 6_667, (5, 6_667L));
+        AssertBill(bill, 6_667, (5, 6_667L), (0, 0L));
     }
 
     [Fact]
@@ -296,8 +296,11 @@ public sealed class PcInternetBillOracleTests(GameClubWebApplicationFactory fact
         await EnsureOfflineRatesAsync(mgr);
         await S3TestHelpers.RegisterPc(api, "PC-O11", PilotSeed.PcNormalGroupId);
         factory.Clock.SetTehran(2026, 6, 2, 20, 0);
-        var sessionId = await S3TestHelpers.StartSession(api, "PC-O11");
-        (await op.PostAsJsonAsync($"/api/operator/sessions/{sessionId}/prepaid/duration", new { minutes = 60 })).EnsureSuccessStatusCode();
+        (await op.PostAsJsonAsync(
+            "/api/operator/stations/PC-O11/start-guest",
+            new { prepaidKind = 1, minutes = 60, openPayAtEnd = false })).EnsureSuccessStatusCode();
+        using var scope11 = factory.Services.CreateScope();
+        var sessionId = await scope11.ServiceProvider.GetRequiredService<AppDbContext>().Sessions.Select(s => s.Id).SingleAsync();
         factory.Clock.SetTehran(2026, 6, 2, 20, 15);
         await S3TestHelpers.CheckpointAsync(api, sessionId, factory.Clock.UtcNow);
         await ToggleAsync(op, sessionId, false);
@@ -317,15 +320,18 @@ public sealed class PcInternetBillOracleTests(GameClubWebApplicationFactory fact
         await EnsureOfflineRatesAsync(mgr);
         await S3TestHelpers.RegisterPc(api, "PC-O12", PilotSeed.PcNormalGroupId);
         factory.Clock.SetTehran(2026, 6, 2, 23, 30);
-        var sessionId = await S3TestHelpers.StartSession(api, "PC-O12");
-        (await op.PostAsJsonAsync($"/api/operator/sessions/{sessionId}/prepaid/duration", new { minutes = 60 })).EnsureSuccessStatusCode();
+        (await op.PostAsJsonAsync(
+            "/api/operator/stations/PC-O12/start-guest",
+            new { prepaidKind = 1, minutes = 60, openPayAtEnd = false })).EnsureSuccessStatusCode();
+        using var scope12 = factory.Services.CreateScope();
+        var sessionId = await scope12.ServiceProvider.GetRequiredService<AppDbContext>().Sessions.Select(s => s.Id).SingleAsync();
         factory.Clock.SetTehran(2026, 6, 2, 23, 40);
         await S3TestHelpers.CheckpointAsync(api, sessionId, factory.Clock.UtcNow);
         await ToggleAsync(op, sessionId, false);
         factory.Clock.SetTehran(2026, 6, 3, 0, 42);
         await S3TestHelpers.CheckpointAsync(api, sessionId, factory.Clock.UtcNow);
         var bill = await BillAfterStopAsync(op, api, sessionId);
-        AssertBill(bill, 89_333, (10, 13_333), (20, 20_000), (42, 56_000));
+        AssertBill(bill, 89_333, (10, 13_333L), (62, 76_000L));
     }
 
     [Fact]
@@ -339,8 +345,11 @@ public sealed class PcInternetBillOracleTests(GameClubWebApplicationFactory fact
         await S3TestHelpers.RegisterPc(api, "PC-O13", PilotSeed.PcNormalGroupId);
         await S3TestHelpers.RegisterPc(api, "PC-O13V", PilotSeed.PcVipGroupId);
         factory.Clock.SetTehran(2026, 6, 2, 20, 0);
-        var sessionId = await S3TestHelpers.StartSession(api, "PC-O13");
-        (await op.PostAsJsonAsync($"/api/operator/sessions/{sessionId}/prepaid/duration", new { minutes = 60 })).EnsureSuccessStatusCode();
+        (await op.PostAsJsonAsync(
+            "/api/operator/stations/PC-O13/start-guest",
+            new { prepaidKind = 1, minutes = 60, openPayAtEnd = false })).EnsureSuccessStatusCode();
+        using var scope13 = factory.Services.CreateScope();
+        var sessionId = await scope13.ServiceProvider.GetRequiredService<AppDbContext>().Sessions.Select(s => s.Id).SingleAsync();
         factory.Clock.SetTehran(2026, 6, 2, 20, 15);
         await S3TestHelpers.CheckpointAsync(api, sessionId, factory.Clock.UtcNow);
         factory.Clock.SetTehran(2026, 6, 2, 20, 15);
