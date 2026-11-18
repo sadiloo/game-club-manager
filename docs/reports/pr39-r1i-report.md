@@ -1,12 +1,20 @@
 # PR #39 R1i report
 
 ## Git
-- **head:** `13244d7` (see `git rev-parse HEAD` after push)
+- **head:** `5da1b1323216955b2313cb3ee832aa20ccee13e7`
 - **parent:** `29c99969c0c78ec1db64a8bafd6681a06a68a8ac`
 - **branch:** `cursor/kiosk-reconnect-b6`
 
 ## Files vs `29c99969`
-(See `git diff --stat 29c99969` after commit.)
+```
+ docs/reports/pr39-r1i-report.md                    |  71 +++++++
+ scripts/agent/run-kiosk-reconnect-mutations.py     |  28 +++-
+ src/GameClub.Kiosk/Services/KioskHostService.cs    |  53 +++++-
+ src/GameClub.Kiosk/Services/KioskHostTestSeam.cs   |   6 +
+ .../Server/KioskLiveServerRegistry.cs              |  18 +-
+ .../Wpf/KioskHostStatusTimerTests.cs               | 148 +++++++++++++++--
+ 6 files changed, 306 insertions(+), 18 deletions(-)
+```
 
 ## Compile gate (local)
 ```text
