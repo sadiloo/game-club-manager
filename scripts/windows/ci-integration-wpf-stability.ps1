@@ -7,7 +7,6 @@ if (-not $env:GAMECLUB_TEST_DATABASE) {
     $env:GAMECLUB_DATABASE = $env:GAMECLUB_TEST_DATABASE
 }
 if (-not $env:GAMECLUB_API_KEY) { $env:GAMECLUB_API_KEY = "ci-test-key" }
-if (-not $env:GAMECLUB_ALLOW_TEST_CLOCK) { $env:GAMECLUB_ALLOW_TEST_CLOCK = "1" }
 if (-not $env:CHECKPOINT_SERVER_URL) { $env:CHECKPOINT_SERVER_URL = "http://127.0.0.1:5225" }
 if (-not $env:OperatorSessionSecret) { $env:OperatorSessionSecret = "ci-operator-secret-r11" }
 $env:ASPNETCORE_URLS = $env:CHECKPOINT_SERVER_URL

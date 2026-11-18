@@ -22,18 +22,6 @@ internal static class WpfLiveServerTestHelper
         return url!.TrimEnd('/');
     }
 
-    public static async Task PinServerTestClockTehranAsync(int year, int month, int day, int hour, int minute, int second = 0)
-    {
-        var baseUrl = RequireServerUrl();
-        var apiKey = Environment.GetEnvironmentVariable("GAMECLUB_API_KEY") ?? "ci-test-key";
-        var api = new HttpClient { BaseAddress = new Uri(baseUrl + "/") };
-        api.DefaultRequestHeaders.Add("X-Api-Key", apiKey);
-        var response = await api.PostAsJsonAsync(
-            "/api/internal/test-clock",
-            new { year, month, day, hour, minute, second });
-        await EnsureSuccessWithBodyAsync(response, "POST /api/internal/test-clock");
-    }
-
     public static async Task<Guid> LookupCustomerIdByLoginAsync(string loginName)
     {
         await using var conn = new NpgsqlConnection(ResolveConnectionString());

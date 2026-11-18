@@ -11,6 +11,7 @@ internal sealed class OutOfProcessLiveServer : IAsyncDisposable
     private readonly string _repoRoot;
     private readonly string _serverDll;
     private bool _ownsProcess;
+    private readonly Dictionary<string, string?> _harnessEnv = new(StringComparer.Ordinal);
 
     private OutOfProcessLiveServer(string repoRoot, string serverDll, Process process, bool ownsProcess)
     {
@@ -32,7 +33,9 @@ internal sealed class OutOfProcessLiveServer : IAsyncDisposable
         return new OutOfProcessLiveServer(root, dll, proc, ownsProcess: false) { BaseUrl = baseUrl.TrimEnd('/') };
     }
 
-    public static async Task<OutOfProcessLiveServer> StartNewAsync(CancellationToken ct = default)
+    public static async Task<OutOfProcessLiveServer> StartNewAsync(
+        Action<Dictionary<string, string?>>? configureHarness = null,
+        CancellationToken ct = default)
     {
         var root = ResolveRepoRoot();
         var dll = ResolveServerDll(root);
@@ -40,6 +43,8 @@ internal sealed class OutOfProcessLiveServer : IAsyncDisposable
         var baseUrl = Environment.GetEnvironmentVariable("CHECKPOINT_SERVER_URL")?.TrimEnd('/')
             ?? $"http://127.0.0.1:{defaultPort}";
         var instance = new OutOfProcessLiveServer(root, dll, null!, ownsProcess: true) { BaseUrl = baseUrl };
+        PcSpecialBandHarnessEnv.ApplyDayTestBandAwayFromNow(instance._harnessEnv);
+        configureHarness?.Invoke(instance._harnessEnv);
         await instance.LaunchAndWaitReadyAsync(ct);
         return instance;
     }
@@ -158,11 +163,19 @@ internal sealed class OutOfProcessLiveServer : IAsyncDisposable
         throw new InvalidOperationException($"GameClub.Server did not become ready at {BaseUrl} (dll={_serverDll}).");
     }
 
-    private static void CopyServerEnvironment(ProcessStartInfo psi)
+    private void CopyServerEnvironment(ProcessStartInfo psi)
     {
-        foreach (var key in new[] { "GAMECLUB_DATABASE", "GAMECLUB_TEST_DATABASE", "GAMECLUB_API_KEY", "GAMECLUB_ALLOW_TEST_CLOCK", "GAMECLUB_TEST_CLOCK_UTC", "OperatorSessionSecret", "ASPNETCORE_ENVIRONMENT" })
+        foreach (var key in new[] { "GAMECLUB_DATABASE", "GAMECLUB_TEST_DATABASE", "GAMECLUB_API_KEY", "OperatorSessionSecret", "ASPNETCORE_ENVIRONMENT" })
         {
             var value = Environment.GetEnvironmentVariable(key);
+            if (!string.IsNullOrWhiteSpace(value))
+            {
+                psi.Environment[key] = value;
+            }
+        }
+
+        foreach (var (key, value) in _harnessEnv)
+        {
             if (!string.IsNullOrWhiteSpace(value))
             {
                 psi.Environment[key] = value;

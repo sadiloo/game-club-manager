@@ -55,8 +55,6 @@ internal sealed class KioskIntegrationBackend
     public static KioskIntegrationBackend CreateForBaseUrl(string baseUrl)
         => new KioskIntegrationBackend(new Uri(baseUrl.TrimEnd('/')));
 
-    public bool UsesMutableClock => _factory is not null;
-
     public async Task ResetAsync()
     {
         if (_factory is not null)
@@ -102,27 +100,6 @@ internal sealed class KioskIntegrationBackend
         : new Uri(_liveBaseUrl! + "/hubs/kiosk");
 
     public HttpMessageHandler? TestHubHandler => _factory?.Server.CreateHandler();
-
-    public async Task SetTehranAsync(int year, int month, int day, int hour, int minute, int second = 0)
-    {
-        if (_factory is not null)
-        {
-            _factory.Clock.SetTehran(year, month, day, hour, minute, second);
-            return;
-        }
-
-        var api = CreateApiClient();
-        var response = await api.PostAsJsonAsync(
-            "/api/internal/test-clock",
-            new { year, month, day, hour, minute, second });
-        await response.EnsureSuccessStatusCodeWithBodyAsync("POST /api/internal/test-clock");
-    }
-
-    public void SetTehran(int year, int month, int day, int hour, int minute, int second = 0)
-        => SetTehranAsync(year, month, day, hour, minute, second).GetAwaiter().GetResult();
-
-    public Task PinDaytimeTestClockAsync()
-        => SetTehranAsync(2026, 6, 3, 14, 0);
 
     public async Task<IReadOnlyList<(string Mode, DateTime StartUtc)>> ReadPlaySegmentsAsync(Guid sessionId)
     {
@@ -219,8 +196,8 @@ internal sealed class KioskIntegrationBackend
 
   public async Task BackdateOpenSessionForDeadPcSweepAsync(Guid sessionId)
     {
-        var started = DateTime.SpecifyKind(S3TestHelpers.T(2026, 6, 3, 14, 0).UtcDateTime, DateTimeKind.Utc);
-        var checkpoint = DateTime.SpecifyKind(S3TestHelpers.T(2026, 6, 3, 15, 0).UtcDateTime, DateTimeKind.Utc);
+        var started = DateTime.UtcNow.AddMinutes(-71);
+        var checkpoint = DateTime.UtcNow.AddMinutes(-11);
         if (_factory is not null)
         {
             await using var scope = _factory.Services.CreateAsyncScope();
@@ -357,7 +334,7 @@ internal sealed class KioskIntegrationBackend
                 .Where(c => c.SessionId == sessionId)
                 .Select(c => new { c.AtUtc })
                 .ToListAsync();
-            var rateLine = await db.RateLines.SingleAsync(r =>
+            var rateLine = await db.RateLines.AsNoTracking().SingleAsync(r =>
                 r.GroupId == PilotSeed.PcNormalGroupId
                 && r.PlayMode == "Online"
                 && r.PlayerCount == null
@@ -410,7 +387,7 @@ internal sealed class KioskIntegrationBackend
         await using (var cmd = new NpgsqlCommand(
             """
             SELECT "HourlyToman" FROM rate_lines
-            WHERE "GroupId" = @group AND "PlayMode" = 'Offline' AND "PlayerCount" = 1 AND "IsSpecialBand" = false
+            WHERE "GroupId" = @group AND "PlayMode" = 'Online' AND "PlayerCount" IS NULL AND "IsSpecialBand" = false
             """,
             conn))
         {

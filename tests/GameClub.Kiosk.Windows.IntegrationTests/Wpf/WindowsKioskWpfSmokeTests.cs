@@ -94,7 +94,6 @@ public sealed class WindowsKioskWpfSmokeTests
             try
             {
                 var loginName = Environment.GetEnvironmentVariable("WPF_STABILITY_LOGIN") ?? "fund48667";
-                WpfLiveServerTestHelper.PinServerTestClockTehranAsync(2026, 6, 3, 14, 0).GetAwaiter().GetResult();
                 WpfLiveServerTestHelper.SetupFundedSessionAsync(loginName, "pass").GetAwaiter().GetResult();
             }
             catch (Exception ex)
@@ -115,12 +114,12 @@ public sealed class WindowsKioskWpfSmokeTests
         string lastPollStatusText = null;
         string pollFailureDiagnostics = null;
         Exception inProcessError = null;
-        var at = DateTime.SpecifyKind(new DateTime(2026, 6, 3, 14, 0, 0), DateTimeKind.Unspecified);
-        var card = new RateCardBuilder().AddBase("pc-normal", PlayMode.Offline, 1, 80_000).Build();
+        var at = GameClub.Billing.TehranTime.FromUtc(DateTime.UtcNow);
+        var card = new RateCardBuilder().AddBase("pc-normal", PlayMode.Online, null, 80_000).Build();
         var stabilityLogin = Environment.GetEnvironmentVariable("WPF_STABILITY_LOGIN") ?? "fund48667";
         var account = new PcAccount(stabilityLogin, startWalletToman);
         var estimatorSeconds = (int)TimeSpan.FromMinutes(
-            RemainingTimeEstimator.Estimate(account, "pc-normal", PlayMode.Offline, 1, at, card, graceMinuteEnabled: true).MoneyMinutes!.Value).TotalSeconds;
+            RemainingTimeEstimator.Estimate(account, "pc-normal", PlayMode.Online, 1, at, card, graceMinuteEnabled: true).MoneyMinutes!.Value).TotalSeconds;
         Assert.Equal(expectedSeconds, estimatorSeconds);
 
         _wpf.RunAsync(async () =>
@@ -197,13 +196,18 @@ public sealed class WindowsKioskWpfSmokeTests
     [Fact]
     public void wpf_remaining_time_matches_funded_session_special_band_night_line()
     {
+        var bandMode = Environment.GetEnvironmentVariable("CHECKPOINT_SERVER_PC_BAND")?.Trim();
+        if (!string.Equals(bandMode, "night", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
         var setupError = (Exception)null;
         var staSetup = new Thread(() =>
         {
             try
             {
                 var loginName = "fund48667-night";
-                WpfLiveServerTestHelper.PinServerTestClockTehranAsync(2026, 6, 3, 2, 0).GetAwaiter().GetResult();
                 WpfLiveServerTestHelper.SetupFundedSessionAsync(loginName, "pass").GetAwaiter().GetResult();
             }
             catch (Exception ex)
@@ -220,7 +224,7 @@ public sealed class WindowsKioskWpfSmokeTests
 
         const int expectedSeconds = 1_740;
         const long startWalletToman = 48_667;
-        var at = DateTime.SpecifyKind(new DateTime(2026, 6, 3, 2, 0, 0), DateTimeKind.Unspecified);
+        var at = GameClub.Billing.TehranTime.FromUtc(DateTime.UtcNow);
         var card = new RateCardBuilder()
             .AddBase("pc-normal", PlayMode.Online, 1, 80_000)
             .AddBand(PilotSeed.PcNormalSpecialHours)

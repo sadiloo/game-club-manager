@@ -177,22 +177,3 @@ public sealed class AuditController(AppDbContext db) : ControllerBase
     }
 }
 
-[ApiController]
-[Route("api/internal")]
-public sealed class InternalTestSupportController : ControllerBase
-{
-    public sealed record TestClockTehranBody(int Year, int Month, int Day, int Hour, int Minute, int Second = 0);
-
-    [HttpPost("test-clock")]
-    public IActionResult SetTestClock([FromBody] TestClockTehranBody body)
-    {
-        var clock = HttpContext.RequestServices.GetService<MutableClock>();
-        if (clock is null)
-        {
-            return NotFound(new { error = "test_clock_disabled" });
-        }
-
-        clock.SetTehran(body.Year, body.Month, body.Day, body.Hour, body.Minute, body.Second);
-        return Ok(new { utcNow = clock.UtcNow });
-    }
-}

@@ -4,6 +4,7 @@ using GameClub.Server.Data;
 using GameClub.Server.Data.Entities;
 using GameClub.Server.Operator;
 using GameClub.Server.Services;
+using GameClub.Server.Testing;
 using GameClub.Server.Time;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -16,7 +17,10 @@ namespace GameClub.Server.Tests;
 
 public class GameClubWebApplicationFactory : WebApplicationFactory<Program>
 {
-    public MutableClock Clock { get; } = new(DateTimeOffset.UtcNow);
+    public TestMutableClock Clock { get; } = new(DateTimeOffset.UtcNow);
+
+  /// <summary>When set, registers harness PC special-band times on the test host only.</summary>
+    public PcSpecialBandHarnessOptions? HarnessPcSpecialBand { get; set; }
 
     /// <summary>
     /// When false (default), the test host does not run periodic dead-PC sweeps.
@@ -57,6 +61,30 @@ public class GameClubWebApplicationFactory : WebApplicationFactory<Program>
         builder.UseSetting("ConnectionStrings:Default", ConnectionString);
         builder.UseSetting($"{DeadPcSweepOptions.SectionName}:SweepIntervalSeconds", "1");
         builder.UseSetting("OperatorSessionSecret", "test-operator-secret");
+        if (HarnessPcSpecialBand is { Enabled: true } band)
+        {
+            builder.UseSetting($"{PcSpecialBandHarnessOptions.SectionName}:Enabled", "true");
+            if (!string.IsNullOrWhiteSpace(band.PcNormalStart))
+            {
+                builder.UseSetting($"{PcSpecialBandHarnessOptions.SectionName}:PcNormalStart", band.PcNormalStart);
+            }
+
+            if (!string.IsNullOrWhiteSpace(band.PcNormalEnd))
+            {
+                builder.UseSetting($"{PcSpecialBandHarnessOptions.SectionName}:PcNormalEnd", band.PcNormalEnd);
+            }
+
+            if (!string.IsNullOrWhiteSpace(band.PcVipStart))
+            {
+                builder.UseSetting($"{PcSpecialBandHarnessOptions.SectionName}:PcVipStart", band.PcVipStart);
+            }
+
+            if (!string.IsNullOrWhiteSpace(band.PcVipEnd))
+            {
+                builder.UseSetting($"{PcSpecialBandHarnessOptions.SectionName}:PcVipEnd", band.PcVipEnd);
+            }
+        }
+
         builder.ConfigureServices(services =>
         {
             services.RemoveAll<IClock>();

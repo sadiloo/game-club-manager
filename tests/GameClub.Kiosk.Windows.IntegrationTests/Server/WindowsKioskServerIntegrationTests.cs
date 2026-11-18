@@ -130,14 +130,12 @@ public sealed class WindowsKioskServerIntegrationTests
             }
             else
             {
-                Environment.SetEnvironmentVariable("GAMECLUB_ALLOW_TEST_CLOCK", "1");
                 ownedServer = await OutOfProcessLiveServer.StartNewAsync();
                 Environment.SetEnvironmentVariable("CHECKPOINT_SERVER_URL", ownedServer.BaseUrl);
                 backend = KioskIntegrationBackend.CreateForBaseUrl(ownedServer.BaseUrl);
             }
 
             await backend.ResetAsync();
-            await backend.PinDaytimeTestClockAsync();
             await backend.SetPcNormalOfflineRatesAsync();
             await backend.RegisterPcAsync(backend.CreateApiClient(), "PC-UNREACH");
             await backend.SeedCustomerWithCredentialAsync("unreach", "pass", 200_000);
@@ -302,27 +300,10 @@ public sealed class WindowsKioskServerIntegrationTests
     public async Task live_server_dead_pc_sweep_after_checkpoint_gap()
     {
         await _backend.ResetAsync();
-        await _backend.PinDaytimeTestClockAsync();
         await _backend.RegisterPcAsync(_backend.CreateApiClient(), "PC-10M");
         var api = _backend.CreateApiClient();
-        if (_backend.UsesMutableClock)
-        {
-            _backend.SetTehran(2026, 6, 3, 14, 0);
-        }
-
         var sessionId = await _backend.StartSessionAsync("PC-10M");
-        if (_backend.UsesMutableClock)
-        {
-            _backend.SetTehran(2026, 6, 3, 15, 0);
-            await api.PostAsJsonAsync(
-                $"/api/sessions/{sessionId}/checkpoints",
-                new { at = S3TestHelpers.T(2026, 6, 3, 15, 0) });
-            _backend.SetTehran(2026, 6, 3, 15, 10);
-        }
-        else
-        {
-            await _backend.BackdateOpenSessionForDeadPcSweepAsync(sessionId);
-        }
+        await _backend.BackdateOpenSessionForDeadPcSweepAsync(sessionId);
 
         var sweep = await api.PostAsync("/api/internal/dead-pc-sweep", null);
         sweep.EnsureSuccessStatusCode();
@@ -363,7 +344,6 @@ public sealed class WindowsKioskServerIntegrationTests
         try
         {
             await backend.ResetAsync();
-            await backend.PinDaytimeTestClockAsync();
             await backend.RegisterPcAsync(backend.CreateApiClient(), "PC-DISC");
             var customerId = await backend.SeedCustomerWithCredentialAsync("disc", "pass", 200_000);
             var (deviceId, deviceKey, leasePem) = await backend.PairAsync("PC-DISC");
@@ -574,12 +554,10 @@ public sealed class WindowsKioskServerIntegrationTests
         var priorCheckpointUrl = Environment.GetEnvironmentVariable("CHECKPOINT_SERVER_URL");
         try
         {
-            Environment.SetEnvironmentVariable("GAMECLUB_ALLOW_TEST_CLOCK", "1");
             ownedServer = await OutOfProcessLiveServer.StartNewAsync();
             Environment.SetEnvironmentVariable("CHECKPOINT_SERVER_URL", ownedServer.BaseUrl);
             var backend = KioskIntegrationBackend.CreateForBaseUrl(ownedServer.BaseUrl);
             await backend.ResetAsync();
-            await backend.PinDaytimeTestClockAsync();
             await backend.SetPcNormalOfflineRate40000Async();
             await backend.RegisterPcAsync(backend.CreateApiClient(), "PC-G2");
             var customerId = await backend.SeedCustomerWithCredentialAsync("g2user", "pass", 500_000);
@@ -690,7 +668,7 @@ public sealed class WindowsKioskServerIntegrationTests
             Console.WriteLine("G2_ROW_DUMP " + evidence.ToDumpLine());
             Console.WriteLine(
                 $"G2_ORACLE measured_seconds={poweredSpanSeconds:F1} minutes={evidence.ExpectedBillableMinutes} expected_collectible={evidence.ExpectedCollectibleToman}");
-            Assert.Equal(40_000, evidence.PcNormalOfflineHourlyToman);
+            Assert.Equal(PilotSeed.PcNormalHourly, evidence.PcNormalOfflineHourlyToman);
             Assert.Equal(evidence.ExpectedBillableMinutes, evidence.CheckpointCount);
             Assert.Equal(0, evidence.DuplicateCheckpointMinuteBuckets);
             Assert.Equal(evidence.ExpectedCollectibleToman, evidence.PendingBillCollectibleToman);
@@ -841,7 +819,6 @@ public sealed class WindowsKioskServerIntegrationTests
             var backend = KioskIntegrationBackend.Create(null);
             ownedServer = OutOfProcessLiveServer.AttachExisting(ciPid, priorCheckpointUrl!);
             await backend.ResetAsync();
-            await backend.PinDaytimeTestClockAsync();
             await backend.SetPcNormalOfflineRatesAsync();
             await backend.RegisterPcAsync(backend.CreateApiClient(), "PC-OUTAGE");
             await backend.SeedCustomerWithCredentialAsync("inetout", "pass", 200_000);
@@ -918,7 +895,6 @@ public sealed class WindowsKioskServerIntegrationTests
             var backend = KioskIntegrationBackend.Create(null);
             ownedServer = OutOfProcessLiveServer.AttachExisting(ciPid, priorCheckpointUrl!);
             await backend.ResetAsync();
-            await backend.PinDaytimeTestClockAsync();
             await backend.SetPcNormalOfflineRatesAsync();
             await backend.RegisterPcAsync(backend.CreateApiClient(), "PC-KILL");
             await backend.SeedCustomerWithCredentialAsync("inetkill", "pass", 200_000);
@@ -1059,7 +1035,6 @@ public sealed class WindowsKioskServerIntegrationTests
         }
 
         await _backend.ResetAsync();
-        await _backend.PinDaytimeTestClockAsync();
         await _backend.SetPcNormalOfflineRatesAsync();
         await _backend.RegisterPcAsync(_backend.CreateApiClient(), "PC-INET");
         await _backend.SeedCustomerWithCredentialAsync("inete2e", "pass", 200_000);
@@ -1094,7 +1069,23 @@ public sealed class WindowsKioskServerIntegrationTests
     }
 }
 
-public sealed class WindowsIntegrationApplicationFactory : GameClubWebApplicationFactory;
+public sealed class WindowsIntegrationApplicationFactory : GameClubWebApplicationFactory
+{
+    public WindowsIntegrationApplicationFactory()
+    {
+        var (start, end) = PcSpecialBandHarnessEnv.ComputeBandAwayFromNow(TimeSpan.FromHours(3));
+        var startText = $"{start.Hour:00}:{start.Minute:00}";
+        var endText = $"{end.Hour:00}:{end.Minute:00}";
+        HarnessPcSpecialBand = new GameClub.Server.Testing.PcSpecialBandHarnessOptions
+        {
+            Enabled = true,
+            PcNormalStart = startText,
+            PcNormalEnd = endText,
+            PcVipStart = startText,
+            PcVipEnd = endText,
+        };
+    }
+}
 
 [CollectionDefinition("windows-kiosk-server")]
 public sealed class WindowsKioskServerCollection

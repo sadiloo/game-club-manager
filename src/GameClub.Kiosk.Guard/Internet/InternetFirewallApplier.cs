@@ -18,6 +18,14 @@ internal sealed class InternetFirewallApplier
             return RunResetScript();
         }
 
+        if (string.Equals(
+            Environment.GetEnvironmentVariable("CHECKPOINT_INTERNET_APPLY_FAULT"),
+            "1",
+            StringComparison.Ordinal))
+        {
+            return "apply_failed:harness_injected";
+        }
+
         if (config.ServerIps.Length == 0 || config.ServerPort <= 0)
         {
             return "firewall_not_configured";

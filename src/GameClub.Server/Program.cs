@@ -3,6 +3,7 @@ using GameClub.Server.Hubs;
 using GameClub.Server.Kiosk;
 using GameClub.Server.Operator;
 using GameClub.Server.Services;
+using GameClub.Server.Testing;
 using GameClub.Server.Time;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -42,14 +43,9 @@ public partial class Program
         builder.Services.AddEndpointsApiExplorer();
         builder.Services.AddSwaggerGen();
         builder.Services.AddSingleton<IOperatorPanelNotifier, OperatorPanelNotifier>();
-        if (TestClockBootstrap.TryRegister(builder.Services))
-        {
-            // MutableClock registered for CI / integration when GAMECLUB_ALLOW_TEST_CLOCK is set.
-        }
-        else
-        {
-            builder.Services.AddSingleton<IClock, SystemClock>();
-        }
+        builder.Services.AddSingleton<IClock, SystemClock>();
+        builder.Services.Configure<PcSpecialBandHarnessOptions>(
+            builder.Configuration.GetSection(PcSpecialBandHarnessOptions.SectionName));
         builder.Services.AddScoped<OperatorContext>();
         builder.Services.AddSingleton<OperatorPolicies>();
         builder.Services.Configure<DeadPcSweepOptions>(builder.Configuration.GetSection(DeadPcSweepOptions.SectionName));

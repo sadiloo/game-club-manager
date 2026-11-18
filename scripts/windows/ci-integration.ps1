@@ -177,7 +177,30 @@ if (-not $env:GAMECLUB_TEST_DATABASE) {
     $env:GAMECLUB_API_KEY = "ci-test-key"
 }
 
-if (-not $env:GAMECLUB_ALLOW_TEST_CLOCK) { $env:GAMECLUB_ALLOW_TEST_CLOCK = "1" }
+function Set-CiPcSpecialBandHarness([ValidateSet('day','night')][string]$Mode) {
+    $tehran = [TimeZoneInfo]::ConvertTimeBySystemTimeZoneId((Get-Date).ToUniversalTime(), 'Iran Standard Time')
+    if ($Mode -eq 'night') {
+        $start = $tehran.AddHours(-3)
+        $end = $tehran.AddHours(3)
+    } else {
+        $minuteOfDay = ($tehran.Hour * 60) + $tehran.Minute
+        $center = ($minuteOfDay + (12 * 60)) % (24 * 60)
+        $startMin = ($center - 15 + (24 * 60)) % (24 * 60)
+        $endMin = ($center + 15) % (24 * 60)
+        $dayBase = $tehran.Date
+        $start = $dayBase.AddMinutes($startMin)
+        $end = $dayBase.AddMinutes($endMin)
+    }
+    $env:TestHarness__PcSpecialBand__Enabled = 'true'
+    $startText = $start.ToString('HH:mm')
+    $endText = $end.ToString('HH:mm')
+    $env:TestHarness__PcSpecialBand__PcNormalStart = $startText
+    $env:TestHarness__PcSpecialBand__PcNormalEnd = $endText
+    $env:TestHarness__PcSpecialBand__PcVipStart = $startText
+    $env:TestHarness__PcSpecialBand__PcVipEnd = $endText
+}
+
+Set-CiPcSpecialBandHarness -Mode day
 
 if (-not $env:CHECKPOINT_SERVER_URL) {
     $env:CHECKPOINT_SERVER_URL = "http://127.0.0.1:5225"
@@ -369,23 +392,57 @@ try {
     $serverTestArgs = @(
     "test", "tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj",
     "-c", "Release", "-f", "net10.0", "--no-build", "--nologo",
-    "--filter", "Category!=WindowsGuard",
+    "--filter", "Category=WindowsServer",
     "--logger", "trx;LogFileName=kiosk-windows-server.trx",
     "--results-directory", $artifactDir,
     "--blame-hang", "--blame-hang-timeout", "5m", "--blame-hang-dump-type", "none",
     "--logger", "console;verbosity=detailed"
 )
     $serverDiag = Join-Path $logDir "vstest-diag-dotnet-test-net10-server.log"
-    $serverTestExit = Invoke-DotNetWithWatchdog -PhaseName "dotnet-test-net10-server" -ArgumentList $serverTestArgs -PhaseCapMs (6 * 60 * 1000) -DiagLogPath $serverDiag
+    $serverTestExit = Invoke-DotNetWithWatchdog -PhaseName "dotnet-test-net10-server" -ArgumentList $serverTestArgs -PhaseCapMs (10 * 60 * 1000) -DiagLogPath $serverDiag
     Write-CiPhaseFirewallProbe -label "after-dotnet-test-net10-server"
     if ($serverTestExit -eq 124) { throw "server test watchdog" }
 
     Write-Host "Running windows guard/wpf integration (net48, live server env)..."
     Write-CiPhaseFirewallProbe -label "before-dotnet-test-net48-guard-wpf"
+    $env:CHECKPOINT_SERVER_PC_BAND = 'night'
+    Set-CiPcSpecialBandHarness -Mode night
+    if ($script:serverProc -and -not $script:serverProc.HasExited) {
+        Stop-ProcessTree -rootProcId $script:serverProc.Id
+        $script:serverProc = $null
+    }
+    $script:serverProc = Start-Process -FilePath "dotnet" -ArgumentList @("exec", $serverDll) -PassThru -NoNewWindow -RedirectStandardOutput $serverLog -RedirectStandardError $serverErr -WorkingDirectory $repoRoot
+    $env:GAMECLUB_SERVER_PID = $script:serverProc.Id
+    $nightReady = $false
+    $nightDeadline = (Get-Date).AddMinutes(2)
+    while ((Get-Date) -lt $nightDeadline) {
+        try {
+            $r = Invoke-WebRequest -Uri "$($env:CHECKPOINT_SERVER_URL)/api/stations" -Headers @{ "X-Api-Key" = $env:GAMECLUB_API_KEY } -UseBasicParsing -TimeoutSec 3
+            if ($r.StatusCode -eq 200) { $nightReady = $true; break }
+        } catch { Start-Sleep -Seconds 2 }
+    }
+    if (-not $nightReady) { throw "server not ready for night-band WPF test" }
+  $nightWpfArgs = @(
+        "test", "tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj",
+        "-c", "Release", "-f", "net48", "--no-build", "--nologo",
+        "--filter", "FullyQualifiedName~wpf_remaining_time_matches_funded_session_special_band_night_line",
+        "--logger", "console;verbosity=detailed"
+    )
+    $nightWpfExit = Invoke-DotNetWithWatchdog -PhaseName "dotnet-test-net48-wpf-night" -ArgumentList $nightWpfArgs -PhaseCapMs (5 * 60 * 1000)
+    if ($nightWpfExit -ne 0) { $script:FinalExitCode = $nightWpfExit; throw "night WPF test failed" }
+    $env:CHECKPOINT_SERVER_PC_BAND = $null
+    Set-CiPcSpecialBandHarness -Mode day
+    if ($script:serverProc -and -not $script:serverProc.HasExited) {
+        Stop-ProcessTree -rootProcId $script:serverProc.Id
+        $script:serverProc = $null
+    }
+    $script:serverProc = Start-Process -FilePath "dotnet" -ArgumentList @("exec", $serverDll) -PassThru -NoNewWindow -RedirectStandardOutput $serverLog -RedirectStandardError $serverErr -WorkingDirectory $repoRoot
+    $env:GAMECLUB_SERVER_PID = $script:serverProc.Id
+
     $guardTestArgs = @(
         "test", "tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj",
         "-c", "Release", "-f", "net48", "--no-build", "--nologo",
-        "--filter", "Category!=WindowsGuard",
+        "--filter", "Category=WindowsWpf|Category=WindowsServer&FullyQualifiedName!~wpf_remaining_time_matches_funded_session_special_band_night_line",
         "--logger", "trx;LogFileName=kiosk-windows-guard.trx",
         "--results-directory", $artifactDir,
         "--blame-hang", "--blame-hang-timeout", "5m", "--blame-hang-dump-type", "none",

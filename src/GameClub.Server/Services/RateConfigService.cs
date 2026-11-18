@@ -2,14 +2,19 @@ using System.Text.Json;
 using GameClub.Billing;
 using GameClub.Server.Data;
 using GameClub.Server.Data.Entities;
+using GameClub.Server.Testing;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 
 namespace GameClub.Server.Services;
 
 public sealed record BranchRatesSnapshot(RateCard Card, RoundingPolicy Rounding);
 
-public sealed class RateConfigService(AppDbContext db, AuditService audit)
+public sealed class RateConfigService(
+    AppDbContext db,
+    AuditService audit,
+    IOptions<PcSpecialBandHarnessOptions> pcSpecialBandHarness)
 {
     public async Task<BranchRatesSnapshot> LoadAsync(CancellationToken ct = default)
     {
@@ -173,12 +178,12 @@ public sealed class RateConfigService(AppDbContext db, AuditService audit)
         return RoundingPolicy.Create(row.StepToman, direction, RoundingScope.WholeInvoice);
     }
 
-    private static RateCard BuildCardFromDbLines(IReadOnlyList<RateLineEntity> lines)
+    private RateCard BuildCardFromDbLines(IReadOnlyList<RateLineEntity> lines)
     {
         var builder = new RateCardBuilder()
             .AddBand(GameTimerReference.SpecialHours)
-            .AddBand(PilotSeed.PcNormalSpecialHours)
-            .AddBand(PilotSeed.PcVipSpecialHours);
+            .AddBand(PcSpecialBandHarness.ResolvePcNormalBand(pcSpecialBandHarness))
+            .AddBand(PcSpecialBandHarness.ResolvePcVipBand(pcSpecialBandHarness));
 
         foreach (var line in lines.Where(l => !l.IsSpecialBand))
         {
@@ -212,12 +217,12 @@ public sealed class RateConfigService(AppDbContext db, AuditService audit)
         return builder.Build();
     }
 
-    private static RateCard BuildCardLegacy(IReadOnlyList<RateLineEntity> lines, long pcSpecialSurchargeToman)
+    private RateCard BuildCardLegacy(IReadOnlyList<RateLineEntity> lines, long pcSpecialSurchargeToman)
     {
         var builder = new RateCardBuilder()
             .AddBand(GameTimerReference.SpecialHours)
-            .AddBand(PilotSeed.PcNormalSpecialHours)
-            .AddBand(PilotSeed.PcVipSpecialHours);
+            .AddBand(PcSpecialBandHarness.ResolvePcNormalBand(pcSpecialBandHarness))
+            .AddBand(PcSpecialBandHarness.ResolvePcVipBand(pcSpecialBandHarness));
 
         foreach (var line in lines.Where(l => !l.IsSpecialBand))
         {
