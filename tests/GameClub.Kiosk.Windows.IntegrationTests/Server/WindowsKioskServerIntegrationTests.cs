@@ -161,6 +161,7 @@ public sealed class WindowsKioskServerIntegrationTests
 
             if (usesCiServer)
             {
+                KioskLiveServerRegistry.Unregister(ciPid);
                 Process.GetProcessById(ciPid).Kill(entireProcessTree: true);
             }
             else
@@ -415,6 +416,7 @@ public sealed class WindowsKioskServerIntegrationTests
 
             if (usesCiServer)
             {
+                KioskLiveServerRegistry.Unregister(ciPid);
                 Process.GetProcessById(ciPid).Kill(entireProcessTree: true);
             }
             else

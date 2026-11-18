@@ -35,6 +35,14 @@ internal static class KioskLiveServerRegistry
         File.WriteAllText(path, pids.Count == 0 ? "" : string.Join(Environment.NewLine, pids));
     }
 
+    /// <summary>Handed-over live server stays on 127.0.0.1:5225 for later CI phases; do not kill at assembly teardown.</summary>
+    public static void HandOverToCiIntegration(int processId, string reason)
+    {
+        Unregister(processId);
+        SyncPidFileForCi();
+        TraceWrite($"HANDOVER_TO_CI pid={processId} reason={reason}");
+    }
+
     public static void StopAllTrackedOwnedServers()
     {
         foreach (var pid in GetTrackedProcessIds())
@@ -44,6 +52,7 @@ internal static class KioskLiveServerRegistry
                 var proc = Process.GetProcessById(pid);
                 if (!proc.HasExited)
                 {
+                    TraceWrite($"KILL_TRACKED_SERVER pid={pid} reason=owner-test-cleanup");
                     proc.Kill(entireProcessTree: true);
                     proc.WaitForExit(15_000);
                 }
@@ -54,12 +63,28 @@ internal static class KioskLiveServerRegistry
             }
             catch
             {
-                // best-effort assembly teardown
+                // best-effort test cleanup
             }
             finally
             {
                 Unregister(pid);
             }
+        }
+    }
+
+    private static void TraceWrite(string message)
+    {
+        try
+        {
+            var repoRoot = ResolveRepoRoot();
+            var logDir = Path.Combine(repoRoot, "artifacts", "kiosk-windows-logs");
+            Directory.CreateDirectory(logDir);
+            var line = $"{DateTime.UtcNow:O} {message}{Environment.NewLine}";
+            File.AppendAllText(Path.Combine(logDir, "live-server-registry.log"), line);
+        }
+        catch
+        {
+            // diagnostic only
         }
     }
 

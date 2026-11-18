@@ -6,7 +6,6 @@ public sealed class KioskLiveServerAssemblyFixture : IDisposable
 {
     public void Dispose()
     {
-        KioskLiveServerRegistry.StopAllTrackedOwnedServers();
         KioskLiveServerRegistry.AssertNoTrackedServersAlive();
     }
 }

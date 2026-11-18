@@ -89,6 +89,24 @@ public static class KioskStationStatus
             && statusText.IndexOf("not connected", StringComparison.OrdinalIgnoreCase) < 0
             && statusText.IndexOf("reconnecting", StringComparison.OrdinalIgnoreCase) < 0;
 
+    /// <summary>True when an Open ack lease gives new positive playable time for the locked session (top-up resume).</summary>
+    public static bool LeaseGrantsFreshPlayTime(KioskHeartbeatAck ack, Guid lockedSessionId, DateTime utcNow)
+    {
+        if (lockedSessionId == Guid.Empty
+            || ack.Lease?.Payload.SessionId is not Guid leaseSessionId
+            || leaseSessionId != lockedSessionId)
+        {
+            return false;
+        }
+
+        if (ack.Lease.Payload.AuthorizedUntilUtc > utcNow)
+        {
+            return true;
+        }
+
+        return ack.Display?.EstimatedRemainingSeconds is > 0;
+    }
+
     /// <summary>Main lock prefix plus O4-d connection suffix (never bare session countdown while locked).</summary>
     public static string FormatLocalLockScreen(
         string stationId,

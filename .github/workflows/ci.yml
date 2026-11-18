@@ -111,6 +111,7 @@ jobs:
         shell: pwsh
         run: ./scripts/windows/ci-integration.ps1
       - name: kiosk host reconnect mutations (net48 D7 and status tick)
+        if: always()
         shell: pwsh
         env:
           MUTOUT_DIR: artifacts/kiosk-reconnect-mut

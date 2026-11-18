@@ -81,11 +81,17 @@ internal sealed class OutOfProcessLiveServer : IAsyncDisposable
     /// <summary>Record relaunched server PID for windows ci-integration.ps1 cleanup (net48 follow-on).</summary>
     public void RecordCiLiveServerPidForIntegrationCleanup()
     {
-        KioskLiveServerRegistry.SyncPidFileForCi();
         var pid = ProcessId;
         if (pid.HasValue && pid.Value > 0)
         {
+            KioskLiveServerRegistry.HandOverToCiIntegration(
+                pid.Value,
+                "live_server B-7/z_disconnect relaunch handed to CI net48 phase");
             Environment.SetEnvironmentVariable("GAMECLUB_SERVER_PID", pid.Value.ToString());
+        }
+        else
+        {
+            KioskLiveServerRegistry.SyncPidFileForCi();
         }
     }
 

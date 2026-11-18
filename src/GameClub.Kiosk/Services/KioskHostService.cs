@@ -8,7 +8,6 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Threading;
 using GameClub.Kiosk.Core.Catalog;
-using System.Linq;
 using GameClub.Kiosk.Core.Protocol;
 using GameClub.Kiosk.Core.Runtime;
 using GameClub.Kiosk.Core.Security;
@@ -17,6 +16,9 @@ namespace GameClub.Kiosk.Services;
 
 public sealed class KioskHostService : IAsyncDisposable
 {
+    internal static bool TestSessionCleanupThrowsForHostTests { get; set; }
+    internal static bool TestSkipLogoutHttpForHostTests { get; set; }
+
     public const string DeviceIdHeader = "X-Device-Id";
     public const string DeviceKeyHeader = "X-Device-Key";
 
@@ -236,7 +238,7 @@ public sealed class KioskHostService : IAsyncDisposable
 
     public async Task LogoutAsync()
     {
-        if (_sessionId != Guid.Empty)
+        if (_sessionId != Guid.Empty && !TestSkipLogoutHttpForHostTests)
         {
             await _http.PostAsync($"{_serverBase}/api/kiosk/sessions/{_sessionId}/logout", null);
         }
@@ -281,17 +283,24 @@ public sealed class KioskHostService : IAsyncDisposable
             else if (string.Equals(ack.SessionStatus, "Open", StringComparison.OrdinalIgnoreCase))
             {
                 var ackLeaseSession = ack.Lease?.Payload.SessionId;
-                if (_locallyLockedSessionId != Guid.Empty
+                var sameLockedSession = _locallyLockedSessionId != Guid.Empty
                     && ackLeaseSession is Guid leasedWhileLocked
                     && leasedWhileLocked != Guid.Empty
-                    && leasedWhileLocked == _locallyLockedSessionId)
+                    && leasedWhileLocked == _locallyLockedSessionId;
+                if (sameLockedSession
+                    && !KioskStationStatus.LeaseGrantsFreshPlayTime(ack, _locallyLockedSessionId, DateTime.UtcNow))
                 {
                     ShowLockLayout();
                     RefreshStationStatusText();
                 }
                 else
                 {
-                    if (_locallyLockedSessionId != Guid.Empty
+                    if (sameLockedSession
+                        && KioskStationStatus.LeaseGrantsFreshPlayTime(ack, _locallyLockedSessionId, DateTime.UtcNow))
+                    {
+                        _locallyLockedSessionId = Guid.Empty;
+                    }
+                    else if (_locallyLockedSessionId != Guid.Empty
                         && ackLeaseSession is Guid differentSession
                         && differentSession != Guid.Empty
                         && differentSession != _locallyLockedSessionId)
@@ -443,11 +452,12 @@ public sealed class KioskHostService : IAsyncDisposable
             return;
         }
 
-        if (_locallyLockedSessionId != Guid.Empty)
+        if (_locallyLockedSessionId != Guid.Empty
+            || (_sessionId == Guid.Empty && _lockPanel.Visibility == Visibility.Visible))
         {
             _status.Text = KioskStationStatus.FormatLocalLockScreen(
                 _stationId,
-                _localLockLeaseExpired,
+                _locallyLockedSessionId != Guid.Empty && _localLockLeaseExpired,
                 _runtime.TransportPhase,
                 _runtime.IsTransportConnected,
                 _runtime.SignalRAutoReconnecting,
@@ -481,10 +491,17 @@ public sealed class KioskHostService : IAsyncDisposable
         }
 
         _localLockLeaseExpired = leaseExpired;
-        RunSessionCleanup();
         ShowLockLayout();
-        _replayTick.Stop();
         RefreshStationStatusText();
+        _replayTick.Stop();
+        try
+        {
+            RunSessionCleanup();
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"RunSessionCleanup failed during local lock: {ex.Message}");
+        }
     }
 
     private async Task RunStartupCatalogRefreshAsync()
@@ -503,6 +520,11 @@ public sealed class KioskHostService : IAsyncDisposable
 
     private void RunSessionCleanup()
     {
+        if (TestSessionCleanupThrowsForHostTests)
+        {
+            throw new UnauthorizedAccessException("host test session cleanup failure");
+        }
+
         _orchestrator.KillDeniedProcesses();
         _orchestrator.EndSessionCleanup();
         ClearKioskProfileScratch();
@@ -527,33 +549,61 @@ public sealed class KioskHostService : IAsyncDisposable
                 continue;
             }
 
-            DeleteTreeContents(dir);
+            DeleteTreeContentsBestEffort(dir);
         }
     }
 
-    private static void DeleteTreeContents(string directory)
+    private static void DeleteTreeContentsBestEffort(string directory)
     {
-        foreach (var file in Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories))
+        try
         {
-            try
+            foreach (var file in Directory.EnumerateFiles(directory))
             {
-                File.Delete(file);
-            }
-            catch
-            {
-                // best-effort profile cleanup
+                try
+                {
+                    File.Delete(file);
+                }
+                catch (UnauthorizedAccessException)
+                {
+                }
+                catch (IOException)
+                {
+                }
             }
         }
-
-        foreach (var dir in Directory.EnumerateDirectories(directory))
+        catch (UnauthorizedAccessException)
         {
+        }
+        catch (IOException)
+        {
+        }
+
+        string[] subdirs;
+        try
+        {
+            subdirs = Directory.EnumerateDirectories(directory).ToArray();
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return;
+        }
+        catch (IOException)
+        {
+            return;
+        }
+
+        foreach (var sub in subdirs)
+        {
+            DeleteTreeContentsBestEffort(sub);
             try
             {
-                Directory.Delete(dir, recursive: true);
+                Directory.Delete(sub, recursive: false);
             }
-            catch
+            catch (UnauthorizedAccessException)
             {
-                // ignore locked directories
+            }
+            catch (IOException)
+            {
             }
         }
     }

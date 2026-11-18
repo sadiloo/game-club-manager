@@ -65,6 +65,22 @@ public sealed class KioskHostStatusTimerTests
     public void host_lease_expired_lock_shows_locked_prefix_with_connection_state()
         => RunD6LockTextScenario(leaseExpired: true);
 
+    [Fact]
+    public void host_logout_shows_locked_prefix_with_connection_state()
+        => RunD6LogoutLockTextScenario();
+
+    [Fact]
+    public void host_top_up_open_ack_after_lease_lock_resumes_playing()
+        => RunD7TopUpUnlockScenario();
+
+    [Fact]
+    public void host_local_lock_keeps_session_id_bound()
+        => RunD7SessionIdStaysBoundScenario();
+
+    [Fact]
+    public void host_local_lock_shows_layout_when_session_cleanup_throws()
+        => RunLockSurvivesCleanupFailureScenario();
+
     private void RunScenario(bool lateConnect, bool operatorStopLock)
     {
         Exception error = null;
@@ -210,9 +226,8 @@ public sealed class KioskHostStatusTimerTests
                 "device-key",
                 "PC-HOST-D5");
 
-            var ensureRuntime = typeof(KioskHostService).GetMethod("EnsureRuntimeAsync", BindingFlags.Instance | BindingFlags.NonPublic);
-            Assert.NotNull(ensureRuntime);
-            await (Task)ensureRuntime.Invoke(host, null);
+            await runtime.StartAsync(CancellationToken.None);
+            await WaitForTransportConnectedAsync(runtime, TimeSpan.FromSeconds(15));
 
             Assert.True(IsUiTickEnabled(host), "status UI tick must be running for paired boot");
 
@@ -315,10 +330,10 @@ public sealed class KioskHostStatusTimerTests
                         {
                             SessionId = sessionId,
                             StationId = "PC-HOST-D7",
-                            AuthorizedUntilUtc = DateTime.UtcNow.AddHours(1),
+                            AuthorizedUntilUtc = DateTime.UtcNow.AddMinutes(-1),
                         },
                     },
-                    Display = new KioskDisplayDto { EstimatedRemainingSeconds = 3600 },
+                    Display = new KioskDisplayDto { EstimatedRemainingSeconds = 0 },
                 },
             });
 
@@ -330,6 +345,214 @@ public sealed class KioskHostStatusTimerTests
         }
         finally
         {
+            await host.DisposeAsync();
+        }
+    }
+
+    private void RunD7TopUpUnlockScenario()
+    {
+        Exception error = null;
+        _wpf.RunAsync(async () =>
+        {
+            try
+            {
+                await RunD7TopUpUnlockOnDispatcherAsync();
+            }
+            catch (Exception ex)
+            {
+                error = ex;
+            }
+        }, TimeSpan.FromMinutes(2));
+
+        if (error is not null)
+        {
+            Assert.Fail(error.ToString());
+        }
+    }
+
+    private static async Task RunD7TopUpUnlockOnDispatcherAsync()
+    {
+        WritePairedDeviceState("PC-HOST-D7-TU");
+        var host = CreateHost(out _, out var lockPanel, out var playingPanel);
+        var sessionId = Guid.NewGuid();
+        try
+        {
+            SetField(host, "_sessionId", sessionId);
+            var runtime = GetRuntime(host);
+            await runtime.ResetForReconfigureAsync();
+            runtime.ConfigureForTests(
+                new HostTestHubTransport(lateConnect: false),
+                new SqliteOfflineEventQueue(Path.Combine(Path.GetTempPath(), $"host-d7-tu-{Guid.NewGuid():N}.db")),
+                "http://127.0.0.1:5999",
+                Guid.NewGuid(),
+                "device-key",
+                "PC-HOST-D7-TU");
+            runtime.BindSession(sessionId);
+            var onAck = typeof(KioskHostService).GetMethod("OnHeartbeatAcknowledged", BindingFlags.Instance | BindingFlags.NonPublic)!;
+            onAck.Invoke(host, new object[]
+            {
+                new KioskHeartbeatAck
+                {
+                    SessionStatus = "Open",
+                    Lease = new SignedSessionLease
+                    {
+                        Payload = new SessionLeasePayload { SessionId = sessionId, StationId = "PC-HOST-D7-TU" },
+                    },
+                },
+            });
+            Assert.Equal(Visibility.Visible, lockPanel.Visibility);
+
+            onAck.Invoke(host, new object[]
+            {
+                new KioskHeartbeatAck
+                {
+                    SessionStatus = "Open",
+                    Lease = new SignedSessionLease
+                    {
+                        Payload = new SessionLeasePayload
+                        {
+                            SessionId = sessionId,
+                            StationId = "PC-HOST-D7-TU",
+                            AuthorizedUntilUtc = DateTime.UtcNow.AddHours(1),
+                        },
+                    },
+                    Display = new KioskDisplayDto { EstimatedRemainingSeconds = 3600 },
+                },
+            });
+
+            Assert.Equal(Visibility.Collapsed, lockPanel.Visibility);
+            Assert.Equal(Visibility.Visible, playingPanel.Visibility);
+            Assert.Equal(Guid.Empty, GetField(host, "_locallyLockedSessionId"));
+        }
+        finally
+        {
+            await host.DisposeAsync();
+        }
+    }
+
+    private void RunD7SessionIdStaysBoundScenario()
+    {
+        Exception error = null;
+        _wpf.RunAsync(async () =>
+        {
+            try
+            {
+                await RunD7SessionIdStaysBoundOnDispatcherAsync();
+            }
+            catch (Exception ex)
+            {
+                error = ex;
+            }
+        }, TimeSpan.FromMinutes(2));
+
+        if (error is not null)
+        {
+            Assert.Fail(error.ToString());
+        }
+    }
+
+    private static async Task RunD7SessionIdStaysBoundOnDispatcherAsync()
+    {
+        WritePairedDeviceState("PC-HOST-D7-SID");
+        var host = CreateHost(out _, out _, out _);
+        var sessionId = Guid.NewGuid();
+        try
+        {
+            SetField(host, "_sessionId", sessionId);
+            var runtime = GetRuntime(host);
+            runtime.BindSession(sessionId);
+            typeof(KioskHostService).GetMethod("EnterLocalLock", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .Invoke(host, new object[] { true });
+            Assert.Equal(sessionId, GetField(host, "_sessionId"));
+            Assert.Equal(sessionId, GetField(host, "_locallyLockedSessionId"));
+            Assert.Equal(sessionId, runtime.GetType().GetField("_sessionId", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(runtime));
+        }
+        finally
+        {
+            KioskHostService.TestSessionCleanupThrowsForHostTests = false;
+            await host.DisposeAsync();
+        }
+    }
+
+    private void RunLockSurvivesCleanupFailureScenario()
+    {
+        Exception error = null;
+        _wpf.RunAsync(async () =>
+        {
+            try
+            {
+                await RunLockSurvivesCleanupFailureOnDispatcherAsync();
+            }
+            catch (Exception ex)
+            {
+                error = ex;
+            }
+        }, TimeSpan.FromMinutes(2));
+
+        if (error is not null)
+        {
+            Assert.Fail(error.ToString());
+        }
+    }
+
+    private static async Task RunLockSurvivesCleanupFailureOnDispatcherAsync()
+    {
+        WritePairedDeviceState("PC-HOST-CLEANUP");
+        var host = CreateHost(out _, out var lockPanel, out var playingPanel);
+        var sessionId = Guid.NewGuid();
+        try
+        {
+            KioskHostService.TestSessionCleanupThrowsForHostTests = true;
+            SetField(host, "_sessionId", sessionId);
+            GetRuntime(host).BindSession(sessionId);
+            typeof(KioskHostService).GetMethod("EnterLocalLock", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .Invoke(host, new object[] { false });
+            Assert.Equal(Visibility.Visible, lockPanel.Visibility);
+            Assert.Equal(Visibility.Collapsed, playingPanel.Visibility);
+        }
+        finally
+        {
+            KioskHostService.TestSessionCleanupThrowsForHostTests = false;
+            await host.DisposeAsync();
+        }
+    }
+
+    private void RunD6LogoutLockTextScenario()
+    {
+        Exception error = null;
+        _wpf.RunAsync(async () =>
+        {
+            try
+            {
+                await RunD6LogoutLockTextOnDispatcherAsync();
+            }
+            catch (Exception ex)
+            {
+                error = ex;
+            }
+        }, TimeSpan.FromMinutes(2));
+
+        if (error is not null)
+        {
+            Assert.Fail(error.ToString());
+        }
+    }
+
+    private static async Task RunD6LogoutLockTextOnDispatcherAsync()
+    {
+        WritePairedDeviceState("PC-HOST-LOGOUT");
+        var host = CreateHost(out var status, out _, out _);
+        try
+        {
+            KioskHostService.TestSkipLogoutHttpForHostTests = true;
+            SetField(host, "_sessionId", Guid.NewGuid());
+            await host.LogoutAsync();
+            var text = status.Text ?? "";
+            Assert.StartsWith("Locked — PC-HOST-LOGOUT · ", text, StringComparison.Ordinal);
+        }
+        finally
+        {
+            KioskHostService.TestSkipLogoutHttpForHostTests = false;
             await host.DisposeAsync();
         }
     }
@@ -418,6 +641,7 @@ public sealed class KioskHostStatusTimerTests
                 Guid.NewGuid(),
                 "device-key",
                 "PC-HOST-O4D");
+            await runtime.StartAsync(CancellationToken.None);
             runtime.BindSession(sessionId);
             runtime.GetType().GetField("_consecutiveHeartbeatFailures", BindingFlags.Instance | BindingFlags.NonPublic)!
                 .SetValue(runtime, 3);

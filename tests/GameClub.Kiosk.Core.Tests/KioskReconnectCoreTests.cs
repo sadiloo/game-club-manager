@@ -729,6 +729,43 @@ public sealed class KioskReconnectCoreTests
     }
 
     [Fact]
+    public void lease_grants_fresh_play_time_when_top_up_extends_same_session()
+    {
+        var sessionId = Guid.NewGuid();
+        var ack = new KioskHeartbeatAck
+        {
+            SessionStatus = "Open",
+            Lease = new SignedSessionLease
+            {
+                Payload = new SessionLeasePayload
+                {
+                    SessionId = sessionId,
+                    StationId = "PC-TU",
+                    AuthorizedUntilUtc = DateTime.UtcNow.AddHours(1),
+                },
+            },
+            Display = new KioskDisplayDto { EstimatedRemainingSeconds = 120 },
+        };
+        Assert.True(KioskStationStatus.LeaseGrantsFreshPlayTime(ack, sessionId, DateTime.UtcNow));
+
+        var stale = new KioskHeartbeatAck
+        {
+            SessionStatus = "Open",
+            Lease = new SignedSessionLease
+            {
+                Payload = new SessionLeasePayload
+                {
+                    SessionId = sessionId,
+                    StationId = "PC-TU",
+                    AuthorizedUntilUtc = DateTime.UtcNow.AddMinutes(-5),
+                },
+            },
+            Display = new KioskDisplayDto { EstimatedRemainingSeconds = 0 },
+        };
+        Assert.False(KioskStationStatus.LeaseGrantsFreshPlayTime(stale, sessionId, DateTime.UtcNow));
+    }
+
+    [Fact]
     public void local_lock_status_includes_locked_prefix_and_connection_suffix()
     {
         var text = KioskStationStatus.FormatLocalLockScreen(
