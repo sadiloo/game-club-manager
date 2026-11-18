@@ -18,14 +18,14 @@ public class AllocationAndSeedTests
 
         var festival = new RateCardBuilder()
             .AddBand(PilotSeed.PcNormalSpecialHours)
-            .AddBase(PilotSeed.PcNormalGroupId, PlayMode.Offline, 1, PilotSeed.PcNormalHourly)
-            .AddBandRate(PilotSeed.PcNormalBandId, PilotSeed.PcNormalGroupId, PlayMode.Offline, 1, PilotSeed.PcNormalSpecialHourly)
-            .AddSpecialRate("opening", PilotSeed.PcNormalGroupId, PlayMode.Offline, 1, 50_000)
+            .AddBase(PilotSeed.PcNormalGroupId, PlayMode.Online, null, PilotSeed.PcNormalHourly)
+            .AddBandRate(PilotSeed.PcNormalBandId, PilotSeed.PcNormalGroupId, PlayMode.Online, null, PilotSeed.PcNormalSpecialHourly)
+            .AddSpecialRate("opening", PilotSeed.PcNormalGroupId, PlayMode.Online, null, 50_000)
             .Build();
         var days = new SpecialDayCalendar(
             [SpecialDay.Once(JalaliDate.FromGregorian(new LocalDate(2026, 6, 4)), "Opening", "opening")]);
         var onDay = SessionPricer.Price(
-            CafeFixture.Session("d", CafeFixture.Play("a", T.At(2026, 6, 4, 2, 0), T.At(2026, 6, 4, 3, 0), "pc-1", PilotSeed.PcNormalGroupId, 1)),
+            CafeFixture.Session("d", CafeFixture.Play("a", T.At(2026, 6, 4, 2, 0), T.At(2026, 6, 4, 3, 0), "pc-1", PilotSeed.PcNormalGroupId, 1, PlayMode.Online)),
             festival,
             days);
         Assert.Equal(RateSource.SpecialDay, Assert.Single(onDay.Lines).Source);
@@ -465,8 +465,9 @@ public class AllocationAndSeedTests
     private static long Hour(RateCard card, string group, string station, int hour)
     {
         var start = T.At(2026, 6, 2, hour, 0);
+        var mode = group is PilotSeed.PcNormalGroupId or PilotSeed.PcVipGroupId ? PlayMode.Online : PlayMode.Offline;
         return SessionPricer.Price(
-            CafeFixture.Session("s", CafeFixture.Play("a", start, start.AddHours(1), station, group, 1)),
+            CafeFixture.Session("s", CafeFixture.Play("a", start, start.AddHours(1), station, group, 1, mode)),
             card).TotalAmountToman;
     }
 

@@ -13,6 +13,7 @@ public interface IKioskLeaseSigner
 {
     string PublicKeyPem { get; }
     SignedSessionLease Sign(SessionLeasePayload payload);
+    SignedInternetCommand SignInternet(InternetCommandPayload payload);
 }
 
 public sealed class KioskLeaseSigner : IKioskLeaseSigner, IDisposable
@@ -55,6 +56,14 @@ public sealed class KioskLeaseSigner : IKioskLeaseSigner, IDisposable
         var data = Encoding.UTF8.GetBytes(canonical);
         var sig = _rsa.SignData(data, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
         return new SignedSessionLease { Payload = payload, SignatureBase64 = Convert.ToBase64String(sig) };
+    }
+
+    public SignedInternetCommand SignInternet(InternetCommandPayload payload)
+    {
+        var canonical = GameClub.Kiosk.Core.Lease.LeaseVerifier.CanonicalJson(payload);
+        var data = Encoding.UTF8.GetBytes(canonical);
+        var sig = _rsa.SignData(data, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+        return new SignedInternetCommand { Payload = payload, SignatureBase64 = Convert.ToBase64String(sig) };
     }
 
     public void Dispose() => _rsa.Dispose();

@@ -11,8 +11,6 @@ public sealed record BranchRatesSnapshot(RateCard Card, RoundingPolicy Rounding)
 
 public sealed class RateConfigService(AppDbContext db, AuditService audit)
 {
-    public const long DefaultPcSpecialBandSurchargeToman = 20_000;
-
     public async Task<BranchRatesSnapshot> LoadAsync(CancellationToken ct = default)
     {
         var roundingRow = await db.BranchRounding.AsNoTracking().SingleAsync(ct);
@@ -23,7 +21,7 @@ public sealed class RateConfigService(AppDbContext db, AuditService audit)
             return new BranchRatesSnapshot(PilotSeed.CreateCard(), rounding);
         }
 
-        var card = BuildCard(lines, roundingRow.PcSpecialBandSurchargeToman);
+        var card = BuildCardFromDbLines(lines);
         return new BranchRatesSnapshot(card, rounding);
     }
 
@@ -42,7 +40,6 @@ public sealed class RateConfigService(AppDbContext db, AuditService audit)
         return new RateConfigResponse(
             roundingRow.StepToman,
             roundingRow.Direction,
-            roundingRow.PcSpecialBandSurchargeToman,
             lines);
     }
 
@@ -67,18 +64,9 @@ public sealed class RateConfigService(AppDbContext db, AuditService audit)
             }
         }
 
-        if (request.PcSpecialBandSurchargeToman is { } requestedSurcharge && requestedSurcharge < 0)
-        {
-            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_rate", "PC special-band surcharge cannot be negative.");
-        }
-
         var rounding = await db.BranchRounding.SingleAsync(ct);
         rounding.StepToman = request.RoundingStepToman;
         rounding.Direction = request.RoundingDirection;
-        if (request.PcSpecialBandSurchargeToman is { } surcharge)
-        {
-            rounding.PcSpecialBandSurchargeToman = surcharge;
-        }
 
         foreach (var line in request.Lines)
         {
@@ -113,25 +101,46 @@ public sealed class RateConfigService(AppDbContext db, AuditService audit)
     {
         var roundingRow = await db.BranchRounding.AsNoTracking().SingleAsync(ct);
         var lines = await db.RateLines.AsNoTracking().ToListAsync(ct);
-        var payload = new StoredBranchRates(
+        var payload = new StoredBranchRatesV2(
+            PcRateCardSupport.SnapshotSchemaVersion,
             roundingRow.StepToman,
             roundingRow.Direction,
-            roundingRow.PcSpecialBandSurchargeToman,
             lines.Select(l => new StoredRateLine(l.GroupId, l.PlayMode, l.PlayerCount, l.IsSpecialBand, l.HourlyToman)).ToList());
         return new RateCardSnapshotEntity { Json = JsonSerializer.Serialize(payload) };
     }
 
     internal BranchRatesSnapshot DeserializeSnapshot(string json)
     {
-        var stored = JsonSerializer.Deserialize<StoredBranchRates>(json)
-            ?? throw new InvalidOperationException("Invalid rate snapshot.");
-        var roundingRow = new BranchRoundingEntity
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+        var schemaVersion = root.TryGetProperty("SchemaVersion", out var sv) ? sv.GetInt32() : (int?)null;
+        var step = root.GetProperty("StepToman").GetInt64();
+        var direction = root.GetProperty("Direction").GetString()!;
+        if (schemaVersion == PcRateCardSupport.SnapshotSchemaVersion)
         {
-            StepToman = stored.StepToman,
-            Direction = stored.Direction,
-            PcSpecialBandSurchargeToman = stored.PcSpecialBandSurchargeToman,
-        };
-        var lines = stored.Lines.Select(l => new RateLineEntity
+            var lines = root.GetProperty("Lines").Deserialize<List<StoredRateLine>>(JsonSerializerOptions.Web)
+                ?? throw new InvalidOperationException("Invalid rate snapshot lines.");
+            var entities = lines.Select(l => new RateLineEntity
+            {
+                GroupId = l.GroupId,
+                PlayMode = l.PlayMode,
+                PlayerCount = l.PlayerCount,
+                IsSpecialBand = l.IsSpecialBand,
+                HourlyToman = l.HourlyToman,
+            }).ToList();
+            var rounding = BuildRounding(new BranchRoundingEntity { StepToman = step, Direction = direction });
+            return new BranchRatesSnapshot(BuildCardFromDbLines(entities), rounding);
+        }
+
+        long surcharge = 20_000;
+        if (root.TryGetProperty("PcSpecialBandSurchargeToman", out var sc))
+        {
+            surcharge = sc.GetInt64();
+        }
+
+        var legacyLines = root.GetProperty("Lines").Deserialize<List<StoredRateLine>>(JsonSerializerOptions.Web)
+            ?? throw new InvalidOperationException("Invalid rate snapshot lines.");
+        var legacyEntities = legacyLines.Select(l => new RateLineEntity
         {
             GroupId = l.GroupId,
             PlayMode = l.PlayMode,
@@ -139,13 +148,14 @@ public sealed class RateConfigService(AppDbContext db, AuditService audit)
             IsSpecialBand = l.IsSpecialBand,
             HourlyToman = l.HourlyToman,
         }).ToList();
-        return new BranchRatesSnapshot(BuildCard(lines, roundingRow.PcSpecialBandSurchargeToman), BuildRounding(roundingRow));
+        var legacyRounding = BuildRounding(new BranchRoundingEntity { StepToman = step, Direction = direction });
+        return new BranchRatesSnapshot(BuildCardLegacy(legacyEntities, surcharge), legacyRounding);
     }
 
-    private sealed record StoredBranchRates(
+    private sealed record StoredBranchRatesV2(
+        int SchemaVersion,
         long StepToman,
         string Direction,
-        long PcSpecialBandSurchargeToman,
         IReadOnlyList<StoredRateLine> Lines);
 
     private sealed record StoredRateLine(
@@ -163,7 +173,7 @@ public sealed class RateConfigService(AppDbContext db, AuditService audit)
         return RoundingPolicy.Create(row.StepToman, direction, RoundingScope.WholeInvoice);
     }
 
-    private static RateCard BuildCard(IReadOnlyList<RateLineEntity> lines, long pcSpecialSurchargeToman)
+    private static RateCard BuildCardFromDbLines(IReadOnlyList<RateLineEntity> lines)
     {
         var builder = new RateCardBuilder()
             .AddBand(GameTimerReference.SpecialHours)
@@ -174,11 +184,48 @@ public sealed class RateConfigService(AppDbContext db, AuditService audit)
         {
             var mode = Enum.Parse<PlayMode>(line.PlayMode, true);
             builder.AddBase(line.GroupId, mode, line.PlayerCount, line.HourlyToman);
-            if (IsPcGroup(line.GroupId))
+        }
+
+        foreach (var line in lines.Where(l => l.IsSpecialBand))
+        {
+            var mode = Enum.Parse<PlayMode>(line.PlayMode, true);
+            if (PcRateCardSupport.IsPcGroup(line.GroupId))
             {
-                var bandId = line.GroupId == PilotSeed.PcNormalGroupId
-                    ? PilotSeed.PcNormalBandId
-                    : PilotSeed.PcVipBandId;
+                builder.AddBandRate(
+                    PcRateCardSupport.BandIdForGroup(line.GroupId),
+                    line.GroupId,
+                    mode,
+                    line.PlayerCount,
+                    line.HourlyToman);
+            }
+            else if (line.GroupId == GameTimerReference.Ps5GroupId)
+            {
+                builder.AddBandRate(
+                    GameTimerReference.SpecialBandId,
+                    line.GroupId,
+                    mode,
+                    line.PlayerCount,
+                    line.HourlyToman);
+            }
+        }
+
+        return builder.Build();
+    }
+
+    private static RateCard BuildCardLegacy(IReadOnlyList<RateLineEntity> lines, long pcSpecialSurchargeToman)
+    {
+        var builder = new RateCardBuilder()
+            .AddBand(GameTimerReference.SpecialHours)
+            .AddBand(PilotSeed.PcNormalSpecialHours)
+            .AddBand(PilotSeed.PcVipSpecialHours);
+
+        foreach (var line in lines.Where(l => !l.IsSpecialBand))
+        {
+            var mode = Enum.Parse<PlayMode>(line.PlayMode, true);
+            builder.AddBase(line.GroupId, mode, line.PlayerCount, line.HourlyToman);
+            if (PcRateCardSupport.IsPcGroup(line.GroupId))
+            {
+                var bandId = PcRateCardSupport.BandIdForGroup(line.GroupId);
                 builder.AddBandRate(
                     bandId,
                     line.GroupId,
@@ -201,9 +248,6 @@ public sealed class RateConfigService(AppDbContext db, AuditService audit)
 
         return builder.Build();
     }
-
-    private static bool IsPcGroup(string groupId)
-        => groupId is PilotSeed.PcNormalGroupId or PilotSeed.PcVipGroupId;
 
     public static IReadOnlyList<RateLineEntity> PilotSeedLines()
     {
@@ -238,8 +282,10 @@ public sealed class RateConfigService(AppDbContext db, AuditService audit)
             Special(ps5, PlayMode.Offline, 3, GameTimerReference.Ps5ThreePlayerSpecialHourly),
             Special(ps5, PlayMode.Offline, 4, GameTimerReference.Ps5FourPlayerSpecialHourly),
             Special(ps5, PlayMode.Online, null, GameTimerReference.Ps5OnlineSpecialHourly),
-            Base(PilotSeed.PcNormalGroupId, PlayMode.Offline, 1, PilotSeed.PcNormalHourly),
-            Base(PilotSeed.PcVipGroupId, PlayMode.Offline, 1, PilotSeed.PcVipHourly),
+            Base(PilotSeed.PcNormalGroupId, PlayMode.Online, null, PilotSeed.PcNormalHourly),
+            Special(PilotSeed.PcNormalGroupId, PlayMode.Online, null, PilotSeed.PcNormalSpecialHourly),
+            Base(PilotSeed.PcVipGroupId, PlayMode.Online, null, PilotSeed.PcVipHourly),
+            Special(PilotSeed.PcVipGroupId, PlayMode.Online, null, PilotSeed.PcVipSpecialHourly),
         ];
     }
 }
@@ -254,7 +300,6 @@ public sealed record RateLineResponse(
 public sealed record RateConfigResponse(
     long RoundingStepToman,
     string RoundingDirection,
-    long PcSpecialBandSurchargeToman,
     IReadOnlyList<RateLineResponse> Lines);
 
 public sealed record RateLineUpdate(
@@ -267,5 +312,4 @@ public sealed record RateLineUpdate(
 public sealed record RateConfigUpdateRequest(
     long RoundingStepToman,
     string RoundingDirection,
-    IReadOnlyList<RateLineUpdate> Lines,
-    long? PcSpecialBandSurchargeToman = null);
+    IReadOnlyList<RateLineUpdate> Lines);

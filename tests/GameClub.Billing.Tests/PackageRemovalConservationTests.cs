@@ -75,7 +75,7 @@ public sealed class PackageRemovalConservationTests
       var start = TehranTime.AddSeconds(T.At(2026, 6, 5, 20, 0), rng.Next(0, 8 * 3600));
       var end = TehranTime.AddSeconds(start, rng.Next(30, 2 * 3600));
       var charge = SessionPricer.Price(
-        new Session("x", [new PlaySegment("a", start, end, "st", groupId, PlayMode.Offline, 1)]),
+        new Session("x", [new PlaySegment("a", start, end, "st", groupId, groupId is PilotSeed.PcNormalGroupId or PilotSeed.PcVipGroupId ? PlayMode.Online : PlayMode.Offline, 1)]),
         card,
         policy: policy);
       var balance = rng.Next(0, 300_000);

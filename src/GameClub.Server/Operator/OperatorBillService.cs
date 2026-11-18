@@ -136,7 +136,8 @@ public sealed class OperatorBillService(
     OperatorPolicies policies,
     OperatorMemberContext memberContext,
     OperatorShiftGate shiftGate,
-    RateConfigService rates)
+    RateConfigService rates,
+    StationInternetStateService internetStates)
 {
     private static long DisplayHourlyToman(
         PlaySegmentEntity segment,
@@ -565,6 +566,19 @@ public sealed class OperatorBillService(
             await audit.AppendAsync("pc_overshoot", new { sessionId = session.Id, alert.Code, alert.AmountToman, alert.Message }, ct);
         }
 
+        var desiredVersion = await internetStates.BumpDesiredAsync(
+            session.StationId,
+            desiredOn: true,
+            endUtc,
+            userId: null,
+            "session_end",
+            session.Id,
+            ct);
+        await audit.AppendAsync(
+            "internet.auto_on",
+            new { stationId = session.StationId, sessionId = session.Id, reason = source, desiredVersion },
+            ct);
+
         var bill = new PendingBillEntity
         {
             Id = Guid.NewGuid(),
@@ -774,9 +788,11 @@ public sealed class OperatorBillService(
 
     private static void ApplyPlayEnd(PlaySessionEntity session, DateTime endUtc)
     {
+        var isPc = session.Station?.Group?.Kind == StationKind.Pc
+            || session.Segments.Any(s => s.Kind == StationKind.Pc);
         foreach (var seg in session.Segments.Where(s => s.EndUtc is null))
         {
-            seg.EndUtc = endUtc;
+            seg.EndUtc = isPc ? (seg.StartUtc > endUtc ? seg.StartUtc : endUtc) : endUtc;
         }
 
         foreach (var pause in session.Pauses.Where(p => p.EndUtc is null))

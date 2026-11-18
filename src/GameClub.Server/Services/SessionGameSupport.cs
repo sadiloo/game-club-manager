@@ -159,7 +159,7 @@ public static class SessionGameSupport
                 throw new ApiException(StatusCodes.Status409Conflict, ex.Code, ex.Message);
             }
 
-            ConsolePrepaidRecalculator.RecalcAmountPrepaid(session, openSegment, snapshot, clock.UtcNow.UtcDateTime);
+            SessionPrepaidRecalculator.RecalcAmountPrepaid(session, openSegment, snapshot, clock.UtcNow.UtcDateTime);
 
             await audit.AppendAsync(
                 "session.game",

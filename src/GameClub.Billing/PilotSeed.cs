@@ -63,11 +63,11 @@ public static class PilotSeed
             .AddBandRate(GameTimerReference.SpecialBandId, GameTimerReference.Ps5GroupId, PlayMode.Offline, 4, GameTimerReference.Ps5FourPlayerSpecialHourly)
             .AddBandRate(GameTimerReference.SpecialBandId, GameTimerReference.Ps5GroupId, PlayMode.Online, null, GameTimerReference.Ps5OnlineSpecialHourly)
             .AddBand(PcNormalSpecialHours)
-            .AddBase(PcNormalGroupId, PlayMode.Offline, 1, PcNormalHourly)
-            .AddBandRate(PcNormalBandId, PcNormalGroupId, PlayMode.Offline, 1, PcNormalSpecialHourly)
+            .AddBase(PcNormalGroupId, PlayMode.Online, null, PcNormalHourly)
+            .AddBandRate(PcNormalBandId, PcNormalGroupId, PlayMode.Online, null, PcNormalSpecialHourly)
             .AddBand(PcVipSpecialHours)
-            .AddBase(PcVipGroupId, PlayMode.Offline, 1, PcVipHourly)
-            .AddBandRate(PcVipBandId, PcVipGroupId, PlayMode.Offline, 1, PcVipSpecialHourly)
+            .AddBase(PcVipGroupId, PlayMode.Online, null, PcVipHourly)
+            .AddBandRate(PcVipBandId, PcVipGroupId, PlayMode.Online, null, PcVipSpecialHourly)
             .Build();
     }
 }

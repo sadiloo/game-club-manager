@@ -78,7 +78,7 @@ public class Round6Tests
             [new Station("pc1", "PC 1", PilotSeed.PcNormalGroupId)]);
         var start = T.At(2026, 6, 2, 10, 0);
         var session = new Session("pc", [
-            new PlaySegment("a", start, start.AddMinutes(10), "pc1", PilotSeed.PcNormalGroupId, PlayMode.Offline, 1, StationKind.Console),
+            new PlaySegment("a", start, start.AddMinutes(10), "pc1", PilotSeed.PcNormalGroupId, PlayMode.Online, 1, StationKind.Console),
         ]);
         var error = Assert.Throws<BillingException>(() => SessionPricer.Price(session, PilotSeed.CreateCard(), stations: stations));
         Assert.Equal(BillingErrors.InvalidSession, error.Code);
@@ -238,8 +238,8 @@ public class Round6Tests
                 session = new Session(
                     "gap",
                     [
-                        new PlaySegment("a", gapStart, gapStart.AddHours(1), "st", groupId, PlayMode.Offline, 1),
-                        new PlaySegment("b", T.At(2026, 6, 6, 0, 30), T.At(2026, 6, 6, 1, 30), "st", groupId, PlayMode.Offline, 1),
+                        new PlaySegment("a", gapStart, gapStart.AddHours(1), "st", groupId, PcPlayMode(groupId), 1),
+                        new PlaySegment("b", T.At(2026, 6, 6, 0, 30), T.At(2026, 6, 6, 1, 30), "st", groupId, PcPlayMode(groupId), 1),
                     ]);
             }
             else if (rng.Next(3) == 0 && groupId == "g")
@@ -249,7 +249,7 @@ public class Round6Tests
             }
             else
             {
-                session = new Session("s", [new PlaySegment("a", start, end, "st", groupId, PlayMode.Offline, 1)]);
+                session = new Session("s", [new PlaySegment("a", start, end, "st", groupId, PcPlayMode(groupId), 1)]);
             }
 
             var charge = SessionPricer.Price(session, card, stations: stations, policy: policy);
@@ -776,4 +776,7 @@ public class Round6Tests
 
     private static CustomerAccount Wallet()
         => new("m", WalletSettings.Shared with { ApplyDiscountsToPc = true }, new WalletPocket(1_000_000, 0), new WalletPocket(0, 0));
+
+    private static PlayMode PcPlayMode(string groupId)
+        => groupId is PilotSeed.PcNormalGroupId or PilotSeed.PcVipGroupId ? PlayMode.Online : PlayMode.Offline;
 }

@@ -8,11 +8,11 @@ public class Round3Tests
     public void Prepaid_pc_invoice_with_pilot_rounding_keeps_the_exact_debit()
     {
         var card = new RateCardBuilder()
-            .AddBase(PilotSeed.PcNormalGroupId, PlayMode.Offline, 1, PilotSeed.PcNormalHourly)
+            .AddBase(PilotSeed.PcNormalGroupId, PlayMode.Online, null, PilotSeed.PcNormalHourly)
             .Build();
         var start = T.At(2026, 6, 2, 10, 0);
         var charge = SessionPricer.Price(new Session("pc", [
-            new PlaySegment("a", start, start.AddMinutes(3), "pc-1", PilotSeed.PcNormalGroupId, PlayMode.Offline, 1, StationKind.Pc),
+            new PlaySegment("a", start, start.AddMinutes(3), "pc-1", PilotSeed.PcNormalGroupId, PlayMode.Online, 1, StationKind.Pc),
         ]), card);
         Assert.Equal(4_000, charge.TotalAmountToman);
 
@@ -93,19 +93,19 @@ public class Round3Tests
         var start = T.At(2026, 6, 2, 10, 0);
         var pause = new PauseInterval(start.AddMinutes(2), start.AddMinutes(3));
         var pc = new Session("pc", [
-            new PlaySegment("a", start, start.AddMinutes(10), "pc-1", PilotSeed.PcNormalGroupId, PlayMode.Offline, 1),
+            new PlaySegment("a", start, start.AddMinutes(10), "pc-1", PilotSeed.PcNormalGroupId, PlayMode.Online, 1),
         ], [pause]);
         var error = Assert.Throws<BillingException>(() => SessionPricer.Price(pc, PilotSeed.CreateCard(), stations: stations));
         Assert.Equal(BillingErrors.PcPause, error.Code);
 
         var marked = new Session("pc", [
-            new PlaySegment("a", start, start.AddMinutes(10), "pc-1", PilotSeed.PcNormalGroupId, PlayMode.Offline, 1, StationKind.Pc),
+            new PlaySegment("a", start, start.AddMinutes(10), "pc-1", PilotSeed.PcNormalGroupId, PlayMode.Online, 1, StationKind.Pc),
         ], [pause]);
         var markedError = Assert.Throws<BillingException>(() => SessionPricer.Price(marked, PilotSeed.CreateCard()));
         Assert.Equal(BillingErrors.PcPause, markedError.Code);
 
         var console = new Session("ps", [
-            new PlaySegment("a", start, start.AddMinutes(10), "ps5-1", CafeFixture.Ps5, PlayMode.Offline, 1),
+            new PlaySegment("a", start, start.AddMinutes(10), "ps5-1", CafeFixture.Ps5, PlayMode.Online, 1),
         ], [pause]);
         var priced = SessionPricer.Price(console, CafeFixture.Card(), stations: stations);
         Assert.Equal(9, priced.TotalBilledMinutes);

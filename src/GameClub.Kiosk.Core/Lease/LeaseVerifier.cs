@@ -37,6 +37,9 @@ public sealed class LeaseVerifier
     public static string CanonicalJson(SessionLeasePayload p)
         => JsonSerializer.Serialize(p);
 
+    public static string CanonicalJson(InternetCommandPayload p)
+        => JsonSerializer.Serialize(p);
+
     private void ImportPublicKeyPem(string pem)
     {
 #if NET10_0_OR_GREATER

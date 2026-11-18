@@ -52,6 +52,7 @@ public partial class Program
         builder.Services.AddScoped<GameTariffService>();
         builder.Services.AddScoped<SessionBilling>();
         builder.Services.AddScoped<SessionCloser>();
+        builder.Services.AddScoped<StationInternetStateService>();
         builder.Services.AddScoped<SessionService>();
         builder.Services.AddScoped<BillCalculator>();
         builder.Services.AddScoped<OperatorBillService>();
