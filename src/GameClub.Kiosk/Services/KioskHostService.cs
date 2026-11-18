@@ -270,10 +270,22 @@ public sealed class KioskHostService : IAsyncDisposable
                 {
                     throw new HttpRequestException("simulated logout HTTP failure");
                 }
+                else if (_testSeam?.LogoutHttpSimulatedStatusCode is int simulatedStatus)
+                {
+                    logoutHttpSucceeded = simulatedStatus >= 200 && simulatedStatus < 300;
+                    if (!logoutHttpSucceeded)
+                    {
+                        Trace.TraceWarning($"Logout HTTP failed during logout: {simulatedStatus}");
+                    }
+                }
                 else
                 {
-                    await _http.PostAsync($"{_serverBase}/api/kiosk/sessions/{sessionForLogout}/logout", null);
-                    logoutHttpSucceeded = true;
+                    using var response = await _http.PostAsync($"{_serverBase}/api/kiosk/sessions/{sessionForLogout}/logout", null);
+                    logoutHttpSucceeded = response.IsSuccessStatusCode;
+                    if (!logoutHttpSucceeded)
+                    {
+                        Trace.TraceWarning($"Logout HTTP failed during logout: {(int)response.StatusCode}");
+                    }
                 }
             }
             catch (Exception ex)

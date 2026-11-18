@@ -109,7 +109,7 @@ M = [
     (
         "Host_no_top_up_unlock",
         HS,
-        r"if \(sameLockedSession && phase == KioskShellPhase\.Playing\)\s*\{\s*_locallyLockedSessionId = Guid\.Empty;\s*\}",
+        r"if \(sameLockedSession && phase == KioskShellPhase\.Playing && !_logoutInProgress\)\s*\{\s*_locallyLockedSessionId = Guid\.Empty;\s*\}",
         "if (sameLockedSession && phase == KioskShellPhase.Playing)\n                {\n                    _ = _locallyLockedSessionId;\n                }",
         "host-d5",
         "host_top_up_open_ack_after_lease_lock_resumes_playing",

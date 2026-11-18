@@ -12,4 +12,7 @@ public sealed class KioskHostTestSeam
     public bool SimulateSuccessfulLogoutHttp { get; init; }
 
     public bool LogoutHttpThrows { get; init; }
+
+    /// <summary>When set, skips real HTTP and treats this status as the logout POST result.</summary>
+    public int? LogoutHttpSimulatedStatusCode { get; init; }
 }
