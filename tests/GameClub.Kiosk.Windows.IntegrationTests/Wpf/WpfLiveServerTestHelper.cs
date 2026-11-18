@@ -127,15 +127,17 @@ internal static class WpfLiveServerTestHelper
         var customerId = ParseGuidProperty(createdJson, "id");
         var topUp = await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up", new { method = "Cash", amountToman = 48_667L , commandId = Guid.NewGuid() });
         LastTopUpStatus = (int)topUp.StatusCode;
+        topUp.EnsureSuccessStatusCode();
         var credential = await op.PutJsonAsync($"/api/operator/customers/{customerId}/credential", new { loginName, password });
         LastCredentialStatus = (int)credential.StatusCode;
+        credential.EnsureSuccessStatusCode();
 
         var codeResponse = await op.PostAsync($"/api/operator/stations/{stationId}/pairing-code", null);
-        codeResponse.EnsureSuccessStatusCode();
+        await EnsureSuccessWithBodyAsync(codeResponse, $"POST /api/operator/stations/{stationId}/pairing-code");
         var codeJson = await codeResponse.Content.ReadAsStringAsync();
         var pairingCode = ParseStringProperty(codeJson, "code");
         var pair = await api.PostAsJsonAsync("/api/kiosk/pair", new { code = pairingCode });
-        pair.EnsureSuccessStatusCode();
+        await EnsureSuccessWithBodyAsync(pair, "POST /api/kiosk/pair");
         var pairJson = await pair.Content.ReadAsStringAsync();
         var deviceId = ParseGuidProperty(pairJson, "deviceId");
         var deviceKey = ParseStringProperty(pairJson, "deviceKey");
@@ -164,6 +166,18 @@ internal static class WpfLiveServerTestHelper
             leaseVerifyPublicKeyPem = leasePem,
         });
         File.WriteAllText(Path.Combine(root, "device.json"), json);
+    }
+
+    private static async Task EnsureSuccessWithBodyAsync(HttpResponseMessage response, string operation)
+    {
+        if (response.IsSuccessStatusCode)
+        {
+            return;
+        }
+
+        var body = await response.Content.ReadAsStringAsync();
+        throw new HttpRequestException(
+            $"{operation} failed: HTTP {(int)response.StatusCode} {response.ReasonPhrase}. Body: {body}");
     }
 
     private static string ResolveConnectionString() =>

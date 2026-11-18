@@ -10,12 +10,14 @@ internal sealed class OutOfProcessLiveServer : IAsyncDisposable
     private Process? _process;
     private readonly string _repoRoot;
     private readonly string _serverDll;
+    private bool _ownsProcess;
 
-    private OutOfProcessLiveServer(string repoRoot, string serverDll, Process process)
+    private OutOfProcessLiveServer(string repoRoot, string serverDll, Process process, bool ownsProcess)
     {
         _repoRoot = repoRoot;
         _serverDll = serverDll;
         _process = process;
+        _ownsProcess = ownsProcess;
     }
 
     public string BaseUrl { get; private set; } = "";
@@ -27,21 +29,22 @@ internal sealed class OutOfProcessLiveServer : IAsyncDisposable
         var proc = Process.GetProcessById(processId);
         var dll = Environment.GetEnvironmentVariable("GAMECLUB_SERVER_DLL") ?? "";
         var root = ResolveRepoRoot();
-        return new OutOfProcessLiveServer(root, dll, proc) { BaseUrl = baseUrl.TrimEnd('/') };
+        return new OutOfProcessLiveServer(root, dll, proc, ownsProcess: false) { BaseUrl = baseUrl.TrimEnd('/') };
     }
 
     public static async Task<OutOfProcessLiveServer> StartNewAsync(CancellationToken ct = default)
     {
         var root = ResolveRepoRoot();
         var dll = ResolveServerDll(root);
+        var defaultPort = 5200 + Random.Shared.Next(200, 800);
         var baseUrl = Environment.GetEnvironmentVariable("CHECKPOINT_SERVER_URL")?.TrimEnd('/')
-            ?? "http://127.0.0.1:5225";
-        var instance = new OutOfProcessLiveServer(root, dll, null!) { BaseUrl = baseUrl };
+            ?? $"http://127.0.0.1:{defaultPort}";
+        var instance = new OutOfProcessLiveServer(root, dll, null!, ownsProcess: true) { BaseUrl = baseUrl };
         await instance.LaunchAndWaitReadyAsync(ct);
         return instance;
     }
 
-    public bool IsOwnedProcess(int pid) => _process is not null && _process.Id == pid;
+    public bool IsOwnedProcess(int pid) => _ownsProcess && _process is not null && _process.Id == pid;
 
     public void Stop()
     {
@@ -50,6 +53,8 @@ internal sealed class OutOfProcessLiveServer : IAsyncDisposable
             return;
         }
 
+        var pid = _process.Id;
+        KioskLiveServerRegistry.LogServerKill(pid, "out_of_process_live_server_stop");
         try
         {
             _process.Kill(entireProcessTree: true);
@@ -59,6 +64,10 @@ internal sealed class OutOfProcessLiveServer : IAsyncDisposable
         {
             // process may already be gone
         }
+        finally
+        {
+            KioskLiveServerRegistry.Unregister(pid);
+        }
     }
 
     public async Task RelaunchAsync(CancellationToken ct = default)
@@ -66,12 +75,30 @@ internal sealed class OutOfProcessLiveServer : IAsyncDisposable
         Stop();
         _process = null;
         await Task.Delay(TimeSpan.FromSeconds(3), ct);
+        _ownsProcess = true;
         await LaunchAndWaitReadyAsync(ct);
+    }
+
+    /// <summary>Record relaunched server PID for windows ci-integration.ps1 cleanup (net48 follow-on).</summary>
+    public void RecordCiLiveServerPidForIntegrationCleanup()
+    {
+        var pid = ProcessId;
+        if (pid.HasValue && pid.Value > 0)
+        {
+            KioskLiveServerRegistry.HandOverToCiIntegration(
+                pid.Value,
+                "live_server B-7/z_disconnect relaunch handed to CI net48 phase");
+            Environment.SetEnvironmentVariable("GAMECLUB_SERVER_PID", pid.Value.ToString());
+        }
+        else
+        {
+            KioskLiveServerRegistry.SyncPidFileForCi();
+        }
     }
 
     public async ValueTask DisposeAsync()
     {
-        if (_process is not null && !_process.HasExited && Environment.GetEnvironmentVariable("GAMECLUB_SERVER_PID") is null)
+        if (_ownsProcess && _process is not null && !_process.HasExited)
         {
             Stop();
         }
@@ -96,6 +123,8 @@ internal sealed class OutOfProcessLiveServer : IAsyncDisposable
         CopyServerEnvironment(psi);
         psi.Environment["ASPNETCORE_URLS"] = BaseUrl;
         _process = Process.Start(psi) ?? throw new InvalidOperationException("Failed to start GameClub.Server.");
+        KioskLiveServerRegistry.RegisterOwned(_process.Id, $"dll={_serverDll}");
+
         _ = Task.Run(() => File.AppendAllText(outLog, _process.StandardOutput.ReadToEnd()));
         _ = Task.Run(() => File.AppendAllText(errLog, _process.StandardError.ReadToEnd()));
 
@@ -110,6 +139,11 @@ internal sealed class OutOfProcessLiveServer : IAsyncDisposable
                 var response = await http.GetAsync($"{BaseUrl}/api/stations", ct);
                 if (response.IsSuccessStatusCode)
                 {
+                    if (_process is not null)
+                    {
+                        Environment.SetEnvironmentVariable("GAMECLUB_SERVER_PID", _process.Id.ToString());
+                    }
+
                     return;
                 }
             }
@@ -145,6 +179,13 @@ internal sealed class OutOfProcessLiveServer : IAsyncDisposable
             || string.IsNullOrWhiteSpace(psi.Environment["OperatorSessionSecret"]))
         {
             psi.Environment["OperatorSessionSecret"] = "ci-operator-secret-r11";
+        }
+
+        if ((!psi.Environment.ContainsKey("GAMECLUB_DATABASE")
+            || string.IsNullOrWhiteSpace(psi.Environment["GAMECLUB_DATABASE"]))
+            && !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("GAMECLUB_TEST_DATABASE")))
+        {
+            psi.Environment["GAMECLUB_DATABASE"] = Environment.GetEnvironmentVariable("GAMECLUB_TEST_DATABASE")!;
         }
     }
 

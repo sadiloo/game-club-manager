@@ -8,7 +8,6 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Threading;
 using GameClub.Kiosk.Core.Catalog;
-using System.Linq;
 using GameClub.Kiosk.Core.Protocol;
 using GameClub.Kiosk.Core.Runtime;
 using GameClub.Kiosk.Core.Security;
@@ -46,7 +45,14 @@ public sealed class KioskHostService : IAsyncDisposable
     private string _deviceKey = "";
     private string _stationId = "";
     private Guid _sessionId;
+    private Guid _locallyLockedSessionId;
+    private bool _localLockLeaseExpired;
+    private bool _logoutInProgress;
     private KioskDisplayDto? _lastDisplay;
+    private bool _runCatalogOnFirstConnected;
+    private bool _pairingJustFailed;
+    private DateTime? _lastHeartbeatAckUtc;
+    private readonly KioskHostTestSeam? _testSeam;
 
     public string ServerBase => _serverBase;
 
@@ -61,8 +67,10 @@ public sealed class KioskHostService : IAsyncDisposable
         UIElement playingPanel,
         ListBox? gameList = null,
         TextBox? gameSearch = null,
-        ComboBox? gameCategory = null)
+        ComboBox? gameCategory = null,
+        KioskHostTestSeam? testSeam = null)
     {
+        _testSeam = testSeam;
         _shell = shell;
         _status = status;
         _balance = balance;
@@ -77,6 +85,7 @@ public sealed class KioskHostService : IAsyncDisposable
         _runtime = new KioskRuntime(() => CreateHttpClient());
         _runtime.HeartbeatAcknowledged += OnHeartbeatAcknowledged;
         _runtime.HeartbeatTransportFailed += OnHeartbeatTransportFailed;
+        _runtime.ConnectionStatusChanged += OnRuntimeConnectionStatus;
         _http.DefaultRequestHeaders.Add("User-Agent", "CheckpointKiosk/1.0");
         _uiTick.Tick += (_, _) => OnUiTick();
         _replayTick.Tick += async (_, _) => await DrainOfflineQueueAsync();
@@ -96,6 +105,7 @@ public sealed class KioskHostService : IAsyncDisposable
             _orchestrator.ConfigureLeaseVerifier(_leaseVerifyPublicKeyPem);
         }
 
+        EnsureStatusUiTickRunning();
         _ = RefreshAsync();
     }
 
@@ -133,9 +143,12 @@ public sealed class KioskHostService : IAsyncDisposable
             new StringContent(JsonSerializer.Serialize(new { code }), Encoding.UTF8, "application/json"));
         if (!pair.IsSuccessStatusCode)
         {
-            _status.Text = "Pairing failed";
+            _pairingJustFailed = true;
+            RefreshStationStatusText();
             return;
         }
+
+        _pairingJustFailed = false;
 
         var doc = JsonDocument.Parse(await pair.Content.ReadAsStringAsync());
         _deviceId = doc.RootElement.GetProperty("deviceId").GetGuid();
@@ -152,6 +165,7 @@ public sealed class KioskHostService : IAsyncDisposable
         await ApplyStationProfileAsync();
         await RefreshCatalogAsync();
         _status.Text = $"Paired to {_stationId}";
+        EnsureStatusUiTickRunning();
     }
 
     public async Task LoginAsync(string loginName, string password)
@@ -173,6 +187,7 @@ public sealed class KioskHostService : IAsyncDisposable
 
         var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         _sessionId = doc.RootElement.GetProperty("sessionId").GetGuid();
+        _locallyLockedSessionId = Guid.Empty;
         _runtime.BindSession(_sessionId);
         await ApplyStationProfileAsync();
         ShowPlayingLayout();
@@ -224,18 +239,82 @@ public sealed class KioskHostService : IAsyncDisposable
 
     public async Task LogoutAsync()
     {
-        if (_sessionId != Guid.Empty)
+        var sessionForLogout = _sessionId;
+        ShowLockLayout();
+        _replayTick.Stop();
+        EnsureStatusUiTickRunning();
+
+        var logoutHttpSucceeded = sessionForLogout == Guid.Empty || _testSeam?.SkipLogoutHttp == true;
+        if (sessionForLogout != Guid.Empty)
         {
-            await _http.PostAsync($"{_serverBase}/api/kiosk/sessions/{_sessionId}/logout", null);
+            _locallyLockedSessionId = sessionForLogout;
+            _localLockLeaseExpired = false;
+            RefreshStationStatusText();
+        }
+
+        if (sessionForLogout != Guid.Empty && _testSeam?.SkipLogoutHttp != true)
+        {
+            _logoutInProgress = true;
+            try
+            {
+                if (_testSeam?.LogoutHttpDelay is TimeSpan logoutDelay)
+                {
+                    await Task.Delay(logoutDelay);
+                }
+
+                if (_testSeam?.SimulateSuccessfulLogoutHttp == true)
+                {
+                    logoutHttpSucceeded = true;
+                }
+                else if (_testSeam?.LogoutHttpThrows == true)
+                {
+                    throw new HttpRequestException("simulated logout HTTP failure");
+                }
+                else if (_testSeam?.LogoutHttpSimulatedStatusCode is int simulatedStatus)
+                {
+                    logoutHttpSucceeded = simulatedStatus >= 200 && simulatedStatus < 300;
+                    if (!logoutHttpSucceeded)
+                    {
+                        Trace.TraceWarning($"Logout HTTP failed during logout: {simulatedStatus}");
+                    }
+                }
+                else
+                {
+                    using var response = await _http.PostAsync($"{_serverBase}/api/kiosk/sessions/{sessionForLogout}/logout", null);
+                    logoutHttpSucceeded = response.IsSuccessStatusCode;
+                    if (!logoutHttpSucceeded)
+                    {
+                        Trace.TraceWarning($"Logout HTTP failed during logout: {(int)response.StatusCode}");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Trace.TraceWarning($"Logout HTTP failed during logout: {ex.Message}");
+            }
+            finally
+            {
+                _logoutInProgress = false;
+            }
+        }
+
+        ShowLockLayout();
+        if (!logoutHttpSucceeded)
+        {
+            _locallyLockedSessionId = Guid.Empty;
         }
 
         _sessionId = Guid.Empty;
         _runtime.BindSession(Guid.Empty);
-        RunSessionCleanup();
-        ShowLockLayout();
-        _uiTick.Stop();
-        _replayTick.Stop();
-        _status.Text = $"Locked — {_stationId}";
+        RefreshStationStatusText();
+        try
+        {
+            RunSessionCleanup();
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"RunSessionCleanup failed during logout: {ex.Message}");
+        }
     }
 
     public void ApplyHeartbeatDisplay(KioskDisplayDto? display)
@@ -251,43 +330,61 @@ public sealed class KioskHostService : IAsyncDisposable
 
     private void OnHeartbeatAcknowledged(KioskHeartbeatAck ack)
     {
+        _lastHeartbeatAckUtc = DateTime.UtcNow;
         var phase = _orchestrator.OnHeartbeatAck(ack, _sessionId, _runtime.ClientMonotonicMs);
         ApplyHeartbeatDisplay(ack.Display);
         _ = DrainOfflineQueueAsync();
         _shell.Dispatcher.Invoke(() =>
         {
-            if (ack.Display?.EstimatedRemainingSeconds is long seconds)
-            {
-                _status.Text = $"Station {_stationId} — ~{TimeSpan.FromSeconds(seconds):hh\\:mm\\:ss} left";
-            }
+            RefreshStationStatusText();
 
             if (phase is KioskShellPhase.LeaseExpired or KioskShellPhase.Ended
                 || ack.ManualSettle || string.Equals(ack.SessionStatus, "AwaitingPayment", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(ack.SessionStatus, "Ended", StringComparison.OrdinalIgnoreCase))
             {
-                RunSessionCleanup();
-                ShowLockLayout();
-                _uiTick.Stop();
-                _replayTick.Stop();
-                _status.Text = phase == KioskShellPhase.LeaseExpired
-                    ? $"Locked — lease expired ({_stationId})"
-                    : $"Locked — {_stationId}";
+                EnterLocalLock(phase == KioskShellPhase.LeaseExpired);
             }
             else if (string.Equals(ack.SessionStatus, "Open", StringComparison.OrdinalIgnoreCase))
             {
-                if (_sessionId == Guid.Empty && ack.Lease?.Payload.SessionId is Guid leased && leased != Guid.Empty)
+                var ackLeaseSession = ack.Lease?.Payload.SessionId;
+                var sameLockedSession = _locallyLockedSessionId != Guid.Empty
+                    && ackLeaseSession is Guid leasedWhileLocked
+                    && leasedWhileLocked != Guid.Empty
+                    && leasedWhileLocked == _locallyLockedSessionId;
+                if (sameLockedSession && phase == KioskShellPhase.Playing && !_logoutInProgress)
+                {
+                    _locallyLockedSessionId = Guid.Empty;
+                }
+                else if (_locallyLockedSessionId != Guid.Empty
+                    && ackLeaseSession is Guid differentSession
+                    && differentSession != Guid.Empty
+                    && differentSession != _locallyLockedSessionId)
+                {
+                    _locallyLockedSessionId = Guid.Empty;
+                    _sessionId = differentSession;
+                    _runtime.BindSession(differentSession);
+                    _ = ApplyStationProfileAsync();
+                }
+                else if (_sessionId == Guid.Empty
+                    && ackLeaseSession is Guid leased
+                    && leased != Guid.Empty
+                    && _locallyLockedSessionId == Guid.Empty)
                 {
                     _sessionId = leased;
                     _runtime.BindSession(leased);
                     _ = ApplyStationProfileAsync();
                 }
 
-                if (_sessionId != Guid.Empty)
+                if (_sessionId != Guid.Empty && _locallyLockedSessionId == Guid.Empty && phase == KioskShellPhase.Playing && !_logoutInProgress)
                 {
                     ShowPlayingLayout();
                     if (!_uiTick.IsEnabled)
                     {
                         _uiTick.Start();
+                    }
+
+                    if (!_replayTick.IsEnabled)
+                    {
                         _replayTick.Start();
                     }
                 }
@@ -348,7 +445,8 @@ public sealed class KioskHostService : IAsyncDisposable
     private void OnUiTick()
     {
         RenderDisplay();
-        if (_sessionId == Guid.Empty)
+        _shell.Dispatcher.Invoke(RefreshStationStatusText);
+        if (_locallyLockedSessionId != Guid.Empty || _sessionId == Guid.Empty)
         {
             return;
         }
@@ -357,14 +455,7 @@ public sealed class KioskHostService : IAsyncDisposable
         var phase = _orchestrator.TickLease(_sessionId, _runtime.ClientMonotonicMs, DateTime.UtcNow, transportDown);
         if (phase == KioskShellPhase.LeaseExpired)
         {
-            _shell.Dispatcher.Invoke(() =>
-            {
-                RunSessionCleanup();
-                ShowLockLayout();
-                _uiTick.Stop();
-                _replayTick.Stop();
-                _status.Text = $"Locked — lease expired ({_stationId})";
-            });
+            _shell.Dispatcher.Invoke(() => EnterLocalLock(leaseExpired: true));
         }
     }
 
@@ -378,59 +469,224 @@ public sealed class KioskHostService : IAsyncDisposable
         _orchestrator.EnqueuePoweredSegmentOnDisconnect(_sessionId, _runtime.ClientMonotonicMs);
     }
 
+    private void OnRuntimeConnectionStatus(KioskTransportPhase phase, string detail)
+    {
+        _shell.Dispatcher.Invoke(() =>
+        {
+            try
+            {
+                if (phase == KioskTransportPhase.Connected)
+                {
+                    EnsureStatusUiTickRunning();
+                    if (_runCatalogOnFirstConnected)
+                    {
+                        _runCatalogOnFirstConnected = false;
+                        _ = RunStartupCatalogRefreshAsync();
+                    }
+                }
+
+                RefreshStationStatusText();
+            }
+            catch
+            {
+                // UI status subscribers must not break transport reconnect.
+            }
+        });
+    }
+
+    private void EnsureStatusUiTickRunning()
+    {
+        if (_deviceId != Guid.Empty && !_uiTick.IsEnabled)
+        {
+            _uiTick.Start();
+        }
+    }
+
+    private void RefreshStationStatusText()
+    {
+        if (string.IsNullOrEmpty(_stationId))
+        {
+            return;
+        }
+
+        if (_locallyLockedSessionId != Guid.Empty
+            || (_sessionId == Guid.Empty && _lockPanel.Visibility == Visibility.Visible))
+        {
+            _status.Text = KioskStationStatus.FormatLocalLockScreen(
+                _stationId,
+                _locallyLockedSessionId != Guid.Empty && _localLockLeaseExpired,
+                _runtime.TransportPhase,
+                _runtime.IsTransportConnected,
+                _runtime.SignalRAutoReconnecting,
+                _pairingJustFailed,
+                _runtime.ConsecutiveHeartbeatFailures,
+                _lastHeartbeatAckUtc,
+                DateTime.UtcNow,
+                _runtime.LastTransportErrorDetail);
+            return;
+        }
+
+        _status.Text = KioskStationStatus.Resolve(
+            _stationId,
+            _runtime.TransportPhase,
+            _runtime.IsTransportConnected,
+            _runtime.SignalRAutoReconnecting,
+            _pairingJustFailed,
+            _sessionId != Guid.Empty,
+            _runtime.ConsecutiveHeartbeatFailures,
+            _lastHeartbeatAckUtc,
+            DateTime.UtcNow,
+            _lastDisplay?.EstimatedRemainingSeconds,
+            _runtime.LastTransportErrorDetail);
+    }
+
+    private void EnterLocalLock(bool leaseExpired)
+    {
+        if (_sessionId != Guid.Empty)
+        {
+            _locallyLockedSessionId = _sessionId;
+        }
+
+        _localLockLeaseExpired = leaseExpired;
+        ShowLockLayout();
+        RefreshStationStatusText();
+        _replayTick.Stop();
+        try
+        {
+            RunSessionCleanup();
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"RunSessionCleanup failed during local lock: {ex.Message}");
+        }
+    }
+
+    private async Task RunStartupCatalogRefreshAsync()
+    {
+        try
+        {
+            await ApplyStationProfileAsync();
+            await RefreshCatalogAsync();
+        }
+        catch (Exception ex)
+        {
+            _shell.Dispatcher.Invoke(() =>
+                _status.Text = $"Station {_stationId} — catalog refresh failed: {ex.Message}");
+        }
+    }
+
     private void RunSessionCleanup()
     {
+        if (_testSeam?.SessionCleanupThrows == true)
+        {
+            throw new UnauthorizedAccessException("host test session cleanup failure");
+        }
+
         _orchestrator.KillDeniedProcesses();
         _orchestrator.EndSessionCleanup();
         ClearKioskProfileScratch();
     }
 
-    private static void ClearKioskProfileScratch()
+    private static readonly string[] KioskProfileScratchRelativeDirs =
     {
-        var root = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        foreach (var relative in new[]
-                 {
-                     "Downloads",
-                     @"AppData\Local\Temp",
-                     @"AppData\Local\Microsoft\Windows\INetCache",
-                     @"AppData\Local\Microsoft\Edge\User Data\Default\Cache",
-                     @"AppData\Local\Google\Chrome\User Data\Default\Cache",
-                     @"AppData\Local\Mozilla\Firefox\Profiles",
-                 })
+        "Downloads",
+        @"AppData\Local\Temp",
+        @"AppData\Local\Microsoft\Windows\INetCache",
+        @"AppData\Local\Microsoft\Edge\User Data\Default\Cache",
+        @"AppData\Local\Google\Chrome\User Data\Default\Cache",
+        @"AppData\Local\Mozilla\Firefox\Profiles",
+    };
+
+    private static void ClearKioskProfileScratch()
+        => ClearKioskProfileScratchUnder(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), KioskProfileScratchRelativeDirs);
+
+    private static void ClearKioskProfileScratchUnder(string profileRoot, IEnumerable<string> relativeDirs)
+    {
+        foreach (var relative in relativeDirs)
         {
-            var dir = Path.Combine(root, relative);
-            if (!Directory.Exists(dir))
+            var dir = Path.Combine(profileRoot, relative);
+            if (!Directory.Exists(dir) || IsReparsePoint(dir))
             {
                 continue;
             }
 
-            DeleteTreeContents(dir);
+            DeleteTreeContentsBestEffort(dir);
         }
     }
 
-    private static void DeleteTreeContents(string directory)
+    private static bool IsReparsePoint(string path)
     {
-        foreach (var file in Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories))
+        try
         {
-            try
+            var attrs = File.GetAttributes(path);
+            return (attrs & FileAttributes.ReparsePoint) != 0;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return true;
+        }
+        catch (IOException)
+        {
+            return true;
+        }
+    }
+
+    private static void DeleteTreeContentsBestEffort(string directory)
+    {
+        try
+        {
+            foreach (var file in Directory.EnumerateFiles(directory))
             {
-                File.Delete(file);
-            }
-            catch
-            {
-                // best-effort profile cleanup
+                try
+                {
+                    File.Delete(file);
+                }
+                catch (UnauthorizedAccessException)
+                {
+                }
+                catch (IOException)
+                {
+                }
             }
         }
-
-        foreach (var dir in Directory.EnumerateDirectories(directory))
+        catch (UnauthorizedAccessException)
         {
+        }
+        catch (IOException)
+        {
+        }
+
+        string[] subdirs;
+        try
+        {
+            subdirs = Directory.EnumerateDirectories(directory).ToArray();
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return;
+        }
+        catch (IOException)
+        {
+            return;
+        }
+
+        foreach (var sub in subdirs)
+        {
+            if (IsReparsePoint(sub))
+            {
+                continue;
+            }
+
+            DeleteTreeContentsBestEffort(sub);
             try
             {
-                Directory.Delete(dir, recursive: true);
+                Directory.Delete(sub, recursive: false);
             }
-            catch
+            catch (UnauthorizedAccessException)
             {
-                // ignore locked directories
+            }
+            catch (IOException)
+            {
             }
         }
     }
@@ -630,10 +886,11 @@ public sealed class KioskHostService : IAsyncDisposable
         var root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "Checkpoint", "kiosk");
         Directory.CreateDirectory(root);
         var queuePath = Path.Combine(root, "events.db");
+        await _runtime.ResetForReconfigureAsync();
         _runtime.Configure(new Uri($"{_serverBase}/hubs/kiosk"), _deviceId, _deviceKey, _stationId, queuePath, legacyWindows: true);
-        await _runtime.StartAsync(CancellationToken.None);
         _orchestrator.BindOfflineQueue(_runtime.GetQueue());
         EnsureCatalogStore();
+        await _runtime.StartAsync(CancellationToken.None);
     }
 
     private void EnsureCatalogStore()
@@ -654,9 +911,20 @@ public sealed class KioskHostService : IAsyncDisposable
         try
         {
             await EnsureRuntimeAsync();
-            await ApplyStationProfileAsync();
-            await RefreshCatalogAsync();
-            _status.Text = $"Station {_stationId} — connected";
+            if (_runtime.IsTransportConnected)
+            {
+                await ApplyStationProfileAsync();
+                await RefreshCatalogAsync();
+                if (_sessionId == Guid.Empty)
+                {
+                    RefreshStationStatusText();
+                }
+            }
+            else
+            {
+                _runCatalogOnFirstConnected = true;
+                RefreshStationStatusText();
+            }
         }
         catch (Exception ex)
         {
