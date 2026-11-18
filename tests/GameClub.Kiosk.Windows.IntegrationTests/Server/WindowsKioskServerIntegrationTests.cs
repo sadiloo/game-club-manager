@@ -814,6 +814,49 @@ public sealed class WindowsKioskServerIntegrationTests
 
         Assert.Fail("Expected at least 3 advancing kiosk heartbeats on the server.");
     }
+
+    /// <summary>Brief §10.4.7 (a),(d),(e) — live server internet desired/applied without cafe hardware.</summary>
+    [Fact(Timeout = 120_000)]
+    public async Task live_server_pc_internet_toggle_off_report_applied_then_session_end_on()
+    {
+        if (!KioskIntegrationBackend.IsLiveMode)
+        {
+            return;
+        }
+
+        await _backend.ResetAsync();
+        await _backend.SetPcNormalOfflineRatesAsync();
+        await _backend.RegisterPcAsync(_backend.CreateApiClient(), "PC-INET");
+        await _backend.SeedCustomerWithCredentialAsync("inete2e", "pass", 200_000);
+        var (deviceId, deviceKey, _) = await _backend.PairAsync("PC-INET");
+        var kioskHttp = _backend.CreateKioskHttpClient(deviceId, deviceKey);
+        var login = await kioskHttp.PostAsJsonAsync(
+            "/api/kiosk/auth/login",
+            new { loginName = "inete2e", password = "pass", stationId = "PC-INET" });
+        login.EnsureSuccessStatusCode();
+        var sessionId = await _backend.OpenSessionIdAsync();
+        var op = await _backend.CreateOperatorClientAsync();
+        var startGrid = await op.GetFromJsonAsync<JsonElement[]>("/api/operator/grid");
+        var rv = startGrid!.Single(t => t.GetProperty("id").GetString() == "PC-INET").GetProperty("rowVersion").GetUInt32();
+        var off = await op.PostAsJsonAsync($"/api/operator/sessions/{sessionId}/internet", new
+        {
+            on = false,
+            expectedVersion = rv,
+            commandId = Guid.NewGuid(),
+        });
+        off.EnsureSuccessStatusCode();
+        var offBody = await off.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.False(offBody!.GetProperty("internetOn").GetBoolean());
+        var gridAfterOff = await op.GetFromJsonAsync<JsonElement[]>("/api/operator/grid");
+        var tileAfterOff = gridAfterOff!.Single(t => t.GetProperty("id").GetString() == "PC-INET");
+        Assert.True(tileAfterOff.GetProperty("internetPending").GetBoolean() || !tileAfterOff.GetProperty("internetOn").GetBoolean());
+
+        var stop = await _backend.CreateApiClient().PostAsync($"/api/sessions/{sessionId}/stop", null);
+        stop.EnsureSuccessStatusCode();
+        var endGrid = await op.GetFromJsonAsync<JsonElement[]>("/api/operator/grid");
+        var endTile = endGrid!.Single(t => t.GetProperty("id").GetString() == "PC-INET");
+        Assert.True(endTile.GetProperty("internetDesiredOn").GetBoolean());
+    }
 }
 
 public sealed class WindowsIntegrationApplicationFactory : GameClubWebApplicationFactory;

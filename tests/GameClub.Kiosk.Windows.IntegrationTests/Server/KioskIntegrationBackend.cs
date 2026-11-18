@@ -272,12 +272,7 @@ internal sealed class KioskIntegrationBackend
 
     public async Task SetPcNormalOfflineRatesAsync(long offlineDay = 60_000L, long offlineNight = 80_000L)
     {
-        if (_factory is null)
-        {
-            throw new InvalidOperationException("Factory required for pc-rates setup.");
-        }
-
-        var mgr = await _factory.CreateOperatorClientAsync("manager", "1234");
+        var mgr = await CreateOperatorClientAsync("manager", "1234");
         var put = await mgr.PutAsJsonAsync(
             $"/api/operator/pc-rates/{PilotSeed.PcNormalGroupId}",
             new

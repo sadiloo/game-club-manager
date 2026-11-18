@@ -146,5 +146,88 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
         Assert.Equal(0, proc.ExitCode);
         Assert.True(File.Exists(InternetGuardPaths.ConfigPath));
     }
+
+    [Fact]
+    public void internet_off_third_party_allow_in_default_store_does_not_bypass_localhost_off()
+    {
+        SkipUnlessWindowsAdmin();
+        var ips = ResolveServerIps();
+        if (ips.Length == 0)
+        {
+            throw new SkipTestException("Could not resolve api.github.com for server allow-list.");
+        }
+
+        var applier = new InternetFirewallApplier();
+        var config = new InternetGuardConfig
+        {
+            StationId = "CI-PC-3",
+            ServerHost = "api.github.com",
+            ServerPort = 443,
+            ServerIps = ips,
+            ExtraAllowPrograms = CiExtraPrograms(),
+        };
+        var bypassRuleName = "GameClub Test Allow";
+        try
+        {
+            var addBypass = $"New-NetFirewallRule -DisplayName '{bypassRuleName}' -Direction Outbound -Action Allow -Program (Get-Command pwsh).Source";
+            applier.Apply(config, on: false);
+            System.Threading.Thread.Sleep(1_500);
+            _ = RunPowerShell(addBypass);
+            Assert.False(TryTcp("1.1.1.1", 443, 2_000), "Default-store allow rule must not bypass localhost OFF.");
+        }
+        finally
+        {
+            RunPowerShell($"Remove-NetFirewallRule -DisplayName '{bypassRuleName}' -ErrorAction SilentlyContinue");
+            applier.RunResetScript();
+        }
+    }
+
+    [Fact]
+    public void internet_on_restores_public_egress_after_off_cycle()
+    {
+        SkipUnlessWindowsAdmin();
+        var ips = ResolveServerIps();
+        if (ips.Length == 0)
+        {
+            throw new SkipTestException("Could not resolve api.github.com for server allow-list.");
+        }
+
+        var applier = new InternetFirewallApplier();
+        var config = new InternetGuardConfig
+        {
+            StationId = "CI-PC-4",
+            ServerHost = "api.github.com",
+            ServerPort = 443,
+            ServerIps = ips,
+            ExtraAllowPrograms = CiExtraPrograms(),
+        };
+        try
+        {
+            Assert.Equal("applied", applier.Apply(config, on: false));
+            Assert.False(TryTcp("1.1.1.1", 443, 2_000));
+            Assert.Equal("applied", applier.Apply(config, on: true));
+            Assert.True(TryTcp("1.1.1.1", 443, 5_000));
+        }
+        finally
+        {
+            applier.RunResetScript();
+        }
+    }
+
+    private static string RunPowerShell(string script)
+    {
+        var encoded = Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes(script));
+        var psi = new ProcessStartInfo
+        {
+            FileName = "powershell.exe",
+            Arguments = $"-NoProfile -NonInteractive -EncodedCommand {encoded}",
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            CreateNoWindow = true,
+        };
+        using var proc = Process.Start(psi) ?? throw new InvalidOperationException("powershell");
+        proc.WaitForExit(60_000);
+        return proc.StandardOutput.ReadToEnd();
+    }
 }
 #endif

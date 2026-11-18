@@ -346,11 +346,11 @@ public sealed class KioskFixR2AcceptanceTests(GameClubWebApplicationFactory fact
         var wallet = new CustomerAccount("m", WalletSettings.Shared, new WalletPocket(100_000, 0), new WalletPocket(0, 0));
         var start = TehranTime.At(2026, 6, 3, 8, 29);
         var charge = SessionPricer.Price(new Session("s", [
-            new PlaySegment("a", start, start.AddMinutes(1), "PC-1", PilotSeed.PcNormalGroupId, PlayMode.Offline, 1, StationKind.Pc),
+            new PlaySegment("a", start, start.AddMinutes(1), "PC-1", PilotSeed.PcNormalGroupId, PlayMode.Online, 1, StationKind.Pc),
         ]), PilotSeed.CreateCard(), policy: policy);
         var settled = CustomerPlay.Settle(charge, wallet, billing: policy);
         var at = TehranTime.At(2026, 6, 3, 8, 30);
-        var estimate = CustomerPlay.Estimate(settled.Account, PilotSeed.PcNormalGroupId, PlayMode.Offline, 1, at, PilotSeed.CreateCard(), policy: policy);
+        var estimate = CustomerPlay.Estimate(settled.Account, PilotSeed.PcNormalGroupId, PlayMode.Online, 1, at, PilotSeed.CreateCard(), policy: policy);
         Assert.InRange(estimate.TotalMinutes, 73, 74);
         Assert.InRange((estimate.MoneyMinutes ?? 0) * 60, 4380, 4440);
     }
@@ -361,7 +361,7 @@ public sealed class KioskFixR2AcceptanceTests(GameClubWebApplicationFactory fact
         var policy = new BillingPolicy(5, PartialUnitMode.Ceiling, RateRemainderMode.Nearest);
         var start = TehranTime.At(2026, 6, 3, 14, 0);
         var charge = SessionPricer.Price(
-            new Session("s", [new PlaySegment("a", start, start.AddMinutes(1), "PC-1", PilotSeed.PcNormalGroupId, PlayMode.Offline, 1, StationKind.Pc)], null),
+            new Session("s", [new PlaySegment("a", start, start.AddMinutes(1), "PC-1", PilotSeed.PcNormalGroupId, PlayMode.Online, 1, StationKind.Pc)], null),
             PilotSeed.CreateCard(),
             policy: policy);
         var wallet = new CustomerAccount("m", WalletSettings.Shared, new WalletPocket(500, 0), new WalletPocket(0, 0));

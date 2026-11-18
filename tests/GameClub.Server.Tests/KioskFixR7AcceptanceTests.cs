@@ -68,7 +68,7 @@ public sealed class KioskFixR7AcceptanceTests(GameClubWebApplicationFactory fact
             .Invoices.Where(i => i.SessionId == sessionId).Select(i => i.Number).SingleAsync();
         var inv = await op.GetFromJsonAsync<JsonElement>($"/api/operator/invoices/{invoiceNumber}");
         Assert.Equal(500, inv.GetProperty("collectibleToman").GetInt64());
-        Assert.Equal(2_167, inv.GetProperty("writeOffToman").GetInt64());
+        Assert.Equal(1_500, inv.GetProperty("writeOffToman").GetInt64());
     }
 
     [Fact]
@@ -90,7 +90,7 @@ public sealed class KioskFixR7AcceptanceTests(GameClubWebApplicationFactory fact
             .Invoices.Where(i => i.SessionId == sessionId).Select(i => i.Number).SingleAsync();
         var inv = await op.GetFromJsonAsync<JsonElement>($"/api/operator/invoices/{invoiceNumber}");
         Assert.Equal(15_500, inv.GetProperty("collectibleToman").GetInt64());
-        Assert.Equal(2_167, inv.GetProperty("writeOffToman").GetInt64());
+        Assert.Equal(1_500, inv.GetProperty("writeOffToman").GetInt64());
     }
 
     private async Task<Guid> SeedPartialGraceSessionAsync()
@@ -132,7 +132,7 @@ public sealed class KioskFixR7AcceptanceTests(GameClubWebApplicationFactory fact
         {
             var db0 = setup.ServiceProvider.GetRequiredService<AppDbContext>();
             await db0.Database.ExecuteSqlInterpolatedAsync(
-                $"""UPDATE rate_lines SET "HourlyToman" = 60000 WHERE "GroupId" = 'pc-normal' AND "PlayerCount" = 1""");
+                $"""UPDATE rate_lines SET "HourlyToman" = 60000 WHERE "GroupId" = 'pc-normal' AND "PlayMode" = 'Online' AND "PlayerCount" IS NULL AND "IsSpecialBand" = false""");
             var customer = new CustomerEntity { Id = Guid.NewGuid(), Name = "OverR7", Mobile = "09126666333", CreatedAtUtc = DateTime.UtcNow };
             db0.Customers.Add(customer);
             db0.CustomerMembers.Add(new CustomerMemberEntity { CustomerId = customer.Id, RealToman = 500 });

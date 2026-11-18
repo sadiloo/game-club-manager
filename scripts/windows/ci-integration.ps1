@@ -397,6 +397,20 @@ try {
     if ($serverTestExit -ne 0) { $script:FinalExitCode = $serverTestExit }
     if ($guardTestExit -ne 0 -and $script:FinalExitCode -eq 0) { $script:FinalExitCode = $guardTestExit }
 
+    Write-Host "Running PC internet firewall integration (Category=PcInternetFirewall)..."
+    Write-CiPhaseFirewallProbe -label "before-dotnet-test-pc-internet-firewall"
+    $fwTestArgs = @(
+        "test", "tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj",
+        "-c", "Release", "-f", "net48", "--no-build", "--nologo",
+        "--filter", "Category=PcInternetFirewall",
+        "--logger", "trx;LogFileName=kiosk-windows-pc-internet-firewall.trx",
+        "--results-directory", $artifactDir,
+        "--logger", "console;verbosity=detailed"
+    )
+    $fwTestExit = Invoke-DotNetWithWatchdog -PhaseName "dotnet-test-pc-internet-firewall" -ArgumentList $fwTestArgs -PhaseCapMs (5 * 60 * 1000)
+    Write-CiPhaseFirewallProbe -label "after-dotnet-test-pc-internet-firewall"
+    if ($fwTestExit -ne 0 -and $script:FinalExitCode -eq 0) { $script:FinalExitCode = $fwTestExit }
+
     $wpfStabilityRuns = 0
     if ($env:WPF_STABILITY_RUNS -match '^\d+$') {
         $wpfStabilityRuns = [int]$env:WPF_STABILITY_RUNS

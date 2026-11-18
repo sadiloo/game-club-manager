@@ -277,7 +277,7 @@ public sealed class KioskFixR1AcceptanceTests(GameClubWebApplicationFactory fact
         var policy = new BillingPolicy(5, PartialUnitMode.Ceiling, RateRemainderMode.Nearest);
         var start = TehranTime.At(2026, 6, 3, 14, 0);
         var charge = SessionPricer.Price(
-            new Session("s", [new PlaySegment("a", start, start.AddMinutes(1), "PC-1", PilotSeed.PcNormalGroupId, PlayMode.Offline, 1, StationKind.Pc)], null),
+            new Session("s", [new PlaySegment("a", start, start.AddMinutes(1), "PC-1", PilotSeed.PcNormalGroupId, PlayMode.Online, 1, StationKind.Pc)], null),
             PilotSeed.CreateCard(),
             policy: policy);
         var wallet = new CustomerAccount("m", WalletSettings.Shared, new WalletPocket(500, 0), new WalletPocket(0, 0));
