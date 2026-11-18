@@ -615,6 +615,16 @@ public sealed class WindowsKioskServerIntegrationTests
             Assert.True(afterOutage2 > afterOutage1, "outage 2 must enqueue offline_play_segment evidence");
 
             var poweredSpanSeconds = (DateTime.UtcNow - poweredSpanStartUtc).TotalSeconds;
+            var secondsPastMinute = poweredSpanSeconds % 60;
+            var marginToNearestMinute = Math.Min(secondsPastMinute, secondsPastMinute == 0 ? 60 : 60 - secondsPastMinute);
+            Console.WriteLine(
+                $"G2_MINUTE_BOUNDARY_MARGIN measured_seconds={poweredSpanSeconds:F3} margin_s={marginToNearestMinute:F3}");
+            if (marginToNearestMinute < 10)
+            {
+                throw new InvalidOperationException(
+                    $"INCONCLUSIVE: G2 span margin to nearest minute boundary is {marginToNearestMinute:F1}s (need >= 10s)");
+            }
+
             leaseCts.Cancel();
             await runtime.DisposeAsync();
             await ownedServer.RelaunchAsync();

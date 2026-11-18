@@ -34,8 +34,36 @@ public sealed class KioskHostStatusTimerTests
         => RunScenario(lateConnect: true, operatorStopLock: false);
 
     [Fact]
+    public void host_connected_starts_status_tick_without_refresh_async()
+        => RunConnectedTickScenario();
+
+    [Fact]
+    public void host_open_session_no_display_shows_no_server_response_when_heartbeats_fail()
+        => RunOpenSessionNoDisplayScenario();
+
+    [Fact]
+    public void host_replay_tick_starts_independently_when_playing_resumes()
+        => RunReplayTickIndependenceScenario();
+
+    [Fact]
     public void host_operator_stop_lock_shows_no_server_response_when_heartbeats_fail()
         => RunScenario(lateConnect: false, operatorStopLock: true);
+
+    [Fact]
+    public void host_ack_lock_then_open_ack_same_session_stays_locked()
+        => RunD7Scenario(leaseExpiredLock: false);
+
+    [Fact]
+    public void host_lease_expired_lock_then_open_ack_same_session_stays_locked()
+        => RunD7Scenario(leaseExpiredLock: true);
+
+    [Fact]
+    public void host_ack_lock_shows_locked_prefix_with_connection_state()
+        => RunD6LockTextScenario(leaseExpired: false);
+
+    [Fact]
+    public void host_lease_expired_lock_shows_locked_prefix_with_connection_state()
+        => RunD6LockTextScenario(leaseExpired: true);
 
     private void RunScenario(bool lateConnect, bool operatorStopLock)
     {
@@ -58,16 +86,121 @@ public sealed class KioskHostStatusTimerTests
         }
     }
 
+    private void RunD7Scenario(bool leaseExpiredLock)
+    {
+        Exception error = null;
+        _wpf.RunAsync(async () =>
+        {
+            try
+            {
+                await RunD7OnDispatcherAsync(leaseExpiredLock);
+            }
+            catch (Exception ex)
+            {
+                error = ex;
+            }
+        }, TimeSpan.FromMinutes(2));
+
+        if (error is not null)
+        {
+            Assert.Fail(error.ToString());
+        }
+    }
+
+    private void RunConnectedTickScenario()
+    {
+        Exception error = null;
+        _wpf.RunAsync(async () =>
+        {
+            try
+            {
+                await RunConnectedTickOnDispatcherAsync();
+            }
+            catch (Exception ex)
+            {
+                error = ex;
+            }
+        }, TimeSpan.FromMinutes(2));
+
+        if (error is not null)
+        {
+            Assert.Fail(error.ToString());
+        }
+    }
+
+    private void RunReplayTickIndependenceScenario()
+    {
+        Exception error = null;
+        _wpf.RunAsync(async () =>
+        {
+            try
+            {
+                await RunReplayTickIndependenceOnDispatcherAsync();
+            }
+            catch (Exception ex)
+            {
+                error = ex;
+            }
+        }, TimeSpan.FromMinutes(2));
+
+        if (error is not null)
+        {
+            Assert.Fail(error.ToString());
+        }
+    }
+
+    private void RunOpenSessionNoDisplayScenario()
+    {
+        Exception error = null;
+        _wpf.RunAsync(async () =>
+        {
+            try
+            {
+                await RunOpenSessionNoDisplayOnDispatcherAsync();
+            }
+            catch (Exception ex)
+            {
+                error = ex;
+            }
+        }, TimeSpan.FromMinutes(2));
+
+        if (error is not null)
+        {
+            Assert.Fail(error.ToString());
+        }
+    }
+
+    private void RunD6LockTextScenario(bool leaseExpired)
+    {
+        Exception error = null;
+        _wpf.RunAsync(async () =>
+        {
+            try
+            {
+                await RunD6LockTextOnDispatcherAsync(leaseExpired);
+            }
+            catch (Exception ex)
+            {
+                error = ex;
+            }
+        }, TimeSpan.FromMinutes(2));
+
+        if (error is not null)
+        {
+            Assert.Fail(error.ToString());
+        }
+    }
+
     private static async Task RunScenarioOnDispatcherAsync(bool lateConnect, bool operatorStopLock)
     {
         WritePairedDeviceState("PC-HOST-D5");
-        var host = CreateHost(out var status);
+        var host = CreateHost(out var status, out var lockPanel, out var playingPanel);
         try
         {
             await Task.Delay(300);
             Assert.True(IsUiTickEnabled(host), "paired boot must start the status UI tick");
             var runtime = GetRuntime(host);
-            await runtime.DisposeAsync();
+            await runtime.ResetForReconfigureAsync();
             var transport = new HostTestHubTransport(lateConnect);
             runtime.ConfigureForTests(
                 transport,
@@ -93,6 +226,7 @@ public sealed class KioskHostStatusTimerTests
                 typeof(KioskHostService).GetMethod("OnHeartbeatAcknowledged", BindingFlags.Instance | BindingFlags.NonPublic)!
                     .Invoke(host, new object[] { ack });
                 Assert.True(IsUiTickEnabled(host), "status UI tick must stay on after operator-stop lock");
+                Assert.Contains("Locked —", status.Text ?? "", StringComparison.Ordinal);
             }
 
             await WaitForTransportConnectedAsync(runtime, TimeSpan.FromSeconds(15));
@@ -125,17 +259,239 @@ public sealed class KioskHostStatusTimerTests
         }
     }
 
-    private static KioskHostService CreateHost(out TextBlock status)
+    private static async Task RunD7OnDispatcherAsync(bool leaseExpiredLock)
+    {
+        WritePairedDeviceState("PC-HOST-D7");
+        var host = CreateHost(out var status, out var lockPanel, out var playingPanel);
+        var sessionId = Guid.NewGuid();
+        try
+        {
+            SetField(host, "_sessionId", sessionId);
+            var runtime = GetRuntime(host);
+            await runtime.ResetForReconfigureAsync();
+            var transport = new HostTestHubTransport(lateConnect: false);
+            runtime.ConfigureForTests(
+                transport,
+                new SqliteOfflineEventQueue(Path.Combine(Path.GetTempPath(), $"host-d7-{Guid.NewGuid():N}.db")),
+                "http://127.0.0.1:5999",
+                Guid.NewGuid(),
+                "device-key",
+                "PC-HOST-D7");
+            runtime.BindSession(sessionId);
+
+            var onAck = typeof(KioskHostService).GetMethod("OnHeartbeatAcknowledged", BindingFlags.Instance | BindingFlags.NonPublic)!;
+            if (leaseExpiredLock)
+            {
+                onAck.Invoke(host, new object[]
+                {
+                    new KioskHeartbeatAck
+                    {
+                        SessionStatus = "Open",
+                        Lease = new SignedSessionLease
+                        {
+                            Payload = new SessionLeasePayload { SessionId = sessionId, StationId = "PC-HOST-D7" },
+                        },
+                    },
+                });
+            }
+            else
+            {
+                onAck.Invoke(host, new object[] { new KioskHeartbeatAck { SessionStatus = "AwaitingPayment" } });
+            }
+
+            Assert.Equal(Visibility.Visible, lockPanel.Visibility);
+            Assert.Equal(Visibility.Collapsed, playingPanel.Visibility);
+            var locallyLocked = (Guid)GetField(host, "_locallyLockedSessionId")!;
+            Assert.Equal(sessionId, locallyLocked);
+
+            onAck.Invoke(host, new object[]
+            {
+                new KioskHeartbeatAck
+                {
+                    SessionStatus = "Open",
+                    Lease = new SignedSessionLease
+                    {
+                        Payload = new SessionLeasePayload
+                        {
+                            SessionId = sessionId,
+                            StationId = "PC-HOST-D7",
+                            AuthorizedUntilUtc = DateTime.UtcNow.AddHours(1),
+                        },
+                    },
+                    Display = new KioskDisplayDto { EstimatedRemainingSeconds = 3600 },
+                },
+            });
+
+            Assert.Equal(Visibility.Visible, lockPanel.Visibility);
+            Assert.Equal(Visibility.Collapsed, playingPanel.Visibility);
+            Assert.Equal(sessionId, GetField(host, "_sessionId"));
+            Assert.Equal(sessionId, runtime.GetType().GetField("_sessionId", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(runtime));
+            Assert.Contains("Locked —", status.Text ?? "", StringComparison.Ordinal);
+        }
+        finally
+        {
+            await host.DisposeAsync();
+        }
+    }
+
+    private static async Task RunConnectedTickOnDispatcherAsync()
+    {
+        WritePairedDeviceState("PC-HOST-CONN-TICK");
+        var host = CreateHost(out _, out _, out _);
+        try
+        {
+            var tick = typeof(KioskHostService).GetField("_uiTick", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(host) as DispatcherTimer;
+            tick!.Stop();
+            Assert.False(tick.IsEnabled, "test setup requires status tick off before Connected");
+
+            typeof(KioskHostService).GetMethod("OnRuntimeConnectionStatus", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .Invoke(host, new object[] { KioskTransportPhase.Connected, "" });
+
+            Assert.True(tick.IsEnabled, "status tick must start on transport Connected without RefreshAsync");
+        }
+        finally
+        {
+            await host.DisposeAsync();
+        }
+    }
+
+    private static async Task RunReplayTickIndependenceOnDispatcherAsync()
+    {
+        WritePairedDeviceState("PC-HOST-REPLAY");
+        var host = CreateHost(out _, out _, out _);
+        var oldSession = Guid.NewGuid();
+        var newSession = Guid.NewGuid();
+        try
+        {
+            SetField(host, "_sessionId", oldSession);
+            GetRuntime(host).BindSession(oldSession);
+            var uiTick = typeof(KioskHostService).GetField("_uiTick", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(host) as DispatcherTimer;
+            var replayTick = typeof(KioskHostService).GetField("_replayTick", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(host) as DispatcherTimer;
+            uiTick!.Start();
+            replayTick!.Stop();
+            Assert.True(uiTick.IsEnabled);
+            Assert.False(replayTick.IsEnabled);
+
+            SetField(host, "_locallyLockedSessionId", oldSession);
+            typeof(KioskHostService).GetMethod("OnHeartbeatAcknowledged", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .Invoke(host, new object[]
+                {
+                    new KioskHeartbeatAck
+                    {
+                        SessionStatus = "Open",
+                        Lease = new SignedSessionLease
+                        {
+                            Payload = new SessionLeasePayload
+                            {
+                                SessionId = newSession,
+                                StationId = "PC-HOST-REPLAY",
+                                AuthorizedUntilUtc = DateTime.UtcNow.AddHours(1),
+                            },
+                        },
+                        Display = new KioskDisplayDto { EstimatedRemainingSeconds = 120 },
+                    },
+                });
+
+            Assert.True(replayTick.IsEnabled, "replay tick must start when playing resumes even if status tick was already on");
+            Assert.True(uiTick.IsEnabled);
+        }
+        finally
+        {
+            await host.DisposeAsync();
+        }
+    }
+
+    private static async Task RunOpenSessionNoDisplayOnDispatcherAsync()
+    {
+        WritePairedDeviceState("PC-HOST-O4D");
+        var host = CreateHost(out var status, out _, out _);
+        var sessionId = Guid.NewGuid();
+        try
+        {
+            SetField(host, "_sessionId", sessionId);
+            var runtime = GetRuntime(host);
+            await runtime.ResetForReconfigureAsync();
+            runtime.ConfigureForTests(
+                new HostTestHubTransport(lateConnect: false) { HeartbeatHandler = _ => throw new InvalidOperationException("hb down") },
+                new SqliteOfflineEventQueue(Path.Combine(Path.GetTempPath(), $"host-o4d-{Guid.NewGuid():N}.db")),
+                "http://127.0.0.1:5999",
+                Guid.NewGuid(),
+                "device-key",
+                "PC-HOST-O4D");
+            runtime.BindSession(sessionId);
+            runtime.GetType().GetField("_consecutiveHeartbeatFailures", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .SetValue(runtime, 3);
+            SetField(host, "_lastHeartbeatAckUtc", DateTime.UtcNow.AddMinutes(-5));
+
+            typeof(KioskHostService).GetMethod("OnRuntimeConnectionStatus", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .Invoke(host, new object[] { KioskTransportPhase.Connected, "" });
+
+            typeof(KioskHostService).GetMethod("RefreshStationStatusText", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(host, null);
+            var text = status.Text ?? "";
+            Assert.Contains("no server response", text, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("connecting", text, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            await host.DisposeAsync();
+        }
+    }
+
+    private static async Task RunD6LockTextOnDispatcherAsync(bool leaseExpired)
+    {
+        WritePairedDeviceState("PC-HOST-D6");
+        var host = CreateHost(out var status, out _, out _);
+        var sessionId = Guid.NewGuid();
+        try
+        {
+            SetField(host, "_sessionId", sessionId);
+            GetRuntime(host).BindSession(sessionId);
+            var onAck = typeof(KioskHostService).GetMethod("OnHeartbeatAcknowledged", BindingFlags.Instance | BindingFlags.NonPublic)!;
+            if (leaseExpired)
+            {
+                onAck.Invoke(host, new object[]
+                {
+                    new KioskHeartbeatAck
+                    {
+                        SessionStatus = "Open",
+                        Lease = new SignedSessionLease
+                        {
+                            Payload = new SessionLeasePayload { SessionId = sessionId, StationId = "PC-HOST-D6" },
+                        },
+                    },
+                });
+                var text = status.Text ?? "";
+                Assert.Contains("Locked — lease expired (PC-HOST-D6)", text, StringComparison.Ordinal);
+                Assert.Contains(" · ", text, StringComparison.Ordinal);
+            }
+            else
+            {
+                onAck.Invoke(host, new object[] { new KioskHeartbeatAck { SessionStatus = "AwaitingPayment" } });
+                var text = status.Text ?? "";
+                Assert.Contains("Locked — PC-HOST-D6", text, StringComparison.Ordinal);
+                Assert.DoesNotContain("lease expired", text, StringComparison.OrdinalIgnoreCase);
+                Assert.Contains(" · ", text, StringComparison.Ordinal);
+            }
+
+            Assert.False(KioskStationStatus.ContainsConnectedWording(status.Text ?? ""));
+        }
+        finally
+        {
+            await host.DisposeAsync();
+        }
+    }
+
+    private static KioskHostService CreateHost(out TextBlock status, out UIElement lockPanel, out UIElement playingPanel)
     {
         var window = new Window { Width = 400, Height = 300 };
         status = new TextBlock();
         var balance = new TextBlock();
         var elapsed = new TextBlock();
         var freeBand = new TextBlock();
-        var lockPanel = new Border();
+        lockPanel = new Border();
         var launcher = new Border();
-        var playing = new Border();
-        return new KioskHostService(window, status, balance, elapsed, freeBand, lockPanel, launcher, playing);
+        playingPanel = new Border();
+        return new KioskHostService(window, status, balance, elapsed, freeBand, lockPanel, launcher, playingPanel);
     }
 
     private static KioskRuntime GetRuntime(KioskHostService host)
@@ -150,6 +506,14 @@ public sealed class KioskHostStatusTimerTests
             .GetValue(host) as DispatcherTimer;
         return tick!.IsEnabled;
     }
+
+    private static void SetField(object host, string name, object value)
+    {
+        typeof(KioskHostService).GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(host, value);
+    }
+
+    private static object GetField(object host, string name)
+        => typeof(KioskHostService).GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(host)!;
 
     private static void WritePairedDeviceState(string stationId)
     {

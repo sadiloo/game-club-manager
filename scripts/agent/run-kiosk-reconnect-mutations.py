@@ -55,10 +55,11 @@ M = [
     ("Mx_heartbeat_failures_never_reset", RT, "                    _consecutiveHeartbeatFailures = 0;", "                    _ = _consecutiveHeartbeatFailures;"),
     ("Ms6_no_connected_on_signalr_reconnected", LC, "    private void OnTransportReconnected() => Publish(KioskTransportPhase.Connected, \"\");", "    private void OnTransportReconnected() { }"),
     ("P5_revert_publish_trycatch", LC, "        try\n        {\n            ConnectionStatusChanged?.Invoke(phase, detail);\n        }\n        catch\n        {\n            // Subscriber faults must not stop the reconnect loop.\n        }", "        ConnectionStatusChanged?.Invoke(phase, detail);"),
-    ("P6_revert_double_dispose", LC, "        if (_disposed)\n        {\n            return;\n        }\n\n        _disposed = true;", ""),
+    ("P6_revert_double_dispose", LC, "        if (_disposed)\n        {\n            return;\n        }\n\n        _disposed = true;", "", "equivalent"),
     ("Host_no_tick_on_boot", HS, "        EnsureStatusUiTickRunning();\n        _ = RefreshAsync();", "        _ = RefreshAsync();", "host-d5"),
     ("Host_no_tick_on_connected", HS, "                    EnsureStatusUiTickRunning();\n                    if (_runCatalogOnFirstConnected)", "                    if (_runCatalogOnFirstConnected)", "host-d5"),
     ("Host_stops_tick_on_ack_lock", HS, "                _replayTick.Stop();\n                RefreshStationStatusText();", "                _replayTick.Stop();\n                _uiTick.Stop();\n                RefreshStationStatusText();", "host-d5"),
+    ("Host_d7_clears_session_on_local_lock", HS, "        _localLockLeaseExpired = leaseExpired;\n        RunSessionCleanup();", "        _localLockLeaseExpired = leaseExpired;\n        _sessionId = Guid.Empty;\n        _runtime.BindSession(Guid.Empty);\n        RunSessionCleanup();", "host-d5"),
 ]
 
 CORE_PROJ = "tests/GameClub.Kiosk.Core.Tests/GameClub.Kiosk.Core.Tests.csproj"
@@ -66,10 +67,17 @@ HOST_PROJ = "tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Window
 HOST_FILTER = "FullyQualifiedName~KioskHostStatusTimerTests"
 BUILD_WARN_OFF = ["-p:TreatWarningsAsErrors=false"]
 
+host_only = os.environ.get("MUT_HOST_ONLY", "").strip() in ("1", "true", "yes")
 res = {}
 for item in M:
     name, path = item[0], item[1]
     tag = item[4] if len(item) > 4 else "core"
+    if host_only and tag != "host-d5":
+        continue
+    if tag == "equivalent":
+        res[name] = "EQUIVALENT"
+        print(name, res[name], flush=True)
+        continue
     if len(item) >= 3 and isinstance(item[2], list):
         pairs = item[2]
     else:
@@ -169,4 +177,15 @@ for item in M:
     print(name, res[name], flush=True)
 
 open(os.path.join(OUT, "mutations-r1d.json"), "w").write(json.dumps(res, indent=2))
+failed = []
+for name, outcome in res.items():
+    if isinstance(outcome, dict) and not outcome.get("killed"):
+        failed.append(name)
+    if outcome in ("BUILD_FAIL", "PATTERN_NOT_FOUND", "SURVIVES"):
+        failed.append(name)
+    if host_only and isinstance(outcome, dict) and outcome.get("killed") is False:
+        failed.append(name)
+if host_only and failed:
+    print("HOST_MUTATION_SURVIVORS", sorted(set(failed)), file=sys.stderr)
+    sys.exit(1)
 sys.exit(0)

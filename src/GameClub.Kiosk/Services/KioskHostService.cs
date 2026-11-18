@@ -46,6 +46,8 @@ public sealed class KioskHostService : IAsyncDisposable
     private string _deviceKey = "";
     private string _stationId = "";
     private Guid _sessionId;
+    private Guid _locallyLockedSessionId;
+    private bool _localLockLeaseExpired;
     private KioskDisplayDto? _lastDisplay;
     private bool _runCatalogOnFirstConnected;
     private bool _pairingJustFailed;
@@ -182,6 +184,7 @@ public sealed class KioskHostService : IAsyncDisposable
 
         var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         _sessionId = doc.RootElement.GetProperty("sessionId").GetGuid();
+        _locallyLockedSessionId = Guid.Empty;
         _runtime.BindSession(_sessionId);
         await ApplyStationProfileAsync();
         ShowPlayingLayout();
@@ -239,6 +242,7 @@ public sealed class KioskHostService : IAsyncDisposable
         }
 
         _sessionId = Guid.Empty;
+        _locallyLockedSessionId = Guid.Empty;
         _runtime.BindSession(Guid.Empty);
         RunSessionCleanup();
         ShowLockLayout();
@@ -272,29 +276,50 @@ public sealed class KioskHostService : IAsyncDisposable
                 || ack.ManualSettle || string.Equals(ack.SessionStatus, "AwaitingPayment", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(ack.SessionStatus, "Ended", StringComparison.OrdinalIgnoreCase))
             {
-                RunSessionCleanup();
-                _sessionId = Guid.Empty;
-                _runtime.BindSession(Guid.Empty);
-                ShowLockLayout();
-                _replayTick.Stop();
-                RefreshStationStatusText();
+                EnterLocalLock(phase == KioskShellPhase.LeaseExpired);
             }
             else if (string.Equals(ack.SessionStatus, "Open", StringComparison.OrdinalIgnoreCase))
             {
-                if (_sessionId == Guid.Empty && ack.Lease?.Payload.SessionId is Guid leased && leased != Guid.Empty)
+                var ackLeaseSession = ack.Lease?.Payload.SessionId;
+                if (_locallyLockedSessionId != Guid.Empty
+                    && ackLeaseSession is Guid leasedWhileLocked
+                    && leasedWhileLocked != Guid.Empty
+                    && leasedWhileLocked == _locallyLockedSessionId)
                 {
-                    _sessionId = leased;
-                    _runtime.BindSession(leased);
-                    _ = ApplyStationProfileAsync();
+                    ShowLockLayout();
+                    RefreshStationStatusText();
                 }
-
-                if (_sessionId != Guid.Empty)
+                else
                 {
-                    ShowPlayingLayout();
-                    if (!_uiTick.IsEnabled)
+                    if (_locallyLockedSessionId != Guid.Empty
+                        && ackLeaseSession is Guid differentSession
+                        && differentSession != Guid.Empty
+                        && differentSession != _locallyLockedSessionId)
                     {
-                        _uiTick.Start();
-                        _replayTick.Start();
+                        _locallyLockedSessionId = Guid.Empty;
+                        _sessionId = differentSession;
+                        _runtime.BindSession(differentSession);
+                        _ = ApplyStationProfileAsync();
+                    }
+                    else if (_sessionId == Guid.Empty && ackLeaseSession is Guid leased && leased != Guid.Empty)
+                    {
+                        _sessionId = leased;
+                        _runtime.BindSession(leased);
+                        _ = ApplyStationProfileAsync();
+                    }
+
+                    if (_sessionId != Guid.Empty && _locallyLockedSessionId == Guid.Empty)
+                    {
+                        ShowPlayingLayout();
+                        if (!_uiTick.IsEnabled)
+                        {
+                            _uiTick.Start();
+                        }
+
+                        if (!_replayTick.IsEnabled)
+                        {
+                            _replayTick.Start();
+                        }
                     }
                 }
             }
@@ -355,7 +380,7 @@ public sealed class KioskHostService : IAsyncDisposable
     {
         RenderDisplay();
         _shell.Dispatcher.Invoke(RefreshStationStatusText);
-        if (_sessionId == Guid.Empty)
+        if (_locallyLockedSessionId != Guid.Empty || _sessionId == Guid.Empty)
         {
             return;
         }
@@ -364,15 +389,7 @@ public sealed class KioskHostService : IAsyncDisposable
         var phase = _orchestrator.TickLease(_sessionId, _runtime.ClientMonotonicMs, DateTime.UtcNow, transportDown);
         if (phase == KioskShellPhase.LeaseExpired)
         {
-            _shell.Dispatcher.Invoke(() =>
-            {
-                RunSessionCleanup();
-                _sessionId = Guid.Empty;
-                _runtime.BindSession(Guid.Empty);
-                ShowLockLayout();
-                _replayTick.Stop();
-                RefreshStationStatusText();
-            });
+            _shell.Dispatcher.Invoke(() => EnterLocalLock(leaseExpired: true));
         }
     }
 
@@ -426,6 +443,22 @@ public sealed class KioskHostService : IAsyncDisposable
             return;
         }
 
+        if (_locallyLockedSessionId != Guid.Empty)
+        {
+            _status.Text = KioskStationStatus.FormatLocalLockScreen(
+                _stationId,
+                _localLockLeaseExpired,
+                _runtime.TransportPhase,
+                _runtime.IsTransportConnected,
+                _runtime.SignalRAutoReconnecting,
+                _pairingJustFailed,
+                _runtime.ConsecutiveHeartbeatFailures,
+                _lastHeartbeatAckUtc,
+                DateTime.UtcNow,
+                _runtime.LastTransportErrorDetail);
+            return;
+        }
+
         _status.Text = KioskStationStatus.Resolve(
             _stationId,
             _runtime.TransportPhase,
@@ -438,6 +471,20 @@ public sealed class KioskHostService : IAsyncDisposable
             DateTime.UtcNow,
             _lastDisplay?.EstimatedRemainingSeconds,
             _runtime.LastTransportErrorDetail);
+    }
+
+    private void EnterLocalLock(bool leaseExpired)
+    {
+        if (_sessionId != Guid.Empty)
+        {
+            _locallyLockedSessionId = _sessionId;
+        }
+
+        _localLockLeaseExpired = leaseExpired;
+        RunSessionCleanup();
+        ShowLockLayout();
+        _replayTick.Stop();
+        RefreshStationStatusText();
     }
 
     private async Task RunStartupCatalogRefreshAsync()
@@ -738,14 +785,12 @@ public sealed class KioskHostService : IAsyncDisposable
                 if (_sessionId == Guid.Empty)
                 {
                     RefreshStationStatusText();
-                    EnsureStatusUiTickRunning();
                 }
             }
             else
             {
                 _runCatalogOnFirstConnected = true;
                 RefreshStationStatusText();
-                EnsureStatusUiTickRunning();
             }
         }
         catch (Exception ex)

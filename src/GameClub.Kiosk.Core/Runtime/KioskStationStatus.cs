@@ -33,17 +33,25 @@ public static class KioskStationStatus
                 or KioskTransportPhase.Connecting
                 or KioskTransportPhase.LastError;
 
-        if (hasOpenSession && !offline && estimatedRemainingSeconds is long seconds)
+        if (hasOpenSession && !offline)
         {
             var noResponse = consecutiveHeartbeatFailures >= 2
                 || (lastHeartbeatAckUtc.HasValue
                     && utcNow - lastHeartbeatAckUtc.Value > TimeSpan.FromSeconds(NoServerResponseAfterSeconds));
+            if (estimatedRemainingSeconds is long seconds)
+            {
+                if (hubTransportConnected && noResponse)
+                {
+                    return $"Station {stationId} — no server response";
+                }
+
+                return $"Station {stationId} — ~{TimeSpan.FromSeconds(seconds):hh\\:mm\\:ss} left";
+            }
+
             if (hubTransportConnected && noResponse)
             {
                 return $"Station {stationId} — no server response";
             }
-
-            return $"Station {stationId} — ~{TimeSpan.FromSeconds(seconds):hh\\:mm\\:ss} left";
         }
 
         if (offline)
@@ -80,4 +88,39 @@ public static class KioskStationStatus
         => statusText.IndexOf("connected", StringComparison.OrdinalIgnoreCase) >= 0
             && statusText.IndexOf("not connected", StringComparison.OrdinalIgnoreCase) < 0
             && statusText.IndexOf("reconnecting", StringComparison.OrdinalIgnoreCase) < 0;
+
+    /// <summary>Main lock prefix plus O4-d connection suffix (never bare session countdown while locked).</summary>
+    public static string FormatLocalLockScreen(
+        string stationId,
+        bool leaseExpired,
+        KioskTransportPhase transportPhase,
+        bool hubTransportConnected,
+        bool signalRAutoReconnecting,
+        bool pairingJustFailed,
+        int consecutiveHeartbeatFailures,
+        DateTime? lastHeartbeatAckUtc,
+        DateTime utcNow,
+        string? lastErrorDetail)
+    {
+        var connection = Resolve(
+            stationId,
+            transportPhase,
+            hubTransportConnected,
+            signalRAutoReconnecting,
+            pairingJustFailed,
+            hasOpenSession: false,
+            consecutiveHeartbeatFailures,
+            lastHeartbeatAckUtc,
+            utcNow,
+            estimatedRemainingSeconds: null,
+            lastErrorDetail);
+        var prefix = $"Station {stationId} — ";
+        var suffix = connection.StartsWith(prefix, StringComparison.Ordinal)
+            ? connection.Substring(prefix.Length)
+            : connection;
+        var locked = leaseExpired
+            ? $"Locked — lease expired ({stationId})"
+            : $"Locked — {stationId}";
+        return $"{locked} · {suffix}";
+    }
 }

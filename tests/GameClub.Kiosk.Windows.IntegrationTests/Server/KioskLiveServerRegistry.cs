@@ -35,6 +35,34 @@ internal static class KioskLiveServerRegistry
         File.WriteAllText(path, pids.Count == 0 ? "" : string.Join(Environment.NewLine, pids));
     }
 
+    public static void StopAllTrackedOwnedServers()
+    {
+        foreach (var pid in GetTrackedProcessIds())
+        {
+            try
+            {
+                var proc = Process.GetProcessById(pid);
+                if (!proc.HasExited)
+                {
+                    proc.Kill(entireProcessTree: true);
+                    proc.WaitForExit(15_000);
+                }
+            }
+            catch (ArgumentException)
+            {
+                // already exited
+            }
+            catch
+            {
+                // best-effort assembly teardown
+            }
+            finally
+            {
+                Unregister(pid);
+            }
+        }
+    }
+
     public static void AssertNoTrackedServersAlive()
     {
         var alive = new List<string>();

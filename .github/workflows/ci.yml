@@ -110,6 +110,15 @@ jobs:
         timeout-minutes: 22
         shell: pwsh
         run: ./scripts/windows/ci-integration.ps1
+      - name: kiosk host reconnect mutations (net48 D7 and status tick)
+        shell: pwsh
+        env:
+          MUTOUT_DIR: artifacts/kiosk-reconnect-mut
+          MUT_HOST_ONLY: "1"
+        run: |
+          New-Item -ItemType Directory -Force -Path $env:MUTOUT_DIR | Out-Null
+          python scripts/agent/run-kiosk-reconnect-mutations.py | Tee-Object -FilePath "$env:MUTOUT_DIR/mutations.log"
+          Get-Content "$env:MUTOUT_DIR/mutations-r1d.json"
       - name: orphan server and db writer check
         if: always()
         timeout-minutes: 2

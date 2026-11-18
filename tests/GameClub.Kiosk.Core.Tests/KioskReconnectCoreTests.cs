@@ -710,6 +710,57 @@ public sealed class KioskReconnectCoreTests
     }
 
     [Fact]
+    public void open_session_connected_without_display_shows_no_server_response_when_heartbeats_fail()
+    {
+        var text = KioskStationStatus.Resolve(
+            "PC-nsr",
+            KioskTransportPhase.Connected,
+            hubTransportConnected: true,
+            signalRAutoReconnecting: false,
+            pairingJustFailed: false,
+            hasOpenSession: true,
+            consecutiveHeartbeatFailures: 3,
+            lastHeartbeatAckUtc: DateTime.UtcNow,
+            utcNow: DateTime.UtcNow,
+            estimatedRemainingSeconds: null,
+            lastErrorDetail: null);
+        Assert.Contains("no server response", text, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("connecting", text, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void local_lock_status_includes_locked_prefix_and_connection_suffix()
+    {
+        var text = KioskStationStatus.FormatLocalLockScreen(
+            "PC-1",
+            leaseExpired: true,
+            KioskTransportPhase.Connected,
+            hubTransportConnected: true,
+            signalRAutoReconnecting: false,
+            pairingJustFailed: false,
+            consecutiveHeartbeatFailures: 0,
+            lastHeartbeatAckUtc: DateTime.UtcNow,
+            utcNow: DateTime.UtcNow,
+            lastErrorDetail: null);
+        Assert.StartsWith("Locked — lease expired (PC-1) · ", text);
+        Assert.Contains("connected", text, StringComparison.OrdinalIgnoreCase);
+
+        var stopped = KioskStationStatus.FormatLocalLockScreen(
+            "PC-2",
+            leaseExpired: false,
+            KioskTransportPhase.Connected,
+            hubTransportConnected: true,
+            signalRAutoReconnecting: false,
+            pairingJustFailed: false,
+            consecutiveHeartbeatFailures: 3,
+            lastHeartbeatAckUtc: DateTime.UtcNow,
+            utcNow: DateTime.UtcNow,
+            lastErrorDetail: null);
+        Assert.StartsWith("Locked — PC-2 · ", stopped);
+        Assert.Contains("no server response", stopped, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task transport_signalr_reconnecting_publishes_reconnecting_phase_with_no_session()
     {
         var transport = new FakeKioskHubTransport();
