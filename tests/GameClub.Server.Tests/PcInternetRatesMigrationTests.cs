@@ -1,4 +1,5 @@
 using System.Net.Http.Json;
+using System.Text.Json;
 using GameClub.Billing;
 using GameClub.Server.Data;
 using GameClub.Server.Data.Entities;
@@ -106,6 +107,22 @@ public sealed class PcInternetRatesMigrationTests(GameClubWebApplicationFactory 
                 .Select(r => $"{r.PlayMode}:{r.PlayerCount}:{r.IsSpecialBand}:{r.HourlyToman}")
                 .ToListAsync();
             Assert.Equal(ps5Before, ps5After);
+        });
+    }
+
+    [Fact]
+    public async Task PcInternetMigration_GameRateLinesByteIdentical()
+    {
+        await WithPrePcInternetSeedAsync(factory, async db =>
+        {
+            var before = await db.GameRateLines.AsNoTracking().OrderBy(g => g.Id)
+                .Select(g => $"{g.GameTitleId}:{g.PlayMode}:{g.PlayerCount}:{g.HourlyToman}:{g.NightHourlyToman}")
+                .ToListAsync();
+            await db.Database.MigrateAsync();
+            var after = await db.GameRateLines.AsNoTracking().OrderBy(g => g.Id)
+                .Select(g => $"{g.GameTitleId}:{g.PlayMode}:{g.PlayerCount}:{g.HourlyToman}:{g.NightHourlyToman}")
+                .ToListAsync();
+            Assert.Equal(before, after);
         });
     }
 }

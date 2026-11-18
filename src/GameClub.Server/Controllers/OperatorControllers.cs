@@ -140,7 +140,7 @@ public sealed class OperatorPanelController(
         });
     }
 
-    public sealed record InternetChangeBody(bool On, uint ExpectedVersion, Guid CommandId);
+    public sealed record InternetChangeBody(bool On, uint? ExpectedVersion, Guid CommandId);
 
     [HttpPost("sessions/{sessionId:guid}/internet")]
     public async Task<IActionResult> ChangeInternet(Guid sessionId, InternetChangeBody body, CancellationToken ct)

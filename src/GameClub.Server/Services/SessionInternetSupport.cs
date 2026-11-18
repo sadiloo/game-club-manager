@@ -85,12 +85,9 @@ public static class SessionInternetSupport
                 throw new ApiException(StatusCodes.Status400BadRequest, "not_pc", "تغییر اینترنت فقط برای PC مجاز است.");
             }
 
-            if (session.Status != SessionStatus.Open)
-            {
-                throw new ApiException(StatusCodes.Status409Conflict, "closed", "جلسه بسته است.");
-            }
-
-            if (expectedVersion is uint version && session.RowVersion != version)
+            if (session.Status == SessionStatus.Open
+                && expectedVersion is uint version
+                && session.RowVersion != version)
             {
                 throw new ApiException(StatusCodes.Status409Conflict, "stale_version", "جلسه به‌روز شده است؛ صفحه را تازه کنید.");
             }
@@ -99,6 +96,11 @@ public static class SessionInternetSupport
                 || session.Status is SessionStatus.BillOpen or SessionStatus.AwaitingPayment)
             {
                 throw new ApiException(StatusCodes.Status409Conflict, "awaiting_payment", "برای این جلسه قبلاً صورتحساب باز شده است.");
+            }
+
+            if (session.Status != SessionStatus.Open)
+            {
+                throw new ApiException(StatusCodes.Status409Conflict, "closed", "جلسه بسته است.");
             }
 
             var targetMode = on ? PlayMode.Online : PlayMode.Offline;

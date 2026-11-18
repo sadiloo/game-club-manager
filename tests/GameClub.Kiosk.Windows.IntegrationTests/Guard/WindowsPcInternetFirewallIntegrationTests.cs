@@ -81,6 +81,127 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
     }
 
     [Fact]
+    public void internet_off_blocks_second_resolved_host_and_reports_local_profiles()
+    {
+        SkipUnlessWindowsAdmin();
+        var ips = ResolveServerIps();
+        if (ips.Length == 0)
+        {
+            throw new SkipTestException("Could not resolve api.github.com for server allow-list.");
+        }
+
+        string[]? secondHostIps = null;
+        try
+        {
+            secondHostIps = Dns.GetHostAddresses("example.com")
+                .Where(a => a.AddressFamily == AddressFamily.InterNetwork)
+                .Select(a => a.ToString())
+                .Distinct()
+                .Take(1)
+                .ToArray();
+        }
+        catch
+        {
+            /* optional */
+        }
+
+        var applier = new InternetFirewallApplier();
+        var config = new InternetGuardConfig
+        {
+            StationId = "CI-PC-0",
+            ServerHost = "api.github.com",
+            ServerPort = 443,
+            ServerIps = ips,
+            ExtraAllowPrograms = CiExtraPrograms(),
+        };
+        try
+        {
+            Assert.Equal("applied", applier.Apply(config, on: false));
+            Thread.Sleep(1_500);
+            var script = "Get-NetFirewallProfile -PolicyStore ActiveStore | Select-Object Name,DefaultOutboundAction,AllowLocalFirewallRules | ConvertTo-Json";
+            var json = RunPowerShell(script);
+            Assert.Contains("Block", json, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("False", json, StringComparison.Ordinal);
+            Assert.True(TryTcp("127.0.0.1", 80, 1_000), "loopback must remain reachable while OFF.");
+            if (secondHostIps is { Length: > 0 })
+            {
+                Assert.False(TryTcp(secondHostIps[0], 443, 2_000), "Second public host must be blocked while OFF.");
+            }
+        }
+        finally
+        {
+            applier.RunResetScript();
+        }
+    }
+
+    [Fact]
+    public void internet_off_ipv6_egress_blocked_when_available()
+    {
+        SkipUnlessWindowsAdmin();
+        if (!Socket.OSSupportsIPv6)
+        {
+            throw new SkipTestException("IPv6 not supported on runner.");
+        }
+
+        try
+        {
+            using var tcp = new TcpClient(AddressFamily.InterNetworkV6);
+            var connect = tcp.ConnectAsync("2606:4700:4700::1111", 443);
+            if (!connect.Wait(2_000) || !tcp.Connected)
+            {
+                throw new SkipTestException("Runner has no working IPv6 egress path to probe.");
+            }
+        }
+        catch (SkipTestException)
+        {
+            throw;
+        }
+        catch
+        {
+            throw new SkipTestException("Runner has no working IPv6 egress path to probe.");
+        }
+
+        var ips = ResolveServerIps();
+        if (ips.Length == 0)
+        {
+            throw new SkipTestException("Could not resolve api.github.com for server allow-list.");
+        }
+
+        var applier = new InternetFirewallApplier();
+        var config = new InternetGuardConfig
+        {
+            StationId = "CI-PC-IPV6",
+            ServerHost = "api.github.com",
+            ServerPort = 443,
+            ServerIps = ips,
+            ExtraAllowPrograms = CiExtraPrograms(),
+        };
+        try
+        {
+            Assert.Equal("applied", applier.Apply(config, on: false));
+            Assert.False(TryTcpV6("2606:4700:4700::1111", 443, 3_000), "IPv6 egress must be blocked while OFF.");
+        }
+        finally
+        {
+            applier.RunResetScript();
+        }
+    }
+
+    private static bool TryTcpV6(string host, int port, int timeoutMs)
+    {
+        try
+        {
+            using var client = new TcpClient(AddressFamily.InterNetworkV6);
+            var task = client.ConnectAsync(host, port);
+            return task.Wait(timeoutMs) && client.Connected;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    [Fact]
     public void internet_off_allows_github_blocks_public_then_reset_restores()
     {
         SkipUnlessWindowsAdmin();

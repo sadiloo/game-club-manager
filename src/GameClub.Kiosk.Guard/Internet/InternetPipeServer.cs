@@ -123,19 +123,15 @@ internal sealed class InternetPipeServer
             }
 
             var p = command.Payload;
-            if (!string.Equals(p.StationId, _config.StationId, StringComparison.Ordinal))
+            var admissionError = InternetCommandAdmission.TryRejectBeforeApply(
+                p,
+                _config.StationId,
+                _epoch,
+                _appliedVersion,
+                _applied);
+            if (admissionError is not null)
             {
-                return JsonSerializer.Serialize(new { error = "rejected_station" });
-            }
-
-            if (p.Epoch == _epoch && p.Version <= _appliedVersion)
-            {
-                return JsonSerializer.Serialize(new { error = "rejected_stale" });
-            }
-
-            if (p.Epoch != _epoch && p.IssuedAtUtc <= (_applied?.IssuedAtUtc ?? DateTime.MinValue))
-            {
-                return JsonSerializer.Serialize(new { error = "rejected_stale" });
+                return JsonSerializer.Serialize(new { error = admissionError });
             }
 
             _epoch = p.Epoch;
