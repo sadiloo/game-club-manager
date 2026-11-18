@@ -104,7 +104,7 @@ M = [
         "        ShowLockLayout();\n        if (!logoutHttpSucceeded)",
         "        if (!logoutHttpSucceeded)",
         "host-d5",
-        "host_logout_session_adopt_during_slow_post_relocks_after_await",
+        "host_logout_login_during_slow_post_readopts_new_session_on_next_ack",
     ),
     (
         "Host_logout_real_http_always_success",
