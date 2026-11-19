@@ -191,5 +191,14 @@ Add test extension on `shell_blocks_external_navigation_and_new_window_with_log_
 | Run | Job | Branch | Notes |
 |-----|-----|--------|-------|
 | 44588422453 | 135787573617 | `cursor/sub-round-a-shell-f022` | Baseline 11 failures |
-| 44595452402 | 135812379937 | `cursor/pr42-r6-diag` @ `7a3fe4e` | Build failed (net48 `Index` range in `ReadShellLogTail`); fixed in next push |
-| *(pending)* | | `cursor/pr42-r6-diag` | `[pr42-r6-diag]` console + `ShellFileLog` lines |
+| 44588422453 | 135787573617 | `cursor/sub-round-a-shell-f022` @ `4999323` | Baseline 11 failures |
+| 44597540749 | 135819786817 | `cursor/pr42-r6-diag` @ `fb66e13` | Confirmed diagnoses (11 failures, same asserts) |
+
+### Diag log highlights (run `44597540749`)
+
+- **A3:** `SHELL-A3 … groupId=ps5 amountToman=5000`; `SHELL-REF … groupId=ps5 amountToman=0`; `A3-compare-1 refAmount=0 shellAmount=5000`.
+- **Pollers:** `close-all-windows openCount=9 types=MainWindow×9`; `unexpected-stop-count-mid=9` / `final=9`; poller ticks &lt;1s apart from many instances.
+- **Placement:** `workArea=(0,0,1024,728)`; `placement-after-show state=Normal w=1044 h=788`; `maximize=True` cases still `Normal`.
+- **Offline (stopped):** `offline-navigate-to-string htmlLen=1759` then `navigation-completed success=False` `webError=OperationCanceled` on `data:text/html…`; test `innerText=` empty.
+- **Offline (post-stop):** `innerText=Hmmm. can't reach this page` after loopback `webError=Unknown`.
+- **Alert:** `page-alert seen=False source=http://127.0.0.1:5000/operator/`.
