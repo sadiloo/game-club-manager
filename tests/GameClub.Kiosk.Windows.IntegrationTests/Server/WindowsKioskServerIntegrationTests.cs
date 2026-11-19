@@ -248,6 +248,23 @@ public sealed class WindowsKioskServerIntegrationTests
                 await Task.Delay(500);
             }
 
+            var leaseKeyAfter = await backend.LeaseSigningKeyFingerprintFromDatabaseAsync();
+            if (lastAck?.Lease is null)
+            {
+                Console.WriteLine(
+                    $"LEASE_VERIFY lease=null sig_ok=false authorizedUntilUtc= nowUtc={DateTime.UtcNow:O} "
+                    + $"phase={orchestrator.Phase} lease_key_k1={leaseKeyBefore} lease_key_k2={leaseKeyAfter} "
+                    + $"keys_match={string.Equals(leaseKeyBefore, leaseKeyAfter, StringComparison.Ordinal)}");
+            }
+            else
+            {
+                var sigOk = new GameClub.Kiosk.Core.Lease.LeaseVerifier(leasePem).TryVerify(lastAck.Lease);
+                Console.WriteLine(
+                    $"LEASE_VERIFY sig_ok={sigOk} authorizedUntilUtc={lastAck.Lease.Payload.AuthorizedUntilUtc:O} "
+                    + $"nowUtc={DateTime.UtcNow:O} phase={orchestrator.Phase} lease_key_k1={leaseKeyBefore} lease_key_k2={leaseKeyAfter} "
+                    + $"keys_match={string.Equals(leaseKeyBefore, leaseKeyAfter, StringComparison.Ordinal)}");
+            }
+
             Assert.NotNull(lastAck);
             Assert.NotNull(lastAck.Lease);
             // Upper bound = funded play seconds (RemainingTimeEstimator + RateCardBuilder on real wallet/rate) + 5 s one heartbeat tick.
@@ -256,13 +273,6 @@ public sealed class WindowsKioskServerIntegrationTests
             Assert.True(lastAck.Display.EstimatedRemainingSeconds <= fundedPlaySeconds + 5);
             Assert.True(lastAck.Display.EstimatedRemainingSeconds >= fundedPlaySeconds - elapsedSeconds - 60);
             Assert.Equal(KioskShellPhase.Playing, orchestrator.Phase);
-
-            var sigOk = new GameClub.Kiosk.Core.Lease.LeaseVerifier(leasePem).TryVerify(lastAck.Lease!);
-            var leaseKeyAfter = await backend.LeaseSigningKeyFingerprintFromDatabaseAsync();
-            Console.WriteLine(
-                $"LEASE_VERIFY sig_ok={sigOk} authorizedUntilUtc={lastAck.Lease!.Payload.AuthorizedUntilUtc:O} "
-                + $"nowUtc={DateTime.UtcNow:O} phase={orchestrator.Phase} lease_key_k1={leaseKeyBefore} lease_key_k2={leaseKeyAfter} "
-                + $"keys_match={string.Equals(leaseKeyBefore, leaseKeyAfter, StringComparison.Ordinal)}");
 
             var stop = await backend.CreateApiClient().PostAsync($"/api/sessions/{sessionId}/stop", null);
             stop.EnsureSuccessStatusCode();
