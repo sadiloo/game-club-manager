@@ -80,7 +80,11 @@ function New-ShellCiCompliantPassword {
 
 $stdUser = "gcm_shell_std"
 $stdPass = New-ShellCiCompliantPassword
+Write-Output "::add-mask::$stdPass"
 $secure = ConvertTo-SecureString $stdPass -AsPlainText -Force
+$VerbosePreference = "SilentlyContinue"
+$DebugPreference = "SilentlyContinue"
+$InformationPreference = "SilentlyContinue"
 if (-not (Get-LocalUser -Name $stdUser -ErrorAction SilentlyContinue)) {
     New-LocalUser -Name $stdUser -Password $secure -FullName "GCM Shell CI" | Out-Null
 } else {
@@ -98,6 +102,17 @@ if (-not $wv2) {
 }
 
 dotnet build tests/GameClub.Shell.Windows.IntegrationTests/GameClub.Shell.Windows.IntegrationTests.csproj -c Release -f net48 --nologo
+$inv = & (Join-Path $PSScriptRoot "shell-windowshell-inventory.ps1") -Role Shell
+$inv | ForEach-Object { Write-Output $_ }
+$listLine = $inv | Where-Object { $_ -match '^SHELL_LIST_COUNT=' } | Select-Object -Last 1
+$excludedArtifact = Join-Path $artifactDir "count/shell-windowshell-count.txt"
+if (Test-Path $excludedArtifact) {
+    $excludedLine = (Get-Content -Path $excludedArtifact -Raw).Trim()
+    if ($listLine -ne $excludedLine) {
+        throw "Shell inventory count mismatch: shell job '$listLine' vs windows job '$excludedLine'"
+    }
+    Write-Output "SHELL_COUNT_MATCHED $listLine $excludedLine"
+}
 dotnet test tests/GameClub.Shell.Windows.IntegrationTests/GameClub.Shell.Windows.IntegrationTests.csproj `
   -c Release -f net48 --no-build --nologo `
   --filter "Category=WindowsShell" `
