@@ -147,22 +147,5 @@ $localRules = @(Get-NetFirewallRule -PolicyStore localhost -Group $group -ErrorA
         return false;
     }
 
-    private static string RunPowerShell(string script)
-    {
-        var encoded = Convert.ToBase64String(Encoding.Unicode.GetBytes(script));
-        var psi = new ProcessStartInfo
-        {
-            FileName = "powershell.exe",
-            Arguments = $"-NoProfile -NonInteractive -EncodedCommand {encoded}",
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            CreateNoWindow = true,
-        };
-        using var proc = Process.Start(psi) ?? throw new InvalidOperationException("powershell start failed");
-        var stdout = proc.StandardOutput.ReadToEnd();
-        proc.StandardError.ReadToEnd();
-        proc.WaitForExit(60_000);
-        return stdout.Trim();
-    }
+    private static string RunPowerShell(string script) => InternetPowerShellRunner.Run(script, 60_000);
 }

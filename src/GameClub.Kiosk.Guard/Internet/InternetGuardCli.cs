@@ -47,7 +47,20 @@ internal static class InternetGuardCli
 
     public static int RunReset()
     {
-        new InternetFirewallApplier().RunResetScript();
+        InternetGuardConfig? config = null;
+        if (File.Exists(InternetGuardPaths.ConfigPath))
+        {
+            config = JsonSerializer.Deserialize<InternetGuardConfig>(File.ReadAllText(InternetGuardPaths.ConfigPath));
+        }
+
+        var applier = new InternetFirewallApplier();
+        var code = config is not null ? applier.Apply(config, on: true) : applier.RunResetScript();
+        if (!string.Equals(code, "applied", StringComparison.Ordinal))
+        {
+            Console.Error.WriteLine(code);
+            return 1;
+        }
+
         if (File.Exists(InternetGuardPaths.StatePath))
         {
             File.Delete(InternetGuardPaths.StatePath);

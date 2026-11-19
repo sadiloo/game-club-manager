@@ -136,7 +136,7 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
     {
         var script =
             """
-            $rules = Get-NetFirewallRule -PolicyStore localhost -Group 'Checkpoint Internet Off' -ErrorAction SilentlyContinue
+            $rules = Get-NetFirewallRule -Group 'Checkpoint Internet Off' -ErrorAction SilentlyContinue
             if (-not $rules) { throw 'missing Checkpoint Internet Off rules' }
             ($rules | Measure-Object).Count
             """;
@@ -479,7 +479,7 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
     }
 
     [Fact]
-    public void internet_off_apply_result_is_applied_only_after_verified_localhost_block()
+    public void internet_off_apply_result_is_applied_only_after_verified_active_store_block()
     {
         RequireWindowsAdmin();
         var ips = ResolveServerIps();
@@ -500,13 +500,139 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
             Assert.Equal("applied", result);
             Assert.False(TryTcp("1.1.1.1", 443, 2_000));
             var profileJson = RunPowerShell(
-                "Get-NetFirewallProfile -PolicyStore localhost | Select-Object Name,DefaultOutboundAction | ConvertTo-Json");
-            Assert.Contains("Block", profileJson, StringComparison.OrdinalIgnoreCase);
+                "Get-NetFirewallProfile -PolicyStore ActiveStore | Select-Object Name,DefaultOutboundAction | ConvertTo-Json");
+            AssertLocalhostOffStoreActive(profileJson);
             AssertCheckpointOffRuleGroupPresent();
         }
         finally
         {
             applier.RunResetScript();
+        }
+    }
+
+    [Fact]
+    public void internet_off_then_on_restores_active_store_without_block_or_group_rules()
+    {
+        RequireWindowsAdmin();
+        var ips = ResolveServerIps();
+        Assert.True(ips.Length > 0, "Could not resolve api.github.com for server allow-list.");
+
+        var applier = new InternetFirewallApplier();
+        var config = new InternetGuardConfig
+        {
+            StationId = "CI-OFF-ON",
+            ServerHost = "api.github.com",
+            ServerPort = 443,
+            ServerIps = ips,
+            ExtraAllowPrograms = CiExtraPrograms(),
+        };
+        try
+        {
+            Assert.Equal("applied", applier.Apply(config, on: false));
+            Assert.Equal("applied", applier.Apply(config, on: true));
+            var activeRuleCount = int.Parse(RunPowerShell(
+                "(Get-NetFirewallRule -Group 'Checkpoint Internet Off' -ErrorAction SilentlyContinue | Measure-Object).Count").Trim());
+            Assert.Equal(0, activeRuleCount);
+            var profileJson = RunPowerShell(
+                "Get-NetFirewallProfile | Select-Object Name,DefaultOutboundAction | ConvertTo-Json");
+            Assert.DoesNotContain("Block", profileJson, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            applier.Apply(config, on: true);
+        }
+    }
+
+    [Fact]
+    public void internet_off_apply_cleans_legacy_localhost_store_before_persistent_off()
+    {
+        RequireWindowsAdmin();
+        var ips = ResolveServerIps();
+        Assert.True(ips.Length > 0, "Could not resolve api.github.com for server allow-list.");
+
+        var applier = new InternetFirewallApplier();
+        var config = new InternetGuardConfig
+        {
+            StationId = "CI-LOCALHOST-CLEAN",
+            ServerHost = "api.github.com",
+            ServerPort = 443,
+            ServerIps = ips,
+            ExtraAllowPrograms = CiExtraPrograms(),
+        };
+        const string seedScript = """
+            $group = 'Checkpoint Internet Off'
+            New-NetFirewallRule -PolicyStore localhost -DisplayName 'Legacy Local' -Group $group -Direction Outbound -Action Allow -Protocol TCP -RemotePort 443 | Out-Null
+            Set-NetFirewallProfile -PolicyStore localhost -Name Public -DefaultOutboundAction Block -AllowLocalFirewallRules False
+            """;
+        try
+        {
+            RunPowerShell(seedScript);
+            var preLocal = int.Parse(RunPowerShell(
+                "(Get-NetFirewallRule -PolicyStore localhost -Group 'Checkpoint Internet Off' -ErrorAction SilentlyContinue | Measure-Object).Count").Trim());
+            Assert.True(preLocal >= 1, "precondition: localhost legacy rules seeded");
+
+            Assert.Equal("applied", applier.Apply(config, on: false));
+            var postLocal = int.Parse(RunPowerShell(
+                "(Get-NetFirewallRule -PolicyStore localhost -Group 'Checkpoint Internet Off' -ErrorAction SilentlyContinue | Measure-Object).Count").Trim());
+            Assert.Equal(0, postLocal);
+            var activeCount = int.Parse(RunPowerShell(
+                "(Get-NetFirewallRule -Group 'Checkpoint Internet Off' -ErrorAction SilentlyContinue | Measure-Object).Count").Trim());
+            Assert.True(activeCount >= 1);
+        }
+        finally
+        {
+            applier.Apply(config, on: true);
+        }
+    }
+
+    [Fact]
+    public void internet_guard_startup_clears_orphan_off_when_state_file_missing()
+    {
+        RequireWindowsAdmin();
+        var ips = ResolveServerIps();
+        Assert.True(ips.Length > 0, "Could not resolve api.github.com for server allow-list.");
+
+        var applier = new InternetFirewallApplier();
+        var config = new InternetGuardConfig
+        {
+            StationId = "CI-STARTUP-ORPHAN",
+            ServerHost = "api.github.com",
+            ServerPort = 443,
+            ServerIps = ips,
+            ExtraAllowPrograms = CiExtraPrograms(),
+        };
+        try
+        {
+            Assert.Equal("applied", applier.Apply(config, on: false));
+            if (File.Exists(InternetGuardPaths.StatePath))
+            {
+                File.Delete(InternetGuardPaths.StatePath);
+            }
+
+            InternetGuardStartupFirewall.ReconcileOnPipeStart(config, applier);
+            Assert.True(TryTcp("1.1.1.1", 443, 3_000), "startup must unblock when OFF artifacts lack verified state");
+            var activeRules = int.Parse(RunPowerShell(
+                "(Get-NetFirewallRule -Group 'Checkpoint Internet Off' -ErrorAction SilentlyContinue | Measure-Object).Count").Trim());
+            Assert.Equal(0, activeRules);
+        }
+        finally
+        {
+            applier.Apply(config, on: true);
+            TryDeleteState();
+        }
+    }
+
+    private static void TryDeleteState()
+    {
+        try
+        {
+            if (File.Exists(InternetGuardPaths.StatePath))
+            {
+                File.Delete(InternetGuardPaths.StatePath);
+            }
+        }
+        catch
+        {
         }
     }
 

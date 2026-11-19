@@ -1,38 +1,39 @@
 # PR #40 R15 report (staging `cursor/pr40-r15-staging`)
 
-Parent: `07e524f24cf33bb820197dc6c8e98a6b2ef8713d`
+Parent: `07e524f24cf33bb820197dc6c8e98a6b2ef8713d`  
+Option A base: `7940b7dc6e5af43ce37f65e8a610a3ff0e7c58ac`
 
-## Summary
+## Summary (Option A — persistent ActiveStore)
 
-Guard OFF: allow rules on **ActiveStore** (no `-PolicyStore`) **before** profile `Block`; rollback removes rules + profiles; C# re-read + `InternetFirewallOffVerification` via `InternetFirewallOffApplyReadback`; `applied` only when classifier returns null. Verified `internet-state.json` only from `InternetGuardStateStore.SaveVerified` after signed apply in `InternetPipeServer` (not applier). L17 prints `L17_OFF_APPLY_DIAG` after apply. `Invoke-CiFirewallRestore` before guard-wpf retained (CI evidence below).
+- **OFF/ON** apply on **ActiveStore** (no `-PolicyStore localhost` for product rules/profiles). Legacy **localhost** rules + profile Block cleared at **every apply** and at **`InternetPipeServer.Run` start** (`InternetFirewallLocalhostStoreCleanup`, `InternetGuardStartupFirewall.ReconcileOnPipeStart`).
+- **Classifier** unchanged for server-TCP reachability; failures still `apply_failed` / `internetError`.
+- **ON** after reset: `TryGetOnResetFailedReason` requires profiles not Block and **0** group rules on ActiveStore (else `apply_failed`).
+- **State file:** `InternetGuardStateStore.SaveVerified` only after signed pipe apply succeeds; OFF pipe path re-classifies with `requireVerifiedStateFile: true` and rolls back to ON on failure.
+- **L17:** `L17RealInternetOffProbe` uses real **Guard pipe** + heartbeat-signed command. Assertions unchanged: `blocked=True`, `rules>=1`, `state_present=True`; **added** `localhost` group rule count **= 0**.
+- **Reboot (iii):** no hardware reboot on Linux agent; **`internet_guard_startup_clears_orphan_off_when_state_file_missing`** calls `InternetGuardStartupFirewall.ReconcileOnPipeStart` (same path as pipe start). Code: if ActiveStore shows OFF artifacts but **no** verified state file → `RunResetScript()` (unblock).
 
-## Root cause (a) — proved from R14 CI job 135509470398
+## Root cause (a) — R14 CI job 135509470398
 
-1. `L17_GUARD_OFF_PROBE apply_result=applied blocked=False guard_rule_count=2 state_present=False` (log ~11:07:20Z).
-2. Same job **before** `dotnet-test-net48-guard-wpf`: `CI_FIREWALL active_profile … out=NotConfigured` (all three), `localhost_profile … out=NotConfigured`, `guard_rule_count … count=2`, `CI_EGRESS … public=1.1.1.1:443 blocked=False`, `checkpoint=127.0.0.1:5225 reachable=True`.
+1. `L17_GUARD_OFF_PROBE apply_result=applied blocked=False guard_rule_count=2 state_present=False`.
+2. Before guard-wpf: ActiveStore profiles `NotConfigured`, `guard_rule_count=2` in localhost store, egress open.
 
-**Interpretation:** R14 `InternetFirewallApplier` (`07e524f`) created **Checkpoint Internet Off** rules in **localhost PolicyStore only**, then set Block only on localhost profiles. ActiveStore outbound stayed `NotConfigured`, so the script’s localhost-only verify could succeed while egress remained open (2 rules visible to localhost rule query, no effective block on ActiveStore). `state_present=False` because L17 calls `InternetFirewallApplier.Apply` directly — `InternetGuardStateStore.SaveVerified` runs only on `InternetPipeServer` signed `apply`, not on the probe’s raw applier call.
+**R14 bug:** rules/profiles on **localhost** only; verify matched localhost while ActiveStore stayed open. **Option A** moves product store to ActiveStore and keeps L17 rule count on ActiveStore.
 
-**R15 proof lines:** after apply, CI will emit `L17_OFF_APPLY_DIAG active_profiles_out=… localhost_profiles_out=… active_group_rule_count=… localhost_group_rule_count=…`.
+## Root cause (c) — host timer / CI firewall
 
-## Root cause (c) — host timer regressions (same R14 change, CI evidence)
+Same R14 localhost-only rules left **2** rules on runner before guard-wpf. **`Invoke-CiFirewallRestore`** before guard-wpf **retained**; applier no longer creates localhost product rules.
 
-**Change:** `InternetFirewallApplier.cs` in `dba1e26..07e524f` — rule creation moved before profile block; rules pinned to `-PolicyStore localhost`.
+## Files (Option A)
 
-**Evidence (job 135509470398):** After server integration (incl. L17 probe), `before-dotnet-test-net48-guard-wpf` shows `guard_rules=2`, `public … blocked=False`, profiles `out=NotConfigured` on ActiveStore — leftover localhost rules without block. Host WPF tests (`KioskHostStatusTimerTests`) run in that phase; shared runner egress/checkpoint reachability matches R12 environmental coupling (ctor `RefreshAsync` vs mock transport). **Not** masking product bugs: restore clears orphan rules before guard-wpf; applier fix prevents new localhost-only partial OFF.
-
-## Files
-
-- `src/GameClub.Kiosk.Guard/Internet/InternetFirewallApplier.cs`, `InternetFirewallOffApplyReadback.cs`, `InternetPipeServer.cs`, `InternetFirewallOffDiagnostics.cs`
-- `src/GameClub.Kiosk.Core/Guard/InternetFirewallOffVerification.cs`, `InternetFirewallOffReadbackModel.cs`
-- `tests/GameClub.Kiosk.Core.Tests/PcInternetFirewallOffVerificationTests.cs`
-- `tests/.../WindowsPcInternetApplyFailureLiveTests.cs` (L17 diag line only)
-- `scripts/windows/ci-integration.ps1` (restore before guard-wpf)
+- `InternetFirewallApplier.cs`, `InternetPowerShellRunner.cs`, `InternetFirewallLocalhostStoreCleanup.cs`, `InternetGuardStartupFirewall.cs`, `InternetFirewallOffApplyReadback.cs`, `InternetPipeServer.cs`, `InternetGuardCli.cs`
+- `InternetFirewallOffVerification.cs` (+ on-reset helper)
+- Tests: `L17RealInternetOffProbe.cs`, `WindowsPcInternetFirewallIntegrationTests.cs` (off/on, localhost cleanup, startup orphan), `WindowsPcInternetApplyFailureLiveTests.cs`, `PcInternetFirewallOffVerificationTests.cs`
+- CI: existing `Category=PcInternetFirewall` + `PcSpecialBandLiveRateCardOracleTests` filters unchanged
 
 ## Staging SHA
 
-`12a575cecafda759c91fa675535ef05c7a22e585`
+*(set at push — see agent reply with `git rev-parse HEAD`)*
 
-## State file (product path)
+## L17 diagnostics
 
-R14 `state_present=False` on L17: probe calls `InternetFirewallApplier` only; `InternetGuardStateStore.SaveVerified` runs in `InternetPipeServer` after signed `apply`. R15: pipe re-reads with `requireVerifiedStateFile: true` after save. L17 probe still uses applier-only (`requireVerifiedStateFile: false`); `state_present` stays false until probe goes through pipe + server-signed command (L17 assertion lines unchanged).
+`L17_OFF_APPLY_DIAG` / probe line still print active vs localhost profile and rule counts for Windows CI triage.

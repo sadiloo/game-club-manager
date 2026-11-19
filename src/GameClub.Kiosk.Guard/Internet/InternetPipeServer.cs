@@ -47,6 +47,7 @@ internal sealed class InternetPipeServer
 
     public void Run(CancellationToken ct)
     {
+        InternetGuardStartupFirewall.ReconcileOnPipeStart(_config, _firewall);
         ReassertPersisted();
         var drift = new Thread(() =>
         {

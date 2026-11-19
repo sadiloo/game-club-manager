@@ -44,4 +44,21 @@ public static class InternetFirewallOffVerification
 
         return null;
     }
+
+    public static string? TryGetOnResetFailedReason(
+        bool anyActiveProfileStillBlock,
+        int activeStoreGuardRuleCount)
+    {
+        if (anyActiveProfileStillBlock)
+        {
+            return "apply_failed:verification:active_profiles_still_block";
+        }
+
+        if (activeStoreGuardRuleCount > 0)
+        {
+            return "apply_failed:verification:checkpoint_off_rules_remain";
+        }
+
+        return null;
+    }
 }

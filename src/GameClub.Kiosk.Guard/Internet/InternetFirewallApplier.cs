@@ -1,8 +1,6 @@
 using System;
-using System.Diagnostics;
 using System.Linq;
-using System.Text;
-using GameClub.Kiosk.Core.Protocol;
+using GameClub.Kiosk.Core.Guard;
 
 namespace GameClub.Kiosk.Guard.Internet;
 
@@ -12,9 +10,20 @@ internal sealed class InternetFirewallApplier : IInternetFirewallApplier
 
     public string Apply(InternetGuardConfig config, bool on)
     {
+        InternetFirewallLocalhostStoreCleanup.CleanupLegacyLocalhostArtifacts();
         if (on)
         {
-            return RunResetScript();
+            var scriptResult = RunResetScriptInternal();
+            if (!string.Equals(scriptResult, "firewall_script_ok", StringComparison.Ordinal))
+            {
+                return scriptResult;
+            }
+
+            var onReadback = InternetFirewallOffApplyReadback.Capture(config);
+            var onFailed = InternetFirewallOffVerification.TryGetOnResetFailedReason(
+                onReadback.Model.AllActiveProfilesBlock,
+                onReadback.Model.ActiveStoreGuardRuleCount);
+            return onFailed ?? "applied";
         }
 
         if (config.ServerIps.Length == 0 || config.ServerPort <= 0)
@@ -71,7 +80,7 @@ try {{
   throw
 }}
 ";
-        var powerShellResult = RunPowerShell(script);
+        var powerShellResult = InternetPowerShellRunner.Run(script);
         if (!string.Equals(powerShellResult, "firewall_script_ok", StringComparison.Ordinal))
         {
             return powerShellResult;
@@ -82,63 +91,20 @@ try {{
         return failed ?? "applied";
     }
 
-    public string RunResetScript()
+    public string RunResetScript() => RunResetScriptInternal();
+
+    private static string RunResetScriptInternal()
     {
         var script = $@"
-$ErrorActionPreference = 'SilentlyContinue'
+$ErrorActionPreference = 'Stop'
 $group = '{GroupName}'
-Get-NetFirewallRule -Group $group | Remove-NetFirewallRule
+Get-NetFirewallRule -Group $group -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction Stop
 foreach ($prof in @('Domain','Private','Public')) {{
-  Set-NetFirewallProfile -Name $prof -DefaultOutboundAction NotConfigured -AllowLocalFirewallRules NotConfigured
+  Set-NetFirewallProfile -Name $prof -DefaultOutboundAction NotConfigured -AllowLocalFirewallRules NotConfigured -ErrorAction Stop
 }}
-'applied'
+'firewall_script_ok'
 ";
-        return RunPowerShell(script);
-    }
-
-    private static string RunPowerShell(string script)
-    {
-        try
-        {
-            var encoded = Convert.ToBase64String(Encoding.Unicode.GetBytes(script));
-            var psi = new ProcessStartInfo
-            {
-                FileName = "powershell.exe",
-                Arguments = $"-NoProfile -NonInteractive -EncodedCommand {encoded}",
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                CreateNoWindow = true,
-            };
-            using var proc = Process.Start(psi) ?? throw new InvalidOperationException("powershell start failed");
-            var stdout = proc.StandardOutput.ReadToEnd();
-            var stderr = proc.StandardError.ReadToEnd();
-            proc.WaitForExit(120_000);
-            if (proc.ExitCode != 0)
-            {
-                var detail = string.IsNullOrWhiteSpace(stderr) ? stdout.Trim() : stderr.Trim();
-                if (string.IsNullOrWhiteSpace(detail))
-                {
-                    detail = $"exit_{proc.ExitCode}";
-                }
-
-                return detail.StartsWith("apply_failed", StringComparison.Ordinal)
-                    ? detail
-                    : $"apply_failed:powershell_error:{detail}";
-            }
-
-            var tail = stdout.Trim().Split('\n').LastOrDefault()?.Trim();
-            if (string.IsNullOrEmpty(tail))
-            {
-                return "apply_failed:powershell_error:empty_output";
-            }
-
-            return tail!;
-        }
-        catch (Exception ex)
-        {
-            return $"apply_failed:powershell_error:{ex.Message}";
-        }
+        return InternetPowerShellRunner.Run(script);
     }
 }
 

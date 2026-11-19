@@ -112,6 +112,25 @@ public sealed class PcInternetFirewallOffVerificationTests
     }
 
     [Fact]
+    public void internet_on_reset_requires_no_block_profiles_and_zero_active_rules()
+    {
+        Assert.Equal(
+            "apply_failed:verification:active_profiles_still_block",
+            InternetFirewallOffVerification.TryGetOnResetFailedReason(
+                anyActiveProfileStillBlock: true,
+                activeStoreGuardRuleCount: 0));
+        Assert.Equal(
+            "apply_failed:verification:checkpoint_off_rules_remain",
+            InternetFirewallOffVerification.TryGetOnResetFailedReason(
+                anyActiveProfileStillBlock: false,
+                activeStoreGuardRuleCount: 2));
+        Assert.Null(
+            InternetFirewallOffVerification.TryGetOnResetFailedReason(
+                anyActiveProfileStillBlock: false,
+                activeStoreGuardRuleCount: 0));
+    }
+
+    [Fact]
     public void readback_model_r14_false_applied_runs_classifier_for_active_store_only()
     {
         const string json =
