@@ -147,59 +147,12 @@ internal sealed class InternetPipeServer
     }
 
     private static string? ReadRequestLine(NamedPipeServerStream stream, int timeoutMs, int handlerThread)
-    {
-        var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
-        var sb = new StringBuilder();
-        var one = new byte[1];
-        while (DateTime.UtcNow < deadline)
-        {
-            var remaining = (int)Math.Max(1, (deadline - DateTime.UtcNow).TotalMilliseconds);
-            var read = 0;
-            try
-            {
-                var readTask = stream.ReadAsync(one, 0, 1);
-                if (!readTask.Wait(remaining))
-                {
-                    GuardWatchdogLog.Append($"pipe_read_timeout thread={handlerThread}");
-                    return null;
-                }
-
-                read = readTask.Result;
-            }
-            catch (ObjectDisposedException)
-            {
-                return null;
-            }
-
-            if (read == 0)
-            {
-                GuardWatchdogLog.Append($"pipe_read_eof thread={handlerThread}");
-                return null;
-            }
-
-            var c = (char)one[0];
-            if (c == '\n')
-            {
-                return sb.ToString();
-            }
-
-            if (c == '\r')
-            {
-                continue;
-            }
-
-            sb.Append(c);
-            if (Encoding.UTF8.GetByteCount(sb.ToString()) > GuardInternetPipeProtocol.MaxLineBytes)
-            {
-                GuardWatchdogLog.Append(
-                    $"pipe_line_oversize thread={handlerThread} bytes={Encoding.UTF8.GetByteCount(sb.ToString())}");
-                return null;
-            }
-        }
-
-        GuardWatchdogLog.Append($"pipe_read_timeout thread={handlerThread}");
-        return null;
-    }
+        => GuardInternetPipeLineReader.ReadLine(
+            stream,
+            timeoutMs,
+            GuardInternetPipeProtocol.MaxLineBytes,
+            handlerThread,
+            GuardWatchdogLog.Append);
 
     private void RunReconcileBackground(CancellationToken ct)
     {

@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.IO;
 using System.IO.Pipes;
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using GameClub.Kiosk.Core.Guard;
@@ -115,6 +116,31 @@ public sealed class GuardInternetPipeFramingTests
     }
 
     [Fact]
+    public async Task internet_pipe_utf8_persian_field_round_trips_on_real_pipe()
+    {
+        if (!OperatingSystem.IsWindows() && !OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        const string persian = "چیپس و نوشابه";
+        using var cts = new CancellationTokenSource();
+        var ready = new ManualResetEventSlim(false);
+        var pipeThread = new Thread(() =>
+            LineFramingPipeStub.RunAcceptLoop(ready, cts.Token, LineFramingPipeStub.HandleEchoNoteStub))
+        {
+            IsBackground = true,
+        };
+        pipeThread.Start();
+        Assert.True(ready.Wait(TimeSpan.FromSeconds(5)));
+
+        var requestJson = JsonSerializer.Serialize(new { verb = "status", note = persian });
+        var response = await InvokeGuardClientSendAsync(requestJson);
+        using var doc = JsonDocument.Parse(response);
+        Assert.Equal(persian, doc.RootElement.GetProperty("note").GetString());
+    }
+
+    [Fact]
     public async Task internet_pipe_rejects_oversize_request_line()
     {
         if (!OperatingSystem.IsWindows() && !OperatingSystem.IsLinux())
@@ -139,6 +165,15 @@ public sealed class GuardInternetPipeFramingTests
         await client.WriteAsync(line, 0, line.Length);
         await client.FlushAsync();
         Assert.True(sawOversize.Wait(TimeSpan.FromSeconds(3)));
+    }
+
+    private static Task<string> InvokeGuardClientSendAsync(string requestJson)
+    {
+        var method = typeof(GuardInternetClient).GetMethod(
+            "SendAsync",
+            BindingFlags.Static | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+        return (Task<string>)method!.Invoke(null, new object[] { requestJson, "test", CancellationToken.None })!;
     }
 }
 
@@ -241,43 +276,28 @@ internal static class LineFramingPipeStub
         return JsonSerializer.Serialize(new { error = "stub_unsigned_apply" });
     }
 
-    private static string? ReadLine(Stream stream, int timeoutMs)
+    internal static string HandleEchoNoteStub(string line)
     {
-        var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
-        var sb = new StringBuilder();
-        var one = new byte[1];
-        while (DateTime.UtcNow < deadline)
+        using var doc = JsonDocument.Parse(line);
+        var verb = doc.RootElement.GetProperty("verb").GetString();
+        if (doc.RootElement.TryGetProperty("note", out var note))
         {
-            var remaining = (int)Math.Max(1, (deadline - DateTime.UtcNow).TotalMilliseconds);
-            var readTask = stream.ReadAsync(one, 0, 1);
-            if (!readTask.Wait(remaining))
+            return JsonSerializer.Serialize(new
             {
-                return null;
-            }
-
-            var read = readTask.Result;
-            if (read == 0)
-            {
-                return null;
-            }
-
-            var c = (char)one[0];
-            if (c == '\n')
-            {
-                return sb.ToString();
-            }
-
-            if (c != '\r')
-            {
-                sb.Append(c);
-            }
-
-            if (Encoding.UTF8.GetByteCount(sb.ToString()) > GuardInternetPipeProtocol.MaxLineBytes)
-            {
-                return null;
-            }
+                verb,
+                note = note.GetString(),
+                echoed = true,
+            });
         }
 
-        return null;
+        return HandleStatusOrApplyStub(line);
     }
+
+    private static string? ReadLine(Stream stream, int timeoutMs)
+        => GuardInternetPipeLineReader.ReadLine(
+            stream,
+            timeoutMs,
+            GuardInternetPipeProtocol.MaxLineBytes,
+            handlerThread: 0,
+            appendLog: null);
 }

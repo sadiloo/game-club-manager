@@ -10,7 +10,9 @@ using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Security.Principal;
+using System.Reflection;
 using System.Text;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using GameClub.Kiosk.Core.Guard;
@@ -530,6 +532,63 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
     }
 
     [Fact(Timeout = 30_000)]
+    public async Task internet_pipe_utf8_persian_field_round_trips_on_real_pipe()
+    {
+        RequireWindowsAdmin();
+        const string persian = "چیپس و نوشابه";
+        var logPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+            "Checkpoint",
+            "guard",
+            "watchdog.log");
+        using var rsa = RSA.Create(2048);
+        var pub = ExportPublicKeyPem(rsa);
+        var config = BuildConfig(pub);
+        config.StationId = persian;
+        CancellationTokenSource cts = null;
+        Thread pipeThread = null;
+        try
+        {
+            cts = new CancellationTokenSource();
+            pipeThread = new Thread(() => new InternetPipeServer(config, new FastApplyInternetFirewallApplier()).Run(cts.Token))
+            {
+                IsBackground = true,
+            };
+            pipeThread.Start();
+            await Task.Delay(500);
+
+            var requestJson = JsonSerializer.Serialize(new { verb = "status", note = persian });
+            var expectedBytes = Encoding.UTF8.GetByteCount(requestJson);
+            var response = await InvokeGuardClientSendAsync(requestJson);
+            using (var doc = JsonDocument.Parse(response))
+            {
+                Assert.True(doc.RootElement.TryGetProperty("on", out _));
+            }
+
+            Assert.True(File.Exists(logPath));
+            Assert.Contains($"pipe_read_ok", File.ReadAllText(logPath), StringComparison.Ordinal);
+            Assert.Contains($"bytes={expectedBytes}", File.ReadAllText(logPath), StringComparison.Ordinal);
+
+            var cmd = Sign(rsa, new InternetCommandPayload
+            {
+                StationId = persian,
+                Epoch = Guid.NewGuid(),
+                Version = 1,
+                On = true,
+                IssuedAtUtc = DateTime.UtcNow,
+            });
+            var applyBody = await new GuardInternetClient().ApplyAsync(cmd);
+            using var applyDoc = JsonDocument.Parse(applyBody);
+            Assert.Equal("applied", applyDoc.RootElement.GetProperty("result").GetString());
+        }
+        finally
+        {
+            cts?.Cancel();
+            pipeThread?.Join(TimeSpan.FromSeconds(5));
+        }
+    }
+
+    [Fact(Timeout = 30_000)]
     public async Task internet_pipe_line_framing_status_within_2s_while_client_pipe_stays_open()
     {
         RequireWindowsAdmin();
@@ -667,6 +726,15 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
             cts?.Cancel();
             pipeThread?.Join(TimeSpan.FromSeconds(5));
         }
+    }
+
+    private static Task<string> InvokeGuardClientSendAsync(string requestJson)
+    {
+        var method = typeof(GuardInternetClient).GetMethod(
+            "SendAsync",
+            BindingFlags.Static | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+        return (Task<string>)method.Invoke(null, new object[] { requestJson, "test", CancellationToken.None });
     }
 
     private static SignedInternetCommand Sign(RSA rsa, InternetCommandPayload payload)
