@@ -33,6 +33,7 @@ internal sealed class ServerStatePoller : IDisposable
     private bool _wasServiceRunningClass;
     private bool _armedForUnexpectedToast = true;
     private DateTime _noAnswerSinceUtc = DateTime.MinValue;
+    private int _tickInProgress;
 
     public event Action<ServerStateSnapshot>? Changed;
 
@@ -45,28 +46,43 @@ internal sealed class ServerStatePoller : IDisposable
 
     private void Tick()
     {
-        var snapshot = BuildSnapshot();
-        if (_armedForUnexpectedToast
-            && _wasServiceRunningClass
-            && snapshot.IconState == TrayIconState.Red
-            && snapshot.IsUnexpectedStopRed
-            && !ShellSeams.TrayStopInProgress
-            && !MaintenanceFlagPresent())
+        if (Interlocked.CompareExchange(ref _tickInProgress, 1, 0) != 0)
         {
-            ShellSeams.Notifications.ShowUnexpectedStop(snapshot.VisualState == ShellServerVisualState.NoAnswer);
+            ShellSeams.OnTickSkippedReentrant?.Invoke();
+            return;
         }
 
-        if (snapshot.IconState == TrayIconState.Green)
+        try
         {
-            _armedForUnexpectedToast = true;
-        }
+            ShellSeams.OnTickEntered?.Invoke();
+            var snapshot = BuildSnapshot();
+            if (_armedForUnexpectedToast
+                && _wasServiceRunningClass
+                && snapshot.IconState == TrayIconState.Red
+                && snapshot.IsUnexpectedStopRed
+                && !ShellSeams.TrayStopInProgress
+                && !MaintenanceFlagPresent())
+            {
+                ShellSeams.Notifications.ShowUnexpectedStop(snapshot.VisualState == ShellServerVisualState.NoAnswer);
+                _armedForUnexpectedToast = false;
+            }
 
-        _wasServiceRunningClass = snapshot.VisualState is ShellServerVisualState.Running
-            or ShellServerVisualState.Starting
-            or ShellServerVisualState.Stopping;
-        _lastIcon = snapshot.IconState;
-        Current = snapshot;
-        Changed?.Invoke(snapshot);
+            if (snapshot.IconState == TrayIconState.Green)
+            {
+                _armedForUnexpectedToast = true;
+            }
+
+            _wasServiceRunningClass = snapshot.VisualState is ShellServerVisualState.Running
+                or ShellServerVisualState.Starting
+                or ShellServerVisualState.Stopping;
+            _lastIcon = snapshot.IconState;
+            Current = snapshot;
+            Changed?.Invoke(snapshot);
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _tickInProgress, 0);
+        }
     }
 
     private static bool MaintenanceFlagPresent()
@@ -97,6 +113,7 @@ internal sealed class ServerStatePoller : IDisposable
 
     private ServerStateSnapshot BuildSnapshot()
     {
+        ShellSeams.BeforeBuildSnapshot?.Invoke();
         if (!ShellSeams.Service.ServiceExists)
         {
             return Red(ShellServerVisualState.Stopped, "سرور: خاموش", "سرور: خاموش یا بدون پاسخ", unexpected: true);

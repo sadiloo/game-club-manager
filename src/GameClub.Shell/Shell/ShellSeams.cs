@@ -224,6 +224,9 @@ public static class ShellSeams
     public static Func<string, bool>? MaintenanceFlagExists { get; set; }
     public static Func<ShellMessageBoxRequest, DialogResult>? MessageBoxHandler { get; set; }
     public static ShellMessageBoxRequest? LastMessageBoxRequest { get; set; }
+    public static Action? BeforeBuildSnapshot { get; set; }
+    public static Action? OnTickEntered { get; set; }
+    public static Action? OnTickSkippedReentrant { get; set; }
 
     public static DialogResult ShowMessageBox(
         string text,

@@ -72,6 +72,9 @@ internal static class FakeShellSeams
         ShellSeams.ReadOpenSessionCount = null;
         ShellSeams.MessageBoxHandler = null;
         ShellSeams.MaintenanceFlagExists = null;
+        ShellSeams.BeforeBuildSnapshot = null;
+        ShellSeams.OnTickEntered = null;
+        ShellSeams.OnTickSkippedReentrant = null;
         ShellSeams.UtcNow = () => DateTime.UtcNow;
         ShellSeams.SystemUptime = () => TimeSpan.FromMilliseconds(Environment.TickCount & int.MaxValue);
     }
@@ -94,6 +97,9 @@ internal static class FakeShellSeams
         ShellSeams.MaintenanceFlagExists = null;
         ShellSeams.MessageBoxHandler = null;
         ShellSeams.ReadOpenSessionCount = null;
+        ShellSeams.BeforeBuildSnapshot = null;
+        ShellSeams.OnTickEntered = null;
+        ShellSeams.OnTickSkippedReentrant = null;
     }
 }
 #endif
