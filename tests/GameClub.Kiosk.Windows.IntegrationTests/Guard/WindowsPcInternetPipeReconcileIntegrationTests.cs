@@ -647,6 +647,61 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
         throw new InvalidOperationException("unreachable");
     }
 
+    [Fact(Timeout = 120_000)]
+    public async Task internet_pipe_off_apply_failure_restores_on_and_replies_on_true_with_original_error()
+    {
+        RequireWindowsAdmin();
+        using var rsa = RSA.Create(2048);
+        var config = BuildConfig(ExportPublicKeyPem(rsa));
+        var applier = new OffFailOpenRollbackInternetFirewallApplier();
+        CancellationTokenSource cts = null;
+        Thread pipeThread = null;
+        try
+        {
+            cts = new CancellationTokenSource();
+            pipeThread = new Thread(() => new InternetPipeServer(config, applier).Run(cts.Token))
+            {
+                IsBackground = true,
+                Name = "OffFailOpenPipe",
+            };
+            pipeThread.Start();
+            await Task.Delay(500);
+
+            var offCommand = Sign(rsa, new InternetCommandPayload
+            {
+                StationId = config.StationId,
+                Epoch = Guid.NewGuid(),
+                Version = 2,
+                On = false,
+                IssuedAtUtc = DateTime.UtcNow,
+            });
+            var applyBody = await new GuardInternetClient().ApplyAsync(offCommand);
+            using var applyDoc = JsonDocument.Parse(applyBody);
+            Assert.Equal("apply_failed:verification:test_harness", applyDoc.RootElement.GetProperty("error").GetString());
+            Assert.True(applyDoc.RootElement.GetProperty("on").GetBoolean());
+            Assert.Equal(1, applier.OffApplyCount);
+            Assert.Equal(1, applier.OnRestoreCount);
+
+            var status = await new GuardInternetClient().GetStatusAsync(default);
+            using var statusDoc = JsonDocument.Parse(status);
+            Assert.True(statusDoc.RootElement.GetProperty("on").GetBoolean());
+
+            var activeOut = RunPowerShell(
+                "@('Domain','Private','Public') | ForEach-Object { (Get-NetFirewallProfile -Name $_ -ErrorAction SilentlyContinue).DefaultOutboundAction.ToString() }");
+            foreach (var line in activeOut.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                Assert.NotEqual("Block", line.Trim(), StringComparer.OrdinalIgnoreCase);
+            }
+        }
+        finally
+        {
+            cts?.Cancel();
+            pipeThread?.Join(TimeSpan.FromSeconds(5));
+            new InternetFirewallApplier().RunResetScript();
+            TryDeleteState();
+        }
+    }
+
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool PeekNamedPipe(
         IntPtr hNamedPipe,

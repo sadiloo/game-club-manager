@@ -15,7 +15,7 @@ public sealed class PcInternetFirewallOffVerificationTests
             "apply_failed:verification:active_profiles_not_block",
             InternetFirewallOffVerification.TryGetApplyFailedReason(
                 allActiveProfilesBlock: false,
-                allLocalhostProfilesBlock: true,
+                anyLocalhostProfileBlock: false,
                 activeStoreGuardRuleCount: 2,
                 checkpointServerReachable: true,
                 stateFilePresent: true,
@@ -24,13 +24,13 @@ public sealed class PcInternetFirewallOffVerificationTests
     }
 
     [Fact]
-    public void internet_off_applied_requires_localhost_profiles_block()
+    public void internet_off_applied_rejects_when_any_localhost_profile_still_block()
     {
         Assert.Equal(
-            "apply_failed:verification:localhost_profiles_not_block",
+            "apply_failed:verification:localhost_profiles_still_block",
             InternetFirewallOffVerification.TryGetApplyFailedReason(
                 allActiveProfilesBlock: true,
-                allLocalhostProfilesBlock: false,
+                anyLocalhostProfileBlock: true,
                 activeStoreGuardRuleCount: 2,
                 checkpointServerReachable: true,
                 stateFilePresent: true,
@@ -45,7 +45,7 @@ public sealed class PcInternetFirewallOffVerificationTests
             "apply_failed:verification:missing_checkpoint_off_rules",
             InternetFirewallOffVerification.TryGetApplyFailedReason(
                 allActiveProfilesBlock: true,
-                allLocalhostProfilesBlock: true,
+                anyLocalhostProfileBlock: false,
                 activeStoreGuardRuleCount: 0,
                 checkpointServerReachable: true,
                 stateFilePresent: true,
@@ -60,7 +60,7 @@ public sealed class PcInternetFirewallOffVerificationTests
             "apply_failed:verification:checkpoint_server_unreachable",
             InternetFirewallOffVerification.TryGetApplyFailedReason(
                 allActiveProfilesBlock: true,
-                allLocalhostProfilesBlock: true,
+                anyLocalhostProfileBlock: false,
                 activeStoreGuardRuleCount: 2,
                 checkpointServerReachable: false,
                 stateFilePresent: true,
@@ -75,7 +75,7 @@ public sealed class PcInternetFirewallOffVerificationTests
             "apply_failed:verification:state_missing",
             InternetFirewallOffVerification.TryGetApplyFailedReason(
                 allActiveProfilesBlock: true,
-                allLocalhostProfilesBlock: true,
+                anyLocalhostProfileBlock: false,
                 activeStoreGuardRuleCount: 2,
                 checkpointServerReachable: true,
                 stateFilePresent: false,
@@ -89,7 +89,7 @@ public sealed class PcInternetFirewallOffVerificationTests
         Assert.Null(
             InternetFirewallOffVerification.TryGetApplyFailedReason(
                 allActiveProfilesBlock: true,
-                allLocalhostProfilesBlock: true,
+                anyLocalhostProfileBlock: false,
                 activeStoreGuardRuleCount: 2,
                 checkpointServerReachable: true,
                 stateFilePresent: true,
@@ -103,12 +103,37 @@ public sealed class PcInternetFirewallOffVerificationTests
         Assert.Null(
             InternetFirewallOffVerification.TryGetApplyFailedReason(
                 allActiveProfilesBlock: true,
-                allLocalhostProfilesBlock: true,
+                anyLocalhostProfileBlock: false,
                 activeStoreGuardRuleCount: 2,
                 checkpointServerReachable: true,
                 stateFilePresent: false,
                 requestedOn: false,
                 requireVerifiedStateFile: false));
+    }
+
+    [Fact]
+    public void internet_off_readback_classify_skips_state_when_not_required()
+    {
+        const string json =
+            """
+            {"activeOut":["Block","Block","Block"],"localOut":["NotConfigured","NotConfigured","NotConfigured"],"activeRuleCount":2,"localRuleCount":0,"checkpointServerReachable":true,"stateFilePresent":false}
+            """;
+        Assert.True(
+            InternetFirewallOffReadbackModel.TryParseDiagnosticJson(json, out var model, out _, out _));
+        Assert.Null(model.ClassifyOff(requireVerifiedStateFile: false));
+    }
+
+    [Fact]
+    public void internet_off_readback_classify_succeeds_when_localhost_cleared_and_active_blocked()
+    {
+        const string json =
+            """
+            {"activeOut":["Block","Block","Block"],"localOut":["NotConfigured","NotConfigured","NotConfigured"],"activeRuleCount":2,"localRuleCount":0,"checkpointServerReachable":true,"stateFilePresent":true}
+            """;
+        Assert.True(
+            InternetFirewallOffReadbackModel.TryParseDiagnosticJson(json, out var model, out _, out _));
+        Assert.False(model.AnyLocalhostProfileBlock);
+        Assert.Null(model.ClassifyOff(requireVerifiedStateFile: true));
     }
 
     [Fact]
@@ -167,7 +192,7 @@ public sealed class PcInternetFirewallOffVerificationTests
             Assert.Null(
                 InternetFirewallOffVerification.TryGetApplyFailedReason(
                     allActiveProfilesBlock: false,
-                    allLocalhostProfilesBlock: false,
+                    anyLocalhostProfileBlock: false,
                     activeStoreGuardRuleCount: 0,
                     checkpointServerReachable: false,
                     stateFilePresent: false,

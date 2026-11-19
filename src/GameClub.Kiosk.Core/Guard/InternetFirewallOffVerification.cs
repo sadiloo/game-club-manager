@@ -5,7 +5,7 @@ public static class InternetFirewallOffVerification
 {
     public static string? TryGetApplyFailedReason(
         bool allActiveProfilesBlock,
-        bool allLocalhostProfilesBlock,
+        bool anyLocalhostProfileBlock,
         int activeStoreGuardRuleCount,
         bool checkpointServerReachable,
         bool stateFilePresent,
@@ -22,9 +22,9 @@ public static class InternetFirewallOffVerification
             return "apply_failed:verification:active_profiles_not_block";
         }
 
-        if (!allLocalhostProfilesBlock)
+        if (anyLocalhostProfileBlock)
         {
-            return "apply_failed:verification:localhost_profiles_not_block";
+            return "apply_failed:verification:localhost_profiles_still_block";
         }
 
         if (activeStoreGuardRuleCount < 1)

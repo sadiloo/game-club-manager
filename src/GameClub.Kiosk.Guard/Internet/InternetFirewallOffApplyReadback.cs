@@ -104,7 +104,7 @@ $localRules = @(Get-NetFirewallRule -PolicyStore localhost -Group $group -ErrorA
         {
             AllActiveProfilesBlock = active.Count == 3 && active.All(v => string.Equals(v, "Block", StringComparison.OrdinalIgnoreCase)),
             AnyActiveProfileBlock = active.Any(v => string.Equals(v, "Block", StringComparison.OrdinalIgnoreCase)),
-            AllLocalhostProfilesBlock = local.Count == 3 && local.All(v => string.Equals(v, "Block", StringComparison.OrdinalIgnoreCase)),
+            AnyLocalhostProfileBlock = local.Any(v => string.Equals(v, "Block", StringComparison.OrdinalIgnoreCase)),
             ActiveStoreGuardRuleCount = activeCount,
             LocalhostStoreGuardRuleCount = localCount,
             CheckpointServerReachable = reachable,
@@ -161,7 +161,7 @@ $localRules = @(Get-NetFirewallRule -PolicyStore localhost -Group $group -ErrorA
         {
             AllActiveProfilesBlock = active.Count == 3 && active.All(v => string.Equals(v, "Block", StringComparison.OrdinalIgnoreCase)),
             AnyActiveProfileBlock = active.Any(v => string.Equals(v, "Block", StringComparison.OrdinalIgnoreCase)),
-            AllLocalhostProfilesBlock = local.Count == 3 && local.All(v => string.Equals(v, "Block", StringComparison.OrdinalIgnoreCase)),
+            AnyLocalhostProfileBlock = local.Any(v => string.Equals(v, "Block", StringComparison.OrdinalIgnoreCase)),
             ActiveStoreGuardRuleCount = activeCount,
             LocalhostStoreGuardRuleCount = localCount,
             CheckpointServerReachable = ProbeServer(config),

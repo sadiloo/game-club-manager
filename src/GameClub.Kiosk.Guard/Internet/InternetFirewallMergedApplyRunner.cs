@@ -76,7 +76,7 @@ try {{
 ";
         var script = BuildLocalhostCleanupScript() + offBody + BuildReadbackEmitScript();
         var raw = InternetPowerShellRunner.Run(script, budgetMs, stepName: "apply_merged_off");
-        return ClassifyMergedResult(raw, config, requireVerifiedStateFile: true, expectOn: false);
+        return ClassifyMergedResult(raw, config, requireVerifiedStateFile: false, expectOn: false);
     }
 
     private static string BuildLocalhostCleanupScript()

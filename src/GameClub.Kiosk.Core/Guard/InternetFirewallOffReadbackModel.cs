@@ -10,7 +10,7 @@ public readonly struct InternetFirewallOffReadbackModel
 {
     public bool AllActiveProfilesBlock { get; init; }
     public bool AnyActiveProfileBlock { get; init; }
-    public bool AllLocalhostProfilesBlock { get; init; }
+    public bool AnyLocalhostProfileBlock { get; init; }
     public int ActiveStoreGuardRuleCount { get; init; }
     public int LocalhostStoreGuardRuleCount { get; init; }
     public bool CheckpointServerReachable { get; init; }
@@ -19,7 +19,7 @@ public readonly struct InternetFirewallOffReadbackModel
     public string? ClassifyOff(bool requireVerifiedStateFile)
         => InternetFirewallOffVerification.TryGetApplyFailedReason(
             AllActiveProfilesBlock,
-            AllLocalhostProfilesBlock,
+            AnyLocalhostProfileBlock,
             ActiveStoreGuardRuleCount,
             CheckpointServerReachable,
             StateFilePresent,
@@ -57,7 +57,7 @@ public readonly struct InternetFirewallOffReadbackModel
             {
                 AllActiveProfilesBlock = activeOut.Length == 3 && AllBlock(activeOut),
                 AnyActiveProfileBlock = AnyBlock(activeOut),
-                AllLocalhostProfilesBlock = localOut.Length == 3 && AllBlock(localOut),
+                AnyLocalhostProfileBlock = AnyBlock(localOut),
                 ActiveStoreGuardRuleCount = activeRules,
                 LocalhostStoreGuardRuleCount = localRules,
                 CheckpointServerReachable = root.TryGetProperty("checkpointServerReachable", out var reach) && reach.GetBoolean(),

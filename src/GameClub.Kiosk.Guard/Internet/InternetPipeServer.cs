@@ -412,6 +412,31 @@ internal sealed class InternetPipeServer
             : _firewall.Apply(_config, p.On);
         if (!string.Equals(code, "applied", StringComparison.Ordinal))
         {
+            if (!p.On)
+            {
+                string? restoreLog = null;
+                try
+                {
+                    var restoreCode = _firewall.Apply(_config, on: true);
+                    if (!string.Equals(restoreCode, "applied", StringComparison.Ordinal))
+                    {
+                        restoreLog = restoreCode;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    restoreLog = ex.Message;
+                }
+
+                _on = true;
+                if (restoreLog is not null)
+                {
+                    GuardWatchdogLog.Append($"off_apply_fail_open_restore result={restoreLog}");
+                }
+
+                return JsonSerializer.Serialize(new { error = code, on = true, version = _appliedVersion });
+            }
+
             return JsonSerializer.Serialize(new { error = code, on = _on, version = _appliedVersion });
         }
 
