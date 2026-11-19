@@ -118,6 +118,7 @@ internal static class L17RealInternetOffProbe
 
         using var conn = new NpgsqlConnection(connString);
         await conn.OpenAsync(ct).ConfigureAwait(false);
+        var resolvedStationId = await ResolveStationRowIdAsync(conn, stationId, ct).ConfigureAwait(false);
         var epoch = Guid.NewGuid();
         var now = DateTime.UtcNow;
         using var cmd = new NpgsqlCommand(
@@ -133,11 +134,67 @@ internal static class L17RealInternetOffProbe
               "Epoch" = @epoch
             """,
             conn);
-        cmd.Parameters.AddWithValue("sid", stationId);
+        cmd.Parameters.AddWithValue("sid", resolvedStationId);
         cmd.Parameters.AddWithValue("epoch", epoch);
         cmd.Parameters.AddWithValue("now", now);
         await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
+
+    private static async Task<string> ResolveStationRowIdAsync(NpgsqlConnection conn, string stationId, CancellationToken ct)
+    {
+        var normalized = NormalizeStationIdLikeServer(stationId);
+        using var lookup = new NpgsqlCommand(
+            """
+            SELECT "Id" FROM stations
+            WHERE "Id" = @raw OR "Id" = @norm
+            LIMIT 1
+            """,
+            conn);
+        lookup.Parameters.AddWithValue("raw", stationId);
+        lookup.Parameters.AddWithValue("norm", normalized);
+        var found = await lookup.ExecuteScalarAsync(ct).ConfigureAwait(false) as string;
+        if (string.IsNullOrWhiteSpace(found))
+        {
+            throw new InvalidOperationException(
+                $"L17 probe could not resolve stations row for stationId={stationId} (normalized={normalized}).");
+        }
+
+        return found;
+    }
+
+    /// <summary>Same letter/digit normalization as GameClub.Server.StationIdNormalizer (test-only).</summary>
+    private static string NormalizeStationIdLikeServer(string id)
+    {
+        if (id is null)
+        {
+            return string.Empty;
+        }
+
+        var trimmed = id.Trim();
+        if (trimmed.Length == 0)
+        {
+            return string.Empty;
+        }
+
+        var buffer = new char[trimmed.Length];
+        for (var i = 0; i < trimmed.Length; i++)
+        {
+            buffer[i] = NormalizeStationIdChar(trimmed[i]);
+        }
+
+        return new string(buffer);
+    }
+
+    private static char NormalizeStationIdChar(char c)
+        => c switch
+        {
+            '\u0643' => '\u06A9',
+            '\u064A' => '\u06CC',
+            >= '\uFF10' and <= '\uFF19' => (char)('0' + (c - '\uFF10')),
+            >= '\u06F0' and <= '\u06F9' => (char)('0' + (c - '\u06F0')),
+            >= '\u0660' and <= '\u0669' => (char)('0' + (c - '\u0660')),
+            _ => char.IsLetter(c) ? char.ToUpperInvariant(c) : c,
+        };
 
     private static int ReadActiveStoreGuardRuleCount()
     {

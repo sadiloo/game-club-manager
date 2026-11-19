@@ -605,7 +605,33 @@ try {
     Set-CiServerPcBandArgs -Mode day
     Start-CiGameClubTestHost -ServerDll $serverDll -BandArgs $script:ServerPcBandArgs -StdoutLog $serverLog -StderrLog $serverErr -ExpectedBand day -PhaseLabel "day-post-night-wpf"
 
-    $guardWpfFilter = "(Category=WindowsWpf&FullyQualifiedName!~wpf_remaining_time_matches_funded_session_special_band_night_line)|(Category=WindowsServer&Category!=LiveCheckpointServer&FullyQualifiedName!~wpf_remaining_time_matches_funded_session_special_band_night_line)"
+    $hostTimerFailFilter = @(
+        "FullyQualifiedName~host_boot_path_shows_no_server_response_when_heartbeats_fail",
+        "FullyQualifiedName~host_late_connect_shows_no_server_response_when_heartbeats_fail",
+        "FullyQualifiedName~host_operator_stop_lock_shows_no_server_response_when_heartbeats_fail",
+        "FullyQualifiedName~host_open_session_no_display_shows_no_server_response_when_heartbeats_fail"
+    ) -join "|"
+    Write-Host "Running KioskHostStatusTimerTests heartbeat-fail scenarios (fresh testhost before guard-wpf bulk)..."
+    Write-VstestPhaseList -phaseName "dotnet-test-net48-host-timer-fail" -framework "net48" -filterExpr $hostTimerFailFilter | Out-Null
+    $hostTimerFailArgs = @(
+        "test", "tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj",
+        "-c", "Release", "-f", "net48", "--no-build", "--nologo",
+        "--filter", $hostTimerFailFilter,
+        "--logger", "console;verbosity=detailed"
+    )
+    $hostTimerFailExit = Invoke-DotNetWithWatchdog -PhaseName "dotnet-test-net48-host-timer-fail" -ArgumentList $hostTimerFailArgs -PhaseCapMs (5 * 60 * 1000)
+    if ($hostTimerFailExit -ne 0) {
+        $script:FinalExitCode = $hostTimerFailExit
+        throw "host timer heartbeat-fail tests failed"
+    }
+
+    $hostTimerFailExclude = @(
+        "FullyQualifiedName!~host_boot_path_shows_no_server_response_when_heartbeats_fail",
+        "FullyQualifiedName!~host_late_connect_shows_no_server_response_when_heartbeats_fail",
+        "FullyQualifiedName!~host_operator_stop_lock_shows_no_server_response_when_heartbeats_fail",
+        "FullyQualifiedName!~host_open_session_no_display_shows_no_server_response_when_heartbeats_fail"
+    ) -join "&"
+    $guardWpfFilter = "(Category=WindowsWpf&FullyQualifiedName!~wpf_remaining_time_matches_funded_session_special_band_night_line&$hostTimerFailExclude)|(Category=WindowsServer&Category!=LiveCheckpointServer&FullyQualifiedName!~wpf_remaining_time_matches_funded_session_special_band_night_line&$hostTimerFailExclude)"
     Write-VstestPhaseList -phaseName "dotnet-test-net48-guard-wpf" -framework "net48" -filterExpr $guardWpfFilter | Out-Null
     $guardTestArgs = @(
         "test", "tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj",
