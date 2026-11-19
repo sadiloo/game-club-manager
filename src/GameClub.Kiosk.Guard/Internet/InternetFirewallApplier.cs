@@ -1,9 +1,7 @@
 using System;
 using System.Diagnostics;
-using System.IO;
 using System.Linq;
 using System.Text;
-using GameClub.Kiosk.Core.Guard;
 using GameClub.Kiosk.Core.Protocol;
 
 namespace GameClub.Kiosk.Guard.Internet;
@@ -16,9 +14,7 @@ internal sealed class InternetFirewallApplier : IInternetFirewallApplier
     {
         if (on)
         {
-            var result = RunResetScript();
-            TryDeleteVerifiedState();
-            return result;
+            return RunResetScript();
         }
 
         if (config.ServerIps.Length == 0 || config.ServerPort <= 0)
@@ -37,7 +33,7 @@ $ips = @({ips})
 $port = {config.ServerPort}
 $group = '{GroupName}'
 try {{
-  $existing = @(Get-NetFirewallRule -PolicyStore localhost -Group $group -ErrorAction Stop)
+  $existing = @(Get-NetFirewallRule -Group $group -ErrorAction Stop)
 }} catch {{
   if ($_.CategoryInfo.Category -eq 'ObjectNotFound' -or $_.FullyQualifiedErrorId -like 'CmdletizationQuery_NotFound*') {{
     $existing = @()
@@ -46,65 +42,44 @@ try {{
   }}
 }}
 if ($existing.Count -gt 0) {{
-  $existing | Remove-NetFirewallRule -PolicyStore localhost -ErrorAction Stop
+  $existing | Remove-NetFirewallRule -ErrorAction Stop
+}}
+New-NetFirewallRule -DisplayName ""$group - Server"" -Group $group -Direction Outbound -Action Allow -Protocol TCP -RemoteAddress $ips -RemotePort $port | Out-Null
+New-NetFirewallRule -DisplayName ""$group - DHCP"" -Group $group -Direction Outbound -Action Allow -Protocol UDP -RemotePort 67-68 | Out-Null
+if ('{extra}' -ne '') {{
+  foreach ($p in '{extra}'.Split(';')) {{
+    if ($p) {{ New-NetFirewallRule -DisplayName ""$group - $p"" -Group $group -Direction Outbound -Action Allow -Program $p | Out-Null }}
+  }}
 }}
 $profilesBlocked = $false
 try {{
   foreach ($prof in @('Domain','Private','Public')) {{
     Set-NetFirewallProfile -Name $prof -Enabled True -DefaultOutboundAction Block -AllowLocalFirewallRules False -ErrorAction Stop
-    Set-NetFirewallProfile -PolicyStore localhost -Name $prof -Enabled True -DefaultOutboundAction Block -AllowLocalFirewallRules False -ErrorAction Stop
   }}
   $profilesBlocked = $true
   {seamThrow}
-  foreach ($prof in @('Domain','Private','Public')) {{
-    $active = Get-NetFirewallProfile -Name $prof -ErrorAction Stop
-    if ($active.DefaultOutboundAction.ToString() -ne 'Block') {{
-      throw ""apply_failed:verification:active_profiles_not_block""
-    }}
-    $local = Get-NetFirewallProfile -PolicyStore localhost -Name $prof -ErrorAction Stop
-    if ($local.DefaultOutboundAction.ToString() -ne 'Block') {{
-      throw ""apply_failed:verification:localhost_profiles_not_block""
-    }}
-  }}
-  New-NetFirewallRule -PolicyStore localhost -DisplayName ""$group - Server"" -Group $group -Direction Outbound -Action Allow -Protocol TCP -RemoteAddress $ips -RemotePort $port | Out-Null
-  New-NetFirewallRule -PolicyStore localhost -DisplayName ""$group - DHCP"" -Group $group -Direction Outbound -Action Allow -Protocol UDP -RemotePort 67-68 | Out-Null
-  if ('{extra}' -ne '') {{
-    foreach ($p in '{extra}'.Split(';')) {{
-      if ($p) {{ New-NetFirewallRule -PolicyStore localhost -DisplayName ""$group - $p"" -Group $group -Direction Outbound -Action Allow -Program $p | Out-Null }}
-    }}
-  }}
-  $rules = @(Get-NetFirewallRule -PolicyStore localhost -Group $group -ErrorAction Stop)
-  if ($rules.Count -lt 1) {{
-    throw ""apply_failed:verification:missing_checkpoint_off_rules""
-  }}
-  'applied'
+  'firewall_script_ok'
 }} catch {{
   if ($profilesBlocked) {{
     foreach ($prof in @('Domain','Private','Public')) {{
       Set-NetFirewallProfile -Name $prof -DefaultOutboundAction NotConfigured -AllowLocalFirewallRules NotConfigured -ErrorAction SilentlyContinue
-      Set-NetFirewallProfile -PolicyStore localhost -Name $prof -DefaultOutboundAction NotConfigured -AllowLocalFirewallRules NotConfigured -ErrorAction SilentlyContinue
     }}
   }}
   try {{
-    Get-NetFirewallRule -PolicyStore localhost -Group $group -ErrorAction SilentlyContinue |
-      Remove-NetFirewallRule -PolicyStore localhost -ErrorAction SilentlyContinue
+    Get-NetFirewallRule -Group $group -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue
   }} catch {{ }}
   throw
 }}
 ";
         var powerShellResult = RunPowerShell(script);
-        if (!string.Equals(powerShellResult, "applied", StringComparison.Ordinal))
+        if (!string.Equals(powerShellResult, "firewall_script_ok", StringComparison.Ordinal))
         {
             return powerShellResult;
         }
 
-        TryPersistVerifiedOffState(config);
-        if (!File.Exists(InternetGuardPaths.StatePath))
-        {
-            return "apply_failed:verification:state_missing";
-        }
-
-        return "applied";
+        var readback = InternetFirewallOffApplyReadback.Capture(config);
+        var failed = readback.ClassifyOff(requireVerifiedStateFile: false);
+        return failed ?? "applied";
     }
 
     public string RunResetScript()
@@ -112,49 +87,13 @@ try {{
         var script = $@"
 $ErrorActionPreference = 'SilentlyContinue'
 $group = '{GroupName}'
-Get-NetFirewallRule -PolicyStore localhost -Group $group | Remove-NetFirewallRule -PolicyStore localhost
+Get-NetFirewallRule -Group $group | Remove-NetFirewallRule
 foreach ($prof in @('Domain','Private','Public')) {{
   Set-NetFirewallProfile -Name $prof -DefaultOutboundAction NotConfigured -AllowLocalFirewallRules NotConfigured
-  Set-NetFirewallProfile -PolicyStore localhost -Name $prof -DefaultOutboundAction NotConfigured -AllowLocalFirewallRules NotConfigured
 }}
 'applied'
 ";
         return RunPowerShell(script);
-    }
-
-    private static void TryPersistVerifiedOffState(InternetGuardConfig config)
-    {
-        try
-        {
-            var payload = new InternetCommandPayload
-            {
-                StationId = config.StationId,
-                Epoch = Guid.NewGuid(),
-                Version = 1,
-                On = false,
-                IssuedAtUtc = DateTime.UtcNow,
-            };
-            InternetVerifiedStateFile.Save(InternetGuardPaths.StatePath, payload);
-        }
-        catch
-        {
-            /* classified on re-read */
-        }
-    }
-
-    private static void TryDeleteVerifiedState()
-    {
-        try
-        {
-            if (File.Exists(InternetGuardPaths.StatePath))
-            {
-                File.Delete(InternetGuardPaths.StatePath);
-            }
-        }
-        catch
-        {
-            /* best effort */
-        }
     }
 
     private static string RunPowerShell(string script)

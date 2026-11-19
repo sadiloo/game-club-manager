@@ -394,6 +394,7 @@ public sealed class WindowsPcInternetApplyFailureLiveTests
         try
         {
             var applyResult = applier.Apply(config, on: false);
+            InternetFirewallOffDiagnostics.WriteL17OffApplyDiagnostics(config, Console.WriteLine);
             var ruleCount = ReadGuardRuleCount();
             var blocked = ProbeEgress("1.1.1.1", 443);
             var statePresent = File.Exists(InternetGuardPaths.StatePath);

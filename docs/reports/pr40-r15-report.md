@@ -4,30 +4,35 @@ Parent: `07e524f24cf33bb820197dc6c8e98a6b2ef8713d`
 
 ## Summary
 
-Guard OFF: profiles and rules run in safe order again; ActiveStore **and** localhost must read `Block` before PS emits `applied`; C# persists `internet-state.json` then rejects `applied` if the file is missing. Core `InternetFirewallOffVerification` unit tests (Category `PcInternetFirewall`) wired on ubuntu + windows integration. Firewall restore before guard-wpf. Oracle + core firewall phases named in `ci-integration.ps1`.
+Guard OFF: allow rules on **ActiveStore** (no `-PolicyStore`) **before** profile `Block`; rollback removes rules + profiles; C# re-read + `InternetFirewallOffVerification` via `InternetFirewallOffApplyReadback`; `applied` only when classifier returns null. Verified `internet-state.json` only from `InternetGuardStateStore.SaveVerified` after signed apply in `InternetPipeServer` (not applier). L17 prints `L17_OFF_APPLY_DIAG` after apply. `Invoke-CiFirewallRestore` before guard-wpf retained (CI evidence below).
 
-## Root cause (a) — false `applied` without block
+## Root cause (a) — proved from R14 CI job 135509470398
 
-R14 (`dba1e26..07e524f`) moved **allow rules before** profile `Block` and verified only **localhost** `Get-NetFirewallProfile`. On windows-2022 CI, localhost could report success / rules count 2 while **ActiveStore** `DefaultOutboundAction` stayed `NotConfigured`, so the script tail was `applied`, egress to `1.1.1.1:443` stayed open, and L17 logged `blocked=False` with no verified state file.
+1. `L17_GUARD_OFF_PROBE apply_result=applied blocked=False guard_rule_count=2 state_present=False` (log ~11:07:20Z).
+2. Same job **before** `dotnet-test-net48-guard-wpf`: `CI_FIREWALL active_profile … out=NotConfigured` (all three), `localhost_profile … out=NotConfigured`, `guard_rule_count … count=2`, `CI_EGRESS … public=1.1.1.1:443 blocked=False`, `checkpoint=127.0.0.1:5225 reachable=True`.
 
-## Root cause (c) — host timer regressions
+**Interpretation:** R14 `InternetFirewallApplier` (`07e524f`) created **Checkpoint Internet Off** rules in **localhost PolicyStore only**, then set Block only on localhost profiles. ActiveStore outbound stayed `NotConfigured`, so the script’s localhost-only verify could succeed while egress remained open (2 rules visible to localhost rule query, no effective block on ActiveStore). `state_present=False` because L17 calls `InternetFirewallApplier.Apply` directly — `InternetGuardStateStore.SaveVerified` runs only on `InternetPipeServer` signed `apply`, not on the probe’s raw applier call.
 
-Same R14 reorder: failed or partial OFF left **Checkpoint Internet Off** allow rules on the runner without effective outbound block. Server integration (incl. L17 probe) ran **before** guard-wpf; dirty firewall + timing pushed host status to bare "connected" instead of "no server response". Fix: restore R13 ordering + dual-store verify + `Invoke-CiFirewallRestore` immediately before guard-wpf (not reverting net10 `GameClub.Server` reference — net48 host tests unaffected).
+**R15 proof lines:** after apply, CI will emit `L17_OFF_APPLY_DIAG active_profiles_out=… localhost_profiles_out=… active_group_rule_count=… localhost_group_rule_count=…`.
+
+## Root cause (c) — host timer regressions (same R14 change, CI evidence)
+
+**Change:** `InternetFirewallApplier.cs` in `dba1e26..07e524f` — rule creation moved before profile block; rules pinned to `-PolicyStore localhost`.
+
+**Evidence (job 135509470398):** After server integration (incl. L17 probe), `before-dotnet-test-net48-guard-wpf` shows `guard_rules=2`, `public … blocked=False`, profiles `out=NotConfigured` on ActiveStore — leftover localhost rules without block. Host WPF tests (`KioskHostStatusTimerTests`) run in that phase; shared runner egress/checkpoint reachability matches R12 environmental coupling (ctor `RefreshAsync` vs mock transport). **Not** masking product bugs: restore clears orphan rules before guard-wpf; applier fix prevents new localhost-only partial OFF.
 
 ## Files
 
-- `src/GameClub.Kiosk.Guard/Internet/InternetFirewallApplier.cs`
-- `src/GameClub.Kiosk.Core/Guard/InternetFirewallOffVerification.cs`
+- `src/GameClub.Kiosk.Guard/Internet/InternetFirewallApplier.cs`, `InternetFirewallOffApplyReadback.cs`, `InternetPipeServer.cs`, `InternetFirewallOffDiagnostics.cs`
+- `src/GameClub.Kiosk.Core/Guard/InternetFirewallOffVerification.cs`, `InternetFirewallOffReadbackModel.cs`
 - `tests/GameClub.Kiosk.Core.Tests/PcInternetFirewallOffVerificationTests.cs`
-- `scripts/windows/ci-integration.ps1`, `.github/workflows/ci.yml`
+- `tests/.../WindowsPcInternetApplyFailureLiveTests.cs` (L17 diag line only)
+- `scripts/windows/ci-integration.ps1` (restore before guard-wpf)
 
 ## Staging SHA
 
-`4ad0b86dc1e3045e64af6c27ead78fe76be572dd`
+_(after push — full sha from `git rev-parse HEAD`)_
 
-## Tests run (agent box)
+## Open question (L17 state assertion)
 
-- Builds: IntegrationTests net48+net10, Server.TestHost, Server.Tests, Core.Tests — 0 errors
-- `Category=PcInternetFirewall` (Core): 7 passed
-- `PcSpecialBandLiveRateCardOracleTests`: 5 passed
-- Full `scripts/agent/test.sh all`: Server/integration failures without local Postgres (expected on Linux agent)
+Probe still calls applier only; `state_present=True` requires signed `InternetPipeServer` apply (same path as production). Applier intentionally uses `requireVerifiedStateFile: false`. If L17 must pass applier-only, need PM rule; otherwise wire probe through pipe with signed command without changing assertion text.

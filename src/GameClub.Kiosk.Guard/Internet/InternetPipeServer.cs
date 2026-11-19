@@ -148,6 +148,17 @@ internal sealed class InternetPipeServer
             }
 
             _state.SaveVerified(p);
+            if (!p.On)
+            {
+                var readback = InternetFirewallOffApplyReadback.Capture(_config);
+                var postStateFailure = readback.ClassifyOff(requireVerifiedStateFile: true);
+                if (postStateFailure is not null)
+                {
+                    _firewall.Apply(_config, on: true);
+                    return JsonSerializer.Serialize(new { error = postStateFailure, on = _on, version = _appliedVersion });
+                }
+            }
+
             return JsonSerializer.Serialize(new
             {
                 epoch = _epoch,

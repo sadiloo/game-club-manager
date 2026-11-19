@@ -6,9 +6,11 @@ public static class InternetFirewallOffVerification
     public static string? TryGetApplyFailedReason(
         bool allActiveProfilesBlock,
         bool allLocalhostProfilesBlock,
-        int guardRuleCount,
+        int activeStoreGuardRuleCount,
+        bool checkpointServerReachable,
         bool stateFilePresent,
-        bool requestedOn)
+        bool requestedOn,
+        bool requireVerifiedStateFile)
     {
         if (requestedOn)
         {
@@ -25,12 +27,17 @@ public static class InternetFirewallOffVerification
             return "apply_failed:verification:localhost_profiles_not_block";
         }
 
-        if (guardRuleCount < 1)
+        if (activeStoreGuardRuleCount < 1)
         {
             return "apply_failed:verification:missing_checkpoint_off_rules";
         }
 
-        if (!stateFilePresent)
+        if (!checkpointServerReachable)
+        {
+            return "apply_failed:verification:checkpoint_server_unreachable";
+        }
+
+        if (requireVerifiedStateFile && !stateFilePresent)
         {
             return "apply_failed:verification:state_missing";
         }
