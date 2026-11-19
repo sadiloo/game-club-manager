@@ -103,7 +103,12 @@ public sealed class ShellPlanAIntegrationTests
             _fixture.RunAsync(() =>
             {
                 var window = new MainWindow();
+                window.Loaded += (_, _) =>
+                    WriteGeometryTimeline("placement-restore", "Loaded", window);
+                window.ContentRendered += (_, _) =>
+                    WriteGeometryTimeline("placement-restore", "ContentRendered", window);
                 window.Show();
+                WriteGeometryTimeline("placement-restore", "Show", window);
                 Assert.Equal(WindowState.Maximized, window.WindowState);
                 // CI runner work area is 1024×728; effective size follows WindowPlacementStore work-area clamp.
                 var area = Screen.PrimaryScreen!.WorkingArea;
@@ -178,9 +183,8 @@ public sealed class ShellPlanAIntegrationTests
         EnsureServiceRunning();
         var shellStation = "SHELL-A3-" + Guid.NewGuid().ToString("N").Substring(0, 6).ToUpperInvariant();
         var refStation = "SHELL-REF-" + Guid.NewGuid().ToString("N").Substring(0, 6).ToUpperInvariant();
-        var shellSession = ShellCiHttp.CreateOpenSessionAsync(shellStation).GetAwaiter().GetResult();
-        var refSession = ShellCiHttp.CreateOpenSessionAsync(refStation).GetAwaiter().GetResult();
-        var baseline = ShellCiHttp.GetOpenSessionLiveBillAsync(refSession).GetAwaiter().GetResult();
+        var shellHandle = ShellCiHttp.CreateOpenSessionAsync(shellStation).GetAwaiter().GetResult();
+        var refHandle = ShellCiHttp.CreateOpenSessionAsync(refStation).GetAwaiter().GetResult();
 
         _fixture.RunAsync(async () =>
         {
@@ -206,28 +210,36 @@ public sealed class ShellPlanAIntegrationTests
             shellProc.Dispose();
         }
 
-        WaitUntilBothSessionsShareMinutesPlayed(shellSession, refSession, TimeSpan.FromSeconds(90));
-        var afterRef = ShellCiHttp.GetOpenSessionLiveBillAsync(refSession).GetAwaiter().GetResult();
-        var afterShell = ShellCiHttp.GetOpenSessionLiveBillAsync(shellSession).GetAwaiter().GetResult();
-        Assert.Equal(afterRef.AmountToman, afterShell.AmountToman);
-        if (afterRef.MinutesPlayed is int refMin && afterShell.MinutesPlayed is int shellMin)
+        Assert.Equal("Playing", ShellCiHttp.GetOperatorGridStatusForStationAsync(refStation).GetAwaiter().GetResult());
+        Assert.Equal("Playing", ShellCiHttp.GetOperatorGridStatusForStationAsync(shellStation).GetAwaiter().GetResult());
+
+        var refStartUtc = ShellCiHttp.GetFirstSegmentStartUtcFromServerAsync(refHandle.SessionId).GetAwaiter().GetResult();
+        var shellStartUtc = ShellCiHttp.GetFirstSegmentStartUtcFromServerAsync(shellHandle.SessionId).GetAwaiter().GetResult();
+        ShellCiHttp.WaitUntilBothSessionsClearMinuteBoundary(
+            refStartUtc,
+            shellStartUtc,
+            TimeSpan.FromMinutes(2));
+
+        var refBill = ShellCiHttp.OpenFrozenBillAsync(refHandle.SessionId).GetAwaiter().GetResult();
+        var shellBill = ShellCiHttp.OpenFrozenBillAsync(shellHandle.SessionId).GetAwaiter().GetResult();
+
+        var refElapsed = ShellCiHttp.WholeElapsedMinutes(refBill.FirstSegmentStartUtc, refBill.FrozenAtUtc);
+        var shellElapsed = ShellCiHttp.WholeElapsedMinutes(shellBill.FirstSegmentStartUtc, shellBill.FrozenAtUtc);
+        if (refElapsed != shellElapsed)
         {
-            Assert.Equal(refMin, shellMin);
+            throw new InvalidOperationException(
+                $"SHELL-MONEY elapsed whole minutes differ: REF={refElapsed} A3={shellElapsed}; "
+                + $"REF start={refBill.FirstSegmentStartUtc:O} frozen={refBill.FrozenAtUtc:O}; "
+                + $"A3 start={shellBill.FirstSegmentStartUtc:O} frozen={shellBill.FrozenAtUtc:O}");
         }
 
-        var waitSeconds = ResolveBillingWaitSeconds();
-        Thread.Sleep(TimeSpan.FromSeconds(waitSeconds));
+        ShellCiHttp.LogShellMoneyLine("REF", refBill);
+        ShellCiHttp.LogShellMoneyLine("A3", shellBill);
 
-        WaitUntilBothSessionsShareMinutesPlayed(shellSession, refSession, TimeSpan.FromSeconds(90));
-        var finalRef = ShellCiHttp.GetOpenSessionLiveBillAsync(refSession).GetAwaiter().GetResult();
-        var finalShell = ShellCiHttp.GetOpenSessionLiveBillAsync(shellSession).GetAwaiter().GetResult();
-        Assert.Equal(finalRef.AmountToman, finalShell.AmountToman);
-        if (finalRef.MinutesPlayed is int refMin2 && finalShell.MinutesPlayed is int shellMin2)
-        {
-            Assert.Equal(refMin2, shellMin2);
-        }
-
-        Assert.True(finalRef.AmountToman >= baseline.AmountToman);
+        Assert.Equal(refBill.CollectibleToman, shellBill.CollectibleToman);
+        Assert.Equal(refBill.TimeGrossToman, shellBill.TimeGrossToman);
+        Assert.Equal(refBill.SegmentCount, shellBill.SegmentCount);
+        AssertFrozenBillSegmentsMatch(refBill, shellBill);
     }
 
     [Fact]
@@ -569,6 +581,9 @@ public sealed class ShellPlanAIntegrationTests
                     {
                         await Task.Delay(300);
                         wv = window.FindName("PanelWebView") as Microsoft.Web.WebView2.Wpf.WebView2;
+                        var serviceStatus = ReadCheckpointServiceStatus();
+                        Console.WriteLine(
+                            $"SHELL-OFFLINE poll UTC={DateTime.UtcNow:O} service={serviceStatus} webViewReady={wv?.CoreWebView2 is not null} uri={wv?.Source}");
                         if (wv?.CoreWebView2 is null)
                         {
                             continue;
@@ -742,17 +757,6 @@ public sealed class ShellPlanAIntegrationTests
         return Process.Start(psi)!;
     }
 
-    private static int ResolveBillingWaitSeconds()
-    {
-        var raw = Environment.GetEnvironmentVariable("SHELL_A3_BILLING_WAIT_SECONDS");
-        if (int.TryParse(raw, out var seconds) && seconds >= 0)
-        {
-            return seconds;
-        }
-
-        return 600;
-    }
-
     private static void EnsureServiceRunning()
     {
         using var sc = new ServiceController(ShellPaths.ServiceName);
@@ -806,27 +810,38 @@ public sealed class ShellPlanAIntegrationTests
         }
     }
 
-    private static void WaitUntilBothSessionsShareMinutesPlayed(Guid shellSession, Guid refSession, TimeSpan maxWait)
+    private static void AssertFrozenBillSegmentsMatch(ShellCiHttp.FrozenBillDetail refBill, ShellCiHttp.FrozenBillDetail shellBill)
     {
-        var deadline = DateTime.UtcNow.Add(maxWait);
-        while (DateTime.UtcNow < deadline)
+        Assert.Equal(refBill.Segments.Count, shellBill.Segments.Count);
+        for (var i = 0; i < refBill.Segments.Count; i++)
         {
-            var shellBill = ShellCiHttp.GetOpenSessionLiveBillAsync(shellSession).GetAwaiter().GetResult();
-            var refBill = ShellCiHttp.GetOpenSessionLiveBillAsync(refSession).GetAwaiter().GetResult();
-            Console.WriteLine(
-                $"SHELL-A3 minutes-sync poll UTC={DateTime.UtcNow:O} shellMinutes={shellBill.MinutesPlayed?.ToString() ?? "null"} refMinutes={refBill.MinutesPlayed?.ToString() ?? "null"}");
-            if (shellBill.MinutesPlayed is int shellMin
-                && refBill.MinutesPlayed is int refMin
-                && shellMin == refMin)
-            {
-                return;
-            }
-
-            Thread.Sleep(500);
+            var r = refBill.Segments[i];
+            var s = shellBill.Segments[i];
+            Assert.Equal(r.Mode, s.Mode);
+            Assert.Equal(r.PlayerCount, s.PlayerCount);
+            Assert.Equal(r.HourlyToman, s.HourlyToman);
         }
+    }
 
-        throw new InvalidOperationException(
-            $"SHELL-A3 and SHELL-REF did not report the same minutesPlayed within {maxWait.TotalSeconds:0}s.");
+    private static void WriteGeometryTimeline(string test, string phase, Window window)
+    {
+        Console.WriteLine(
+            $"SHELL-GEOMETRY test={test} phase={phase} UTC={DateTime.UtcNow:O} "
+            + $"state={window.WindowState} left={window.Left:0} top={window.Top:0} width={window.Width:0} height={window.Height:0}");
+    }
+
+    private static string ReadCheckpointServiceStatus()
+    {
+        try
+        {
+            using var sc = new ServiceController(ShellPaths.ServiceName);
+            sc.Refresh();
+            return sc.Status.ToString();
+        }
+        catch (Exception ex)
+        {
+            return "error:" + ex.GetType().Name;
+        }
     }
 
     private static string UnquoteWebViewScriptString(string json)

@@ -33,7 +33,12 @@ public sealed class ShellWindowPlacementRegressionTests
             _fixture.RunAsync(() =>
             {
                 var window = new MainWindow();
+                window.Loaded += (_, _) =>
+                    WriteGeometryTimeline("infinity-round-trip", "Loaded", window);
+                window.ContentRendered += (_, _) =>
+                    WriteGeometryTimeline("infinity-round-trip", "ContentRendered", window);
                 window.Show();
+                WriteGeometryTimeline("infinity-round-trip", "Show", window);
                 Assert.Equal(WindowState.Maximized, window.WindowState);
                 window.Close();
 
@@ -102,6 +107,13 @@ public sealed class ShellWindowPlacementRegressionTests
         catch
         {
         }
+    }
+
+    private static void WriteGeometryTimeline(string test, string phase, Window window)
+    {
+        Console.WriteLine(
+            $"SHELL-GEOMETRY test={test} phase={phase} UTC={DateTime.UtcNow:O} "
+            + $"state={window.WindowState} left={window.Left:0} top={window.Top:0} width={window.Width:0} height={window.Height:0}");
     }
 }
 #endif
