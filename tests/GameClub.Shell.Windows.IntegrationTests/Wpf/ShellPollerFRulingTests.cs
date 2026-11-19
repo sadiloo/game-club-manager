@@ -118,7 +118,6 @@ public sealed class ShellPollerFRulingTests
         Assert.NotEqual(stoppedTitle, noAnswerTitle);
     }
 
-    [Fact]
     private static void AssertNoLatinLetters(string text)
     {
         foreach (var c in text)
