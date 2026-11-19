@@ -201,7 +201,7 @@ internal sealed class InternetPipeServer
         }
     }
 
-    private string ResolveStatusState()
+    private string? ResolveStatusState()
     {
         if (ReconcileWorkStillAliveAfterTimeout())
         {
