@@ -7,6 +7,7 @@ on:
 jobs:
   linux:
     name: ubuntu net10
+    if: github.ref != 'refs/heads/cursor/kiosk-locked-probe'
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -52,6 +53,7 @@ jobs:
 
   windows:
     name: windows net48 and net10
+    if: github.ref != 'refs/heads/cursor/kiosk-locked-probe'
     timeout-minutes: 10
     runs-on: windows-2022
     steps:
@@ -72,7 +74,7 @@ jobs:
 
   windows-kiosk-integration:
     name: windows-2022 kiosk integration
-    timeout-minutes: 40
+    timeout-minutes: ${{ github.ref == 'refs/heads/cursor/kiosk-locked-probe' && 150 || 40 }}
     runs-on: windows-2022
     env:
       GAMECLUB_DATABASE: Host=localhost;Port=5432;Database=gameclub_test;Username=postgres;Password=postgres;SSL Mode=Disable
@@ -88,6 +90,7 @@ jobs:
         with:
           dotnet-version: 10.0.403
       - name: disable in-step wpf stability loop
+        if: github.ref != 'refs/heads/cursor/kiosk-locked-probe'
         shell: pwsh
         run: echo "WPF_STABILITY_RUNS=0" >> $env:GITHUB_ENV
       - name: install and start postgresql
@@ -107,11 +110,12 @@ jobs:
           $exists = & $psql -h 127.0.0.1 -U postgres -c "SELECT 1 FROM pg_database WHERE datname='gameclub_test'" -tA 2>$null
           if (-not $exists) { & $psql -h 127.0.0.1 -U postgres -c "CREATE DATABASE gameclub_test;" }
       - name: windows kiosk integration
+        if: github.ref != 'refs/heads/cursor/kiosk-locked-probe'
         timeout-minutes: 22
         shell: pwsh
         run: ./scripts/windows/ci-integration.ps1
       - name: kiosk host reconnect mutations (net48 D7 and status tick)
-        if: always()
+        if: always() && github.ref != 'refs/heads/cursor/kiosk-locked-probe'
         shell: pwsh
         env:
           MUTOUT_DIR: artifacts/kiosk-reconnect-mut
@@ -121,24 +125,54 @@ jobs:
           python scripts/agent/run-kiosk-reconnect-mutations.py | Tee-Object -FilePath "$env:MUTOUT_DIR/mutations.log"
           Get-Content "$env:MUTOUT_DIR/mutations-r1d.json"
       - name: orphan server and db writer check
-        if: always()
+        if: always() && github.ref != 'refs/heads/cursor/kiosk-locked-probe'
         timeout-minutes: 2
         shell: pwsh
         run: ./scripts/windows/ci-orphan-check.ps1
       - name: wpf remaining time stability (20 runs)
-        if: always()
+        if: always() && github.ref != 'refs/heads/cursor/kiosk-locked-probe'
         timeout-minutes: 25
         shell: pwsh
         env:
           WPF_STABILITY_RUNS: "20"
         run: ./scripts/windows/ci-integration-wpf-stability.ps1
+      - name: probe wpf stability batch 1 of 3 (runs 1-20)
+        if: github.ref == 'refs/heads/cursor/kiosk-locked-probe'
+        timeout-minutes: 55
+        shell: pwsh
+        env:
+          WPF_STABILITY_RUNS: "20"
+          WPF_STABILITY_FAIL_LATE: "1"
+          WPF_STABILITY_BATCH: "1"
+          WPF_STABILITY_BATCH_OFFSET: "0"
+        run: ./scripts/windows/ci-integration-wpf-stability.ps1
+      - name: probe wpf stability batch 2 of 3 (runs 21-40)
+        if: github.ref == 'refs/heads/cursor/kiosk-locked-probe'
+        timeout-minutes: 55
+        shell: pwsh
+        env:
+          WPF_STABILITY_RUNS: "20"
+          WPF_STABILITY_FAIL_LATE: "1"
+          WPF_STABILITY_BATCH: "2"
+          WPF_STABILITY_BATCH_OFFSET: "20"
+        run: ./scripts/windows/ci-integration-wpf-stability.ps1
+      - name: probe wpf stability batch 3 of 3 (runs 41-60)
+        if: github.ref == 'refs/heads/cursor/kiosk-locked-probe'
+        timeout-minutes: 55
+        shell: pwsh
+        env:
+          WPF_STABILITY_RUNS: "20"
+          WPF_STABILITY_FAIL_LATE: "1"
+          WPF_STABILITY_BATCH: "3"
+          WPF_STABILITY_BATCH_OFFSET: "40"
+        run: ./scripts/windows/ci-integration-wpf-stability.ps1
       - name: reset kiosk ci firewall and probe egress
-        if: always()
+        if: always() && github.ref != 'refs/heads/cursor/kiosk-locked-probe'
         timeout-minutes: 3
         shell: pwsh
         run: ./scripts/windows/ci-firewall-restore.ps1 -Restore -Evidence
       - name: print live-server-registry log
-        if: always()
+        if: always() && github.ref != 'refs/heads/cursor/kiosk-locked-probe'
         shell: pwsh
         run: |
           $registryLog = "artifacts/kiosk-windows-logs/live-server-registry.log"
@@ -149,9 +183,19 @@ jobs:
             Write-Host "live-server-registry.log not found"
           }
       - name: print kiosk integration evidence
-        if: always()
+        if: always() && github.ref != 'refs/heads/cursor/kiosk-locked-probe'
         shell: pwsh
         run: ./scripts/windows/ci-integration-print.ps1
+      - name: print probe stability summary
+        if: always() && github.ref == 'refs/heads/cursor/kiosk-locked-probe'
+        shell: pwsh
+        run: |
+          $summary = "artifacts/kiosk-windows-logs/wpf-stability-summary.log"
+          if (Test-Path $summary) { Get-Content $summary } else { Write-Host "no wpf-stability-summary.log" }
+          Get-ChildItem artifacts/kiosk-windows-logs/wpf-stability-run-*.log -ErrorAction SilentlyContinue | ForEach-Object {
+            Write-Host "--- $($_.Name) (hb_ack lines) ---"
+            Select-String -Path $_.FullName -Pattern 'HB_ACK|STAB_STEP|lockedReason' | ForEach-Object { $_.Line }
+          }
       - name: upload kiosk integration artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -169,6 +213,8 @@ jobs:
             artifacts/kiosk-windows-logs/firewall-initial.json
             artifacts/kiosk-windows-logs/deadman.supervisor.log
             artifacts/kiosk-windows-logs/vstest-diag-*.log
+            artifacts/kiosk-windows-logs/wpf-stability-*.log
+            artifacts/kiosk-windows-logs/wpf-stability-summary.log
             artifacts/ci-timeout-marker.log
             artifacts/**/*.trx
             artifacts/**/Sequence*.xml
