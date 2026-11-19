@@ -630,22 +630,71 @@ try {
         "FullyQualifiedName!~host_open_session_no_display_shows_no_server_response_when_heartbeats_fail"
     ) -join "&"
     $guardWpfFilter = "(Category=WindowsWpf&FullyQualifiedName!~wpf_remaining_time_matches_funded_session_special_band_night_line&$hostTimerFailExclude)|(Category=WindowsServer&Category!=LiveCheckpointServer&FullyQualifiedName!~wpf_remaining_time_matches_funded_session_special_band_night_line&$hostTimerFailExclude)"
-    Write-VstestPhaseList -phaseName "dotnet-test-net48-guard-wpf" -framework "net48" -filterExpr $guardWpfFilter | Out-Null
-    $guardTestArgs = @(
+    $guardWpfBaselineNames = @(Write-VstestPhaseList -phaseName "dotnet-test-net48-guard-wpf-inventory" -framework "net48" -filterExpr $guardWpfFilter)
+    Write-Host "GUARD_WPF_INVENTORY baseline_count=$($guardWpfBaselineNames.Count) (R16 single-phase dotnet-test-net48-guard-wpf union)"
+
+    # Fresh testhost per batch; each phase budget 5m (<= global clamp; avoids single ~271s effective cap on a long suite).
+    $guardWpfHostTimerFilter = "(Category=WindowsWpf&FullyQualifiedName~KioskHostStatusTimerTests&FullyQualifiedName!~wpf_remaining_time_matches_funded_session_special_band_night_line&$hostTimerFailExclude)"
+    $guardWpfWpfServerFilter = "((Category=WindowsWpf&FullyQualifiedName!~KioskHostStatusTimerTests&FullyQualifiedName!~wpf_remaining_time_matches_funded_session_special_band_night_line&$hostTimerFailExclude)|(Category=WindowsServer&Category!=LiveCheckpointServer&FullyQualifiedName!~wpf_remaining_time_matches_funded_session_special_band_night_line&$hostTimerFailExclude))"
+
+    $guardHostTimerNames = @(Write-VstestPhaseList -phaseName "dotnet-test-net48-guard-wpf-host-timers" -framework "net48" -filterExpr $guardWpfHostTimerFilter)
+    $guardWpfServerNames = @(Write-VstestPhaseList -phaseName "dotnet-test-net48-guard-wpf-wpf-server" -framework "net48" -filterExpr $guardWpfWpfServerFilter)
+
+    $guardUnion = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($n in $guardHostTimerNames) { [void]$guardUnion.Add($n.Trim()) }
+    foreach ($n in $guardWpfServerNames) { [void]$guardUnion.Add($n.Trim()) }
+    $baselineSet = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($n in $guardWpfBaselineNames) { [void]$baselineSet.Add($n.Trim()) }
+    $missingFromUnion = @($baselineSet | Where-Object { -not $guardUnion.Contains($_) })
+    $extraInUnion = @($guardUnion | Where-Object { -not $baselineSet.Contains($_) })
+    Write-Host "GUARD_WPF_INVENTORY union_count=$($guardUnion.Count) baseline_count=$($baselineSet.Count) missing_count=$($missingFromUnion.Count) extra_count=$($extraInUnion.Count)"
+    if ($missingFromUnion.Count -gt 0) {
+        foreach ($m in $missingFromUnion) { Write-Host "GUARD_WPF_INVENTORY_MISSING $m" }
+        throw "guard-wpf split dropped tests (missing from union)"
+    }
+    if ($extraInUnion.Count -gt 0) {
+        foreach ($e in $extraInUnion) { Write-Host "GUARD_WPF_INVENTORY_EXTRA $e" }
+        throw "guard-wpf split added unexpected tests"
+    }
+    Write-Host "GUARD_WPF_INVENTORY diff=empty"
+
+    $guardHostTimerArgs = @(
         "test", "tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj",
         "-c", "Release", "-f", "net48", "--no-build", "--nologo",
-        "--filter", $guardWpfFilter,
+        "--filter", $guardWpfHostTimerFilter,
+        "--logger", "trx;LogFileName=kiosk-windows-guard-host-timers.trx",
+        "--results-directory", $artifactDir,
+        "--blame-hang", "--blame-hang-timeout", "5m", "--blame-hang-dump-type", "none",
+        "--logger", "console;verbosity=detailed"
+    )
+    $guardHostTimerDiag = Join-Path $logDir "vstest-diag-dotnet-test-net48-guard-wpf-host-timers.log"
+    $guardHostTimerBudgetMs = 5 * 60 * 1000
+    Write-Host "GUARD_WPF_PHASE_BUDGET phase=dotnet-test-net48-guard-wpf-host-timers cap_ms=$guardHostTimerBudgetMs"
+    $guardHostTimerExit = Invoke-DotNetWithWatchdog -PhaseName "dotnet-test-net48-guard-wpf-host-timers" -ArgumentList $guardHostTimerArgs -PhaseCapMs $guardHostTimerBudgetMs -DiagLogPath $guardHostTimerDiag
+    Publish-ServerLeaseBuildEvidence -phaseName "dotnet-test-net48-guard-wpf-host-timers" -TrxPath (Join-Path $artifactDir "kiosk-windows-guard-host-timers.trx")
+    if ($guardHostTimerExit -ne 0 -and $script:FinalExitCode -eq 0) { $script:FinalExitCode = $guardHostTimerExit }
+    if ($guardHostTimerExit -eq 124) { throw "guard-wpf host-timers watchdog" }
+
+    $guardWpfServerArgs = @(
+        "test", "tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj",
+        "-c", "Release", "-f", "net48", "--no-build", "--nologo",
+        "--filter", $guardWpfWpfServerFilter,
         "--logger", "trx;LogFileName=kiosk-windows-guard.trx",
         "--results-directory", $artifactDir,
         "--blame-hang", "--blame-hang-timeout", "5m", "--blame-hang-dump-type", "none",
         "--logger", "console;verbosity=detailed"
     )
-    $guardDiag = Join-Path $logDir "vstest-diag-dotnet-test-net48-guard-wpf.log"
-    $guardTestExit = Invoke-DotNetWithWatchdog -PhaseName "dotnet-test-net48-guard-wpf" -ArgumentList $guardTestArgs -PhaseCapMs (8 * 60 * 1000) -DiagLogPath $guardDiag
-    Publish-ServerLeaseBuildEvidence -phaseName "dotnet-test-net48-guard-wpf" -TrxPath (Join-Path $artifactDir "kiosk-windows-guard.trx")
+    $guardDiag = Join-Path $logDir "vstest-diag-dotnet-test-net48-guard-wpf-wpf-server.log"
+    $guardWpfServerBudgetMs = 5 * 60 * 1000
+    Write-Host "GUARD_WPF_PHASE_BUDGET phase=dotnet-test-net48-guard-wpf-wpf-server cap_ms=$guardWpfServerBudgetMs"
+    $guardWpfServerExit = Invoke-DotNetWithWatchdog -PhaseName "dotnet-test-net48-guard-wpf-wpf-server" -ArgumentList $guardWpfServerArgs -PhaseCapMs $guardWpfServerBudgetMs -DiagLogPath $guardDiag
+    Publish-ServerLeaseBuildEvidence -phaseName "dotnet-test-net48-guard-wpf-wpf-server" -TrxPath (Join-Path $artifactDir "kiosk-windows-guard.trx")
     Assert-NightLineOnlyInNightPhase
     Write-CiPhaseFirewallProbe -label "after-dotnet-test-net48-guard-wpf"
-    if ($guardTestExit -eq 124) { throw "guard test watchdog" }
+    if ($guardWpfServerExit -ne 0 -and $script:FinalExitCode -eq 0) { $script:FinalExitCode = $guardWpfServerExit }
+    if ($guardWpfServerExit -eq 124) { throw "guard-wpf wpf-server watchdog" }
+
+    $guardTestExit = if ($guardHostTimerExit -ne 0) { $guardHostTimerExit } elseif ($guardWpfServerExit -ne 0) { $guardWpfServerExit } else { 0 }
 
     if ($serverTestExit -ne 0) { $script:FinalExitCode = $serverTestExit }
     if ($guardTestExit -ne 0 -and $script:FinalExitCode -eq 0) { $script:FinalExitCode = $guardTestExit }

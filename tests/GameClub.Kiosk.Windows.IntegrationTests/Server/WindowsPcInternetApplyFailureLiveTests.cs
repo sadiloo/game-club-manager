@@ -14,6 +14,7 @@ using GameClub.Billing;
 using GameClub.Kiosk.Core.Runtime;
 using GameClub.Kiosk.Guard.Internet;
 using GameClub.Kiosk.Windows.IntegrationTests;
+using GameClub.Kiosk.Core.Guard;
 using GameClub.Kiosk.Windows.IntegrationTests.Guard;
 using Npgsql;
 using Xunit;
@@ -118,17 +119,15 @@ public sealed class WindowsPcInternetApplyFailureLiveTests
             };
             Directory.CreateDirectory(Path.GetDirectoryName(InternetGuardPaths.ConfigPath));
             File.WriteAllText(InternetGuardPaths.ConfigPath, JsonSerializer.Serialize(config));
-            var probeCts = new CancellationTokenSource();
-            Thread probePipe = null;
+            Process probeGuard = null;
             try
             {
-                probePipe = new Thread(() => new InternetPipeServer(config).Run(probeCts.Token))
-                {
-                    IsBackground = true,
-                    Name = "L17ProbeInternetPipe",
-                };
-                probePipe.Start();
-                await Task.Delay(500);
+                L17GuardProbeSupport.LogPreflight();
+                probeGuard = GuardProcessStart.StartGuard();
+                Console.WriteLine(
+                    $"L17_PROBE_GUARD_STARTED pid={probeGuard.Id} pipe_name={GuardInternetClient.PipeName}");
+                await L17GuardProbeSupport.WaitForPipeReadyAsync(TimeSpan.FromSeconds(90), default);
+                L17GuardProbeSupport.LogPreflight();
                 await L17RealInternetOffProbe.RunAsync(
                     config,
                     deviceId,
@@ -139,8 +138,20 @@ public sealed class WindowsPcInternetApplyFailureLiveTests
             }
             finally
             {
-                probeCts.Cancel();
-                probePipe?.Join(5_000);
+                if (probeGuard is not null && !probeGuard.HasExited)
+                {
+                    try
+                    {
+                        probeGuard.Kill();
+                        probeGuard.WaitForExit(10_000);
+                    }
+                    catch
+                    {
+                        /* best-effort */
+                    }
+
+                    probeGuard.Dispose();
+                }
             }
 
             pipe = new Thread(() => new InternetPipeServer(config, new FaultInjectingInternetFirewallApplier()).Run(pipeCts.Token))
