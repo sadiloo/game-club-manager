@@ -1,7 +1,9 @@
 using System;
+using System.Diagnostics;
 using System.Linq;
 using System.Text.Json;
 using GameClub.Kiosk.Core.Guard;
+using GameClub.Kiosk.Guard;
 
 namespace GameClub.Kiosk.Guard.Internet;
 
@@ -20,6 +22,7 @@ internal static class InternetFirewallMergedApplyRunner
 
     internal static string ApplyOff(InternetGuardConfig config, int budgetMs)
     {
+        var totalSw = Stopwatch.StartNew();
         if (config.ServerIps.Length == 0 || config.ServerPort <= 0)
         {
             return "firewall_not_configured";
@@ -76,7 +79,39 @@ try {{
 ";
         var script = BuildLocalhostCleanupScript() + offBody + BuildReadbackEmitScript();
         var raw = InternetPowerShellRunner.Run(script, budgetMs, stepName: "apply_merged_off");
-        return ClassifyMergedResult(raw, config, requireVerifiedStateFile: false, expectOn: false);
+        var offBodyMs = InternetPowerShellRunner.LastRunWallMs;
+        var psStartMs = InternetPowerShellRunner.LastPsStartMs;
+        long readbackMs = 0;
+        long verifyMs = 0;
+        string result;
+        if (raw.TrimStart().StartsWith("{", StringComparison.Ordinal))
+        {
+            var parseSw = Stopwatch.StartNew();
+            var readback = InternetFirewallOffApplyReadback.ParseFromPowerShellJson(raw, config);
+            readbackMs = parseSw.ElapsedMilliseconds;
+            var verifySw = Stopwatch.StartNew();
+            result = readback.ClassifyOff(requireVerifiedStateFile: false) ?? "applied";
+            verifyMs = verifySw.ElapsedMilliseconds;
+        }
+        else
+        {
+            var classifySw = Stopwatch.StartNew();
+            result = ClassifyMergedResult(raw, config, requireVerifiedStateFile: false, expectOn: false);
+            verifyMs = classifySw.ElapsedMilliseconds;
+        }
+        GuardWatchdogLog.Append(
+            "GUARD_OFF_PHASES total_ms="
+            + totalSw.ElapsedMilliseconds
+            + " cleanup_ms=0"
+            + " off_body_ms="
+            + offBodyMs
+            + " readback_ms="
+            + readbackMs
+            + " verify_ms="
+            + verifyMs
+            + " ps_start_ms="
+            + psStartMs);
+        return result;
     }
 
     private static string BuildLocalhostCleanupScript()

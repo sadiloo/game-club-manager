@@ -15,6 +15,8 @@ internal static class InternetPowerShellRunner
     internal static int RunCallCount;
     internal static int ReconcileRunCallCount;
     internal static int ReconcileRunCallCountAtAbandon = -1;
+    internal static long LastPsStartMs;
+    internal static long LastRunWallMs;
 
     internal static void SetReconcilePathThread(bool active) => ReconcilePathThread = active;
 
@@ -33,6 +35,7 @@ internal static class InternetPowerShellRunner
     public static string Run(string script, int timeoutMs = 120_000, string? stepName = null)
     {
         var stepSw = Stopwatch.StartNew();
+        var psStartSw = Stopwatch.StartNew();
         Interlocked.Increment(ref RunCallCount);
         if (ReconcilePathThread)
         {
@@ -52,6 +55,7 @@ internal static class InternetPowerShellRunner
                 CreateNoWindow = true,
             };
             proc = Process.Start(psi) ?? throw new InvalidOperationException("powershell start failed");
+            LastPsStartMs = psStartSw.ElapsedMilliseconds;
             var pid = proc.Id;
             var stdoutTask = Task.Run(() => proc.StandardOutput.ReadToEnd());
             var stderrTask = Task.Run(() => proc.StandardError.ReadToEnd());
@@ -95,6 +99,7 @@ internal static class InternetPowerShellRunner
         }
         finally
         {
+            LastRunWallMs = stepSw.ElapsedMilliseconds;
             proc?.Dispose();
         }
     }

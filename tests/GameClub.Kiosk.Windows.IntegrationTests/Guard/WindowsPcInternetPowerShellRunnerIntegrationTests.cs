@@ -4,6 +4,7 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Threading.Tasks;
 using GameClub.Kiosk.Guard.Internet;
 using Xunit;
 
@@ -14,7 +15,7 @@ namespace GameClub.Kiosk.Windows.IntegrationTests.Guard;
 public sealed class WindowsPcInternetPowerShellRunnerIntegrationTests
 {
     [Fact(Timeout = 60_000)]
-    public void internet_powershell_runner_times_out_hung_child_and_kills_process_tree()
+    public async Task internet_powershell_runner_times_out_hung_child_and_kills_process_tree()
     {
         if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
         {

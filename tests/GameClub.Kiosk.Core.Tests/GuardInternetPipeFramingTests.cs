@@ -165,18 +165,41 @@ public sealed class GuardInternetPipeFramingTests
         await client.ConnectAsync(3000);
         var oversize = new string('a', GuardInternetPipeProtocol.MaxLineBytes + 1);
         var line = Encoding.UTF8.GetBytes(oversize + "\n");
+        var wroteIOException = false;
         try
         {
             await client.WriteAsync(line, 0, line.Length);
             await client.FlushAsync();
         }
-        catch (IOException) when (sawOversize.Wait(TimeSpan.FromSeconds(3)) && serverLog.Any(l => l.StartsWith("pipe_line_oversize", StringComparison.Ordinal)))
+        catch (IOException)
         {
-            /* server closed on purpose after pipe_line_oversize while the trailing bytes were still being written */
+            wroteIOException = true;
         }
 
         Assert.True(sawOversize.Wait(TimeSpan.FromSeconds(3)));
-        Assert.Contains(serverLog, l => l.StartsWith("pipe_line_oversize", StringComparison.Ordinal));
+        var oversizeLogged = serverLog.Any(l => l.StartsWith("pipe_line_oversize", StringComparison.Ordinal));
+        Assert.True(oversizeLogged);
+
+        var reply = new byte[256];
+        var read = 0;
+        try
+        {
+            using var readCts = new CancellationTokenSource(TimeSpan.FromSeconds(1));
+            read = await client.ReadAsync(reply, 0, reply.Length, readCts.Token);
+        }
+        catch (Exception)
+        {
+            read = 0;
+        }
+
+        if (wroteIOException)
+        {
+            Assert.True(oversizeLogged && read == 0, "IOException on write allowed only after pipe_line_oversize with no reply");
+        }
+        else
+        {
+            Assert.True(read == 0, "expected no successful reply after oversize request");
+        }
     }
 
     private static Task<string> InvokeGuardClientSendAsync(string requestJson)

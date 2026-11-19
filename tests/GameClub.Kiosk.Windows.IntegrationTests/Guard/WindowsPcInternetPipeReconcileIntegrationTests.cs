@@ -665,7 +665,9 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
                 Name = "OffFailOpenPipe",
             };
             pipeThread.Start();
-            await Task.Delay(500);
+            await WaitForPipeStatusReconcileFinishedAsync(TimeSpan.FromSeconds(60));
+
+            var onRestoreBeforeOff = applier.OnRestoreCount;
 
             var offCommand = Sign(rsa, new InternetCommandPayload
             {
@@ -680,7 +682,7 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
             Assert.Equal("apply_failed:verification:test_harness", applyDoc.RootElement.GetProperty("error").GetString());
             Assert.True(applyDoc.RootElement.GetProperty("on").GetBoolean());
             Assert.Equal(1, applier.OffApplyCount);
-            Assert.Equal(1, applier.OnRestoreCount);
+            Assert.Equal(onRestoreBeforeOff + 1, applier.OnRestoreCount);
 
             var status = await new GuardInternetClient().GetStatusAsync(default);
             using var statusDoc = JsonDocument.Parse(status);
@@ -696,9 +698,44 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
         finally
         {
             cts?.Cancel();
-            pipeThread?.Join(TimeSpan.FromSeconds(5));
+            TryUnblockInternetPipeServer();
+            Assert.True(
+                pipeThread is null || pipeThread.Join(TimeSpan.FromSeconds(10)),
+                "OffFailOpenPipe thread did not stop");
             new InternetFirewallApplier().RunResetScript();
             TryDeleteState();
+        }
+    }
+
+    private static async Task WaitForPipeStatusReconcileFinishedAsync(TimeSpan budget)
+    {
+        var deadline = DateTime.UtcNow.Add(budget);
+        while (DateTime.UtcNow < deadline)
+        {
+            var status = await new GuardInternetClient().GetStatusAsync(default);
+            using var doc = JsonDocument.Parse(status);
+            if (!doc.RootElement.TryGetProperty("state", out var state)
+                || !string.Equals(state.GetString(), "reconciling", StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            await Task.Delay(50);
+        }
+
+        Assert.Fail($"status still reconciling after {budget.TotalSeconds:0}s");
+    }
+
+    private static void TryUnblockInternetPipeServer()
+    {
+        try
+        {
+            using var unblock = new NamedPipeClientStream(".", GuardInternetClient.PipeName, PipeDirection.InOut);
+            unblock.Connect(1_000);
+        }
+        catch (Exception)
+        {
+            /* listener already stopped or between accept iterations */
         }
     }
 
@@ -895,11 +932,41 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
             client.Connect(3_000);
             var oversize = new string('a', GuardInternetPipeProtocol.MaxLineBytes + 1);
             var line = Encoding.UTF8.GetBytes(oversize + "\n");
-            client.Write(line, 0, line.Length);
-            client.Flush();
+            var wroteIOException = false;
+            try
+            {
+                client.Write(line, 0, line.Length);
+                client.Flush();
+            }
+            catch (IOException)
+            {
+                wroteIOException = true;
+            }
+
             await Task.Delay(1_000);
             Assert.True(File.Exists(logPath));
-            Assert.Contains("pipe_line_oversize", File.ReadAllText(logPath), StringComparison.Ordinal);
+            var logText = File.ReadAllText(logPath);
+            Assert.Contains("pipe_line_oversize", logText, StringComparison.Ordinal);
+
+            var replyRead = 0;
+            try
+            {
+                var replyBuf = new byte[256];
+                replyRead = client.Read(replyBuf, 0, replyBuf.Length);
+            }
+            catch (IOException)
+            {
+                replyRead = 0;
+            }
+
+            if (wroteIOException)
+            {
+                Assert.True(logText.Contains("pipe_line_oversize", StringComparison.Ordinal) && replyRead == 0);
+            }
+            else
+            {
+                Assert.True(replyRead == 0, "expected no successful reply after oversize request");
+            }
         }
         finally
         {
