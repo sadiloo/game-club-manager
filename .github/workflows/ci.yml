@@ -63,17 +63,7 @@ jobs:
         run: dotnet build src/GameClub.Kiosk/GameClub.Kiosk.csproj -c Release -f net48 --nologo && dotnet build src/GameClub.Kiosk.Guard/GameClub.Kiosk.Guard.csproj -c Release -f net48 --nologo
       - name: shell windowshell exclusion inventory
         shell: pwsh
-        run: |
-          ./scripts/windows/shell-windowshell-inventory.ps1 -Role Excluded | Tee-Object -Variable inv
-          $countLine = $inv | Where-Object { $_ -match '^SHELL_EXCLUDED_COUNT=' } | Select-Object -Last 1
-          if (-not $countLine) { throw 'missing SHELL_EXCLUDED_COUNT' }
-          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
-          Set-Content -Path artifacts/shell-windowshell-count.txt -Value $countLine -NoNewline
-      - name: upload shell windowshell count
-        uses: actions/upload-artifact@v4
-        with:
-          name: shell-windowshell-count
-          path: artifacts/shell-windowshell-count.txt
+        run: ./scripts/windows/shell-windowshell-inventory.ps1 -Role Excluded
       - name: test every target framework except server and windows kiosk integration
         run: dotnet test GameClub.slnx -c Release --nologo --filter "FullyQualifiedName!~GameClub.Server.Tests&FullyQualifiedName!~GameClub.Kiosk.Windows.IntegrationTests&FullyQualifiedName!~GameClub.Shell.Windows.IntegrationTests" --results-directory artifacts/windows-ci --logger "trx;LogFileName=windows-ci.trx"
       - name: upload windows ci test artifacts
@@ -188,7 +178,6 @@ jobs:
 
   windows-shell:
     name: windows-2022 shell
-    needs: windows
     timeout-minutes: 25
     runs-on: windows-2022
     env:
@@ -201,10 +190,6 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.403
-      - uses: actions/download-artifact@v4
-        with:
-          name: shell-windowshell-count
-          path: artifacts/count
       - name: install and start postgresql
         shell: pwsh
         run: |

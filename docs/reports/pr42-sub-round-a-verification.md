@@ -50,5 +50,5 @@ Bindings follow `step-mvp-a-shell-plan-r1`. **WindowsShell** proofs run only in 
 
 ## CI inventory markers
 
-- **windows net48 and net10:** `SHELL_EXCLUDED_TEST` / `SHELL_EXCLUDED_COUNT` via `scripts/windows/shell-windowshell-inventory.ps1 -Role Excluded` (Category=WindowsShell list must match slnx subset).
-- **windows-2022 shell:** `SHELL_LIST_TEST` / `SHELL_LIST_COUNT` via the same script `-Role Shell` before `Category=WindowsShell` test run.
+- **windows net48 and net10:** `SHELL_EXCLUDED_TEST` / `SHELL_EXCLUDED_COUNT` — whole `GameClub.Shell.Windows.IntegrationTests` project (`--list-tests`, no filter), matching FQN exclusion in the general test step.
+- **windows-2022 shell:** `SHELL_PROJECT_COUNT`, `SHELL_LIST_TEST` / `SHELL_LIST_COUNT` — project list must equal `Category=WindowsShell` before the filtered test run.

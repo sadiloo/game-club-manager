@@ -6,6 +6,7 @@ using Microsoft.Extensions.Hosting;
 
 namespace GameClub.Server.Tests;
 
+[Collection("server")]
 public sealed class ShellServerConfigurationTests
 {
     [Fact]

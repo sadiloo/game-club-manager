@@ -6,6 +6,7 @@ using GameClub.Server.Hosting;
 
 namespace GameClub.Server.Tests;
 
+[Collection("server")]
 public sealed class OperatorServerStatusEndpointTests(GameClubWebApplicationFactory factory) : IClassFixture<GameClubWebApplicationFactory>
 {
     [Fact]

@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace GameClub.Server.Tests;
 
+[Collection("server")]
 public sealed class OperatorPanelServerStatusChipTests(GameClubWebApplicationFactory factory) : IClassFixture<GameClubWebApplicationFactory>
 {
     [Fact]

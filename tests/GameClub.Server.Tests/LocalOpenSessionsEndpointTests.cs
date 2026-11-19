@@ -6,6 +6,7 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace GameClub.Server.Tests;
 
+[Collection("server")]
 public sealed class LocalOpenSessionsEndpointTests(GameClubWebApplicationFactory factory) : IClassFixture<GameClubWebApplicationFactory>
 {
     [Fact]
