@@ -40,7 +40,7 @@ See `git diff 4999323d9a1dce2e5ac3e2507fc3a5d156eeecb6 -- src/GameClub.Shell/Mai
 
 Parent: `32c9ad98acea1650022ef45ed4f509d71d80ea5e`.
 
-Staging sha: `da5d8b3acb98f8b1cfeb3ecd523dffc57e4fa874`
+Staging sha: `afb703ccae8cef8131275a44f0b08681d8dac47b`
 
 ### Cause
 
