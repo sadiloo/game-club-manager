@@ -177,30 +177,13 @@ if (-not $env:GAMECLUB_TEST_DATABASE) {
     $env:GAMECLUB_API_KEY = "ci-test-key"
 }
 
-function Set-CiPcSpecialBandHarness([ValidateSet('day','night')][string]$Mode) {
-    $tehran = [TimeZoneInfo]::ConvertTimeBySystemTimeZoneId((Get-Date).ToUniversalTime(), 'Iran Standard Time')
-    if ($Mode -eq 'night') {
-        $start = $tehran.AddHours(-3)
-        $end = $tehran.AddHours(3)
-    } else {
-        $minuteOfDay = ($tehran.Hour * 60) + $tehran.Minute
-        $center = ($minuteOfDay + (12 * 60)) % (24 * 60)
-        $startMin = ($center - 15 + (24 * 60)) % (24 * 60)
-        $endMin = ($center + 15) % (24 * 60)
-        $dayBase = $tehran.Date
-        $start = $dayBase.AddMinutes($startMin)
-        $end = $dayBase.AddMinutes($endMin)
-    }
-    $env:TestHarness__PcSpecialBand__Enabled = 'true'
-    $startText = $start.ToString('HH:mm')
-    $endText = $end.ToString('HH:mm')
-    $env:TestHarness__PcSpecialBand__PcNormalStart = $startText
-    $env:TestHarness__PcSpecialBand__PcNormalEnd = $endText
-    $env:TestHarness__PcSpecialBand__PcVipStart = $startText
-    $env:TestHarness__PcSpecialBand__PcVipEnd = $endText
+$script:ServerPcBandArgs = @('--pc-band', 'day')
+
+function Set-CiServerPcBandArgs([ValidateSet('day','night')][string]$Mode) {
+    $script:ServerPcBandArgs = @('--pc-band', $Mode)
 }
 
-Set-CiPcSpecialBandHarness -Mode day
+Set-CiServerPcBandArgs -Mode day
 
 if (-not $env:CHECKPOINT_SERVER_URL) {
     $env:CHECKPOINT_SERVER_URL = "http://127.0.0.1:5225"
@@ -327,6 +310,7 @@ try {
         @("build", "src/GameClub.Kiosk/GameClub.Kiosk.csproj", "-c", "Release", "-f", "net48", "--nologo"),
         @("build", "src/GameClub.Kiosk.Guard/GameClub.Kiosk.Guard.csproj", "-c", "Release", "-f", "net48", "--nologo"),
         @("build", "src/GameClub.Server/GameClub.Server.csproj", "-c", "Release", "--nologo"),
+        @("build", "tests/GameClub.Server.TestHost/GameClub.Server.TestHost.csproj", "-c", "Release", "--nologo"),
         @("build", "tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj", "-c", "Release", "-f", "net48", "--nologo"),
         @("build", "tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj", "-c", "Release", "-f", "net10.0", "--nologo")
     )
@@ -352,12 +336,12 @@ try {
     Write-PhaseLog "END phase=builds exit=0"
     Write-CiPhaseFirewallProbe -label "after-builds"
 
-    $serverDll = Join-Path $repoRoot "src/GameClub.Server/bin/Release/net10.0/GameClub.Server.dll"
-    if (-not (Test-Path $serverDll)) { throw "GameClub.Server.dll not found at $serverDll" }
+    $serverDll = Join-Path $repoRoot "tests/GameClub.Server.TestHost/bin/Release/net10.0/GameClub.Server.TestHost.dll"
+    if (-not (Test-Path $serverDll)) { throw "GameClub.Server.TestHost.dll not found at $serverDll" }
     $serverLog = Join-Path $logDir "server-out.log"
     $serverErr = Join-Path $logDir "server-err.log"
     Write-PhaseLog "START phase=server-start"
-    $script:serverProc = Start-Process -FilePath "dotnet" -ArgumentList @("exec", $serverDll) -PassThru -NoNewWindow -RedirectStandardOutput $serverLog -RedirectStandardError $serverErr -WorkingDirectory $repoRoot
+    $script:serverProc = Start-Process -FilePath "dotnet" -ArgumentList (@("exec", $serverDll) + $script:ServerPcBandArgs) -PassThru -NoNewWindow -RedirectStandardOutput $serverLog -RedirectStandardError $serverErr -WorkingDirectory $repoRoot
     $null = $script:serverProc.Handle
     $env:GAMECLUB_SERVER_PID = $script:serverProc.Id
     $env:GAMECLUB_SERVER_DLL = $serverDll
@@ -406,12 +390,12 @@ try {
     Write-Host "Running windows guard/wpf integration (net48, live server env)..."
     Write-CiPhaseFirewallProbe -label "before-dotnet-test-net48-guard-wpf"
     $env:CHECKPOINT_SERVER_PC_BAND = 'night'
-    Set-CiPcSpecialBandHarness -Mode night
+    Set-CiServerPcBandArgs -Mode night
     if ($script:serverProc -and -not $script:serverProc.HasExited) {
         Stop-ProcessTree -rootProcId $script:serverProc.Id
         $script:serverProc = $null
     }
-    $script:serverProc = Start-Process -FilePath "dotnet" -ArgumentList @("exec", $serverDll) -PassThru -NoNewWindow -RedirectStandardOutput $serverLog -RedirectStandardError $serverErr -WorkingDirectory $repoRoot
+    $script:serverProc = Start-Process -FilePath "dotnet" -ArgumentList (@("exec", $serverDll) + $script:ServerPcBandArgs) -PassThru -NoNewWindow -RedirectStandardOutput $serverLog -RedirectStandardError $serverErr -WorkingDirectory $repoRoot
     $env:GAMECLUB_SERVER_PID = $script:serverProc.Id
     $nightReady = $false
     $nightDeadline = (Get-Date).AddMinutes(2)
@@ -431,12 +415,12 @@ try {
     $nightWpfExit = Invoke-DotNetWithWatchdog -PhaseName "dotnet-test-net48-wpf-night" -ArgumentList $nightWpfArgs -PhaseCapMs (5 * 60 * 1000)
     if ($nightWpfExit -ne 0) { $script:FinalExitCode = $nightWpfExit; throw "night WPF test failed" }
     $env:CHECKPOINT_SERVER_PC_BAND = $null
-    Set-CiPcSpecialBandHarness -Mode day
+    Set-CiServerPcBandArgs -Mode day
     if ($script:serverProc -and -not $script:serverProc.HasExited) {
         Stop-ProcessTree -rootProcId $script:serverProc.Id
         $script:serverProc = $null
     }
-    $script:serverProc = Start-Process -FilePath "dotnet" -ArgumentList @("exec", $serverDll) -PassThru -NoNewWindow -RedirectStandardOutput $serverLog -RedirectStandardError $serverErr -WorkingDirectory $repoRoot
+    $script:serverProc = Start-Process -FilePath "dotnet" -ArgumentList (@("exec", $serverDll) + $script:ServerPcBandArgs) -PassThru -NoNewWindow -RedirectStandardOutput $serverLog -RedirectStandardError $serverErr -WorkingDirectory $repoRoot
     $env:GAMECLUB_SERVER_PID = $script:serverProc.Id
 
     $guardTestArgs = @(

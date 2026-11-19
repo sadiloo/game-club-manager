@@ -61,32 +61,21 @@ public class GameClubWebApplicationFactory : WebApplicationFactory<Program>
         builder.UseSetting("ConnectionStrings:Default", ConnectionString);
         builder.UseSetting($"{DeadPcSweepOptions.SectionName}:SweepIntervalSeconds", "1");
         builder.UseSetting("OperatorSessionSecret", "test-operator-secret");
-        if (HarnessPcSpecialBand is { Enabled: true } band)
-        {
-            builder.UseSetting($"{PcSpecialBandHarnessOptions.SectionName}:Enabled", "true");
-            if (!string.IsNullOrWhiteSpace(band.PcNormalStart))
-            {
-                builder.UseSetting($"{PcSpecialBandHarnessOptions.SectionName}:PcNormalStart", band.PcNormalStart);
-            }
-
-            if (!string.IsNullOrWhiteSpace(band.PcNormalEnd))
-            {
-                builder.UseSetting($"{PcSpecialBandHarnessOptions.SectionName}:PcNormalEnd", band.PcNormalEnd);
-            }
-
-            if (!string.IsNullOrWhiteSpace(band.PcVipStart))
-            {
-                builder.UseSetting($"{PcSpecialBandHarnessOptions.SectionName}:PcVipStart", band.PcVipStart);
-            }
-
-            if (!string.IsNullOrWhiteSpace(band.PcVipEnd))
-            {
-                builder.UseSetting($"{PcSpecialBandHarnessOptions.SectionName}:PcVipEnd", band.PcVipEnd);
-            }
-        }
 
         builder.ConfigureServices(services =>
         {
+            if (HarnessPcSpecialBand is { Enabled: true } band)
+            {
+                services.Configure<PcSpecialBandHarnessOptions>(options =>
+                {
+                    options.Enabled = true;
+                    options.PcNormalStart = band.PcNormalStart;
+                    options.PcNormalEnd = band.PcNormalEnd;
+                    options.PcVipStart = band.PcVipStart;
+                    options.PcVipEnd = band.PcVipEnd;
+                });
+            }
+
             services.RemoveAll<IClock>();
             services.AddSingleton<IClock>(Clock);
             services.AddSingleton(_ => this);

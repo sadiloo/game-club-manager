@@ -7,7 +7,7 @@ using GameClub.Kiosk.Core.Protocol;
 
 namespace GameClub.Kiosk.Guard.Internet;
 
-internal sealed class InternetFirewallApplier
+internal sealed class InternetFirewallApplier : IInternetFirewallApplier
 {
     private const string GroupName = "Checkpoint Internet Off";
 
@@ -16,14 +16,6 @@ internal sealed class InternetFirewallApplier
         if (on)
         {
             return RunResetScript();
-        }
-
-        if (string.Equals(
-            Environment.GetEnvironmentVariable("CHECKPOINT_INTERNET_APPLY_FAULT"),
-            "1",
-            StringComparison.Ordinal))
-        {
-            return "apply_failed:harness_injected";
         }
 
         if (config.ServerIps.Length == 0 || config.ServerPort <= 0)
@@ -125,7 +117,7 @@ foreach ($prof in @('Domain','Private','Public')) {{
     }
 }
 
-internal sealed class InternetGuardConfig
+public sealed class InternetGuardConfig
 {
     public string StationId { get; set; } = "";
     public string ServerHost { get; set; } = "";

@@ -1,22 +1,21 @@
 #if NET10_0_OR_GREATER
 using System.Diagnostics;
-using System.Net.Http.Headers;
-
 namespace GameClub.Kiosk.Windows.IntegrationTests.Server;
 
-/// <summary>Supervise a live GameClub.Server process for transport-outage tests (CI subprocess or windows-2022 job).</summary>
+/// <summary>Supervise a live GameClub.Server.TestHost process for transport-outage tests (CI subprocess or windows-2022 job).</summary>
 internal sealed class OutOfProcessLiveServer : IAsyncDisposable
 {
     private Process? _process;
     private readonly string _repoRoot;
-    private readonly string _serverDll;
+    private readonly string _hostDll;
+    private readonly string _hostArgs;
     private bool _ownsProcess;
-    private readonly Dictionary<string, string?> _harnessEnv = new(StringComparer.Ordinal);
 
-    private OutOfProcessLiveServer(string repoRoot, string serverDll, Process process, bool ownsProcess)
+    private OutOfProcessLiveServer(string repoRoot, string hostDll, string hostArgs, Process process, bool ownsProcess)
     {
         _repoRoot = repoRoot;
-        _serverDll = serverDll;
+        _hostDll = hostDll;
+        _hostArgs = hostArgs;
         _process = process;
         _ownsProcess = ownsProcess;
     }
@@ -30,21 +29,22 @@ internal sealed class OutOfProcessLiveServer : IAsyncDisposable
         var proc = Process.GetProcessById(processId);
         var dll = Environment.GetEnvironmentVariable("GAMECLUB_SERVER_DLL") ?? "";
         var root = ResolveRepoRoot();
-        return new OutOfProcessLiveServer(root, dll, proc, ownsProcess: false) { BaseUrl = baseUrl.TrimEnd('/') };
+        return new OutOfProcessLiveServer(root, dll, string.Empty, proc, ownsProcess: false) { BaseUrl = baseUrl.TrimEnd('/') };
     }
 
     public static async Task<OutOfProcessLiveServer> StartNewAsync(
-        Action<Dictionary<string, string?>>? configureHarness = null,
+        string? pcBandHostArgs = null,
         CancellationToken ct = default)
     {
         var root = ResolveRepoRoot();
-        var dll = ResolveServerDll(root);
+        var dll = ResolveTestHostDll(root);
         var defaultPort = 5200 + Random.Shared.Next(200, 800);
         var baseUrl = Environment.GetEnvironmentVariable("CHECKPOINT_SERVER_URL")?.TrimEnd('/')
             ?? $"http://127.0.0.1:{defaultPort}";
-        var instance = new OutOfProcessLiveServer(root, dll, null!, ownsProcess: true) { BaseUrl = baseUrl };
-        PcSpecialBandHarnessEnv.ApplyDayTestBandAwayFromNow(instance._harnessEnv);
-        configureHarness?.Invoke(instance._harnessEnv);
+        var hostArgs = string.IsNullOrWhiteSpace(pcBandHostArgs)
+            ? PcSpecialBandHarnessEnv.DayBandHostArgs()
+            : pcBandHostArgs.Trim();
+        var instance = new OutOfProcessLiveServer(root, dll, hostArgs, null!, ownsProcess: true) { BaseUrl = baseUrl };
         await instance.LaunchAndWaitReadyAsync(ct);
         return instance;
     }
@@ -116,10 +116,13 @@ internal sealed class OutOfProcessLiveServer : IAsyncDisposable
     {
         var outLog = Path.Combine(Path.GetTempPath(), $"gcm-server-out-{Guid.NewGuid():N}.log");
         var errLog = Path.Combine(Path.GetTempPath(), $"gcm-server-err-{Guid.NewGuid():N}.log");
+        var execArgs = string.IsNullOrWhiteSpace(_hostArgs)
+            ? $"exec \"{_hostDll}\""
+            : $"exec \"{_hostDll}\" {_hostArgs}";
         var psi = new ProcessStartInfo
         {
             FileName = "dotnet",
-            Arguments = $"exec \"{_serverDll}\"",
+            Arguments = execArgs,
             WorkingDirectory = _repoRoot,
             UseShellExecute = false,
             RedirectStandardOutput = true,
@@ -127,8 +130,9 @@ internal sealed class OutOfProcessLiveServer : IAsyncDisposable
         };
         CopyServerEnvironment(psi);
         psi.Environment["ASPNETCORE_URLS"] = BaseUrl;
-        _process = Process.Start(psi) ?? throw new InvalidOperationException("Failed to start GameClub.Server.");
-        KioskLiveServerRegistry.RegisterOwned(_process.Id, $"dll={_serverDll}");
+        _process = Process.Start(psi) ?? throw new InvalidOperationException("Failed to start GameClub.Server.TestHost.");
+        KioskLiveServerRegistry.RegisterOwned(_process.Id, $"dll={_hostDll} args={_hostArgs}");
+        Environment.SetEnvironmentVariable("GAMECLUB_SERVER_DLL", _hostDll);
 
         _ = Task.Run(() => File.AppendAllText(outLog, _process.StandardOutput.ReadToEnd()));
         _ = Task.Run(() => File.AppendAllText(errLog, _process.StandardError.ReadToEnd()));
@@ -160,7 +164,7 @@ internal sealed class OutOfProcessLiveServer : IAsyncDisposable
             await Task.Delay(TimeSpan.FromSeconds(2), ct);
         }
 
-        throw new InvalidOperationException($"GameClub.Server did not become ready at {BaseUrl} (dll={_serverDll}).");
+        throw new InvalidOperationException($"GameClub.Server.TestHost did not become ready at {BaseUrl} (dll={_hostDll}).");
     }
 
     private void CopyServerEnvironment(ProcessStartInfo psi)
@@ -168,14 +172,6 @@ internal sealed class OutOfProcessLiveServer : IAsyncDisposable
         foreach (var key in new[] { "GAMECLUB_DATABASE", "GAMECLUB_TEST_DATABASE", "GAMECLUB_API_KEY", "OperatorSessionSecret", "ASPNETCORE_ENVIRONMENT" })
         {
             var value = Environment.GetEnvironmentVariable(key);
-            if (!string.IsNullOrWhiteSpace(value))
-            {
-                psi.Environment[key] = value;
-            }
-        }
-
-        foreach (var (key, value) in _harnessEnv)
-        {
             if (!string.IsNullOrWhiteSpace(value))
             {
                 psi.Environment[key] = value;
@@ -215,10 +211,10 @@ internal sealed class OutOfProcessLiveServer : IAsyncDisposable
             dir = Path.GetDirectoryName(dir) ?? dir;
         }
 
-        throw new InvalidOperationException("Could not locate repository root for GameClub.Server.");
+        throw new InvalidOperationException("Could not locate repository root for GameClub.Server.TestHost.");
     }
 
-    private static string ResolveServerDll(string repoRoot)
+    private static string ResolveTestHostDll(string repoRoot)
     {
         var fromEnv = Environment.GetEnvironmentVariable("GAMECLUB_SERVER_DLL");
         if (!string.IsNullOrWhiteSpace(fromEnv) && File.Exists(fromEnv))
@@ -228,6 +224,8 @@ internal sealed class OutOfProcessLiveServer : IAsyncDisposable
 
         var candidates = new[]
         {
+            Path.Combine(repoRoot, "tests/GameClub.Server.TestHost/bin/Release/net10.0/GameClub.Server.TestHost.dll"),
+            Path.Combine(repoRoot, "tests/GameClub.Server.TestHost/bin/Debug/net10.0/GameClub.Server.TestHost.dll"),
             Path.Combine(repoRoot, "src/GameClub.Server/bin/Release/net10.0/GameClub.Server.dll"),
             Path.Combine(repoRoot, "src/GameClub.Server/bin/Debug/net10.0/GameClub.Server.dll"),
         };
@@ -239,7 +237,7 @@ internal sealed class OutOfProcessLiveServer : IAsyncDisposable
             }
         }
 
-        throw new InvalidOperationException("GameClub.Server.dll not found; build the server before running live outage tests.");
+        throw new InvalidOperationException("GameClub.Server.TestHost.dll not found; build the test host before running live outage tests.");
     }
 }
 #endif

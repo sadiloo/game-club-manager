@@ -558,7 +558,7 @@ public sealed class WindowsKioskServerIntegrationTests
             Environment.SetEnvironmentVariable("CHECKPOINT_SERVER_URL", ownedServer.BaseUrl);
             var backend = KioskIntegrationBackend.CreateForBaseUrl(ownedServer.BaseUrl);
             await backend.ResetAsync();
-            await backend.SetPcNormalOfflineRate40000Async();
+            await backend.ConfigurePcNormalOfflineRate40KForG2Async();
             await backend.RegisterPcAsync(backend.CreateApiClient(), "PC-G2");
             var customerId = await backend.SeedCustomerWithCredentialAsync("g2user", "pass", 500_000);
             var (deviceId, deviceKey, leasePem) = await backend.PairAsync("PC-G2");
@@ -604,6 +604,7 @@ public sealed class WindowsKioskServerIntegrationTests
             }, leaseCts.Token);
             await runtime.StartAsync(default);
             await WaitUntilTransportConnectedAsync(runtime, TimeSpan.FromSeconds(60));
+            AssertG2HarnessDayBandPutsSessionInOnlineDay();
             var poweredSpanStartUtc = DateTime.UtcNow;
             await Task.Delay(TimeSpan.FromMinutes(6));
 
@@ -620,7 +621,9 @@ public sealed class WindowsKioskServerIntegrationTests
             var afterOutage2 = (await runtime.GetQueue().PendingAsync()).Count(e => e.Type == "offline_play_segment");
             Assert.True(afterOutage2 > afterOutage1, "outage 2 must enqueue offline_play_segment evidence");
 
-            var poweredSpanSeconds = (DateTime.UtcNow - poweredSpanStartUtc).TotalSeconds;
+            var poweredSpanEndUtc = DateTime.UtcNow;
+            AssertG2PoweredSpanStaysInOnlineDayBand(poweredSpanStartUtc, poweredSpanEndUtc);
+            var poweredSpanSeconds = (poweredSpanEndUtc - poweredSpanStartUtc).TotalSeconds;
             var secondsPastMinute = poweredSpanSeconds % 60;
             var marginToNearestMinute = Math.Min(secondsPastMinute, secondsPastMinute == 0 ? 60 : 60 - secondsPastMinute);
             Console.WriteLine(
@@ -668,7 +671,9 @@ public sealed class WindowsKioskServerIntegrationTests
             Console.WriteLine("G2_ROW_DUMP " + evidence.ToDumpLine());
             Console.WriteLine(
                 $"G2_ORACLE measured_seconds={poweredSpanSeconds:F1} minutes={evidence.ExpectedBillableMinutes} expected_collectible={evidence.ExpectedCollectibleToman}");
-            Assert.Equal(PilotSeed.PcNormalHourly, evidence.PcNormalOfflineHourlyToman);
+            Assert.Equal(80_000, evidence.PcNormalOnlineDayHourlyToman);
+            Assert.Equal(40_000, evidence.PcNormalOfflineDayHourlyToman);
+            Assert.Equal(0, evidence.OfflinePlaySegmentCount);
             Assert.Equal(evidence.ExpectedBillableMinutes, evidence.CheckpointCount);
             Assert.Equal(0, evidence.DuplicateCheckpointMinuteBuckets);
             Assert.Equal(evidence.ExpectedCollectibleToman, evidence.PendingBillCollectibleToman);
@@ -681,6 +686,56 @@ public sealed class WindowsKioskServerIntegrationTests
                 Environment.SetEnvironmentVariable("CHECKPOINT_SERVER_URL", priorCheckpointUrl);
             }
         }
+    }
+
+    private static void AssertG2HarnessDayBandPutsSessionInOnlineDay()
+    {
+        var (start, end) = GameClub.Server.Testing.PcSpecialBandHarnessSchedule.DayBandAwayFromNow(TimeSpan.FromHours(3));
+        var now = TehranTime.FromUtc(DateTime.UtcNow);
+        if (IsInsideHarnessSpecialBand(now, start, end))
+        {
+            Assert.Fail(
+                $"G2 requires test-host --pc-band day; now {now:yyyy-MM-dd HH:mm} Tehran is inside harness special {start.Hour:00}:{start.Minute:00}–{end.Hour:00}:{end.Minute:00}.");
+        }
+    }
+
+    private static void AssertG2PoweredSpanStaysInOnlineDayBand(DateTime spanStartUtc, DateTime spanEndUtc)
+    {
+        var (start, end) = GameClub.Server.Testing.PcSpecialBandHarnessSchedule.DayBandAwayFromNow(TimeSpan.FromHours(3));
+        var startTehran = TehranTime.FromUtc(spanStartUtc);
+        var endTehran = TehranTime.FromUtc(spanEndUtc);
+        if (IsInsideHarnessSpecialBand(startTehran, start, end) || IsInsideHarnessSpecialBand(endTehran, start, end))
+        {
+            Assert.Fail(
+                $"G2 powered span must stay in online day via harness override; span {startTehran:HH:mm}–{endTehran:HH:mm} Tehran intersects harness special {start.Hour:00}:{start.Minute:00}–{end.Hour:00}:{end.Minute:00}.");
+        }
+
+        for (var day = startTehran.Date; day <= endTehran.Date; day = day.AddDays(1))
+        {
+            foreach (var boundary in new[]
+                     {
+                         TehranTime.At(day.Year, day.Month, day.Day, 0, 0),
+                         TehranTime.At(day.Year, day.Month, day.Day, 8, 30),
+                     })
+            {
+                var boundaryUtc = boundary.UtcDateTime;
+                if (spanStartUtc < boundaryUtc && boundaryUtc < spanEndUtc)
+                {
+                    Assert.Fail(
+                        $"G2 powered span must not cross 00:00 or 08:30 Tehran; crossed {boundary:yyyy-MM-dd HH:mm} between {startTehran:O} and {endTehran:O}.");
+                }
+            }
+        }
+    }
+
+    private static bool IsInsideHarnessSpecialBand(DateTimeOffset tehranLocal, TimeOfDay bandStart, TimeOfDay bandEnd)
+    {
+        var minuteOfDay = (tehranLocal.Hour * 60) + tehranLocal.Minute;
+        var startMinute = (bandStart.Hour * 60) + bandStart.Minute;
+        var endMinute = (bandEnd.Hour * 60) + bandEnd.Minute;
+        return startMinute <= endMinute
+            ? minuteOfDay >= startMinute && minuteOfDay < endMinute
+            : minuteOfDay >= startMinute || minuteOfDay < endMinute;
     }
 
     private static async Task DrainG2QueueOnAckAsync(
@@ -805,6 +860,7 @@ public sealed class WindowsKioskServerIntegrationTests
     {
         if (!KioskIntegrationBackend.IsLiveMode)
         {
+            IntegrationTestCi.FailIfActive("CHECKPOINT_SERVER_URL must be set in CI for live_server_pc_internet_off_unaffected_by_server_outage.");
             return;
         }
 
@@ -1031,6 +1087,7 @@ public sealed class WindowsKioskServerIntegrationTests
     {
         if (!KioskIntegrationBackend.IsLiveMode)
         {
+            IntegrationTestCi.FailIfActive("CHECKPOINT_SERVER_URL must be set in CI for live_server_pc_internet_toggle_off_report_applied_then_session_end_on.");
             return;
         }
 
@@ -1073,17 +1130,7 @@ public sealed class WindowsIntegrationApplicationFactory : GameClubWebApplicatio
 {
     public WindowsIntegrationApplicationFactory()
     {
-        var (start, end) = PcSpecialBandHarnessEnv.ComputeBandAwayFromNow(TimeSpan.FromHours(3));
-        var startText = $"{start.Hour:00}:{start.Minute:00}";
-        var endText = $"{end.Hour:00}:{end.Minute:00}";
-        HarnessPcSpecialBand = new GameClub.Server.Testing.PcSpecialBandHarnessOptions
-        {
-            Enabled = true,
-            PcNormalStart = startText,
-            PcNormalEnd = endText,
-            PcVipStart = startText,
-            PcVipEnd = endText,
-        };
+        HarnessPcSpecialBand = GameClub.Server.Testing.PcSpecialBandHarnessSchedule.OptionsForBand("day");
     }
 }
 

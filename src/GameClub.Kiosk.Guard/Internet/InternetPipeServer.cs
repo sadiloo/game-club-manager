@@ -13,16 +13,17 @@ internal sealed class InternetPipeServer
 {
     private readonly InternetGuardConfig _config;
     private readonly InternetGuardStateStore _state = new();
-    private readonly InternetFirewallApplier _firewall = new();
+    private readonly IInternetFirewallApplier _firewall;
     private readonly InternetCommandVerifier _verifier;
     private InternetCommandPayload? _applied;
     private long _appliedVersion;
     private Guid _epoch = Guid.NewGuid();
     private bool _on = true;
 
-    public InternetPipeServer(InternetGuardConfig config)
+    public InternetPipeServer(InternetGuardConfig config, IInternetFirewallApplier? firewall = null)
     {
         _config = config;
+        _firewall = firewall ?? new InternetFirewallApplier();
         _verifier = new InternetCommandVerifier(config.ServerPublicKeyPem);
         var persisted = _state.Load();
         if (persisted is not null)

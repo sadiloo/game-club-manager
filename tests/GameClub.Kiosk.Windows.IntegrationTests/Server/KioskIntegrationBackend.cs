@@ -287,8 +287,9 @@ internal sealed class KioskIntegrationBackend
     public async Task RegisterPcAsync(HttpClient api, string stationId, string groupId = PilotSeed.PcNormalGroupId)
         => await S3TestHelpers.RegisterPc(api, stationId, groupId);
 
-    public async Task SetPcNormalOfflineRate40000Async()
-        => await PutPcNormalOfflineRateAsync(40_000L);
+    /// <summary>Sets pc-normal offline day/night to 40k for internet toggle setup; G2 billing must still use online day 80k.</summary>
+    public async Task ConfigurePcNormalOfflineRate40KForG2Async()
+        => await PutPcNormalOfflineRateOnlyAsync(40_000L);
 
     public async Task SetPcNormalOfflineRatesAsync(long offlineDay = 60_000L, long offlineNight = 80_000L)
     {
@@ -305,7 +306,7 @@ internal sealed class KioskIntegrationBackend
         await put.EnsureSuccessStatusCodeWithBodyAsync("PUT /api/operator/pc-rates (pc-normal four rates)");
     }
 
-    private async Task PutPcNormalOfflineRateAsync(long hourlyToman)
+    private async Task PutPcNormalOfflineRateOnlyAsync(long hourlyToman)
     {
         var mgr = _factory is not null
             ? await _factory.CreateOperatorClientAsync("manager", "1234")
@@ -334,11 +335,18 @@ internal sealed class KioskIntegrationBackend
                 .Where(c => c.SessionId == sessionId)
                 .Select(c => new { c.AtUtc })
                 .ToListAsync();
-            var rateLine = await db.RateLines.AsNoTracking().SingleAsync(r =>
+            var onlineDayRate = await db.RateLines.AsNoTracking().SingleAsync(r =>
                 r.GroupId == PilotSeed.PcNormalGroupId
                 && r.PlayMode == "Online"
                 && r.PlayerCount == null
                 && !r.IsSpecialBand);
+            var offlineDayRate = await db.RateLines.AsNoTracking().SingleAsync(r =>
+                r.GroupId == PilotSeed.PcNormalGroupId
+                && r.PlayMode == "Offline"
+                && r.PlayerCount == 1
+                && !r.IsSpecialBand);
+            var offlinePlaySegments = await db.Segments.CountAsync(p =>
+                p.SessionId == sessionId && p.Mode == PlayMode.Offline);
             var factoryBillTotal = await db.PendingBills
                 .Where(b => b.SessionId == sessionId)
                 .SumAsync(b => b.CollectibleToman);
@@ -347,7 +355,9 @@ internal sealed class KioskIntegrationBackend
                 checkpointCount,
                 factoryOfflineAuditCount,
                 checkpointMinMax.Select(c => c.AtUtc),
-                rateLine.HourlyToman,
+                onlineDayRate.HourlyToman,
+                offlineDayRate.HourlyToman,
+                offlinePlaySegments,
                 factoryBillTotal,
                 oraclePoweredSpanSeconds);
         }
@@ -383,7 +393,7 @@ internal sealed class KioskIntegrationBackend
             }
         }
 
-        long hourly;
+        long onlineDayHourly;
         await using (var cmd = new NpgsqlCommand(
             """
             SELECT "HourlyToman" FROM rate_lines
@@ -392,7 +402,28 @@ internal sealed class KioskIntegrationBackend
             conn))
         {
             cmd.Parameters.AddWithValue("group", PilotSeed.PcNormalGroupId);
-            hourly = Convert.ToInt64(await cmd.ExecuteScalarAsync() ?? 0L);
+            onlineDayHourly = Convert.ToInt64(await cmd.ExecuteScalarAsync() ?? 0L);
+        }
+
+        long offlineDayHourly;
+        await using (var cmd = new NpgsqlCommand(
+            """
+            SELECT "HourlyToman" FROM rate_lines
+            WHERE "GroupId" = @group AND "PlayMode" = 'Offline' AND "PlayerCount" = 1 AND "IsSpecialBand" = false
+            """,
+            conn))
+        {
+            cmd.Parameters.AddWithValue("group", PilotSeed.PcNormalGroupId);
+            offlineDayHourly = Convert.ToInt64(await cmd.ExecuteScalarAsync() ?? 0L);
+        }
+
+        int offlinePlaySegments;
+        await using (var cmd = new NpgsqlCommand(
+            """SELECT COUNT(*)::int FROM play_segments WHERE "SessionId" = @id AND "Mode" = 'Offline'""",
+            conn))
+        {
+            cmd.Parameters.AddWithValue("id", sessionId);
+            offlinePlaySegments = (int)(await cmd.ExecuteScalarAsync() ?? 0);
         }
 
         long billTotal;
@@ -404,7 +435,16 @@ internal sealed class KioskIntegrationBackend
             billTotal = Convert.ToInt64(await cmd.ExecuteScalarAsync() ?? 0L);
         }
 
-        return G2BillingEvidence.Build(sessionId, checkpoints, offlineAuditCount, ats, hourly, billTotal, oraclePoweredSpanSeconds);
+        return G2BillingEvidence.Build(
+            sessionId,
+            checkpoints,
+            offlineAuditCount,
+            ats,
+            onlineDayHourly,
+            offlineDayHourly,
+            offlinePlaySegments,
+            billTotal,
+            oraclePoweredSpanSeconds);
         }
     }
 
@@ -515,18 +555,24 @@ internal sealed record G2BillingEvidence(
     int CheckpointCount,
     int OfflineSegmentAuditCount,
     string OfflineSegmentMinuteSpan,
-    long PcNormalOfflineHourlyToman,
+    long PcNormalOnlineDayHourlyToman,
+    long PcNormalOfflineDayHourlyToman,
+    int OfflinePlaySegmentCount,
     long PendingBillCollectibleToman,
     int ExpectedBillableMinutes,
     long ExpectedCollectibleToman,
     int DuplicateCheckpointMinuteBuckets)
 {
+    private const long G2OnlineDayHourlyToman = 80_000L;
+
     public static G2BillingEvidence Build(
         Guid sessionId,
         int checkpointCount,
         int offlineAudits,
         IEnumerable<DateTime> checkpointTimes,
-        long hourlyToman,
+        long onlineDayHourlyToman,
+        long offlineDayHourlyToman,
+        int offlinePlaySegmentCount,
         long bill,
         double oraclePoweredSpanSeconds)
     {
@@ -536,7 +582,8 @@ internal sealed record G2BillingEvidence(
             : $"{ordered[0]:O}..{ordered[^1]:O} ({ordered.Count} rows)";
         var measuredSeconds = Math.Max(0, oraclePoweredSpanSeconds);
         var expectedMinutes = (int)Math.Floor(measuredSeconds / 60.0);
-        var expectedCollectible = expectedMinutes * hourlyToman / 60;
+        var n = expectedMinutes * G2OnlineDayHourlyToman;
+        var expectedCollectible = n / 60 + (n % 60 >= 30 ? 1 : 0);
         var minuteBuckets = ordered
             .Select(t => new DateTime(t.Year, t.Month, t.Day, t.Hour, t.Minute, 0, DateTimeKind.Utc))
             .ToList();
@@ -548,7 +595,9 @@ internal sealed record G2BillingEvidence(
             checkpointCount,
             offlineAudits,
             span,
-            hourlyToman,
+            onlineDayHourlyToman,
+            offlineDayHourlyToman,
+            offlinePlaySegmentCount,
             bill,
             expectedMinutes,
             expectedCollectible,
@@ -561,7 +610,9 @@ internal sealed record G2BillingEvidence(
             .Append("; checkpoints=").Append(CheckpointCount)
             .Append("; offline_segment_audit=").Append(OfflineSegmentAuditCount)
             .Append("; checkpoint_span=").Append(OfflineSegmentMinuteSpan)
-            .Append("; pc_normal_offline_rate_per_hour=").Append(PcNormalOfflineHourlyToman)
+            .Append("; pc_normal_online_day_rate_per_hour=").Append(PcNormalOnlineDayHourlyToman)
+            .Append("; pc_normal_offline_day_rate_per_hour=").Append(PcNormalOfflineDayHourlyToman)
+            .Append("; offline_play_segments=").Append(OfflinePlaySegmentCount)
             .Append("; pending_bill_collectible=").Append(PendingBillCollectibleToman)
             .Append("; g2_expected_minutes=").Append(ExpectedBillableMinutes)
             .Append("; g2_expected_collectible=").Append(ExpectedCollectibleToman)

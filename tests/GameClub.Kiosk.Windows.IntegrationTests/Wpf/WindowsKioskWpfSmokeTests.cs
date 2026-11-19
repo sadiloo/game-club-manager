@@ -11,6 +11,7 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using GameClub.Billing;
+using GameClub.Kiosk.Windows.IntegrationTests;
 using Xunit;
 
 namespace GameClub.Kiosk.Windows.IntegrationTests.Wpf;
@@ -199,6 +200,7 @@ public sealed class WindowsKioskWpfSmokeTests
         var bandMode = Environment.GetEnvironmentVariable("CHECKPOINT_SERVER_PC_BAND")?.Trim();
         if (!string.Equals(bandMode, "night", StringComparison.OrdinalIgnoreCase))
         {
+            IntegrationTestCi.FailIfActive("CHECKPOINT_SERVER_PC_BAND must be night in CI for wpf_remaining_time_matches_funded_session_special_band_night_line.");
             return;
         }
 

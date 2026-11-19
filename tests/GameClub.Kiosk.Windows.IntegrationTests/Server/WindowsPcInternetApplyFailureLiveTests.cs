@@ -11,6 +11,8 @@ using System.Threading.Tasks;
 using GameClub.Billing;
 using GameClub.Kiosk.Core.Runtime;
 using GameClub.Kiosk.Guard.Internet;
+using GameClub.Kiosk.Windows.IntegrationTests;
+using GameClub.Kiosk.Windows.IntegrationTests.Guard;
 using Npgsql;
 using Xunit;
 
@@ -26,12 +28,11 @@ public sealed class WindowsPcInternetApplyFailureLiveTests
         var serverUrl = Environment.GetEnvironmentVariable("CHECKPOINT_SERVER_URL")?.Trim();
         if (string.IsNullOrWhiteSpace(serverUrl))
         {
+            IntegrationTestCi.FailIfActive("CHECKPOINT_SERVER_URL must be set in CI for live_server_pc_internet_guard_forced_apply_failure.");
             return;
         }
 
         var apiKey = Environment.GetEnvironmentVariable("GAMECLUB_API_KEY") ?? "ci-test-key";
-        var priorFault = Environment.GetEnvironmentVariable("CHECKPOINT_INTERNET_APPLY_FAULT");
-        Environment.SetEnvironmentVariable("CHECKPOINT_INTERNET_APPLY_FAULT", "1");
         KioskRuntime runtime = null;
         var pipeCts = new CancellationTokenSource();
         Thread pipe = null;
@@ -112,7 +113,7 @@ public sealed class WindowsPcInternetApplyFailureLiveTests
             };
             Directory.CreateDirectory(Path.GetDirectoryName(InternetGuardPaths.ConfigPath));
             File.WriteAllText(InternetGuardPaths.ConfigPath, JsonSerializer.Serialize(config));
-            pipe = new Thread(() => new InternetPipeServer(config).Run(pipeCts.Token))
+            pipe = new Thread(() => new InternetPipeServer(config, new FaultInjectingInternetFirewallApplier()).Run(pipeCts.Token))
             {
                 IsBackground = true,
                 Name = "HarnessInternetPipe",
@@ -216,7 +217,6 @@ public sealed class WindowsPcInternetApplyFailureLiveTests
         }
         finally
         {
-            Environment.SetEnvironmentVariable("CHECKPOINT_INTERNET_APPLY_FAULT", priorFault);
             pipeCts.Cancel();
             if (runtime is not null)
             {
