@@ -6,6 +6,7 @@ using GameClub.Billing;
 using GameClub.Kiosk.Core.Heartbeat;
 using GameClub.Kiosk.Core.Protocol;
 using GameClub.Server.Data;
+using GameClub.Server.Diagnostics;
 using GameClub.Server.Data.Entities;
 using GameClub.Server.Operator;
 using GameClub.Server.Services;
@@ -658,6 +659,12 @@ public sealed class KioskSessionService(
     {
         var customerId = await auth.LoginAsync(loginName, password, stationId, ct);
         var session = await AttachOrStartMemberAsync(customerId, stationId, ct);
+        var normalized = StationIdNormalizer.Normalize(stationId);
+        ProbeRequestLog.WriteLine(
+            "PROBE_V3_SESSION "
+            + $"utc_ms={ProbeRequestLog.UtcMs()} event=login_attach_ok "
+            + $"stationRaw={stationId} stationNormalized={normalized} "
+            + $"customerId={customerId} sessionId={session.Id} status={session.Status}");
         return (customerId, session);
     }
 

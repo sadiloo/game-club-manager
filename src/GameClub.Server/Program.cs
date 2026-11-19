@@ -117,6 +117,7 @@ public partial class Program
             runtimeStatus.ApplicationStartedAtUtc = DateTimeOffset.UtcNow;
         });
 
+        app.UseMiddleware<ProbeApiRequestLoggingMiddleware>();
         app.UseMiddleware<ApiExceptionMiddleware>();
         app.UseMiddleware<OperatorSessionMiddleware>();
         app.UseMiddleware<OperatorAuthorizationMiddleware>();
