@@ -4,6 +4,27 @@
 
 - `4cef504ba9fd293998890fd7083264fd78c7500a` (`cursor/pc-internet-switch-6bdd`)
 
+## Staging head
+
+- `61f29c54a03ebef16e74d6ebe5a7a6590c38af67` (`cursor/pr40-r17-staging`)
+
+## Files changed
+
+- `tests/GameClub.Kiosk.Windows.IntegrationTests/Server/L17GuardProbeSupport.cs` (new)
+- `tests/GameClub.Kiosk.Windows.IntegrationTests/Server/WindowsPcInternetApplyFailureLiveTests.cs`
+- `scripts/windows/ci-integration.ps1`
+- `docs/reports/pr40-r17-report.md`
+
+## Build (Linux, Release, `-p:EnableWindowsTargeting=true` where needed)
+
+| Project | Result |
+|---------|--------|
+| GameClub.Kiosk.Windows.IntegrationTests net10.0 | 0 errors |
+| GameClub.Kiosk.Windows.IntegrationTests net48 | 0 errors |
+| GameClub.Server.TestHost | 0 errors |
+| GameClub.Server.Tests | 0 errors |
+| GameClub.Kiosk.Core.Tests | 0 errors |
+
 ## (a) L17 probe pipe timeout — root cause
 
 **Evidence (R16 run 44545653691, `pr40r16_kiosk.log`):**
