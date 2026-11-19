@@ -34,8 +34,12 @@ Red CI: run `44583927556` (ubuntu job `135771642703`, windows kiosk `13577164313
 | `CHECKPOINT_INTERNET_PIPE_IO_MS` | Not set in `.github/workflows/ci.yml` or `scripts/windows/ci-integration.ps1`; client defaults `connect_ms=5000`, `io_ms=30000` (`GuardInternetClient.DefaultIoTimeoutMs`). |
 | Red L17 | Artifact `14561774950`: `GUARD_PIPE utc_ms=1795113238960 verb=status event=start` only; xUnit **180000 ms** timeout; no `L17_GUARD_OFF_PROBE`. |
 | Red WPF | Job `135771643130`: `GUARD_PIPE utc_ms=1795113463245 verb=apply event=start` (no `end`) ~18:37:43–18:39:10. |
-| Sub-step diag | Log-only `GUARD_PIPE … event=connect_begin/connect_ok/write_ok/flush_ok/read_ok/read_timeout/dispose_* thread=N` on `cursor/pr40-r18e-diag` (pending windows kiosk run). |
-| Prior read-timeout theory | **Refuted** for 85s+ hang: `ReadWithTimeoutAsync` uses `WhenAny` + throws; catch logs `end`. Missing `end` ⇒ blocking call without return (connect/write/flush/dispose) or process kill. |
+| CI proof run | `44598481278` job windows kiosk, artifact `14570091439`, commit `3746864`. |
+| `CHECKPOINT_INTERNET_PIPE_IO_MS` | **unset** → `config connect_ms=5000 io_ms=30000` (logged on every call). |
+| **Proven block (L17)** | `live-checkpoint-net48-console.log`: `connect_ok` (thread=6) → `write_begin` → **no** `write_ok` / `end` until xUnit **180000 ms** timeout. |
+| **Proven block (WPF night)** | Job log `44598481278`: `verb=apply utc_ms=1795117687321` `connect_ok thread=17` → `write_begin` → fail at `19:49:34` (~87s), no `write_ok`. |
+| Cause | **(2) net48 `WriteWithTimeoutAsync`** — `await pipe.WriteAsync(..., timeoutCts.Token)` at `GuardInternetClient.cs:119` does not return within `io_ms`; cancellation is ignored once overlapped/BeginWrite is in flight on .NET Framework. Refuted: (1) connect returned `connect_ok`; (3) no `dispose_begin` without prior hang; (4) process alive until xUnit kill. |
+| **STOP — minimal product diff (do not apply)** | `#if !NET10_0_OR_GREATER` in `WriteWithTimeoutAsync` / `FlushWithTimeoutAsync`: race `Task.Factory.FromAsync(BeginWrite/EndWrite, …)` (and sync `Flush` on a worker) against `Task.Delay(timeoutMs)` like `ReadWithTimeoutAsync`, then throw `IoTimeout` when delay wins. |
 
 ## (c) L17 net48 live-checkpoint
 
