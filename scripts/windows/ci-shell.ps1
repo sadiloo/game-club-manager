@@ -60,11 +60,31 @@ while ((Get-Date) -lt $deadline) {
     Start-Sleep -Seconds 2
 }
 
+function New-ShellCiCompliantPassword {
+    $upper = (65..90) | ForEach-Object { [char]$_ }
+    $lower = (97..122) | ForEach-Object { [char]$_ }
+    $digits = (48..57) | ForEach-Object { [char]$_ }
+    $symbols = '@', '#', '$', '!', '%', '^', '&', '*'
+    $required = @(
+        ($lower | Get-Random),
+        ($upper | Get-Random),
+        ($digits | Get-Random),
+        ($symbols | Get-Random)
+    )
+    $pool = $lower + $upper + $digits + $symbols
+    while ($required.Count -lt 20) {
+        $required += $pool | Get-Random
+    }
+  return -join ($required | Get-Random -Count $required.Count)
+}
+
 $stdUser = "gcm_shell_std"
-$stdPass = "GcmShellStd1!"
+$stdPass = New-ShellCiCompliantPassword
+$secure = ConvertTo-SecureString $stdPass -AsPlainText -Force
 if (-not (Get-LocalUser -Name $stdUser -ErrorAction SilentlyContinue)) {
-    $secure = ConvertTo-SecureString $stdPass -AsPlainText -Force
     New-LocalUser -Name $stdUser -Password $secure -FullName "GCM Shell CI" | Out-Null
+} else {
+    Set-LocalUser -Name $stdUser -Password $secure
 }
 $env:GCM_SHELL_STD_USER = $stdUser
 $env:GCM_SHELL_STD_PASSWORD = $stdPass
