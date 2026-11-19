@@ -33,6 +33,21 @@ internal static class InternetFirewallMergedApplyRunner
         var seamThrow = InternetFirewallApplierTestSeams.ThrowAfterProfilesBeforeVerify
             ? "throw \"apply_failed:verification:test_seam_after_profiles\""
             : "";
+        const string phaseSwInit = @"
+$__gcmPhaseSw = [System.Diagnostics.Stopwatch]::StartNew()
+";
+        const string phaseAfterCleanup = @"
+$__gcmCleanupMs = $__gcmPhaseSw.ElapsedMilliseconds
+$__gcmPhaseSw.Restart()
+";
+        const string phaseAfterOffBody = @"
+$__gcmOffMs = $__gcmPhaseSw.ElapsedMilliseconds
+$__gcmPhaseSw.Restart()
+";
+        const string phaseAfterReadback = @"
+$__gcmReadbackMs = $__gcmPhaseSw.ElapsedMilliseconds
+[Console]::Error.WriteLine(""PHASES cleanup_ms=$__gcmCleanupMs off_ms=$__gcmOffMs readback_ms=$__gcmReadbackMs"")
+";
         var offBody = $@"
 $ErrorActionPreference = 'Stop'
 $ips = @({ips})
@@ -77,41 +92,72 @@ try {{
 }}
 'firewall_script_ok'
 ";
-        var script = BuildLocalhostCleanupScript() + offBody + BuildReadbackEmitScript();
+        var script = phaseSwInit
+            + BuildLocalhostCleanupScript()
+            + phaseAfterCleanup
+            + offBody
+            + phaseAfterOffBody
+            + BuildReadbackEmitScript()
+            + phaseAfterReadback;
         var raw = InternetPowerShellRunner.Run(script, budgetMs, stepName: "apply_merged_off");
-        var offBodyMs = InternetPowerShellRunner.LastRunWallMs;
         var psStartMs = InternetPowerShellRunner.LastPsStartMs;
-        long readbackMs = 0;
-        long verifyMs = 0;
-        string result;
-        if (raw.TrimStart().StartsWith("{", StringComparison.Ordinal))
-        {
-            var parseSw = Stopwatch.StartNew();
-            var readback = InternetFirewallOffApplyReadback.ParseFromPowerShellJson(raw, config);
-            readbackMs = parseSw.ElapsedMilliseconds;
-            var verifySw = Stopwatch.StartNew();
-            result = readback.ClassifyOff(requireVerifiedStateFile: false) ?? "applied";
-            verifyMs = verifySw.ElapsedMilliseconds;
-        }
-        else
-        {
-            var classifySw = Stopwatch.StartNew();
-            result = ClassifyMergedResult(raw, config, requireVerifiedStateFile: false, expectOn: false);
-            verifyMs = classifySw.ElapsedMilliseconds;
-        }
+        var phases = TryParseOffScriptPhases(InternetPowerShellRunner.LastRunStderr);
+        var verifySw = Stopwatch.StartNew();
+        var result = ClassifyMergedResult(raw, config, requireVerifiedStateFile: false, expectOn: false);
+        var verifyMs = verifySw.ElapsedMilliseconds;
         GuardWatchdogLog.Append(
             "GUARD_OFF_PHASES total_ms="
             + totalSw.ElapsedMilliseconds
-            + " cleanup_ms=0"
+            + " cleanup_ms="
+            + phases.cleanupMs
             + " off_body_ms="
-            + offBodyMs
+            + phases.offBodyMs
             + " readback_ms="
-            + readbackMs
+            + phases.readbackMs
             + " verify_ms="
             + verifyMs
             + " ps_start_ms="
             + psStartMs);
         return result;
+    }
+
+    private static (string cleanupMs, string offBodyMs, string readbackMs) TryParseOffScriptPhases(string stderr)
+    {
+        if (string.IsNullOrWhiteSpace(stderr))
+        {
+            return ("na", "na", "na");
+        }
+
+        foreach (var line in stderr.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (!line.StartsWith("PHASES ", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            string cleanup = "na";
+            string off = "na";
+            string readback = "na";
+            foreach (var part in line.Split(' '))
+            {
+                if (part.StartsWith("cleanup_ms=", StringComparison.Ordinal))
+                {
+                    cleanup = part.Substring("cleanup_ms=".Length);
+                }
+                else if (part.StartsWith("off_ms=", StringComparison.Ordinal))
+                {
+                    off = part.Substring("off_ms=".Length);
+                }
+                else if (part.StartsWith("readback_ms=", StringComparison.Ordinal))
+                {
+                    readback = part.Substring("readback_ms=".Length);
+                }
+            }
+
+            return (cleanup, off, readback);
+        }
+
+        return ("na", "na", "na");
     }
 
     private static string BuildLocalhostCleanupScript()

@@ -17,6 +17,7 @@ internal static class InternetPowerShellRunner
     internal static int ReconcileRunCallCountAtAbandon = -1;
     internal static long LastPsStartMs;
     internal static long LastRunWallMs;
+    internal static string LastRunStderr = "";
 
     internal static void SetReconcilePathThread(bool active) => ReconcilePathThread = active;
 
@@ -74,9 +75,10 @@ internal static class InternetPowerShellRunner
 
             var stdout = stdoutTask.GetAwaiter().GetResult();
             var stderr = stderrTask.GetAwaiter().GetResult();
+            LastRunStderr = stderr ?? "";
             if (proc.ExitCode != 0)
             {
-                var detail = string.IsNullOrWhiteSpace(stderr) ? stdout.Trim() : stderr.Trim();
+                var detail = string.IsNullOrWhiteSpace(LastRunStderr) ? stdout.Trim() : LastRunStderr.Trim();
                 if (string.IsNullOrWhiteSpace(detail))
                 {
                     detail = $"exit_{proc.ExitCode}";

@@ -952,9 +952,10 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
             try
             {
                 var replyBuf = new byte[256];
-                replyRead = client.Read(replyBuf, 0, replyBuf.Length);
+                using var readCts = new CancellationTokenSource(TimeSpan.FromSeconds(1));
+                replyRead = await client.ReadAsync(replyBuf, 0, replyBuf.Length, readCts.Token);
             }
-            catch (IOException)
+            catch (Exception)
             {
                 replyRead = 0;
             }
