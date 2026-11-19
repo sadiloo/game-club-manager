@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.ServiceProcess;
+using System.Windows.Forms;
 
 namespace GameClub.Shell.Shell;
 
@@ -28,6 +29,8 @@ public interface IShellNotificationSeam
     int NoAnswerStopCount { get; }
     void ResetCounts();
     void ShowBalloon(string title, string text);
+    string? LastUnexpectedStopTitle { get; }
+    string? LastUnexpectedStopBody { get; }
 }
 
 public interface IHttpProbeSeam
@@ -122,18 +125,22 @@ public sealed class ProductionNotificationSeam : IShellNotificationSeam
 {
     public int UnexpectedStopCount { get; private set; }
     public int NoAnswerStopCount { get; private set; }
+    public string? LastUnexpectedStopTitle { get; private set; }
+    public string? LastUnexpectedStopBody { get; private set; }
 
     public void ShowUnexpectedStop(bool noAnswer)
     {
         if (noAnswer)
         {
             NoAnswerStopCount++;
+            LastUnexpectedStopTitle = "سرور پاسخ نمی‌دهد";
+            LastUnexpectedStopBody = "از منوی کنار ساعت «توقف سرور» و بعد «شروع سرور» را بزنید.";
             try
             {
                 ShellTrayHost.CurrentNotifyIcon?.ShowBalloonTip(
                     5000,
-                    "\u200fسرور پاسخ نمی‌دهد",
-                    "\u200fاز منوی کنار ساعت «توقف سرور» و بعد «شروع سرور» را بزنید.",
+                    "\u200f" + LastUnexpectedStopTitle,
+                    "\u200f" + LastUnexpectedStopBody,
                     System.Windows.Forms.ToolTipIcon.Warning);
             }
             catch
@@ -144,12 +151,14 @@ public sealed class ProductionNotificationSeam : IShellNotificationSeam
         }
 
         UnexpectedStopCount++;
+        LastUnexpectedStopTitle = "سرور چک‌پوینت متوقف شد";
+        LastUnexpectedStopBody = "از منوی کنار ساعت «شروع سرور» را بزنید.";
         try
         {
             ShellTrayHost.CurrentNotifyIcon?.ShowBalloonTip(
                 5000,
-                "\u200fسرور چک‌پوینت متوقف شد",
-                "\u200fاز منوی کنار ساعت «شروع سرور» را بزنید.",
+                "\u200f" + LastUnexpectedStopTitle,
+                "\u200f" + LastUnexpectedStopBody,
                 System.Windows.Forms.ToolTipIcon.Warning);
         }
         catch
@@ -195,6 +204,13 @@ public sealed class ProductionHttpProbeSeam : IHttpProbeSeam
     }
 }
 
+public readonly record struct ShellMessageBoxRequest(
+    string Text,
+    string Caption,
+    MessageBoxButtons Buttons,
+    MessageBoxIcon Icon,
+    MessageBoxDefaultButton DefaultButton);
+
 public static class ShellSeams
 {
     public static IServiceControllerSeam Service { get; set; } = new ProductionServiceControllerSeam();
@@ -203,4 +219,32 @@ public static class ShellSeams
     public static Func<int>? ReadOpenSessionCount { get; set; }
     public static Func<LocalServerStatusDto?>? ReadLocalStatus { get; set; }
     public static bool TrayStopInProgress { get; set; }
+    public static Func<DateTime> UtcNow { get; set; } = () => DateTime.UtcNow;
+    public static Func<TimeSpan> SystemUptime { get; set; } = () => TimeSpan.FromMilliseconds(Environment.TickCount & int.MaxValue);
+    public static Func<string, bool>? MaintenanceFlagExists { get; set; }
+    public static Func<ShellMessageBoxRequest, DialogResult>? MessageBoxHandler { get; set; }
+    public static ShellMessageBoxRequest? LastMessageBoxRequest { get; set; }
+
+    public static DialogResult ShowMessageBox(
+        string text,
+        string caption,
+        MessageBoxButtons buttons,
+        MessageBoxIcon icon,
+        MessageBoxDefaultButton defaultButton = MessageBoxDefaultButton.Button1)
+    {
+        var request = new ShellMessageBoxRequest(text, caption, buttons, icon, defaultButton);
+        LastMessageBoxRequest = request;
+        if (MessageBoxHandler is not null)
+        {
+            return MessageBoxHandler(request);
+        }
+
+        return MessageBox.Show(
+            text,
+            caption,
+            buttons,
+            icon,
+            defaultButton,
+            MessageBoxOptions.RtlReading | MessageBoxOptions.RightAlign);
+    }
 }

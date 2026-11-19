@@ -1,6 +1,5 @@
 using System.Net;
 using System.Net.Http.Json;
-using GameClub.Server.Controllers;
 using GameClub.Server.Hosting;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -11,11 +10,16 @@ public sealed class LocalServerStatusEndpointTests(GameClubWebApplicationFactory
     [Fact]
     public async Task local_server_status_returns_404_off_loopback()
     {
-        Assert.False(LocalOpenSessionsController.IsLoopbackAddress(System.Net.IPAddress.Parse("203.0.113.7")));
-        var client = factory.CreateClient();
-        client.DefaultRequestHeaders.Add("X-Api-Key", "dev-key");
-        var ok = await client.GetAsync("/api/local/server-status");
-        Assert.Equal(HttpStatusCode.OK, ok.StatusCode);
+        await using var isolated = new GameClubWebApplicationFactory
+        {
+            SimulatedRemoteIpAddress = IPAddress.Parse("203.0.113.7"),
+        };
+        var client = isolated.CreateClient();
+        var response = await client.GetAsync("/api/local/server-status");
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        var body = await response.Content.ReadAsStringAsync();
+        Assert.DoesNotContain("startedAtUtc", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("dbOk", body, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -34,6 +38,23 @@ public sealed class LocalServerStatusEndpointTests(GameClubWebApplicationFactory
         Assert.NotNull(body);
         Assert.Equal(DateTimeOffset.Parse("2026-03-01T08:00:00Z"), body!.StartedAtUtc);
         Assert.True(body.DbOk);
+    }
+
+    [Fact]
+    public async Task local_server_status_db_ok_false_when_database_unreachable()
+    {
+        await using var isolated = new GameClubWebApplicationFactory
+        {
+            SkipDbMigrateOnStartup = true,
+            ConnectionStringOverride =
+                "Host=203.0.113.1;Port=9;Database=gameclub_unreachable;Username=postgres;Password=postgres;Timeout=1;Command Timeout=1",
+        };
+        var client = isolated.CreateClient();
+        var response = await client.GetAsync("/api/local/server-status");
+        response.EnsureSuccessStatusCode();
+        var body = await response.Content.ReadFromJsonAsync<LocalStatusDto>();
+        Assert.NotNull(body);
+        Assert.False(body!.DbOk);
     }
 
     private sealed record LocalStatusDto(DateTimeOffset? StartedAtUtc, bool DbOk);

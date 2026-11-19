@@ -11,12 +11,22 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
+using System.Net;
 
 namespace GameClub.Server.Tests;
 
 public class GameClubWebApplicationFactory : WebApplicationFactory<Program>
 {
     public MutableClock Clock { get; } = new(DateTimeOffset.UtcNow);
+
+    /// <summary>When set, all requests appear to come from this remote address (loopback tests).</summary>
+    public IPAddress? SimulatedRemoteIpAddress { get; set; }
+
+    /// <summary>Overrides the PostgreSQL connection string for this host only.</summary>
+    public string? ConnectionStringOverride { get; set; }
+
+    /// <summary>Skip EF migrate/seed on host startup (probe-only hosts).</summary>
+    public bool SkipDbMigrateOnStartup { get; set; }
 
     /// <summary>
     /// When false (default), the test host does not run periodic dead-PC sweeps.
@@ -46,12 +56,16 @@ public class GameClubWebApplicationFactory : WebApplicationFactory<Program>
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
-        ConnectionString = Environment.GetEnvironmentVariable("GAMECLUB_TEST_DATABASE")
+        ConnectionString = ConnectionStringOverride
+            ?? Environment.GetEnvironmentVariable("GAMECLUB_TEST_DATABASE")
             ?? Environment.GetEnvironmentVariable("GAMECLUB_DATABASE")
             ?? "Host=localhost;Database=gameclub_test;Username=gameclub;Password=gameclub";
 
         Environment.SetEnvironmentVariable("GAMECLUB_DATABASE", ConnectionString);
         Environment.SetEnvironmentVariable("GAMECLUB_API_KEY", "dev-key");
+        Environment.SetEnvironmentVariable(
+            "GAMECLUB_SKIP_DB_MIGRATE",
+            SkipDbMigrateOnStartup ? "1" : null);
         Environment.SetEnvironmentVariable("DeadPc__SweepIntervalSeconds", "1");
 
         builder.UseSetting("ConnectionStrings:Default", ConnectionString);
@@ -65,19 +79,30 @@ public class GameClubWebApplicationFactory : WebApplicationFactory<Program>
             services.RemoveAll<IHostedService>();
             services.AddHostedService<TestDeadPcSweepBackgroundService>();
             SaveTitleSecondSaveFaultInjectionRegistration.Register(services);
+            if (SimulatedRemoteIpAddress is not null)
+            {
+                services.AddSingleton<IStartupFilter>(new NonLoopbackRemoteIpStartupFilter(SimulatedRemoteIpAddress));
+            }
         });
     }
 
     protected override IHost CreateHost(IHostBuilder builder)
     {
-        var options = new DbContextOptionsBuilder<AppDbContext>().UseNpgsql(ConnectionString).Options;
-        using (var bootstrap = new AppDbContext(options))
+        if (!SkipDbMigrateOnStartup)
         {
-            bootstrap.Database.EnsureDeleted();
+            var options = new DbContextOptionsBuilder<AppDbContext>().UseNpgsql(ConnectionString).Options;
+            using (var bootstrap = new AppDbContext(options))
+            {
+                bootstrap.Database.EnsureDeleted();
+            }
         }
 
         var host = base.CreateHost(builder);
-        SeedDatabase(host);
+        if (!SkipDbMigrateOnStartup)
+        {
+            SeedDatabase(host);
+        }
+
         return host;
     }
 

@@ -38,13 +38,12 @@ internal static class ServerControlProgram
         var count = TryReadOpenSessions(out var readFailed);
         if (readFailed)
         {
-            var d2 = MessageBox.Show(
+            var d2 = ShellSeams.ShowMessageBox(
                 "وضعیت جلسه‌های باز معلوم نیست. باز هم سرور متوقف شود؟",
                 "توقف سرور",
                 MessageBoxButtons.YesNo,
                 MessageBoxIcon.Warning,
-                MessageBoxDefaultButton.Button2,
-                MessageBoxOptions.RtlReading | MessageBoxOptions.RightAlign);
+                MessageBoxDefaultButton.Button2);
             if (d2 != DialogResult.Yes)
             {
                 return 1;
@@ -53,13 +52,12 @@ internal static class ServerControlProgram
         else if (count > 0)
         {
             var digit = ServerStatePoller.ToPersianDigits(count.ToString());
-            var d1 = MessageBox.Show(
+            var d1 = ShellSeams.ShowMessageBox(
                 $"{digit} جلسهٔ باز در جریان است. با توقف سرور، پنل اپراتور روی این رایانه و روی گوشی‌ها تا روشن شدن دوبارهٔ سرور باز نمی‌شود.",
                 "توقف سرور",
                 MessageBoxButtons.OKCancel,
                 MessageBoxIcon.Warning,
-                MessageBoxDefaultButton.Button2,
-                MessageBoxOptions.RtlReading | MessageBoxOptions.RightAlign);
+                MessageBoxDefaultButton.Button2);
             if (d1 != DialogResult.OK)
             {
                 return 1;
@@ -68,13 +66,16 @@ internal static class ServerControlProgram
 
         try
         {
-            using var sc = new ServiceController(ShellPaths.ServiceName);
-            sc.Stop();
-            try
+            if (ShellSeams.Service.ServiceExists)
             {
-                sc.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(60));
+                ShellSeams.Service.Stop();
             }
-            catch
+            else
+            {
+                return 2;
+            }
+
+            if (!ShellSeams.Service.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(60)))
             {
                 return 4;
             }
@@ -91,25 +92,29 @@ internal static class ServerControlProgram
     {
         if (IsPortListening(5000))
         {
-            MessageBox.Show(
+            ShellSeams.ShowMessageBox(
                 "یک برنامهٔ دیگر روی این رایانه درگاه ۵۰۰۰ را گرفته و سرور چک‌پوینت نمی‌تواند روشن شود. آن برنامه را ببندید و از منوی آیکن چک‌پوینت «شروع سرور» را بزنید.",
                 "برنامهٔ دیگری جای سرور را گرفته است",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Warning,
-                MessageBoxDefaultButton.Button1,
-                MessageBoxOptions.RtlReading | MessageBoxOptions.RightAlign);
+                MessageBoxDefaultButton.Button1);
             return 3;
         }
 
         try
         {
-            using var sc = new ServiceController(ShellPaths.ServiceName);
-            sc.Start();
-            var deadline = DateTime.UtcNow.AddSeconds(90);
-            while (DateTime.UtcNow < deadline)
+            if (!ShellSeams.Service.ServiceExists)
             {
-                sc.Refresh();
-                if (sc.Status == ServiceControllerStatus.Running && LocalServerStatusClient.TryRead(out var local) && local!.DbOk)
+                return 2;
+            }
+
+            ShellSeams.Service.Start();
+            var deadline = ShellSeams.UtcNow().AddSeconds(90);
+            while (ShellSeams.UtcNow() < deadline)
+            {
+                if (ShellSeams.Service.Status == ServiceControllerStatus.Running
+                    && LocalServerStatusClient.TryRead(out var local)
+                    && local!.DbOk)
                 {
                     return 0;
                 }

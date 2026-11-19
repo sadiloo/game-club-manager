@@ -25,4 +25,6 @@ public sealed class MutableClock : IClock
         var tehran = GameClub.Billing.TehranTime.At(year, month, day, hour, minute, second);
         _utcNow = tehran.ToUniversalTime();
     }
+
+    public void Advance(TimeSpan delta) => SetUtc(UtcNow + delta);
 }

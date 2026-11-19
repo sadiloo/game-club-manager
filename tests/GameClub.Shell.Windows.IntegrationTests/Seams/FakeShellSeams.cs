@@ -19,10 +19,23 @@ internal sealed class FakeNotificationSeam : IShellNotificationSeam
 {
     public int UnexpectedStopCount { get; private set; }
     public int NoAnswerStopCount { get; private set; }
+    public string? LastUnexpectedStopTitle { get; private set; }
+    public string? LastUnexpectedStopBody { get; private set; }
+
     public void ShowUnexpectedStop(bool noAnswer)
     {
-        if (noAnswer) NoAnswerStopCount++;
-        else UnexpectedStopCount++;
+        if (noAnswer)
+        {
+            NoAnswerStopCount++;
+            LastUnexpectedStopTitle = "سرور پاسخ نمی‌دهد";
+            LastUnexpectedStopBody = "از منوی کنار ساعت «توقف سرور» و بعد «شروع سرور» را بزنید.";
+        }
+        else
+        {
+            UnexpectedStopCount++;
+            LastUnexpectedStopTitle = "سرور چک‌پوینت متوقف شد";
+            LastUnexpectedStopBody = "از منوی کنار ساعت «شروع سرور» را بزنید.";
+        }
     }
 
     public void ResetCounts()
@@ -50,6 +63,19 @@ internal static class FakeShellSeams
     public static FakeNotificationSeam Notifications { get; } = new();
     public static FakeHttpSeam Http { get; } = new();
 
+    public static void RestoreProduction()
+    {
+        ShellSeams.Service = new ProductionServiceControllerSeam();
+        ShellSeams.Notifications = new ProductionNotificationSeam();
+        ShellSeams.HttpProbe = new ProductionHttpProbeSeam();
+        ShellSeams.ReadLocalStatus = null;
+        ShellSeams.ReadOpenSessionCount = null;
+        ShellSeams.MessageBoxHandler = null;
+        ShellSeams.MaintenanceFlagExists = null;
+        ShellSeams.UtcNow = () => DateTime.UtcNow;
+        ShellSeams.SystemUptime = () => TimeSpan.FromMilliseconds(Environment.TickCount & int.MaxValue);
+    }
+
     public static void Install()
     {
         ShellSeams.Service = Service;
@@ -63,6 +89,11 @@ internal static class FakeShellSeams
         Notifications.ResetCounts();
         Service.Status = ServiceControllerStatus.Running;
         Http.Answers = true;
+        ShellSeams.UtcNow = () => DateTime.UtcNow;
+        ShellSeams.SystemUptime = () => TimeSpan.FromMilliseconds(Environment.TickCount & int.MaxValue);
+        ShellSeams.MaintenanceFlagExists = null;
+        ShellSeams.MessageBoxHandler = null;
+        ShellSeams.ReadOpenSessionCount = null;
     }
 }
 #endif

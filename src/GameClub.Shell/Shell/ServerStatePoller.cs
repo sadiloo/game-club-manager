@@ -33,7 +33,6 @@ internal sealed class ServerStatePoller : IDisposable
     private bool _wasServiceRunningClass;
     private bool _armedForUnexpectedToast = true;
     private DateTime _noAnswerSinceUtc = DateTime.MinValue;
-    private DateTime _bootUtc = DateTime.UtcNow;
 
     public event Action<ServerStateSnapshot>? Changed;
 
@@ -72,6 +71,18 @@ internal sealed class ServerStatePoller : IDisposable
 
     private static bool MaintenanceFlagPresent()
     {
+        if (ShellSeams.MaintenanceFlagExists is not null)
+        {
+            try
+            {
+                return ShellSeams.MaintenanceFlagExists(ShellPaths.ProgramDataLogs);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         try
         {
             return File.Exists(Path.Combine(ShellPaths.ProgramDataLogs, "maintenance.flag"));
@@ -81,6 +92,8 @@ internal sealed class ServerStatePoller : IDisposable
             return false;
         }
     }
+
+    internal ServerStateSnapshot BuildSnapshotForTests() => BuildSnapshot();
 
     private ServerStateSnapshot BuildSnapshot()
     {
@@ -144,10 +157,10 @@ internal sealed class ServerStatePoller : IDisposable
 
         if (_noAnswerSinceUtc == DateTime.MinValue)
         {
-            _noAnswerSinceUtc = DateTime.UtcNow;
+            _noAnswerSinceUtc = ShellSeams.UtcNow();
         }
 
-        var elapsed = DateTime.UtcNow - _noAnswerSinceUtc;
+        var elapsed = ShellSeams.UtcNow() - _noAnswerSinceUtc;
         if (elapsed < TimeSpan.FromSeconds(90))
         {
             return Yellow(ShellServerVisualState.Starting, "سرور: بدون پاسخ", "سرور: در حال روشن/خاموش شدن", operatorAnswers: false);
@@ -160,7 +173,7 @@ internal sealed class ServerStatePoller : IDisposable
     {
         try
         {
-            var uptime = TimeSpan.FromMilliseconds(Environment.TickCount);
+            var uptime = ShellSeams.SystemUptime();
             return uptime < TimeSpan.FromMinutes(5);
         }
         catch
@@ -177,7 +190,7 @@ internal sealed class ServerStatePoller : IDisposable
         }
 
         var tehran = TimeZoneInfo.ConvertTime(startedUtc.Value, GetTehranZone());
-        var today = TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, GetTehranZone()).Date;
+        var today = TimeZoneInfo.ConvertTime(ShellSeams.UtcNow(), GetTehranZone()).Date;
         var startDate = tehran.Date;
         var hm = ToPersianDigits(tehran.ToString("HH:mm", CultureInfo.InvariantCulture));
         if (startDate == today)

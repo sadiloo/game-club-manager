@@ -73,6 +73,9 @@ internal static class WindowPlacementStore
         }
     }
 
+    internal static (double left, double top) ClampPositionForTests(double left, double top, double width, double height)
+        => ClampToWorkingArea(left, top, width, height);
+
     private static (double left, double top) ClampToWorkingArea(double left, double top, double width, double height)
     {
         var screen = Screen.FromPoint(new System.Drawing.Point((int)left, (int)top));
