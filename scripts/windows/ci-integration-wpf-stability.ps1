@@ -138,6 +138,8 @@ try {
 
     $wpfFilter = 'FullyQualifiedName~wpf_remaining_time_matches_funded_session_within_one_tick'
     for ($run = 1; $run -le $runs; $run++) {
+        $stabMs = [long]([datetimeoffset]::UtcNow.ToUnixTimeMilliseconds())
+        Write-Host "STAB_STEP utc_ms=$stabMs step=run_begin run=$run/$runs"
         Write-Host "WPF stability run $run/$runs"
         $env:WPF_STABILITY_LOGIN = "fund" + [guid]::NewGuid().ToString("N").Substring(0, 8)
         $runLog = Join-Path $logDir ("wpf-stability-run-" + $run + ".log")
@@ -157,10 +159,12 @@ try {
             Stop-ServerTree -processId $wpfProc.Id
             throw "WPF stability run $run timed out after 240s"
         }
+        Copy-KioskDiagnosticLogs -RunNumber $run
         if ($wpfProc.ExitCode -ne 0) {
-            Copy-KioskDiagnosticLogs -RunNumber $run
             throw "WPF stability run $run failed with exit $($wpfProc.ExitCode); see $serverErr and $runLog"
         }
+        $stabEndMs = [long]([datetimeoffset]::UtcNow.ToUnixTimeMilliseconds())
+        Write-Host "STAB_STEP utc_ms=$stabEndMs step=run_end run=$run/$runs exit=0"
         Write-Host "WPF_STABILITY_PROGRESS $run/$runs"
     }
     Write-Host "WPF_STABILITY_COMPLETED $runs/$runs"

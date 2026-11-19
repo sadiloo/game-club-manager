@@ -36,7 +36,9 @@ public sealed class WindowsPcInternetApplyFailureLiveTests
             return;
         }
 
+        L17StepLog.Write("test_begin", "live_server_pc_internet_guard_forced_apply_failure");
         LiveDatabaseResetInvoker.ResetViaHarnessTest();
+        L17StepLog.Write("orphan_cleanup", "phase=before_l17_live");
         CiGuardKioskProcessCleanup.KillOrphanedGuardAndKiosk("before_l17_live");
 
         var apiKey = Environment.GetEnvironmentVariable("GAMECLUB_API_KEY") ?? "ci-test-key";
@@ -123,8 +125,10 @@ public sealed class WindowsPcInternetApplyFailureLiveTests
             Process probeGuard = null;
             try
             {
+                L17StepLog.Write("guard_start_begin");
                 L17GuardProbeSupport.LogPreflight();
                 probeGuard = GuardProcessStart.StartGuard();
+                L17StepLog.Write("guard_start_end", $"pid={probeGuard.Id} pipe={GuardInternetClient.PipeName}");
                 Console.WriteLine(
                     $"L17_PROBE_GUARD_STARTED pid={probeGuard.Id} pipe_name={GuardInternetClient.PipeName}");
                 await L17GuardProbeSupport.WaitForPipeReadyAsync(TimeSpan.FromSeconds(90), default);
@@ -141,13 +145,16 @@ public sealed class WindowsPcInternetApplyFailureLiveTests
             {
                 if (probeGuard is not null)
                 {
+                    L17StepLog.Write("guard_kill_begin", $"pid={probeGuard.Id}");
                     GuardProcessLifecycle.StopGuardProcessTree(probeGuard, TimeSpan.FromSeconds(15));
+                    L17StepLog.Write("guard_kill_end", $"pid={probeGuard.Id} exited={probeGuard.HasExited}");
                     probeGuard.Dispose();
                 }
 
                 L17GuardProbeSupport.RestoreFirewallAfterProbeGuard(config);
             }
 
+            L17StepLog.Write("harness_pipe_start_begin");
             pipe = new Thread(() => new InternetPipeServer(config, new FaultInjectingInternetFirewallApplier()).Run(pipeCts.Token))
             {
                 IsBackground = true,
@@ -155,6 +162,7 @@ public sealed class WindowsPcInternetApplyFailureLiveTests
             };
             pipe.Start();
             await Task.Delay(500);
+            L17StepLog.Write("harness_pipe_start_end");
 
             var kioskHttp = new HttpClient { BaseAddress = api.BaseAddress };
             kioskHttp.DefaultRequestHeaders.Add("X-Device-Id", deviceId.ToString());
@@ -263,7 +271,9 @@ public sealed class WindowsPcInternetApplyFailureLiveTests
                 await runtime.DisposeAsync();
             }
 
+            L17StepLog.Write("orphan_cleanup", "phase=after_l17_live");
             CiGuardKioskProcessCleanup.KillOrphanedGuardAndKiosk("after_l17_live");
+            L17StepLog.Write("test_end");
         }
     }
 

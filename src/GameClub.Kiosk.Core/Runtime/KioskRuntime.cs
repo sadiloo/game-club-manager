@@ -44,6 +44,8 @@ public sealed class KioskRuntime : IAsyncDisposable
     public Guid DeviceId { get; private set; }
     public string DeviceKey { get; private set; } = "";
 
+    public Guid BoundSessionId => _sessionId;
+
     public event Action<KioskHeartbeatAck>? HeartbeatAcknowledged;
 
     public event Action? HeartbeatTransportFailed;

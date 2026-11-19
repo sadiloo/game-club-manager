@@ -2,6 +2,7 @@
 #nullable disable
 using System;
 using System.Diagnostics;
+using GameClub.Kiosk.Windows.IntegrationTests.Server;
 
 namespace GameClub.Kiosk.Windows.IntegrationTests.Guard;
 
@@ -16,6 +17,7 @@ internal static class GuardProcessLifecycle
 
         var rootPid = guard.Id;
         var waitMs = (int)Math.Max(1, timeout.TotalMilliseconds);
+        L17StepLog.Write("process_tree_kill_begin", $"rootPid={rootPid} wait_ms={waitMs}");
         try
         {
             using var killer = Process.Start(new ProcessStartInfo("taskkill", $"/T /F /PID {rootPid}")
@@ -79,6 +81,8 @@ internal static class GuardProcessLifecycle
                 }
             }
         }
+
+        L17StepLog.Write("process_tree_kill_end", $"rootPid={rootPid} exited={guard.HasExited}");
     }
 }
 #endif

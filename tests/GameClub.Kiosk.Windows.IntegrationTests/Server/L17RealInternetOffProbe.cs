@@ -27,14 +27,22 @@ internal static class L17RealInternetOffProbe
         string stationId,
         CancellationToken ct)
     {
+        L17StepLog.Write("probe_run_begin", $"stationId={stationId}");
         var applier = new InternetFirewallApplier();
         try
         {
+            L17StepLog.Write("probe_seed_desired_off_begin", $"stationId={stationId}");
             await SeedStationInternetDesiredOffAsync(stationId, ct).ConfigureAwait(false);
+            L17StepLog.Write("probe_seed_desired_off_end", $"stationId={stationId}");
+            L17StepLog.Write("probe_fetch_signed_command_begin");
             var command = await FetchSignedInternetOffAsync(hubUri, deviceId, deviceKey, ct).ConfigureAwait(false);
+            L17StepLog.Write("probe_fetch_signed_command_end", $"version={command.Payload.Version}");
             var client = new GuardInternetClient();
+            L17StepLog.Write("probe_apply_begin");
             var raw = await client.ApplyAsync(command, ct).ConfigureAwait(false);
+            L17StepLog.Write("probe_apply_end");
             var applyResult = ParsePipeApplyResult(raw);
+            L17StepLog.Write("probe_readback_begin");
             InternetFirewallOffDiagnostics.WriteL17OffApplyDiagnostics(config, Console.WriteLine);
             var ruleCount = ReadActiveStoreGuardRuleCount();
             var localhostRuleCount = ReadLocalhostStoreGuardRuleCount();
@@ -47,10 +55,13 @@ internal static class L17RealInternetOffProbe
             Assert.True(ruleCount >= 1, "real internet-off probe expected guard_rule_count >= 1");
             Assert.True(statePresent, "real internet-off probe expected guard state file present");
             Assert.Equal(0, localhostRuleCount);
+            L17StepLog.Write("probe_readback_end", $"apply_result={applyResult} rule_count={ruleCount}");
         }
         finally
         {
+            L17StepLog.Write("probe_restore_firewall_on");
             applier.Apply(config, on: true);
+            L17StepLog.Write("probe_run_end");
         }
     }
 
@@ -81,18 +92,22 @@ internal static class L17RealInternetOffProbe
         string deviceKey,
         CancellationToken ct)
     {
+        L17StepLog.Write("probe_hub_connect_begin");
         var hub = KioskConnectionFactory.Create(hubUri, deviceId.ToString(), deviceKey, legacyWindows: true);
         await hub.StartAsync(ct).ConfigureAwait(false);
+        L17StepLog.Write("probe_hub_connect_end");
         try
         {
             for (var attempt = 0; attempt < 12; attempt++)
             {
+                L17StepLog.Write("probe_hub_heartbeat_attempt", $"attempt={attempt}");
                 var ack = await hub.InvokeAsync<KioskHeartbeatAck>(
                     "Heartbeat",
                     new KioskHeartbeatRequest { SessionId = null, ClientMonotonicMs = attempt * 1_000 },
                     ct).ConfigureAwait(false);
                 if (ack.Internet is not null && ack.Internet.Payload is not null && !ack.Internet.Payload.On)
                 {
+                    L17StepLog.Write("probe_hub_internet_off_received", $"attempt={attempt}");
                     return ack.Internet;
                 }
 
@@ -101,6 +116,7 @@ internal static class L17RealInternetOffProbe
         }
         finally
         {
+            L17StepLog.Write("probe_hub_disconnect");
             await hub.DisposeAsync().ConfigureAwait(false);
         }
 

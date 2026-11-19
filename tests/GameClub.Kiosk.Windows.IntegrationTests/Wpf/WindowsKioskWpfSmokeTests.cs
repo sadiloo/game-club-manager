@@ -12,6 +12,7 @@ using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using GameClub.Billing;
 using GameClub.Kiosk.Windows.IntegrationTests;
+using GameClub.Kiosk.Windows.IntegrationTests.Server;
 using Xunit;
 
 namespace GameClub.Kiosk.Windows.IntegrationTests.Wpf;
@@ -89,6 +90,7 @@ public sealed class WindowsKioskWpfSmokeTests
     [Fact]
     public void wpf_remaining_time_matches_funded_session_within_one_tick()
     {
+        StabStepLog.Write("within_one_tick_begin");
         var setupError = (Exception)null;
         var staSetup = new Thread(() =>
         {
@@ -192,6 +194,7 @@ public sealed class WindowsKioskWpfSmokeTests
             int.Parse(match.Groups[2].Value, CultureInfo.InvariantCulture),
             int.Parse(match.Groups[3].Value, CultureInfo.InvariantCulture)).TotalSeconds;
         Assert.InRange(displayedSeconds, expectedSeconds - 1, expectedSeconds + 1);
+        StabStepLog.Write("within_one_tick_end", $"displayed_seconds={displayedSeconds}");
     }
 
     [Fact]

@@ -322,7 +322,9 @@ function Invoke-DotNetWithWatchdog {
         [string]$PhaseName,
         [string[]]$ArgumentList,
         [int]$PhaseCapMs,
-        [string]$DiagLogPath = ""
+        [string]$DiagLogPath = "",
+        [string]$StdOutLog = "",
+        [string]$StdErrLog = ""
     )
     $timeoutMs = Get-EffectiveTimeoutMs -phaseCapMs $PhaseCapMs
     if ($timeoutMs -le 0) {
@@ -339,7 +341,20 @@ function Invoke-DotNetWithWatchdog {
     if (-not [string]::IsNullOrWhiteSpace($DiagLogPath)) {
         $dotnetArgs = $ArgumentList + @("--diag:$DiagLogPath")
     }
-    $proc = Start-Process -FilePath "dotnet" -ArgumentList $dotnetArgs -PassThru -NoNewWindow -WorkingDirectory $repoRoot
+    $startParams = @{
+        FilePath     = "dotnet"
+        ArgumentList = $dotnetArgs
+        PassThru     = $true
+        NoNewWindow  = $true
+        WorkingDirectory = $repoRoot
+    }
+    if (-not [string]::IsNullOrWhiteSpace($StdOutLog)) {
+        $startParams["RedirectStandardOutput"] = $StdOutLog
+    }
+    if (-not [string]::IsNullOrWhiteSpace($StdErrLog)) {
+        $startParams["RedirectStandardError"] = $StdErrLog
+    }
+    $proc = Start-Process @startParams
     $null = $proc.Handle
     $exited = $proc.WaitForExit($timeoutMs)
     if (-not $exited) {
@@ -581,7 +596,11 @@ try {
         "--results-directory", $artifactDir,
         "--logger", "console;verbosity=detailed"
     )
-    $liveNet48Exit = Invoke-DotNetWithWatchdog -PhaseName "dotnet-test-net48-live-checkpoint" -ArgumentList $liveNet48Args -PhaseCapMs (6 * 60 * 1000)
+    $liveNet48Out = Join-Path $logDir "live-checkpoint-net48-console.log"
+    $liveNet48Err = Join-Path $logDir "live-checkpoint-net48-console-err.log"
+    $liveNet48Exit = Invoke-DotNetWithWatchdog -PhaseName "dotnet-test-net48-live-checkpoint" -ArgumentList $liveNet48Args -PhaseCapMs (6 * 60 * 1000) -StdOutLog $liveNet48Out -StdErrLog $liveNet48Err
+    Copy-Item $serverLog (Join-Path $logDir "live-checkpoint-server-out.log") -Force -ErrorAction SilentlyContinue
+    Copy-Item $serverErr (Join-Path $logDir "live-checkpoint-server-err.log") -Force -ErrorAction SilentlyContinue
     Publish-ServerLeaseBuildEvidence -phaseName "dotnet-test-net48-live-checkpoint" -TrxPath (Join-Path $artifactDir "kiosk-windows-live-checkpoint-net48.trx")
     if ($liveNet48Exit -ne 0 -and $script:FinalExitCode -eq 0) { $script:FinalExitCode = $liveNet48Exit }
     if ($liveNet48Exit -eq 124) { throw "live checkpoint net48 watchdog" }
