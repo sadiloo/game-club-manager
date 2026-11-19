@@ -536,10 +536,7 @@ internal sealed record G2BillingEvidence(
             : $"{ordered[0]:O}..{ordered[^1]:O} ({ordered.Count} rows)";
         var measuredSeconds = Math.Max(0, oraclePoweredSpanSeconds);
         var expectedMinutes = (int)Math.Floor(measuredSeconds / 60.0);
-        var expectedCollectible = GameClub.Billing.MoneyMath.ChargeForMinutes(
-            hourlyToman,
-            expectedMinutes,
-            GameClub.Billing.RateRemainderMode.Nearest);
+        var expectedCollectible = expectedMinutes * hourlyToman / 60;
         var minuteBuckets = ordered
             .Select(t => new DateTime(t.Year, t.Month, t.Day, t.Hour, t.Minute, 0, DateTimeKind.Utc))
             .ToList();
