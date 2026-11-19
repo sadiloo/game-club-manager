@@ -529,6 +529,146 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
         }
     }
 
+    [Fact(Timeout = 30_000)]
+    public async Task internet_pipe_line_framing_status_within_2s_while_client_pipe_stays_open()
+    {
+        RequireWindowsAdmin();
+        using var rsa = RSA.Create(2048);
+        var config = BuildConfig(ExportPublicKeyPem(rsa));
+        CancellationTokenSource cts = null;
+        Thread pipeThread = null;
+        try
+        {
+            cts = new CancellationTokenSource();
+            pipeThread = new Thread(() => new InternetPipeServer(config).Run(cts.Token)) { IsBackground = true };
+            pipeThread.Start();
+            await Task.Delay(500);
+            var sw = Stopwatch.StartNew();
+            var status = await new GuardInternetClient().GetStatusAsync(default);
+            sw.Stop();
+            Assert.True(sw.ElapsedMilliseconds < 2_000, $"status took {sw.ElapsedMilliseconds}ms");
+            Assert.False(string.IsNullOrWhiteSpace(status));
+        }
+        finally
+        {
+            cts?.Cancel();
+            pipeThread?.Join(TimeSpan.FromSeconds(5));
+        }
+    }
+
+    [Fact(Timeout = 60_000)]
+    public async Task internet_pipe_line_framing_apply_within_2s_while_client_pipe_stays_open()
+    {
+        RequireWindowsAdmin();
+        using var rsa = RSA.Create(2048);
+        var config = BuildConfig(ExportPublicKeyPem(rsa));
+        CancellationTokenSource cts = null;
+        Thread pipeThread = null;
+        try
+        {
+            cts = new CancellationTokenSource();
+            pipeThread = new Thread(() => new InternetPipeServer(config, new FastApplyInternetFirewallApplier()).Run(cts.Token))
+            {
+                IsBackground = true,
+            };
+            pipeThread.Start();
+            await Task.Delay(500);
+            var cmd = Sign(rsa, new InternetCommandPayload
+            {
+                StationId = config.StationId,
+                Epoch = Guid.NewGuid(),
+                Version = 1,
+                On = true,
+                IssuedAtUtc = DateTime.UtcNow,
+            });
+            var sw = Stopwatch.StartNew();
+            var body = await new GuardInternetClient().ApplyAsync(cmd);
+            sw.Stop();
+            Assert.True(sw.ElapsedMilliseconds < 2_000, $"apply took {sw.ElapsedMilliseconds}ms");
+            Assert.False(string.IsNullOrWhiteSpace(body));
+        }
+        finally
+        {
+            cts?.Cancel();
+            pipeThread?.Join(TimeSpan.FromSeconds(5));
+            new InternetFirewallApplier().RunResetScript();
+        }
+    }
+
+    [Fact(Timeout = 30_000)]
+    public async Task internet_pipe_closes_connection_when_client_never_sends_newline_before_read_timeout()
+    {
+        RequireWindowsAdmin();
+        var priorRead = Environment.GetEnvironmentVariable("CHECKPOINT_INTERNET_PIPE_READ_MS");
+        Environment.SetEnvironmentVariable("CHECKPOINT_INTERNET_PIPE_READ_MS", "500");
+        var logPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+            "Checkpoint",
+            "guard",
+            "watchdog.log");
+        CancellationTokenSource cts = null;
+        Thread pipeThread = null;
+        try
+        {
+            using var rsa = RSA.Create(2048);
+            var config = BuildConfig(ExportPublicKeyPem(rsa));
+            cts = new CancellationTokenSource();
+            pipeThread = new Thread(() => new InternetPipeServer(config).Run(cts.Token)) { IsBackground = true };
+            pipeThread.Start();
+            await Task.Delay(500);
+            using var client = new NamedPipeClientStream(".", GuardInternetClient.PipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+            client.Connect(3_000);
+            var partial = Encoding.UTF8.GetBytes("{\"verb\":\"status\"}");
+            client.Write(partial, 0, partial.Length);
+            client.Flush();
+            await Task.Delay(2_000);
+            Assert.True(File.Exists(logPath));
+            Assert.Contains("pipe_read_timeout", File.ReadAllText(logPath), StringComparison.Ordinal);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("CHECKPOINT_INTERNET_PIPE_READ_MS", priorRead);
+            cts?.Cancel();
+            pipeThread?.Join(TimeSpan.FromSeconds(5));
+        }
+    }
+
+    [Fact(Timeout = 30_000)]
+    public async Task internet_pipe_rejects_oversize_request_line()
+    {
+        RequireWindowsAdmin();
+        var logPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+            "Checkpoint",
+            "guard",
+            "watchdog.log");
+        CancellationTokenSource cts = null;
+        Thread pipeThread = null;
+        try
+        {
+            using var rsa = RSA.Create(2048);
+            var config = BuildConfig(ExportPublicKeyPem(rsa));
+            cts = new CancellationTokenSource();
+            pipeThread = new Thread(() => new InternetPipeServer(config).Run(cts.Token)) { IsBackground = true };
+            pipeThread.Start();
+            await Task.Delay(500);
+            using var client = new NamedPipeClientStream(".", GuardInternetClient.PipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+            client.Connect(3_000);
+            var oversize = new string('a', GuardInternetPipeProtocol.MaxLineBytes + 1);
+            var line = Encoding.UTF8.GetBytes(oversize + "\n");
+            client.Write(line, 0, line.Length);
+            client.Flush();
+            await Task.Delay(1_000);
+            Assert.True(File.Exists(logPath));
+            Assert.Contains("pipe_line_oversize", File.ReadAllText(logPath), StringComparison.Ordinal);
+        }
+        finally
+        {
+            cts?.Cancel();
+            pipeThread?.Join(TimeSpan.FromSeconds(5));
+        }
+    }
+
     private static SignedInternetCommand Sign(RSA rsa, InternetCommandPayload payload)
     {
         var canonical = LeaseVerifier.CanonicalJson(payload);

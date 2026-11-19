@@ -65,18 +65,16 @@ public sealed class GuardInternetClient
             await Task.CompletedTask;
 #endif
             ObservabilityLogFormats.WriteGuardPipeSubStep(verb, "connect_ok");
-            var req = Encoding.UTF8.GetBytes(requestJson);
+            var req = Encoding.UTF8.GetBytes(GuardInternetPipeProtocol.FrameRequest(requestJson));
             ObservabilityLogFormats.WriteGuardPipeSubStep(verb, "write_begin");
             await WriteWithTimeoutAsync(pipe, req, 0, req.Length, ioMs, ct).ConfigureAwait(false);
             ObservabilityLogFormats.WriteGuardPipeSubStep(verb, "write_ok");
             ObservabilityLogFormats.WriteGuardPipeSubStep(verb, "flush_begin");
             await FlushWithTimeoutAsync(pipe, ioMs, ct).ConfigureAwait(false);
             ObservabilityLogFormats.WriteGuardPipeSubStep(verb, "flush_ok");
-            var buf = new byte[16_384];
             ObservabilityLogFormats.WriteGuardPipeSubStep(verb, "read_begin");
-            var read = await ReadWithTimeoutAsync(pipe, buf, 0, buf.Length, ioMs, ct).ConfigureAwait(false);
+            var response = await ReadLineWithTimeoutAsync(pipe, ioMs, ct).ConfigureAwait(false);
             ObservabilityLogFormats.WriteGuardPipeSubStep(verb, "read_ok");
-            var response = Encoding.UTF8.GetString(buf, 0, read);
             ObservabilityLogFormats.WriteGuardPipeStep(verb, "end", (int)sw.ElapsedMilliseconds, errorCode: "ok");
             return response;
         }
@@ -168,15 +166,39 @@ public sealed class GuardInternetClient
 #endif
     }
 
-    private static async Task<int> ReadWithTimeoutAsync(
-        Stream pipe,
-        byte[] buffer,
-        int offset,
-        int count,
-        int timeoutMs,
-        CancellationToken ct)
+    private static async Task<string> ReadLineWithTimeoutAsync(Stream pipe, int timeoutMs, CancellationToken ct)
     {
-        var readTask = pipe.ReadAsync(buffer, offset, count, ct);
+#if NET10_0_OR_GREATER
+        using var reader = new StreamReader(pipe, Encoding.UTF8, detectEncodingFromByteOrderMarks: false, bufferSize: 4096, leaveOpen: true);
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeoutCts.CancelAfter(timeoutMs);
+        try
+        {
+            var line = await reader.ReadLineAsync(timeoutCts.Token).ConfigureAwait(false);
+            if (line is null)
+            {
+                throw new TimeoutException(GuardInternetClientErrorCodes.IoTimeout);
+            }
+
+            if (Encoding.UTF8.GetByteCount(line) > GuardInternetPipeProtocol.MaxLineBytes)
+            {
+                throw new InvalidOperationException(GuardInternetClientErrorCodes.PipeError);
+            }
+
+            return line;
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            throw new TimeoutException(GuardInternetClientErrorCodes.IoTimeout);
+        }
+#else
+        var readTask = Task.Run(
+            () =>
+            {
+                using var reader = new StreamReader(pipe, Encoding.UTF8, false, 4096, leaveOpen: true);
+                return reader.ReadLine();
+            },
+            ct);
         var delayTask = Task.Delay(timeoutMs, ct);
         var completed = await Task.WhenAny(readTask, delayTask).ConfigureAwait(false);
         if (completed != readTask)
@@ -184,6 +206,18 @@ public sealed class GuardInternetClient
             throw new TimeoutException(GuardInternetClientErrorCodes.IoTimeout);
         }
 
-        return await readTask.ConfigureAwait(false);
+        var line = await readTask.ConfigureAwait(false);
+        if (line is null)
+        {
+            throw new TimeoutException(GuardInternetClientErrorCodes.IoTimeout);
+        }
+
+        if (Encoding.UTF8.GetByteCount(line) > GuardInternetPipeProtocol.MaxLineBytes)
+        {
+            throw new InvalidOperationException(GuardInternetClientErrorCodes.PipeError);
+        }
+
+        return line;
+#endif
     }
 }

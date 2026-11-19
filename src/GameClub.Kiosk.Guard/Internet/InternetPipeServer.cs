@@ -113,14 +113,24 @@ internal sealed class InternetPipeServer
             using (server)
             {
                 GuardWatchdogLog.Append($"pipe_client_handler_begin thread={handlerThread}");
-                using var reader = new StreamReader(server, Encoding.UTF8, false, 8192, leaveOpen: true);
-                using var writer = new StreamWriter(server, Encoding.UTF8, 4096, leaveOpen: true) { AutoFlush = true };
-                GuardWatchdogLog.Append($"pipe_read_begin thread={handlerThread}");
-                var body = reader.ReadToEnd();
+                var readTimeoutMs = InternetGuardPipePolicy.ResolveReadTimeoutMs();
+                GuardWatchdogLog.Append(
+                    $"pipe_read_begin thread={handlerThread} budget_ms={readTimeoutMs}");
+                var body = ReadRequestLine(server, readTimeoutMs, handlerThread);
+                if (body is null)
+                {
+                    return;
+                }
+
                 GuardWatchdogLog.Append(
                     $"pipe_read_ok thread={handlerThread} bytes={Encoding.UTF8.GetByteCount(body)}");
                 var response = HandleRequest(body);
-                writer.Write(response);
+                var responseLine = GuardInternetPipeProtocol.FrameRequest(response);
+                var outBytes = Encoding.UTF8.GetBytes(responseLine);
+                server.Write(outBytes, 0, outBytes.Length);
+                server.Flush();
+                GuardWatchdogLog.Append(
+                    $"pipe_write_ok thread={handlerThread} bytes={outBytes.Length}");
             }
         }
         catch
@@ -134,6 +144,61 @@ internal sealed class InternetPipeServer
                 /* listener continues */
             }
         }
+    }
+
+    private static string? ReadRequestLine(NamedPipeServerStream stream, int timeoutMs, int handlerThread)
+    {
+        var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+        var sb = new StringBuilder();
+        var one = new byte[1];
+        while (DateTime.UtcNow < deadline)
+        {
+            var remaining = (int)Math.Max(1, (deadline - DateTime.UtcNow).TotalMilliseconds);
+            var read = 0;
+            try
+            {
+                var readTask = stream.ReadAsync(one, 0, 1);
+                if (!readTask.Wait(remaining))
+                {
+                    GuardWatchdogLog.Append($"pipe_read_timeout thread={handlerThread}");
+                    return null;
+                }
+
+                read = readTask.Result;
+            }
+            catch (ObjectDisposedException)
+            {
+                return null;
+            }
+
+            if (read == 0)
+            {
+                GuardWatchdogLog.Append($"pipe_read_eof thread={handlerThread}");
+                return null;
+            }
+
+            var c = (char)one[0];
+            if (c == '\n')
+            {
+                return sb.ToString();
+            }
+
+            if (c == '\r')
+            {
+                continue;
+            }
+
+            sb.Append(c);
+            if (Encoding.UTF8.GetByteCount(sb.ToString()) > GuardInternetPipeProtocol.MaxLineBytes)
+            {
+                GuardWatchdogLog.Append(
+                    $"pipe_line_oversize thread={handlerThread} bytes={Encoding.UTF8.GetByteCount(sb.ToString())}");
+                return null;
+            }
+        }
+
+        GuardWatchdogLog.Append($"pipe_read_timeout thread={handlerThread}");
+        return null;
     }
 
     private void RunReconcileBackground(CancellationToken ct)
