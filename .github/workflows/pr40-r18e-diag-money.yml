@@ -1,0 +1,55 @@
+name: pr40-r18e-diag-money
+
+on:
+  push:
+    branches:
+      - cursor/pr40-r18e-diag
+      - cursor/main-5574ce0-diag
+
+jobs:
+  buffet-repeat:
+    name: buffet remove bill refresh (repeat)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: gameclub_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      GAMECLUB_DATABASE: Host=localhost;Port=5432;Database=gameclub_test;Username=postgres;Password=postgres
+      GAMECLUB_TEST_DATABASE: Host=localhost;Port=5432;Database=gameclub_test;Username=postgres;Password=postgres
+      GAMECLUB_API_KEY: ci-test-key
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.403
+      - name: build server tests
+        run: dotnet build tests/GameClub.Server.Tests/GameClub.Server.Tests.csproj -c Release -f net10.0 --nologo
+      - name: run buffet remove test 5x
+        run: |
+          set -euo pipefail
+          FILTER='FullyQualifiedName~pr29_r2_buffet_only_checkout_remove_refreshes_visible_total'
+          for i in 1 2 3 4 5; do
+            echo "=== buffet diag iteration $i ==="
+            dotnet test tests/GameClub.Server.Tests/GameClub.Server.Tests.csproj \
+              -c Release -f net10.0 --no-build --nologo \
+              --filter "$FILTER" \
+              --logger "console;verbosity=normal" \
+              2>&1 | tee "/tmp/buffet-diag-$i.log"
+            if rg -q 'Expected: 20000' "/tmp/buffet-diag-$i.log"; then
+              echo "iteration $i RED"
+              exit 1
+            fi
+            rg 'DIAG_BUFFET_LINE_REMOVE' "/tmp/buffet-diag-$i.log" || true
+          done
+          echo "all 5 iterations green"

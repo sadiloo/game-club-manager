@@ -4,6 +4,7 @@ using GameClub.Server.Data.Entities;
 using GameClub.Server.Services;
 using GameClub.Server.Time;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 
 namespace GameClub.Server.Operator;
 
@@ -263,7 +264,8 @@ public sealed class OperatorBuffetSaleService(
     BillCalculator calculator,
     SessionCloser closer,
     OperatorBillService bills,
-    OperatorPolicies policies)
+    OperatorPolicies policies,
+    ILogger<OperatorBuffetSaleService> logger)
 {
     public async Task<OpenSaleEntity> GetOrCreateForSessionAsync(PlaySessionEntity session, CancellationToken ct)
     {
@@ -377,6 +379,14 @@ public sealed class OperatorBuffetSaleService(
             await RemoveLineCoreAsync(line, innerCt);
             await db.Entry(sale).Collection(o => o.Lines).Query().Include(l => l.CatalogItem).LoadAsync(innerCt);
             await RefreshOpenSalePendingBillIfAnyAsync(sale, innerCt);
+            var collectible = sale.PendingBill?.CollectibleToman;
+            var lineCount = sale.Lines.Count;
+            logger.LogInformation(
+                "DIAG_BUFFET_LINE_REMOVE openSaleId={OpenSaleId} lineId={LineId} lineCount={LineCount} collectibleToman={CollectibleToman}",
+                openSaleId,
+                lineId,
+                lineCount,
+                collectible);
             await audit.AppendAsync("sale.line_remove", new { openSaleId, lineId }, innerCt);
             return await MapSaleWithCustomerAsync(sale, innerCt);
         }, ct);
@@ -668,6 +678,12 @@ public sealed class OperatorBuffetSaleService(
 
         await db.Entry(sale).Collection(o => o.Lines).Query().Include(l => l.CatalogItem).LoadAsync(ct);
         var amounts = await calculator.ComputeBuffetOnlyAsync(sale.Lines, ct);
+        logger.LogInformation(
+            "DIAG_BUFFET_REFRESH openSaleId={OpenSaleId} lineCount={LineCount} beforeCollectible={BeforeCollectible} afterCollectible={AfterCollectible}",
+            sale.Id,
+            sale.Lines.Count,
+            bill.CollectibleToman,
+            amounts.CollectibleToman);
         ApplyAmounts(bill, amounts);
     }
 
