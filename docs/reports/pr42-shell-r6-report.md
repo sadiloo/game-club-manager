@@ -13,7 +13,7 @@ Release with `-p:EnableWindowsTargeting=true` on `GameClub.Server`, `GameClub.Sh
 | Src (allowed only) | `MainWindow.xaml.cs`, `WindowPlacementStore.cs` |
 | Harness | `WpfStaApplicationFixture.cs`, `ShellPlanAIntegrationTests.cs`, `ShellWindowPlacementRegressionTests.cs`, `ShellPollerReentrancyTests.cs` |
 
-Staging sha: `1d4c17d040cb7d7febe23be9d6aa7abaf181e915`
+Staging sha: *(filled after push)*
 
 ## Items
 
@@ -40,7 +40,7 @@ See `git diff 4999323d9a1dce2e5ac3e2507fc3a5d156eeecb6 -- src/GameClub.Shell/Mai
 
 Parent: `32c9ad98acea1650022ef45ed4f509d71d80ea5e`.
 
-Staging sha: `1d4c17d040cb7d7febe23be9d6aa7abaf181e915`
+Staging sha: `da5d8b3acb98f8b1cfeb3ecd523dffc57e4fa874`
 
 ### Cause
 
