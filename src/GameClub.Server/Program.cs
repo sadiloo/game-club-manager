@@ -103,6 +103,7 @@ public partial class Program
         builder.Services.AddDbContext<AppDbContext>(options => options.UseNpgsql(connectionString));
 
         var app = builder.Build();
+        app.UseMiddleware<ProbeApiRequestLoggingMiddleware>();
         app.UseMiddleware<ApiExceptionMiddleware>();
         app.UseMiddleware<OperatorSessionMiddleware>();
         app.UseMiddleware<OperatorAuthorizationMiddleware>();

@@ -4,6 +4,7 @@ using System.IO;
 using System.Net.Http;
 using System.Text.Json;
 using System.Threading.Tasks;
+using GameClub.Kiosk.Windows.IntegrationTests.Server;
 using Npgsql;
 using Xunit;
 
@@ -108,6 +109,9 @@ internal static class WpfLiveServerTestHelper
 
     public static async Task<string> SetupFundedSessionAsync(string loginName, string password)
     {
+        ProbeHttpCallTrace.Clear();
+        StabStepLog.Write("setup_begin", "session_start_via=test_harness_no_session_start_kiosk_login_will_open_session");
+
         var baseUrl = RequireServerUrl();
         var apiKey = Environment.GetEnvironmentVariable("GAMECLUB_API_KEY") ?? "ci-test-key";
         var api = new HttpClient { BaseAddress = new Uri(baseUrl + "/") };
@@ -115,28 +119,37 @@ internal static class WpfLiveServerTestHelper
 
         await EnsurePcNormalRate80000Async();
         var stationId = "PC-WPF-" + Guid.NewGuid().ToString("N").Substring(0, 8);
-        var register = await api.PostAsJsonAsync("/api/stations", new { id = stationId, name = stationId, groupId = "pc-normal" });
+        StabStepLog.Write("station_created", $"rawStationId={stationId}");
+        var registerBody = System.Text.Json.JsonSerializer.Serialize(new { id = stationId, name = stationId, groupId = "pc-normal" });
+        var register = await TraceJsonAsync(api, HttpMethod.Post, "/api/stations", registerBody);
         register.EnsureSuccessStatusCode();
 
         var op = new HttpClient { BaseAddress = api.BaseAddress };
-        var opLogin = await op.PostAsJsonAsync("/api/operator/auth/login", new { username = "manager", pin = "1234" });
+        var opLoginBody = System.Text.Json.JsonSerializer.Serialize(new { username = "manager", pin = "1234" });
+        var opLogin = await TraceJsonAsync(op, HttpMethod.Post, "/api/operator/auth/login", opLoginBody);
         opLogin.EnsureSuccessStatusCode();
-        var created = await op.PostAsJsonAsync("/api/operator/customers", new { name = loginName, mobile = $"0912{new Random().Next(1_000_000, 9_999_999)}" });
+        var createdBody = System.Text.Json.JsonSerializer.Serialize(new { name = loginName, mobile = $"0912{new Random().Next(1_000_000, 9_999_999)}" });
+        var created = await TraceJsonAsync(op, HttpMethod.Post, "/api/operator/customers", createdBody);
         created.EnsureSuccessStatusCode();
         var createdJson = await created.Content.ReadAsStringAsync();
         var customerId = ParseGuidProperty(createdJson, "id");
-        var topUp = await op.PostAsJsonAsync($"/api/operator/members/customers/{customerId}/wallet/top-up", new { method = "Cash", amountToman = 48_667L , commandId = Guid.NewGuid() });
+        var topUpBody = System.Text.Json.JsonSerializer.Serialize(new { method = "Cash", amountToman = 48_667L, commandId = Guid.NewGuid() });
+        var topUp = await TraceJsonAsync(op, HttpMethod.Post, $"/api/operator/members/customers/{customerId}/wallet/top-up", topUpBody);
         LastTopUpStatus = (int)topUp.StatusCode;
+        StabStepLog.Write("wallet_top_up", $"status={LastTopUpStatus}");
         topUp.EnsureSuccessStatusCode();
-        var credential = await op.PutJsonAsync($"/api/operator/customers/{customerId}/credential", new { loginName, password });
+        var credBody = System.Text.Json.JsonSerializer.Serialize(new { loginName, password });
+        var credential = await TraceJsonAsync(op, HttpMethod.Put, $"/api/operator/customers/{customerId}/credential", credBody);
         LastCredentialStatus = (int)credential.StatusCode;
+        StabStepLog.Write("credential_put", $"status={LastCredentialStatus}");
         credential.EnsureSuccessStatusCode();
 
-        var codeResponse = await op.PostAsync($"/api/operator/stations/{stationId}/pairing-code", null);
+        var codeResponse = await TraceAsync(op, HttpMethod.Post, $"/api/operator/stations/{stationId}/pairing-code", null);
         await EnsureSuccessWithBodyAsync(codeResponse, $"POST /api/operator/stations/{stationId}/pairing-code");
         var codeJson = await codeResponse.Content.ReadAsStringAsync();
         var pairingCode = ParseStringProperty(codeJson, "code");
-        var pair = await api.PostAsJsonAsync("/api/kiosk/pair", new { code = pairingCode });
+        var pairBody = System.Text.Json.JsonSerializer.Serialize(new { code = pairingCode });
+        var pair = await TraceJsonAsync(api, HttpMethod.Post, "/api/kiosk/pair", pairBody);
         await EnsureSuccessWithBodyAsync(pair, "POST /api/kiosk/pair");
         var pairJson = await pair.Content.ReadAsStringAsync();
         var deviceId = ParseGuidProperty(pairJson, "deviceId");
@@ -150,7 +163,31 @@ internal static class WpfLiveServerTestHelper
         }
 
         WriteDeviceJson(baseUrl, stationId, deviceId, deviceKey, leasePem);
+        StabStepLog.Write("setup_complete", $"stationId={stationId} deviceId={deviceId}");
         return stationId;
+    }
+
+    private static async Task<HttpResponseMessage> TraceJsonAsync(HttpClient client, HttpMethod method, string path, string jsonBody)
+    {
+        using var content = new StringContent(jsonBody, System.Text.Encoding.UTF8, "application/json");
+        using var request = new HttpRequestMessage(method, path) { Content = content };
+        var response = await client.SendAsync(request);
+        var resBody = await response.Content.ReadAsStringAsync();
+        var mediaType = response.Content.Headers.ContentType?.MediaType ?? "application/json";
+        response.Content = new StringContent(resBody, System.Text.Encoding.UTF8, mediaType);
+        ProbeHttpCallTrace.Record(method.Method, path, (int)response.StatusCode, jsonBody, resBody);
+        return response;
+    }
+
+    private static async Task<HttpResponseMessage> TraceAsync(HttpClient client, HttpMethod method, string path, HttpContent content)
+    {
+        using var request = new HttpRequestMessage(method, path) { Content = content };
+        var response = await client.SendAsync(request);
+        var resBody = await response.Content.ReadAsStringAsync();
+        var mediaType = response.Content.Headers.ContentType?.MediaType ?? "application/json";
+        response.Content = new StringContent(resBody, System.Text.Encoding.UTF8, mediaType);
+        ProbeHttpCallTrace.Record(method.Method, path, (int)response.StatusCode, "", resBody);
+        return response;
     }
 
     public static void WriteDeviceJson(string serverBase, string stationId, Guid deviceId, string deviceKey, string leasePem)

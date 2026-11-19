@@ -89,7 +89,7 @@ public sealed class WindowsKioskWpfSmokeTests
     [Fact]
     public void wpf_remaining_time_matches_funded_session_within_one_tick()
     {
-        StabStepLog.Write("within_one_tick_begin");
+        StabStepLog.Write("within_one_tick_begin", "test_does_not_call_session_start_kiosk_auto_login_opens_session");
         var setupError = (Exception)null;
         var staSetup = new Thread(() =>
         {
