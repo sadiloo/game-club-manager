@@ -24,12 +24,12 @@ internal static class ProbeHttpCallTrace
         var res = Redact(responseBody);
         if (req.Length > 2048)
         {
-            req = req[..2048] + "…(truncated)";
+            req = req.Substring(0, 2048) + "...(truncated)";
         }
 
         if (res.Length > 2048)
         {
-            res = res[..2048] + "…(truncated)";
+            res = res.Substring(0, 2048) + "...(truncated)";
         }
 
         var line =
