@@ -103,31 +103,39 @@ internal sealed class KioskIntegrationBackend
 
     public async Task<IReadOnlyList<(string Mode, DateTime StartUtc)>> ReadPlaySegmentsAsync(Guid sessionId)
     {
+        var detailed = await ReadPlaySegmentSequenceAsync(sessionId);
+        return detailed.Select(s => (s.Mode, s.StartUtc)).ToList();
+    }
+
+    public async Task<IReadOnlyList<(string Mode, DateTime StartUtc, DateTime? EndUtc)>> ReadPlaySegmentSequenceAsync(Guid sessionId)
+    {
         if (_factory is not null)
         {
             await using var scope = _factory.Services.CreateAsyncScope();
             var rows = await scope.ServiceProvider.GetRequiredService<AppDbContext>().Segments
                 .Where(s => s.SessionId == sessionId)
                 .OrderBy(s => s.StartUtc)
-                .Select(s => new { Mode = s.Mode.ToString(), s.StartUtc })
+                .ThenBy(s => s.Id)
+                .Select(s => new { Mode = s.Mode.ToString(), s.StartUtc, s.EndUtc })
                 .ToListAsync();
-            return rows.Select(r => (r.Mode, r.StartUtc)).ToList();
+            return rows.Select(r => (r.Mode, r.StartUtc, r.EndUtc)).ToList();
         }
 
         await using var conn = new NpgsqlConnection(ResolveConnectionString());
         await conn.OpenAsync();
         await using var cmd = new NpgsqlCommand(
             """
-            SELECT "Mode", "StartUtc" FROM play_segments
-            WHERE "SessionId" = @id ORDER BY "StartUtc"
+            SELECT "Mode", "StartUtc", "EndUtc" FROM play_segments
+            WHERE "SessionId" = @id ORDER BY "StartUtc", "Id"
             """,
             conn);
         cmd.Parameters.AddWithValue("id", sessionId);
-        var list = new List<(string, DateTime)>();
+        var list = new List<(string, DateTime, DateTime?)>();
         await using var reader = await cmd.ExecuteReaderAsync();
         while (await reader.ReadAsync())
         {
-            list.Add((reader.GetString(0), reader.GetDateTime(1)));
+            var end = await reader.IsDBNullAsync(2) ? (DateTime?)null : reader.GetDateTime(2);
+            list.Add((reader.GetString(0), reader.GetDateTime(1), end));
         }
 
         return list;

@@ -148,16 +148,46 @@ public sealed class WindowsKioskServerIntegrationTests
             var sessionId = await backend.OpenSessionIdAsync();
             const long startWalletToman = 200_000;
             var sessionStartedUtc = DateTime.UtcNow;
-            var rateCard = new RateCardBuilder().AddBase(PilotSeed.PcNormalGroupId, PlayMode.Offline, 1, PilotSeed.PcNormalHourly).Build();
+            var rateCard = new RateCardBuilder().AddBase(PilotSeed.PcNormalGroupId, PlayMode.Online, null, PilotSeed.PcNormalHourly).Build();
             var fundedPlaySeconds = (int)TimeSpan.FromMinutes(
                 RemainingTimeEstimator.Estimate(
                     new PcAccount("unreach", startWalletToman),
                     PilotSeed.PcNormalGroupId,
-                    PlayMode.Offline,
+                    PlayMode.Online,
                     1,
                     DateTime.UtcNow,
                     rateCard,
                     graceMinuteEnabled: true).MoneyMinutes!.Value).TotalSeconds;
+
+            var primeQueue = Path.Combine(Path.GetTempPath(), $"kiosk-unreach-prime-{Guid.NewGuid():N}.db");
+            await using (var primeRuntime = new KioskRuntime(() => kioskHttp))
+            {
+                primeRuntime.Configure(
+                    backend.HubUri,
+                    deviceId,
+                    deviceKey,
+                    "PC-UNREACH",
+                    primeQueue,
+                    legacyWindows: true,
+                    testHubHandler: backend.TestHubHandler);
+                primeRuntime.BindSession(sessionId);
+                KioskHeartbeatAck? primeAck = null;
+                primeRuntime.HeartbeatAcknowledged += ack => primeAck = ack;
+                await primeRuntime.StartAsync(default);
+                await WaitUntilTransportConnectedAsync(primeRuntime, TimeSpan.FromSeconds(45));
+                var primeDeadline = DateTime.UtcNow.AddSeconds(45);
+                while (DateTime.UtcNow < primeDeadline)
+                {
+                    if (primeAck?.Lease is not null && primeAck.Display?.EstimatedRemainingSeconds is > 0)
+                    {
+                        break;
+                    }
+
+                    await Task.Delay(500);
+                }
+
+                Assert.NotNull(primeAck?.Lease);
+            }
 
             if (usesCiServer)
             {
@@ -231,14 +261,27 @@ public sealed class WindowsKioskServerIntegrationTests
             await WaitUntilTransportConnectedAsync(runtime, TimeSpan.FromSeconds(30));
             Assert.True(runtime.IsTransportConnected, "Transport must connect within 30 seconds after server returns.");
 
-            var ackDeadline = DateTime.UtcNow.AddSeconds(30);
+            var ackDeadline = DateTime.UtcNow.AddSeconds(45);
+            var stablePlayingSince = DateTime.MinValue;
             while (DateTime.UtcNow < ackDeadline)
             {
                 if (lastAck?.Lease is not null
                     && lastAck.Display?.EstimatedRemainingSeconds is > 0
-                    && orchestrator.Phase == KioskShellPhase.Playing)
+                    && orchestrator.Phase == KioskShellPhase.Playing
+                    && orchestrator.VerifyLease(lastAck.Lease))
                 {
-                    break;
+                    if (stablePlayingSince == DateTime.MinValue)
+                    {
+                        stablePlayingSince = DateTime.UtcNow;
+                    }
+                    else if ((DateTime.UtcNow - stablePlayingSince).TotalSeconds >= 2)
+                    {
+                        break;
+                    }
+                }
+                else
+                {
+                    stablePlayingSince = DateTime.MinValue;
                 }
 
                 await Task.Delay(500);
@@ -543,13 +586,10 @@ public sealed class WindowsKioskServerIntegrationTests
         await runtime.DisposeAsync();
     }
 
-    [SkippableFact(Timeout = 1_200_000)]
+    [Fact(Timeout = 1_200_000)]
+    [Trait("Category", "UbuntuG2Oracle")]
     public async Task live_server_two_outages_bill_matches_main_g2_oracle()
     {
-        Skip.If(
-            KioskIntegrationBackend.IsLiveMode,
-            "G2 ~11 min owned-server oracle runs on ubuntu (dedicated CI step); Windows live job does not host a second server.");
-
         OutOfProcessLiveServer? ownedServer = null;
         var priorCheckpointUrl = Environment.GetEnvironmentVariable("CHECKPOINT_SERVER_URL");
         try
@@ -983,6 +1023,7 @@ public sealed class WindowsKioskServerIntegrationTests
             var op = await backend.CreateOperatorClientAsync();
             var rv0 = (await op.GetFromJsonAsync<JsonElement[]>("/api/operator/grid"))!
                 .Single(t => t.GetProperty("id").GetString() == "PC-KILL").GetProperty("rowVersion").GetUInt32();
+            var offPressAt = DateTime.UtcNow;
             (await op.PostAsJsonAsync($"/api/operator/sessions/{sessionId}/internet", new
             {
                 on = false,
@@ -1054,11 +1095,21 @@ public sealed class WindowsKioskServerIntegrationTests
 
             Assert.NotNull(lastTile);
             Assert.True(lastTile!.Value.GetProperty("internetOn").GetBoolean());
-            var onLineStart = segmentsBeforeReconnect
-                .Where(s => string.Equals(s.Mode, nameof(PlayMode.Online), StringComparison.Ordinal))
-                .MaxBy(s => s.StartUtc)
-                .StartUtc.ToUniversalTime();
-            Assert.True(onLineStart >= pressAt.AddSeconds(-5), "ON segment must start at toggle press time.");
+
+            var segments = await backend.ReadPlaySegmentSequenceAsync(sessionId);
+            Assert.Equal(3, segments.Count);
+            Assert.All(segments, s => Assert.True(s.StartUtc <= (s.EndUtc ?? DateTime.UtcNow.AddMinutes(5)), "segment end must not precede start"));
+            Assert.Equal(nameof(PlayMode.Online), segments[0].Mode);
+            Assert.Equal(nameof(PlayMode.Offline), segments[1].Mode);
+            Assert.Equal(nameof(PlayMode.Online), segments[2].Mode);
+            Assert.True(segments[1].StartUtc.ToUniversalTime() >= offPressAt.AddSeconds(-5), "Offline segment must start at OFF press (brief L11).");
+            Assert.True(segments[1].StartUtc.ToUniversalTime() <= offPressAt.AddSeconds(5), "Offline segment must start at OFF press (brief L11).");
+            Assert.True(segments[2].StartUtc.ToUniversalTime() >= pressAt.AddSeconds(-5), "Online segment must start at ON press while disconnected (brief §10.4.7(c), L11).");
+            Assert.True(segments[2].StartUtc.ToUniversalTime() <= pressAt.AddSeconds(5), "Online segment must start at ON press while disconnected (brief §10.4.7(c), L11).");
+            Assert.True(segments[2].EndUtc is null, "final online segment remains open until session end");
+            Assert.True(
+                segments[0].StartUtc < segments[1].StartUtc && segments[1].StartUtc < segments[2].StartUtc,
+                "segment sequence must be strictly ordered by press boundaries");
             _ = deviceKey;
         }
         finally

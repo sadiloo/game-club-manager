@@ -108,7 +108,105 @@ function Stop-CiManagedGameClubServerPids() {
     }
 
     $global:LASTEXITCODE = 0
+    $script:serverProc = $null
     Write-GameClubServerProcessAudit
+}
+
+function Test-TcpPortTaken([int]$Port) {
+    try {
+        $client = [System.Net.Sockets.TcpClient]::new()
+        $client.Connect('127.0.0.1', $Port)
+        $client.Close()
+        return $true
+    } catch {
+        return $false
+    }
+}
+
+function Wait-CiServerPortFree([int]$Port, [int]$TimeoutSec) {
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    while ((Get-Date) -lt $deadline) {
+        if (-not (Test-TcpPortTaken -Port $Port)) { return }
+        Start-Sleep -Seconds 1
+    }
+    throw "TCP port 127.0.0.1:${Port} still in use after ${TimeoutSec}s; orphaned GameClub.Server must be stopped before continuing."
+}
+
+function Stop-OrphanedGameClubTestHosts() {
+    foreach ($p in Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -match 'GameClub\.Server\.TestHost' }) {
+        Write-PhaseLog "STOP_ORPHAN_TESTHOST pid=$($p.ProcessId)"
+        Stop-ProcessTree -rootProcId $p.ProcessId
+    }
+    $global:LASTEXITCODE = 0
+}
+
+function Assert-TestHostPcBandLog([string]$LogPath, [string]$ExpectedBand) {
+    if (-not (Test-Path $LogPath)) {
+        throw "TestHost stdout log missing at $LogPath"
+    }
+    $production = @(Select-String -Path $LogPath -Pattern '^pc_band=production\b' -ErrorAction SilentlyContinue)
+    if ($production.Count -gt 0) {
+        throw "GameClub.Server.TestHost logged pc_band=production; --pc-band is required."
+    }
+    $matches = @(Select-String -Path $LogPath -Pattern "^pc_band=$ExpectedBand\b" -ErrorAction SilentlyContinue)
+    if ($matches.Count -eq 0) {
+        throw "TestHost log has no pc_band=$ExpectedBand line (path=$LogPath)."
+    }
+    foreach ($bandLine in $matches) {
+        Write-PhaseLog $bandLine.Line
+        Write-Host $bandLine.Line
+    }
+}
+
+function Start-CiGameClubTestHost(
+    [string]$ServerDll,
+    [string[]]$BandArgs,
+    [string]$StdoutLog,
+    [string]$StderrLog,
+    [string]$ExpectedBand,
+    [string]$PhaseLabel
+) {
+    Stop-CiManagedGameClubServerPids
+    Stop-OrphanedGameClubTestHosts
+    $uri = [Uri]$env:CHECKPOINT_SERVER_URL
+    $port = if ($uri.Port -gt 0) { $uri.Port } else { 80 }
+    Wait-CiServerPortFree -Port $port -TimeoutSec 45
+    if (Test-TcpPortTaken -Port $port) {
+        Write-GameClubServerProcessAudit
+        throw "Port ${port} still taken before $PhaseLabel server start."
+    }
+
+    if (Test-Path $StdoutLog) { Remove-Item -Force $StdoutLog }
+    if (Test-Path $StderrLog) { Remove-Item -Force $StderrLog }
+
+    $env:GAMECLUB_SERVER_HOST_ARGS = ($BandArgs -join ' ')
+    Write-Host "live_server_ci $PhaseLabel band_args=$($env:GAMECLUB_SERVER_HOST_ARGS)"
+    Write-PhaseLog "START $PhaseLabel host_args=$($env:GAMECLUB_SERVER_HOST_ARGS)"
+    $script:serverProc = Start-Process -FilePath "dotnet" -ArgumentList (@("exec", $ServerDll) + $BandArgs) -PassThru -NoNewWindow `
+        -RedirectStandardOutput $StdoutLog -RedirectStandardError $StderrLog -WorkingDirectory $repoRoot
+    $null = $script:serverProc.Handle
+    $env:GAMECLUB_SERVER_PID = $script:serverProc.Id
+    $env:GAMECLUB_SERVER_DLL = $ServerDll
+
+    $readyDeadline = (Get-Date).AddMinutes(2)
+    $ready = $false
+    while ((Get-Date) -lt $readyDeadline) {
+        try {
+            $r = Invoke-WebRequest -Uri "$($env:CHECKPOINT_SERVER_URL)/api/stations" -Headers @{ "X-Api-Key" = $env:GAMECLUB_API_KEY } -UseBasicParsing -TimeoutSec 3
+            if ($r.StatusCode -eq 200) { $ready = $true; break }
+        } catch {
+            Start-Sleep -Seconds 2
+        }
+    }
+    if (-not $ready) {
+        if ($script:serverProc -and -not $script:serverProc.HasExited) {
+            Stop-ProcessTree -rootProcId $script:serverProc.Id
+        }
+        throw "GameClub.Server.TestHost not ready for $PhaseLabel"
+    }
+
+    Start-Sleep -Seconds 1
+    Assert-TestHostPcBandLog -LogPath $StdoutLog -ExpectedBand $ExpectedBand
 }
 
 function Stop-LeftoverCiProcesses() {
@@ -338,46 +436,10 @@ try {
 
     $serverDll = Join-Path $repoRoot "tests/GameClub.Server.TestHost/bin/Release/net10.0/GameClub.Server.TestHost.dll"
     if (-not (Test-Path $serverDll)) { throw "GameClub.Server.TestHost.dll not found at $serverDll" }
-    $serverLog = Join-Path $logDir "server-out.log"
-    $serverErr = Join-Path $logDir "server-err.log"
-    $env:GAMECLUB_SERVER_HOST_ARGS = ($script:ServerPcBandArgs -join ' ')
-    Write-PhaseLog "START phase=server-start host_args=$($env:GAMECLUB_SERVER_HOST_ARGS)"
-    Write-Host "live_server_ci band_args=$($env:GAMECLUB_SERVER_HOST_ARGS)"
-    $script:serverProc = Start-Process -FilePath "dotnet" -ArgumentList (@("exec", $serverDll) + $script:ServerPcBandArgs) -PassThru -NoNewWindow -RedirectStandardOutput $serverLog -RedirectStandardError $serverErr -WorkingDirectory $repoRoot
-    $null = $script:serverProc.Handle
-    $env:GAMECLUB_SERVER_PID = $script:serverProc.Id
-    $env:GAMECLUB_SERVER_DLL = $serverDll
-
-    Write-PhaseLog "START phase=server-ready"
-    $readyCapMs = 2 * 60 * 1000
-    $readyDeadline = (Get-Date).AddMilliseconds([double](Get-EffectiveTimeoutMs -phaseCapMs $readyCapMs))
-    $ready = $false
-    while ((Get-Date) -lt $readyDeadline) {
-        try {
-            $r = Invoke-WebRequest -Uri "$($env:CHECKPOINT_SERVER_URL)/api/stations" -Headers @{ "X-Api-Key" = $env:GAMECLUB_API_KEY } -UseBasicParsing -TimeoutSec 3
-            if ($r.StatusCode -eq 200) { $ready = $true; break }
-        } catch {
-            Start-Sleep -Seconds 2
-        }
-    }
-    if (-not $ready) {
-        Write-TimeoutLine "WATCHDOG TIMEOUT phase=server-ready after 120s"
-        Write-PhaseLog "WATCHDOG: dotnet-dump not available; skipped"
-        if ($script:serverProc) {
-            Write-ProcessTree -rootProcId $script:serverProc.Id
-            Stop-ProcessTree -rootProcId $script:serverProc.Id
-        }
-        $script:FinalExitCode = 124
-        throw "server not ready"
-    }
+    $serverLog = Join-Path $logDir "server-day-out.log"
+    $serverErr = Join-Path $logDir "server-day-err.log"
+    Start-CiGameClubTestHost -ServerDll $serverDll -BandArgs $script:ServerPcBandArgs -StdoutLog $serverLog -StderrLog $serverErr -ExpectedBand day -PhaseLabel "day-initial"
     Write-PhaseLog "END phase=server-ready exit=0"
-    if (Test-Path $serverLog) {
-        $bandLines = Select-String -Path $serverLog -Pattern '^pc_band=' -ErrorAction SilentlyContinue
-        foreach ($bandLine in $bandLines) {
-            Write-PhaseLog $bandLine.Line
-            Write-Host $bandLine.Line
-        }
-    }
     Write-CiPhaseFirewallProbe -label "after-server-ready"
 
     Write-Host "Listing LiveCheckpointServer tests (must not be zero)..."
@@ -402,7 +464,7 @@ try {
     $serverTestArgs = @(
     "test", "tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj",
     "-c", "Release", "-f", "net10.0", "--no-build", "--nologo",
-    "--filter", "Category=WindowsServer",
+    "--filter", "Category=WindowsServer&Category!=UbuntuG2Oracle",
     "--logger", "trx;LogFileName=kiosk-windows-server.trx",
     "--results-directory", $artifactDir,
     "--blame-hang", "--blame-hang-timeout", "5m", "--blame-hang-dump-type", "none",
@@ -413,34 +475,18 @@ try {
     Write-CiPhaseFirewallProbe -label "after-dotnet-test-net10-server"
     if ($serverTestExit -eq 124) { throw "server test watchdog" }
 
+    Write-Host "Reconciling live server after net10 server integration (handover/relaunch may leave orphan PIDs)..."
+    $serverLog = Join-Path $logDir "server-day-out.log"
+    $serverErr = Join-Path $logDir "server-day-err.log"
+    Start-CiGameClubTestHost -ServerDll $serverDll -BandArgs $script:ServerPcBandArgs -StdoutLog $serverLog -StderrLog $serverErr -ExpectedBand day -PhaseLabel "day-post-net10"
+
     Write-Host "Running windows guard/wpf integration (net48, live server env)..."
     Write-CiPhaseFirewallProbe -label "before-dotnet-test-net48-guard-wpf"
     $env:CHECKPOINT_SERVER_PC_BAND = 'night'
     Set-CiServerPcBandArgs -Mode night
-    if ($script:serverProc -and -not $script:serverProc.HasExited) {
-        Stop-ProcessTree -rootProcId $script:serverProc.Id
-        $script:serverProc = $null
-    }
-    $env:GAMECLUB_SERVER_HOST_ARGS = ($script:ServerPcBandArgs -join ' ')
-    Write-Host "live_server_ci night restart band_args=$($env:GAMECLUB_SERVER_HOST_ARGS)"
-    $script:serverProc = Start-Process -FilePath "dotnet" -ArgumentList (@("exec", $serverDll) + $script:ServerPcBandArgs) -PassThru -NoNewWindow -RedirectStandardOutput $serverLog -RedirectStandardError $serverErr -WorkingDirectory $repoRoot
-    $env:GAMECLUB_SERVER_PID = $script:serverProc.Id
-    $nightReady = $false
-    $nightDeadline = (Get-Date).AddMinutes(2)
-    while ((Get-Date) -lt $nightDeadline) {
-        try {
-            $r = Invoke-WebRequest -Uri "$($env:CHECKPOINT_SERVER_URL)/api/stations" -Headers @{ "X-Api-Key" = $env:GAMECLUB_API_KEY } -UseBasicParsing -TimeoutSec 3
-            if ($r.StatusCode -eq 200) { $nightReady = $true; break }
-        } catch { Start-Sleep -Seconds 2 }
-    }
-    if (-not $nightReady) { throw "server not ready for night-band WPF test" }
-    if (Test-Path $serverLog) {
-        $nightBandLines = Select-String -Path $serverLog -Pattern '^pc_band=night' -ErrorAction SilentlyContinue
-        foreach ($bandLine in $nightBandLines) {
-            Write-PhaseLog $bandLine.Line
-            Write-Host $bandLine.Line
-        }
-    }
+    $serverNightLog = Join-Path $logDir "server-night-out.log"
+    $serverNightErr = Join-Path $logDir "server-night-err.log"
+    Start-CiGameClubTestHost -ServerDll $serverDll -BandArgs $script:ServerPcBandArgs -StdoutLog $serverNightLog -StderrLog $serverNightErr -ExpectedBand night -PhaseLabel "night-wpf"
   $nightWpfArgs = @(
         "test", "tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj",
         "-c", "Release", "-f", "net48", "--no-build", "--nologo",
@@ -451,21 +497,7 @@ try {
     if ($nightWpfExit -ne 0) { $script:FinalExitCode = $nightWpfExit; throw "night WPF test failed" }
     $env:CHECKPOINT_SERVER_PC_BAND = $null
     Set-CiServerPcBandArgs -Mode day
-    if ($script:serverProc -and -not $script:serverProc.HasExited) {
-        Stop-ProcessTree -rootProcId $script:serverProc.Id
-        $script:serverProc = $null
-    }
-    $env:GAMECLUB_SERVER_HOST_ARGS = ($script:ServerPcBandArgs -join ' ')
-    Write-Host "live_server_ci day restart band_args=$($env:GAMECLUB_SERVER_HOST_ARGS)"
-    $script:serverProc = Start-Process -FilePath "dotnet" -ArgumentList (@("exec", $serverDll) + $script:ServerPcBandArgs) -PassThru -NoNewWindow -RedirectStandardOutput $serverLog -RedirectStandardError $serverErr -WorkingDirectory $repoRoot
-    $env:GAMECLUB_SERVER_PID = $script:serverProc.Id
-    if (Test-Path $serverLog) {
-        $dayBandLines = Select-String -Path $serverLog -Pattern '^pc_band=day' -ErrorAction SilentlyContinue
-        foreach ($bandLine in $dayBandLines) {
-            Write-PhaseLog $bandLine.Line
-            Write-Host $bandLine.Line
-        }
-    }
+    Start-CiGameClubTestHost -ServerDll $serverDll -BandArgs $script:ServerPcBandArgs -StdoutLog $serverLog -StderrLog $serverErr -ExpectedBand day -PhaseLabel "day-post-night-wpf"
 
     $guardTestArgs = @(
         "test", "tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj",

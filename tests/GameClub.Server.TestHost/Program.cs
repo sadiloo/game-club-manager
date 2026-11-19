@@ -3,12 +3,15 @@ using GameClub.Server.TestHost;
 using GameClub.Server.Testing;
 
 var (hostArgs, harness) = PcSpecialBandTestHostArgs.Parse(args);
-var bandMode = PcBandHarnessDiagnostics.TryParseBandModeFromHostArgs(string.Join(' ', args)) ?? "production";
-Console.WriteLine(PcBandHarnessDiagnostics.FormatLogLine(bandMode, harness));
-if (harness is { Enabled: true })
+if (harness is not { Enabled: true })
 {
-    PcBandHarnessDiagnostics.AssertLiveTestHarnessActive(harness);
+    Console.Error.WriteLine("GameClub.Server.TestHost requires --pc-band day or night.");
+    return 2;
 }
+
+var bandMode = PcBandHarnessDiagnostics.TryParseBandModeFromHostArgs(string.Join(' ', args))!;
+Console.WriteLine(PcBandHarnessDiagnostics.FormatLogLine(bandMode, harness));
+PcBandHarnessDiagnostics.AssertLiveTestHarnessActive(harness);
 
 await ServerApplication.RunAsync(hostArgs, builder =>
 {

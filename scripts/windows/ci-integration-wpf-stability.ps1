@@ -57,7 +57,42 @@ function Stop-ServerTree([int]$processId) {
     $global:LASTEXITCODE = 0
 }
 
+function Test-TcpPortTaken([int]$Port) {
+    try {
+        $client = [System.Net.Sockets.TcpClient]::new()
+        $client.Connect('127.0.0.1', $Port)
+        $client.Close()
+        return $true
+    } catch {
+        return $false
+    }
+}
+
+function Wait-CiServerPortFree([int]$Port, [int]$TimeoutSec) {
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    while ((Get-Date) -lt $deadline) {
+        if (-not (Test-TcpPortTaken -Port $Port)) { return }
+        Start-Sleep -Seconds 1
+    }
+    throw "TCP port 127.0.0.1:${Port} still in use after ${TimeoutSec}s before WPF stability server start."
+}
+
+function Stop-OrphanedGameClubTestHosts() {
+    foreach ($p in Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -match 'GameClub\.Server\.TestHost' }) {
+        Stop-ServerTree -processId $p.ProcessId
+    }
+    $global:LASTEXITCODE = 0
+}
+
 try {
+    Stop-OrphanedGameClubTestHosts
+    $uri = [Uri]$env:CHECKPOINT_SERVER_URL
+    $port = if ($uri.Port -gt 0) { $uri.Port } else { 80 }
+    Wait-CiServerPortFree -Port $port -TimeoutSec 45
+    if (Test-TcpPortTaken -Port $port) { throw "Port $port still taken before WPF stability" }
+    if (Test-Path $serverLog) { Remove-Item -Force $serverLog }
+    if (Test-Path $serverErr) { Remove-Item -Force $serverErr }
+
     Write-Host "live_server_wpf_stability pc_band=day start=(harness) end=(harness)"
     $serverProc = Start-Process -FilePath "dotnet" -ArgumentList (@("exec", $serverDll) + $script:WpfStabilityServerBandArgs) -PassThru -NoNewWindow `
         -RedirectStandardOutput $serverLog -RedirectStandardError $serverErr -WorkingDirectory $repoRoot
@@ -75,9 +110,16 @@ try {
         }
     }
     if (-not $ready) { throw "GameClub.Server.TestHost not ready for WPF stability" }
-    if (Test-Path $serverLog) {
-        Select-String -Path $serverLog -Pattern '^pc_band=' -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_.Line }
+  Start-Sleep -Seconds 1
+    $bandLines = @(Select-String -Path $serverLog -Pattern '^pc_band=' -ErrorAction SilentlyContinue)
+    if ($bandLines.Count -eq 0) {
+        throw "WPF stability server logged zero pc_band lines"
     }
+    $production = @($bandLines | Where-Object { $_.Line -match '^pc_band=production\b' })
+    if ($production.Count -gt 0) {
+        throw "WPF stability server logged pc_band=production"
+    }
+    foreach ($bandLine in $bandLines) { Write-Host $bandLine.Line }
 
     $wpfFilter = 'FullyQualifiedName~wpf_remaining_time_matches_funded_session_within_one_tick'
     for ($run = 1; $run -le $runs; $run++) {
@@ -108,6 +150,7 @@ try {
     if ($null -ne $serverProc -and -not $serverProc.HasExited) {
         Stop-ServerTree -processId $serverProc.Id
     }
+    Stop-OrphanedGameClubTestHosts
     $global:LASTEXITCODE = 0
 }
 
