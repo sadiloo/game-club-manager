@@ -125,6 +125,13 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
         Assert.Contains("False", json, StringComparison.Ordinal);
     }
 
+    private static void AssertLocalhostProfilesNotBlock()
+    {
+        var profileJson = RunPowerShell(
+            "Get-NetFirewallProfile -PolicyStore localhost | Select-Object Name,DefaultOutboundAction | ConvertTo-Json");
+        Assert.DoesNotContain("Block", profileJson, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static void AssertCheckpointOffRuleGroupPresent()
     {
         var script =
@@ -439,36 +446,20 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
             ServerIps = ips,
             ExtraAllowPrograms = CiExtraPrograms(),
         };
+        var priorSeam = InternetFirewallApplierTestSeams.ThrowAfterProfilesBeforeVerify;
         try
         {
-            Assert.Equal("applied", applier.Apply(config, on: false));
-            var rollbackProbe = RunPowerShell(
-                """
-                $ErrorActionPreference = 'Stop'
-                $profilesBlocked = $false
-                try {
-                  foreach ($prof in @('Domain','Private','Public')) {
-                    Set-NetFirewallProfile -PolicyStore localhost -Name $prof -DefaultOutboundAction Block
-                  }
-                  $profilesBlocked = $true
-                  throw 'apply_failed:verification:missing_checkpoint_off_rules'
-                } catch {
-                  if ($profilesBlocked) {
-                    foreach ($prof in @('Domain','Private','Public')) {
-                      Set-NetFirewallProfile -PolicyStore localhost -Name $prof -DefaultOutboundAction NotConfigured -AllowLocalFirewallRules NotConfigured -ErrorAction SilentlyContinue
-                    }
-                  }
-                  $_.Exception.Message
-                }
-                """);
-            Assert.Contains("apply_failed:verification", rollbackProbe, StringComparison.Ordinal);
-            var profileJson = RunPowerShell(
-                "Get-NetFirewallProfile -PolicyStore localhost | Select-Object Name,DefaultOutboundAction | ConvertTo-Json");
-            Assert.DoesNotContain("Block", profileJson, StringComparison.OrdinalIgnoreCase);
-            Assert.True(TryTcp("api.github.com", 443, 5_000), "server allow rules from prior apply must keep server reachable.");
+            applier.RunResetScript();
+            Thread.Sleep(500);
+            InternetFirewallApplierTestSeams.ThrowAfterProfilesBeforeVerify = true;
+            var result = applier.Apply(config, on: false);
+            Assert.StartsWith("apply_failed", result, StringComparison.Ordinal);
+            AssertLocalhostProfilesNotBlock();
+            Assert.True(TryTcp(config.ServerHost, 443, 5_000), "server host must stay reachable when OFF apply fails after profiles.");
         }
         finally
         {
+            InternetFirewallApplierTestSeams.ThrowAfterProfilesBeforeVerify = priorSeam;
             applier.RunResetScript();
         }
     }

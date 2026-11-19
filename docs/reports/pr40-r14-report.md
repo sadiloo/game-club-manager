@@ -4,7 +4,7 @@ Parent: dba1e26ebb0835ca0fe920b1cb28942bc7f09c01
 
 ## Summary
 
-Guard OFF script: tolerate missing Checkpoint rule group on first query, create allow rules before blocking localhost profiles, roll back profiles on verify failure. WPF night remaining-time test builds rate card from the same harness band as live TestHost (`GAMECLUB_SERVER_HOST_ARGS` / `CHECKPOINT_SERVER_PC_BAND`). New firewall integration tests for empty-group first apply and verify-failure rollback.
+Guard OFF script: line-36 rule-group query treats **ObjectNotFound** only as empty (Stop elsewhere); allow rules before profile block; `$profilesBlocked = $true` before profile loop so partial block rolls back; profile rollback on verify failure. **Product** rollback tested via `InternetFirewallApplierTestSeams.ThrowAfterProfilesBeforeVerify` (internal, off by default). WPF night rate card uses `PcSpecialBandLiveRateCardHelperNet48Mirror`; net10 oracle tests prove mirror matches `PcSpecialBandHostArgs` / `PcBandHarnessDiagnostics` for night, day, production, and explicit args.
 
 ## CI lines unchanged
 

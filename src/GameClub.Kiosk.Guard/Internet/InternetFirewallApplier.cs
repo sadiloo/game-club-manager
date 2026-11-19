@@ -25,13 +25,23 @@ internal sealed class InternetFirewallApplier : IInternetFirewallApplier
 
         var extra = string.Join(";", config.ExtraAllowPrograms.Select(p => p.Replace("'", "''")));
         var ips = string.Join(",", config.ServerIps.Select(ip => $"'{ip.Replace("'", "''")}'"));
+        var seamThrow = InternetFirewallApplierTestSeams.ThrowAfterProfilesBeforeVerify
+            ? "throw \"apply_failed:verification:test_seam_after_profiles\""
+            : "";
         var script = $@"
 $ErrorActionPreference = 'Stop'
 $ips = @({ips})
 $port = {config.ServerPort}
 $group = '{GroupName}'
-$existing = @(Get-NetFirewallRule -PolicyStore localhost -Group $group -ErrorAction SilentlyContinue)
-if ($null -eq $existing) {{ $existing = @() }}
+try {{
+  $existing = @(Get-NetFirewallRule -PolicyStore localhost -Group $group -ErrorAction Stop)
+}} catch {{
+  if ($_.CategoryInfo.Category -eq 'ObjectNotFound' -or $_.FullyQualifiedErrorId -like 'CmdletizationQuery_NotFound*') {{
+    $existing = @()
+  }} else {{
+    throw
+  }}
+}}
 if ($existing.Count -gt 0) {{
   $existing | Remove-NetFirewallRule -PolicyStore localhost -ErrorAction Stop
 }}
@@ -42,12 +52,12 @@ if ('{extra}' -ne '') {{
     if ($p) {{ New-NetFirewallRule -PolicyStore localhost -DisplayName ""$group - $p"" -Group $group -Direction Outbound -Action Allow -Program $p | Out-Null }}
   }}
 }}
-$profilesBlocked = $false
+$profilesBlocked = $true
 try {{
   foreach ($prof in @('Domain','Private','Public')) {{
     Set-NetFirewallProfile -PolicyStore localhost -Name $prof -Enabled True -DefaultOutboundAction Block -AllowLocalFirewallRules False -ErrorAction Stop
   }}
-  $profilesBlocked = $true
+  {seamThrow}
   $profiles = Get-NetFirewallProfile -PolicyStore localhost | Where-Object {{ $_.DefaultOutboundAction -ne 'Block' }}
   if (@($profiles).Count -gt 0) {{
     throw ""apply_failed:verification:localhost_profiles_not_block""
