@@ -32,7 +32,7 @@ Same R14 localhost-only rules left **2** rules on runner before guard-wpf. **`In
 
 ## Staging SHA
 
-*(set at push — see agent reply with `git rev-parse HEAD`)*
+`e4d84de33f47d39ea49783693fcaec0a75c2889d`
 
 ## L17 diagnostics
 

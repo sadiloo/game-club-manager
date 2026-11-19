@@ -1,4 +1,6 @@
+using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text.Json;
 
 namespace GameClub.Kiosk.Core.Guard;
@@ -7,6 +9,7 @@ namespace GameClub.Kiosk.Core.Guard;
 public readonly struct InternetFirewallOffReadbackModel
 {
     public bool AllActiveProfilesBlock { get; init; }
+    public bool AnyActiveProfileBlock { get; init; }
     public bool AllLocalhostProfilesBlock { get; init; }
     public int ActiveStoreGuardRuleCount { get; init; }
     public int LocalhostStoreGuardRuleCount { get; init; }
@@ -22,6 +25,11 @@ public readonly struct InternetFirewallOffReadbackModel
             StateFilePresent,
             requestedOn: false,
             requireVerifiedStateFile);
+
+    public string? ClassifyOnReset()
+        => InternetFirewallOffVerification.TryGetOnResetFailedReason(
+            AnyActiveProfileBlock,
+            ActiveStoreGuardRuleCount);
 
     public static bool TryParseDiagnosticJson(
         string json,
@@ -48,6 +56,7 @@ public readonly struct InternetFirewallOffReadbackModel
             model = new InternetFirewallOffReadbackModel
             {
                 AllActiveProfilesBlock = activeOut.Length == 3 && AllBlock(activeOut),
+                AnyActiveProfileBlock = AnyBlock(activeOut),
                 AllLocalhostProfilesBlock = localOut.Length == 3 && AllBlock(localOut),
                 ActiveStoreGuardRuleCount = activeRules,
                 LocalhostStoreGuardRuleCount = localRules,
@@ -74,6 +83,9 @@ public readonly struct InternetFirewallOffReadbackModel
 
         return true;
     }
+
+    private static bool AnyBlock(IEnumerable<string> values)
+        => values.Any(v => string.Equals(v, "Block", StringComparison.OrdinalIgnoreCase));
 
     private static string[] ReadStringArray(JsonElement root, string name)
     {

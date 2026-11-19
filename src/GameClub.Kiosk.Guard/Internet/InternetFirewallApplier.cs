@@ -20,9 +20,7 @@ internal sealed class InternetFirewallApplier : IInternetFirewallApplier
             }
 
             var onReadback = InternetFirewallOffApplyReadback.Capture(config);
-            var onFailed = InternetFirewallOffVerification.TryGetOnResetFailedReason(
-                onReadback.Model.AllActiveProfilesBlock,
-                onReadback.Model.ActiveStoreGuardRuleCount);
+            var onFailed = onReadback.Model.ClassifyOnReset();
             return onFailed ?? "applied";
         }
 

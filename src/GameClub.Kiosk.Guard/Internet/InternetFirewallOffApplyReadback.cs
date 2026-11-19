@@ -1,5 +1,4 @@
 using System;
-using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -103,6 +102,7 @@ $localRules = @(Get-NetFirewallRule -PolicyStore localhost -Group $group -ErrorA
         var model = new InternetFirewallOffReadbackModel
         {
             AllActiveProfilesBlock = active.Count == 3 && active.All(v => string.Equals(v, "Block", StringComparison.OrdinalIgnoreCase)),
+            AnyActiveProfileBlock = active.Any(v => string.Equals(v, "Block", StringComparison.OrdinalIgnoreCase)),
             AllLocalhostProfilesBlock = local.Count == 3 && local.All(v => string.Equals(v, "Block", StringComparison.OrdinalIgnoreCase)),
             ActiveStoreGuardRuleCount = activeCount,
             LocalhostStoreGuardRuleCount = localCount,

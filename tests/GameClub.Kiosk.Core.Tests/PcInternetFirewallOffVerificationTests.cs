@@ -131,6 +131,22 @@ public sealed class PcInternetFirewallOffVerificationTests
     }
 
     [Fact]
+    public void readback_model_on_reset_fails_when_one_active_profile_still_block()
+    {
+        const string json =
+            """
+            {"activeOut":["Block","NotConfigured","NotConfigured"],"localOut":["NotConfigured","NotConfigured","NotConfigured"],"activeRuleCount":0,"localRuleCount":0,"checkpointServerReachable":true,"stateFilePresent":false}
+            """;
+        Assert.True(
+            InternetFirewallOffReadbackModel.TryParseDiagnosticJson(json, out var model, out _, out _));
+        Assert.True(model.AnyActiveProfileBlock);
+        Assert.False(model.AllActiveProfilesBlock);
+        Assert.Equal(
+            "apply_failed:verification:active_profiles_still_block",
+            model.ClassifyOnReset());
+    }
+
+    [Fact]
     public void readback_model_r14_false_applied_runs_classifier_for_active_store_only()
     {
         const string json =

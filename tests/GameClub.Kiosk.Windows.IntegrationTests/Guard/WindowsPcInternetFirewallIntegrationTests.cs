@@ -586,6 +586,56 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
     }
 
     [Fact]
+    public void internet_guard_startup_clears_orphan_partial_block_when_state_file_missing()
+    {
+        RequireWindowsAdmin();
+        var ips = ResolveServerIps();
+        Assert.True(ips.Length > 0, "Could not resolve api.github.com for server allow-list.");
+
+        var applier = new InternetFirewallApplier();
+        var config = new InternetGuardConfig
+        {
+            StationId = "CI-STARTUP-PARTIAL",
+            ServerHost = "api.github.com",
+            ServerPort = 443,
+            ServerIps = ips,
+            ExtraAllowPrograms = CiExtraPrograms(),
+        };
+        var watchdogPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+            "Checkpoint",
+            "guard",
+            "watchdog.log");
+        try
+        {
+            TryDeleteState();
+            RunPowerShell(
+                "Set-NetFirewallProfile -Name Public -DefaultOutboundAction Block -AllowLocalFirewallRules False");
+            Assert.True(TryTcp("1.1.1.1", 443, 2_000) is false, "precondition: partial block should restrict egress");
+
+            InternetGuardStartupFirewall.ReconcileOnPipeStart(config, applier);
+
+            Assert.True(TryTcp("1.1.1.1", 443, 3_000), "startup must unblock partial Block without verified state");
+            var profileJson = RunPowerShell(
+                "Get-NetFirewallProfile | Select-Object Name,DefaultOutboundAction | ConvertTo-Json");
+            Assert.DoesNotContain("Block", profileJson, StringComparison.OrdinalIgnoreCase);
+            var activeRules = int.Parse(RunPowerShell(
+                "(Get-NetFirewallRule -Group 'Checkpoint Internet Off' -ErrorAction SilentlyContinue | Measure-Object).Count").Trim());
+            Assert.Equal(0, activeRules);
+            if (File.Exists(watchdogPath))
+            {
+                var tail = File.ReadAllText(watchdogPath);
+                Assert.Contains("reconcile_reset=applied", tail, StringComparison.Ordinal);
+            }
+        }
+        finally
+        {
+            applier.Apply(config, on: true);
+            TryDeleteState();
+        }
+    }
+
+    [Fact]
     public void internet_guard_startup_clears_orphan_off_when_state_file_missing()
     {
         RequireWindowsAdmin();

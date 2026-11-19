@@ -1,3 +1,5 @@
+using System;
+
 namespace GameClub.Kiosk.Guard.Internet;
 
 /// <summary>Removes legacy localhost-store OFF artifacts from builds that used -PolicyStore localhost (PR40-R15 option A).</summary>
@@ -5,7 +7,7 @@ internal static class InternetFirewallLocalhostStoreCleanup
 {
     private const string GroupName = "Checkpoint Internet Off";
 
-    public static void CleanupLegacyLocalhostArtifacts()
+    public static string CleanupLegacyLocalhostArtifacts()
     {
         var script = $@"
 $ErrorActionPreference = 'SilentlyContinue'
@@ -19,6 +21,13 @@ foreach ($prof in @('Domain','Private','Public')) {{
 }}
 'cleanup_ok'
 ";
-        _ = InternetPowerShellRunner.Run(script, 60_000);
+        var result = InternetPowerShellRunner.Run(script, 60_000);
+        var outcome = string.Equals(result, "cleanup_ok", StringComparison.Ordinal)
+            ? "applied"
+            : string.IsNullOrWhiteSpace(result)
+                ? "cleanup_failed:empty"
+                : result;
+        GuardWatchdogLog.Append($"localhost_cleanup={outcome}");
+        return outcome;
     }
 }
