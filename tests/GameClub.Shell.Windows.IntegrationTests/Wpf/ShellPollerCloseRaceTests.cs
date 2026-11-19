@@ -33,9 +33,23 @@ public sealed class ShellPollerCloseRaceTests
         var updateSnapshotAfterClose = 0;
         var closedFlag = 0;
 
-        void OnDomainUnhandled(object sender, UnhandledExceptionEventArgs e) => Interlocked.Increment(ref domainUnhandled);
-        void OnDispatcherUnhandled(object sender, System.Windows.Threading.DispatcherUnhandledExceptionEventArgs e) =>
+        void OnDomainUnhandled(object sender, UnhandledExceptionEventArgs e)
+        {
+            if (e.ExceptionObject is Exception ex)
+            {
+                Console.WriteLine(
+                    $"SHELL-RACE domainUnhandled type={ex.GetType().FullName} message={ex.Message} stack={ex.StackTrace}");
+            }
+
+            Interlocked.Increment(ref domainUnhandled);
+        }
+
+        void OnDispatcherUnhandled(object sender, System.Windows.Threading.DispatcherUnhandledExceptionEventArgs e)
+        {
+            Console.WriteLine(
+                $"SHELL-RACE dispatcherUnhandled type={e.Exception.GetType().FullName} message={e.Exception.Message} stack={e.Exception.StackTrace}");
             Interlocked.Increment(ref dispatcherUnhandled);
+        }
 
         AppDomain.CurrentDomain.UnhandledException += OnDomainUnhandled;
         System.Windows.Application.Current.DispatcherUnhandledException += OnDispatcherUnhandled;
@@ -75,25 +89,39 @@ public sealed class ShellPollerCloseRaceTests
 
                 var navBeforeClose = window.NavigationStartingCount;
                 var logBeforeClose = ReadShellLogTail();
-
                 Volatile.Write(ref closedFlag, 1);
                 ShellEnvironment.ForceExit = true;
                 window.Close();
                 ShellEnvironment.ForceExit = false;
 
                 buildGate.Set();
-                await Task.Delay(3000);
+                for (var i = 0; i < 30; i++)
+                {
+                    await Task.Delay(100);
+                    var navNow = window.NavigationStartingCount;
+                    if (navNow != navBeforeClose)
+                    {
+                        var delta = navNow - navBeforeClose;
+                        Console.WriteLine(
+                            $"SHELL-RACE navigation-after-close delta={delta} navCount={navNow} stack={Environment.StackTrace}");
+                        break;
+                    }
+                }
 
                 var logAfterClose = ReadShellLogTail();
                 var navDelta = window.NavigationStartingCount - navBeforeClose;
                 var panelNavigateAfterClose = logAfterClose
                     .Replace(logBeforeClose, "")
                     .Contains("panel-navigate", StringComparison.Ordinal);
+                if (panelNavigateAfterClose)
+                {
+                    Console.WriteLine($"SHELL-RACE panel-navigate-after-close stack={Environment.StackTrace}");
+                }
 
-                Assert.Equal(0, Volatile.Read(ref domainUnhandled));
-                Assert.Equal(0, Volatile.Read(ref dispatcherUnhandled));
-                Assert.Equal(0, Volatile.Read(ref updateSnapshotAfterClose));
-                Assert.Equal(0, navDelta);
+                Assert.True(Volatile.Read(ref domainUnhandled) == 0, "AppDomain.UnhandledException fired during poller-close race");
+                Assert.True(Volatile.Read(ref dispatcherUnhandled) == 0, "Dispatcher.UnhandledException fired during poller-close race");
+                Assert.True(Volatile.Read(ref updateSnapshotAfterClose) == 0, "Tray status line updated after MainWindow close");
+                Assert.True(navDelta == 0, "NavigationStarting fired after MainWindow close");
                 Assert.False(panelNavigateAfterClose, "panel-navigate log line appeared after window close");
             }, TimeSpan.FromSeconds(60));
         }
@@ -127,6 +155,7 @@ public sealed class ShellPollerCloseRaceTests
         {
             if (closedFlagReader() != 0)
             {
+                Console.WriteLine($"SHELL-RACE tray-status-line-after-close stack={Environment.StackTrace}");
                 recordUpdateAfterClose();
             }
         };

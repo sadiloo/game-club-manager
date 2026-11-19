@@ -210,6 +210,9 @@ public sealed class ShellPlanAIntegrationTests
             shellProc.Dispose();
         }
 
+        var waitSeconds = ResolveBillingWaitSeconds();
+        Thread.Sleep(TimeSpan.FromSeconds(waitSeconds));
+
         Assert.Equal("Playing", ShellCiHttp.GetOperatorGridStatusForStationAsync(refStation).GetAwaiter().GetResult());
         Assert.Equal("Playing", ShellCiHttp.GetOperatorGridStatusForStationAsync(shellStation).GetAwaiter().GetResult());
 
@@ -225,6 +228,16 @@ public sealed class ShellPlanAIntegrationTests
 
         var refElapsed = ShellCiHttp.WholeElapsedMinutes(refBill.FirstSegmentStartUtc, refBill.FrozenAtUtc);
         var shellElapsed = ShellCiHttp.WholeElapsedMinutes(shellBill.FirstSegmentStartUtc, shellBill.FrozenAtUtc);
+        var minWholeMinutes = waitSeconds / 60;
+        if (refElapsed < minWholeMinutes || shellElapsed < minWholeMinutes)
+        {
+            throw new InvalidOperationException(
+                $"SHELL-MONEY elapsed whole minutes below billing wait floor ({minWholeMinutes} from {waitSeconds}s): "
+                + $"REF={refElapsed} A3={shellElapsed}; "
+                + $"REF start={refBill.FirstSegmentStartUtc:O} frozen={refBill.FrozenAtUtc:O}; "
+                + $"A3 start={shellBill.FirstSegmentStartUtc:O} frozen={shellBill.FrozenAtUtc:O}");
+        }
+
         if (refElapsed != shellElapsed)
         {
             throw new InvalidOperationException(
@@ -755,6 +768,17 @@ public sealed class ShellPlanAIntegrationTests
         };
         psi.EnvironmentVariables["CHECKPOINT_SHELL_DATA"] = root;
         return Process.Start(psi)!;
+    }
+
+    private static int ResolveBillingWaitSeconds()
+    {
+        var raw = Environment.GetEnvironmentVariable("SHELL_A3_BILLING_WAIT_SECONDS");
+        if (int.TryParse(raw, out var seconds) && seconds >= 0)
+        {
+            return seconds;
+        }
+
+        return 600;
     }
 
     private static void EnsureServiceRunning()
