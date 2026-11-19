@@ -6,8 +6,8 @@ Branches (pushed, no PR):
 
 | Phase | Branch | Base | Head (`git rev-parse`) |
 |-------|--------|------|-------------------------|
-| A | `cursor/kiosk-locked-probe-v3-pr42` | `cursor/kiosk-locked-probe-v2-pr42` @ `b718edd` | `a4d8d70` (after probe fix `dbf113e` equivalent on B) |
-| B | `cursor/kiosk-locked-probe-v3` | `cursor/kiosk-locked-probe-v2` @ `10f7d6c` | `dbf113e` |
+| A | `cursor/kiosk-locked-probe-v3-pr42` | `cursor/kiosk-locked-probe-v2-pr42` @ `b718edd` | `45b5825` |
+| B | `cursor/kiosk-locked-probe-v3` | `cursor/kiosk-locked-probe-v2` @ `10f7d6c` | `7c880a7` |
 
 ## Instrumentation added (logging only)
 
@@ -27,41 +27,57 @@ CI order unchanged from v2 (integration → mutations → orphan → host_logout
 | A | [44632354599](https://github.com/sadiloo/game-club-manager/actions/runs/44632354599) | failed &lt;21m | net48 build: `ProbeHttpCallTrace.cs:57` expression-bodied `Clear()` with `lock`; ps1: `$Label:` parse in `Invoke-ProbePostgresQuery` |
 | B | [44632351764](https://github.com/sadiloo/game-club-manager/actions/runs/44632351764) | failed &lt;21m | same; integration step never reached WPF stability |
 
-Fix commit `fix: probe v3 net48 Clear() and ps1 Label interpolation` on both heads (above). **Re-run CI in progress** (no stability data from attempt 1).
+Fix commit `fix: probe v3 net48 Clear() and ps1 Label interpolation` on both heads. **No stability data from attempt 1.**
 
 ## CI attempt 2 (aborted — probe harness)
 
 | Phase | Run | Stability batches (fail/total) | Cause (**test-harness**) |
 |-------|-----|-------------------------------|--------------------------|
 | B | [44635656555](https://github.com/sadiloo/game-club-manager/actions/runs/44635656555) | **20/20 each batch, 100/100 total** (instant exit=1) | net48 build failed: `ProbeHttpCallTrace.cs` used C# range/index `..` (needs `Substring` on net48); no `IntegrationTests.dll` → all vstest runs missing assembly |
-| A | [44635658738](https://github.com/sadiloo/game-club-manager/actions/runs/44635658738) | _(same pattern expected)_ | same Range/`Index` issue |
+| A | [44635658738](https://github.com/sadiloo/game-club-manager/actions/runs/44635658738) | same pattern | same Range/`Index` issue |
 
-Fix: `3218131` / `a6347a0` — net48-safe truncation. **Attempt 3 CI running** on both branches.
+Fix: `3218131` (B) / `a6347a0` (A) — net48-safe truncation in `ProbeHttpCallTrace.cs`.
 
-## CI attempt 3 (in progress)
+## CI attempt 3 (aborted — CI infra + harness; **no WPF stability polls**)
 
-| Phase | Head | Run |
-|-------|------|-----|
-| B | `3218131` | _(pending)_ |
-| A | `a6347a0` | _(pending)_ |
+| Phase | Head | Run | Job outcome |
+|-------|------|-----|-------------|
+| A | `45b5825` | [44637788243](https://github.com/sadiloo/game-club-manager/actions/runs/44637788243) | `windows-2022 kiosk integration` **failure**; `windows-2022 shell` **failure** |
+| B | `7c880a7` | [44637788933](https://github.com/sadiloo/game-club-manager/actions/runs/44637788933) | same pattern |
 
 ### Pass/fail counts (5 batches × 20)
 
-| Phase | Batch 1 | Batch 2 | Batch 3 | Batch 4 | Batch 5 | Host logout 20× |
-|-------|---------|---------|---------|---------|---------|-----------------|
-| A | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ |
-| B | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ |
+| Phase | Batch 1 | Batch 2 | Batch 3 | Batch 4 | Batch 5 | Host logout 20× | `windows kiosk integration` |
+|-------|---------|---------|---------|---------|---------|-----------------|---------------------------|
+| A | 0/20* | 0/20* | 0/20* | 0/20* | 0/20* | **20/20 pass** | **skipped** (postgres step failed) |
+| B | 0/20* | 0/20* | 0/20* | 0/20* | 0/20* | _(same run family)_ | **skipped** |
 
-## Per-failure timelines
+\*Each batch exited in ~12–25s at `ci-integration-wpf-stability.ps1:51` — **never reached** `WindowsKioskWpfSmokeTests` (~90s polls). `WPF_STABILITY_RUNS: 0` in workflow env at end.
 
-_Populated from job logs and `artifacts/kiosk-windows-logs/wpf-stability-failure-evidence-<global>.log` when each run finishes._
+### Root cause (attempt 3)
+
+| Step | Label | Detail |
+|------|-------|--------|
+| `install and start postgresql` (~92s) | **CI infra** | Step failed (`postgresql service not ready` or Chocolatey/install never left Postgres listening on `127.0.0.1:5432`). Both integration and shell jobs failed here. |
+| `probe v3 wpf stability batch *` | **test-harness / workflow** | Workflow still runs stability batches after postgres failure (`always()`-style ordering). `LiveDatabaseResetHarnessTests.harness_live_database_reset_only` → `Npgsql` **connection refused** → throw at `ci-integration-wpf-stability.ps1:51` (`LiveDatabaseMigration.cs:17`, `LiveDatabaseResetHarnessTests.cs:13`). |
+| Mutations / orphan / host_logout | n/a | Steps **passed** on integration job despite postgres failure (they do not require live Postgres for this probe path). |
+
+**No** `wpf-stability-failure-evidence-*.log` with `PROBE_V3_FAILURE_EVIDENCE` sections — zero stability test iterations executed. v3 product instrumentation was **not exercised** on attempt 3.
+
+### Per-failure timelines
+
+_Not applicable for attempt 3 (no stability failures, only pre-test DB reset failures)._
 
 ## Working hypothesis (v2 prior art; v3 evidence will confirm or reject)
 
 v2 run global **25** on PR42 base: `sessions` **0 rows** for station; harness fund HTTP **200/204**; kiosk **`hostSessionId` all-zero** with `lockedReason=other:empty_host_session` (`KioskShellOrchestrator.cs` ~108). That pattern points to **product**: kiosk login/session bind race or ordering (`KioskHostService` / `KioskShellOrchestrator`), not missing harness session start — harness never calls `/api/kiosk/auth/login`; WPF kiosk does.
 
-v3 logging will show whether **`POST /api/kiosk/auth/login`** is absent, 4xx/409, or succeeds without a persisted session (case-normalization mismatch on `StationId` is an explicit check in evidence block 4).
+v3 logging will show whether **`POST /api/kiosk/auth/login`** is absent, 4xx/409, or succeeds without a persisted session (case-normalization mismatch on `StationId` is an explicit check in evidence block 4) **once a CI run completes with Postgres up and all 100 stability iterations**.
+
+## Next step (manual)
+
+Re-run workflow on both v3 branch heads after Postgres install is healthy on `windows-2022` (Actions → run → Re-run failed jobs, or empty push). Cloud agent token could not `gh run rerun` (integration permission).
 
 ## STOP
 
-Report will be completed with batch pass/fail tables and full failure timelines when Windows CI terminates on both branches. No PR opened.
+Probe branches pushed; report current through attempt 3. **No PR.** A successful attempt 4 should populate batch tables and per-failure `PROBE_V3_*` timelines in this file.
