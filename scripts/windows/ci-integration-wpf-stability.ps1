@@ -99,7 +99,7 @@ function Get-StationIdFromLogs([string[]]$Paths) {
 function Invoke-ProbePostgresQuery([string]$Query, [string]$Label, [scriptblock]$Append) {
     $psql = 'C:\Program Files\PostgreSQL\16\bin\psql.exe'
     if (-not (Test-Path $psql)) {
-        & $Append "($Label: psql missing)"
+        & $Append "($($Label): psql missing)"
         return
     }
     $conn = $env:GAMECLUB_TEST_DATABASE
