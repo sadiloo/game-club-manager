@@ -6,12 +6,13 @@
     <IsTestProject>true</IsTestProject>
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
-    <NoWarn>$(NoWarn);NU1902;NU1903</NoWarn>
+    <NoWarn>$(NoWarn);NU1902;NU1903;xUnit1031</NoWarn>
     <UseWPF>true</UseWPF>
   </PropertyGroup>
 
   <ItemGroup>
     <Reference Include="System.ServiceProcess" />
+    <Reference Include="System.Windows.Forms" />
   </ItemGroup>
 
   <ItemGroup>

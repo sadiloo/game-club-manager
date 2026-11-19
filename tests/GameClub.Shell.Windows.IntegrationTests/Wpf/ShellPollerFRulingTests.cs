@@ -88,7 +88,7 @@ public sealed class ShellPollerFRulingTests
         var yesterdayTehran = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, tehranZone).Date.AddDays(-1).AddHours(9);
         var startedUtc = TimeZoneInfo.ConvertTimeToUtc(yesterdayTehran, tehranZone);
         ShellSeams.UtcNow = () => DateTime.UtcNow;
-        FakeShellSeams.ReadLocalStatus = () => new LocalServerStatusDto { DbOk = true, StartedAtUtc = startedUtc };
+        ShellSeams.ReadLocalStatus = () => new LocalServerStatusDto { DbOk = true, StartedAtUtc = startedUtc };
         FakeShellSeams.Service.Status = ServiceControllerStatus.Running;
         _fixture.RunAsync(() =>
         {
@@ -108,14 +108,26 @@ public sealed class ShellPollerFRulingTests
         ShellSeams.Notifications.ShowUnexpectedStop(noAnswer: false);
         var stoppedTitle = FakeShellSeams.Notifications.LastUnexpectedStopTitle ?? "";
         var stoppedBody = FakeShellSeams.Notifications.LastUnexpectedStopBody ?? "";
-        Assert.False(stoppedTitle.Any(c => c is >= 'A' and <= 'Z' or >= 'a' and <= 'z'));
-        Assert.False(stoppedBody.Any(c => c is >= 'A' and <= 'Z' or >= 'a' and <= 'z'));
+        AssertNoLatinLetters(stoppedTitle);
+        AssertNoLatinLetters(stoppedBody);
         ShellSeams.Notifications.ShowUnexpectedStop(noAnswer: true);
         var noAnswerTitle = FakeShellSeams.Notifications.LastUnexpectedStopTitle ?? "";
         var noAnswerBody = FakeShellSeams.Notifications.LastUnexpectedStopBody ?? "";
-        Assert.False(noAnswerTitle.Any(c => c is >= 'A' and <= 'Z' or >= 'a' and <= 'z'));
-        Assert.False(noAnswerBody.Any(c => c is >= 'A' and <= 'Z' or >= 'a' and <= 'z'));
+        AssertNoLatinLetters(noAnswerTitle);
+        AssertNoLatinLetters(noAnswerBody);
         Assert.NotEqual(stoppedTitle, noAnswerTitle);
+    }
+
+    [Fact]
+    private static void AssertNoLatinLetters(string text)
+    {
+        foreach (var c in text)
+        {
+            if (c is >= 'A' and <= 'Z' or >= 'a' and <= 'z')
+            {
+                Assert.Fail($"Latin letter in Persian toast text: '{c}'");
+            }
+        }
     }
 
     [Fact]

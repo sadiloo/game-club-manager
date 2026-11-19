@@ -9,7 +9,6 @@ using System.Security;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
-using System.Windows.Forms;
 using GameClub.Shell;
 using GameClub.Shell.ServerControl;
 using GameClub.Shell.Shell;
@@ -173,8 +172,8 @@ public sealed class ShellPlanAIntegrationTests
     {
         FakeShellSeams.RestoreProduction();
         EnsureServiceRunning();
-        var shellStation = "SHELL-A3-" + Guid.NewGuid().ToString("N")[..6].ToUpperInvariant();
-        var refStation = "SHELL-REF-" + Guid.NewGuid().ToString("N")[..6].ToUpperInvariant();
+        var shellStation = "SHELL-A3-" + Guid.NewGuid().ToString("N").Substring(0, 6).ToUpperInvariant();
+        var refStation = "SHELL-REF-" + Guid.NewGuid().ToString("N").Substring(0, 6).ToUpperInvariant();
         var shellSession = ShellCiHttp.CreateOpenSessionAsync(shellStation).GetAwaiter().GetResult();
         var refSession = ShellCiHttp.CreateOpenSessionAsync(refStation).GetAwaiter().GetResult();
         var baseline = ShellCiHttp.GetOpenSessionLiveBillAsync(refSession).GetAwaiter().GetResult();
@@ -244,7 +243,7 @@ public sealed class ShellPlanAIntegrationTests
         ShellSeams.MessageBoxHandler = req =>
         {
             Assert.Contains("۲", req.Text);
-            return DialogResult.Cancel;
+            return System.Windows.Forms.DialogResult.Cancel;
         };
         FakeShellSeams.Service.Status = ServiceControllerStatus.Running;
         var code = ServerControlProgram.Run("stop");
@@ -257,7 +256,7 @@ public sealed class ShellPlanAIntegrationTests
     {
         FakeShellSeams.Install();
         ShellSeams.ReadOpenSessionCount = () => 3;
-        ShellSeams.MessageBoxHandler = _ => DialogResult.Cancel;
+        ShellSeams.MessageBoxHandler = _ => System.Windows.Forms.DialogResult.Cancel;
         FakeShellSeams.Service.Status = ServiceControllerStatus.Running;
         var code = ServerControlProgram.Run("stop");
         Assert.Equal(1, code);
@@ -421,7 +420,7 @@ public sealed class ShellPlanAIntegrationTests
                 await Task.Delay(4000);
                 var wv = window.FindName("PanelWebView") as Microsoft.Web.WebView2.Wpf.WebView2;
                 Assert.NotNull(wv?.CoreWebView2);
-                wv.CoreWebView2.JavaScriptDialogOpening += (_, _) => tcs.TrySetResult(true);
+                wv.CoreWebView2.ScriptDialogOpening += (_, _) => tcs.TrySetResult(true);
                 await wv.CoreWebView2.ExecuteScriptAsync("alert('سلام');");
                 var seen = await Task.WhenAny(tcs.Task, Task.Delay(5000)) == tcs.Task;
                 Assert.True(seen);
