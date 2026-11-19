@@ -33,6 +33,7 @@ $batchOffset = 0
 if ($env:WPF_STABILITY_BATCH -match '^\d+$') { $batchIndex = [int]$env:WPF_STABILITY_BATCH }
 if ($env:WPF_STABILITY_BATCH_OFFSET -match '^\d+$') { $batchOffset = [int]$env:WPF_STABILITY_BATCH_OFFSET }
 $failLate = $env:WPF_STABILITY_FAIL_LATE -eq '1'
+$probeV2 = $env:WPF_STABILITY_PROBE_V2 -eq '1'
 
 dotnet build tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj -c Release -f net10.0 --nologo
 dotnet build tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj -c Release -f net48 --nologo
@@ -82,6 +83,83 @@ function Write-StabilitySummaryLine([string]$line) {
     Write-Host $line
 }
 
+function Write-ProbeFailureEvidence(
+    [int]$GlobalRun,
+    [string]$ServerOutLog,
+    [string]$ServerErrLog,
+    [string]$RunLog,
+    [string]$RunErr
+) {
+    $evidencePath = Join-Path $logDir ("wpf-stability-failure-evidence-" + $GlobalRun + ".log")
+  $utc = [datetime]::UtcNow.ToString("o")
+    $lines = New-Object System.Collections.Generic.List[string]
+    $append = { param($s) $lines.Add($s); Write-Host $s }
+    & $append "PROBE_V2_FAILURE_EVIDENCE utc=$utc global_run=$GlobalRun"
+
+    & $append "--- HB_ACK and lease lines (run log) ---"
+    if (Test-Path $RunLog) {
+        Select-String -Path $RunLog -Pattern 'HB_ACK|lease|lockedReason|STAB_STEP' -ErrorAction SilentlyContinue |
+            ForEach-Object { & $append $_.Line }
+    }
+    if (Test-Path $RunErr) {
+        Select-String -Path $RunErr -Pattern 'HB_ACK|lease|lockedReason|STAB_STEP' -ErrorAction SilentlyContinue |
+            ForEach-Object { & $append $_.Line }
+    }
+
+    & $append "--- full server stdout for this batch ---"
+    if (Test-Path $ServerOutLog) { Get-Content $ServerOutLog | ForEach-Object { & $append $_ } }
+    & $append "--- full server stderr for this batch ---"
+    if (Test-Path $ServerErrLog) { Get-Content $ServerErrLog | ForEach-Object { & $append $_ } }
+
+    & $append "--- /api/kiosk lines (server logs + run output) ---"
+    $kioskPatterns = @('/api/kiosk', 'POST /api/kiosk', 'GET /api/kiosk', 'kiosk.login', 'kiosk\.')
+    foreach ($path in @($ServerOutLog, $ServerErrLog, $RunLog, $RunErr)) {
+        if (-not (Test-Path $path)) { continue }
+        Select-String -Path $path -Pattern ($kioskPatterns -join '|') -ErrorAction SilentlyContinue |
+            ForEach-Object { & $append ("source=$([IO.Path]::GetFileName($path)) " + $_.Line) }
+    }
+    Get-ChildItem $logDir -Filter ("wpf-stability-" + $GlobalRun + "-*.log") -ErrorAction SilentlyContinue | ForEach-Object {
+        Select-String -Path $_.FullName -Pattern '/api/kiosk|HB_ACK|HTTP' -ErrorAction SilentlyContinue |
+            ForEach-Object { & $append ("source=$($_.Filename) " + $_.Line) }
+    }
+
+    $stationId = $null
+    foreach ($path in @($RunLog, $RunErr, $ServerOutLog)) {
+        if (-not (Test-Path $path)) { continue }
+        $m = Select-String -Path $path -Pattern 'PC-WPF-[0-9a-f]{8}' -AllMatches -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($m -and $m.Matches.Count -gt 0) {
+            $stationId = $m.Matches[0].Value
+            break
+        }
+    }
+
+    & $append "--- postgres sessions for station ---"
+    $psql = 'C:\Program Files\PostgreSQL\16\bin\psql.exe'
+    if ($stationId -and (Test-Path $psql)) {
+        & $append "stationId=$stationId"
+        $conn = $env:GAMECLUB_TEST_DATABASE
+        if ($conn -match 'Password=([^;]+)') { $env:PGPASSWORD = $Matches[1] }
+        $db = if ($conn -match 'Database=([^;]+)') { $Matches[1] } else { 'gameclub_test' }
+        $hostName = if ($conn -match 'Host=([^;]+)') { $Matches[1] } else { '127.0.0.1' }
+        $port = if ($conn -match 'Port=([^;]+)') { $Matches[1] } else { '5432' }
+        $user = if ($conn -match 'Username=([^;]+)') { $Matches[1] } else { 'postgres' }
+        $query = @"
+SELECT "Id", "StationId", "Status", "StartedAtUtc", "EndedAtUtc"
+FROM sessions
+WHERE "StationId" = '$stationId'
+ORDER BY "StartedAtUtc" DESC
+LIMIT 20;
+"@
+        $pgOut = & $psql -h $hostName -p $port -U $user -d $db -c $query 2>&1
+        ($pgOut | Out-String).Trim().Split("`n") | ForEach-Object { if ($_.Length -gt 0) { & $append $_ } }
+    } else {
+        & $append "(station id not found in logs or psql missing)"
+    }
+
+    $lines | Set-Content -Path $evidencePath -Encoding UTF8
+    & $append "--- evidence written to $evidencePath ---"
+}
+
 try {
     $serverProc = Start-Process -FilePath "dotnet" -ArgumentList @("exec", $serverDll) -PassThru -NoNewWindow `
         -RedirectStandardOutput $serverLog -RedirectStandardError $serverErr -WorkingDirectory $repoRoot
@@ -125,6 +203,7 @@ try {
             $failureCount++
             Write-StabilitySummaryLine "WPF_STABILITY_FAIL global=$globalRun reason=timeout"
             Copy-KioskDiagnosticLogs -RunNumber $globalRun
+            if ($probeV2) { Write-ProbeFailureEvidence -GlobalRun $globalRun -ServerOutLog $serverLog -ServerErrLog $serverErr -RunLog $runLog -RunErr $runErr }
             if (-not $failLate) { throw "WPF stability run $globalRun timed out after 240s" }
             continue
         }
@@ -132,6 +211,7 @@ try {
         if ($wpfProc.ExitCode -ne 0) {
             $failureCount++
             Write-StabilitySummaryLine "WPF_STABILITY_FAIL global=$globalRun exit=$($wpfProc.ExitCode) log=$runLog"
+            if ($probeV2) { Write-ProbeFailureEvidence -GlobalRun $globalRun -ServerOutLog $serverLog -ServerErrLog $serverErr -RunLog $runLog -RunErr $runErr }
             if (-not $failLate) {
                 throw "WPF stability run $globalRun failed with exit $($wpfProc.ExitCode); see $serverErr and $runLog"
             }

@@ -7,7 +7,7 @@ on:
 jobs:
   linux:
     name: ubuntu net10
-    if: github.ref != 'refs/heads/cursor/kiosk-locked-probe'
+    if: github.ref != 'refs/heads/cursor/kiosk-locked-probe' && github.ref != 'refs/heads/cursor/kiosk-locked-probe-v2'
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -53,7 +53,7 @@ jobs:
 
   windows:
     name: windows net48 and net10
-    if: github.ref != 'refs/heads/cursor/kiosk-locked-probe'
+    if: github.ref != 'refs/heads/cursor/kiosk-locked-probe' && github.ref != 'refs/heads/cursor/kiosk-locked-probe-v2'
     timeout-minutes: 10
     runs-on: windows-2022
     steps:
@@ -74,7 +74,7 @@ jobs:
 
   windows-kiosk-integration:
     name: windows-2022 kiosk integration
-    timeout-minutes: ${{ github.ref == 'refs/heads/cursor/kiosk-locked-probe' && 150 || 40 }}
+    timeout-minutes: ${{ (github.ref == 'refs/heads/cursor/kiosk-locked-probe' || github.ref == 'refs/heads/cursor/kiosk-locked-probe-v2') && 220 || 40 }}
     runs-on: windows-2022
     env:
       GAMECLUB_DATABASE: Host=localhost;Port=5432;Database=gameclub_test;Username=postgres;Password=postgres;SSL Mode=Disable
@@ -130,12 +130,66 @@ jobs:
         shell: pwsh
         run: ./scripts/windows/ci-orphan-check.ps1
       - name: wpf remaining time stability (20 runs)
-        if: always() && github.ref != 'refs/heads/cursor/kiosk-locked-probe'
+        if: always() && github.ref != 'refs/heads/cursor/kiosk-locked-probe' && github.ref != 'refs/heads/cursor/kiosk-locked-probe-v2'
         timeout-minutes: 25
         shell: pwsh
         env:
           WPF_STABILITY_RUNS: "20"
         run: ./scripts/windows/ci-integration-wpf-stability.ps1
+      - name: probe v2 pre-batch diagnostics (batch 1)
+        if: always() && github.ref == 'refs/heads/cursor/kiosk-locked-probe-v2'
+        shell: pwsh
+        run: ./scripts/windows/ci-probe-v2-pre-batch.ps1 -Batch 1
+      - name: probe v2 wpf stability batch 1 of 3 (runs 1-20)
+        if: always() && github.ref == 'refs/heads/cursor/kiosk-locked-probe-v2'
+        timeout-minutes: 55
+        shell: pwsh
+        env:
+          WPF_STABILITY_RUNS: "20"
+          WPF_STABILITY_FAIL_LATE: "1"
+          WPF_STABILITY_PROBE_V2: "1"
+          WPF_STABILITY_BATCH: "1"
+          WPF_STABILITY_BATCH_OFFSET: "0"
+        run: ./scripts/windows/ci-integration-wpf-stability.ps1
+      - name: probe v2 pre-batch diagnostics (batch 2)
+        if: always() && github.ref == 'refs/heads/cursor/kiosk-locked-probe-v2'
+        shell: pwsh
+        run: ./scripts/windows/ci-probe-v2-pre-batch.ps1 -Batch 2
+      - name: probe v2 wpf stability batch 2 of 3 (runs 21-40)
+        if: always() && github.ref == 'refs/heads/cursor/kiosk-locked-probe-v2'
+        timeout-minutes: 55
+        shell: pwsh
+        env:
+          WPF_STABILITY_RUNS: "20"
+          WPF_STABILITY_FAIL_LATE: "1"
+          WPF_STABILITY_PROBE_V2: "1"
+          WPF_STABILITY_BATCH: "2"
+          WPF_STABILITY_BATCH_OFFSET: "20"
+        run: ./scripts/windows/ci-integration-wpf-stability.ps1
+      - name: probe v2 pre-batch diagnostics (batch 3)
+        if: always() && github.ref == 'refs/heads/cursor/kiosk-locked-probe-v2'
+        shell: pwsh
+        run: ./scripts/windows/ci-probe-v2-pre-batch.ps1 -Batch 3
+      - name: probe v2 wpf stability batch 3 of 3 (runs 41-60)
+        if: always() && github.ref == 'refs/heads/cursor/kiosk-locked-probe-v2'
+        timeout-minutes: 55
+        shell: pwsh
+        env:
+          WPF_STABILITY_RUNS: "20"
+          WPF_STABILITY_FAIL_LATE: "1"
+          WPF_STABILITY_PROBE_V2: "1"
+          WPF_STABILITY_BATCH: "3"
+          WPF_STABILITY_BATCH_OFFSET: "40"
+        run: ./scripts/windows/ci-integration-wpf-stability.ps1
+      - name: probe v2 upload stability failure artifacts
+        if: always() && github.ref == 'refs/heads/cursor/kiosk-locked-probe-v2'
+        uses: actions/upload-artifact@v4
+        with:
+          name: kiosk-locked-probe-v2-failures
+          if-no-files-found: ignore
+          path: |
+            artifacts/kiosk-windows-logs/wpf-stability-failure-evidence-*.log
+            artifacts/kiosk-windows-logs/wpf-stability-run-*-err.log
       - name: probe wpf stability batch 1 of 3 (runs 1-20)
         if: github.ref == 'refs/heads/cursor/kiosk-locked-probe'
         timeout-minutes: 55
@@ -167,7 +221,7 @@ jobs:
           WPF_STABILITY_BATCH_OFFSET: "40"
         run: ./scripts/windows/ci-integration-wpf-stability.ps1
       - name: reset kiosk ci firewall and probe egress
-        if: always() && github.ref != 'refs/heads/cursor/kiosk-locked-probe'
+        if: always() && github.ref != 'refs/heads/cursor/kiosk-locked-probe' && github.ref != 'refs/heads/cursor/kiosk-locked-probe-v2'
         timeout-minutes: 3
         shell: pwsh
         run: ./scripts/windows/ci-firewall-restore.ps1 -Restore -Evidence
@@ -187,15 +241,32 @@ jobs:
         shell: pwsh
         run: ./scripts/windows/ci-integration-print.ps1
       - name: print probe stability summary
-        if: always() && github.ref == 'refs/heads/cursor/kiosk-locked-probe'
+        if: always() && (github.ref == 'refs/heads/cursor/kiosk-locked-probe' || github.ref == 'refs/heads/cursor/kiosk-locked-probe-v2')
         shell: pwsh
         run: |
           $summary = "artifacts/kiosk-windows-logs/wpf-stability-summary.log"
           if (Test-Path $summary) { Get-Content $summary } else { Write-Host "no wpf-stability-summary.log" }
+          Get-ChildItem artifacts/kiosk-windows-logs/wpf-stability-failure-evidence-*.log -ErrorAction SilentlyContinue | ForEach-Object {
+            Write-Host "--- $($_.Name) ---"
+            Get-Content $_.FullName
+          }
           Get-ChildItem artifacts/kiosk-windows-logs/wpf-stability-run-*.log -ErrorAction SilentlyContinue | ForEach-Object {
             Write-Host "--- $($_.Name) (hb_ack lines) ---"
             Select-String -Path $_.FullName -Pattern 'HB_ACK|STAB_STEP|lockedReason' | ForEach-Object { $_.Line }
           }
+      - name: probe v2 fail job on stability failures
+        if: always() && github.ref == 'refs/heads/cursor/kiosk-locked-probe-v2'
+        shell: pwsh
+        run: |
+          $summary = "artifacts/kiosk-windows-logs/wpf-stability-summary.log"
+          if (-not (Test-Path $summary)) { throw "missing wpf-stability-summary.log" }
+          $fails = Select-String -Path $summary -Pattern 'WPF_STABILITY_FAIL|WPF_STABILITY_BATCH_FAIL'
+          if ($fails) {
+            Write-Host "probe v2 stability failures:"
+            $fails | ForEach-Object { Write-Host $_.Line }
+            exit 1
+          }
+          Write-Host "probe v2 stability: 0 failures in summary"
       - name: upload kiosk integration artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -215,6 +286,8 @@ jobs:
             artifacts/kiosk-windows-logs/vstest-diag-*.log
             artifacts/kiosk-windows-logs/wpf-stability-*.log
             artifacts/kiosk-windows-logs/wpf-stability-summary.log
+            artifacts/kiosk-windows-logs/wpf-stability-failure-evidence-*.log
+            artifacts/kiosk-reconnect-mut/**
             artifacts/ci-timeout-marker.log
             artifacts/**/*.trx
             artifacts/**/Sequence*.xml
