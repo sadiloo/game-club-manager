@@ -1,81 +1,66 @@
 # Kiosk locked probe v2 (diagnosis only)
 
-Base: `main` `5574ce0`. Branches: `cursor/kiosk-locked-probe-v2` (logging + CI only). No PR. Phase 2 (`cursor/kiosk-locked-probe-v2-pr42`) runs only if phase 1 records **0** stability failures.
+Base: `main` `5574ce0`. Branches: `cursor/kiosk-locked-probe-v2`, `cursor/kiosk-locked-probe-v2-pr42` (logging + CI/scripts only). No PR.
 
-## External reference run (PR #42 staging, no kiosk diff)
+## External reference (PR #42 staging `13e5a4e`, no kiosk diff)
 
 | Field | Value |
 |--------|--------|
-| Head | `13e5a4ed2137b852e2519809d17ddf8a743ec4d8` |
 | Workflow run | [44609799325](https://github.com/sadiloo/game-club-manager/actions/runs/44609799325) |
-| Job | `windows-2022 kiosk integration` ([135863047760](https://github.com/sadiloo/game-club-manager/actions/runs/44609799325/job/135863047760)) |
-| Job outcome | **failure** |
+| Job | [135863047760](https://github.com/sadiloo/game-club-manager/actions/runs/44609799325/job/135863047760) |
 
-### Integration-step failure (before stability)
-
-| UTC | Event |
-|-----|--------|
-| `2026-11-19T20:47:27Z` | `ci-integration.ps1` starts (full net48 WPF host suite in job). |
-| `2026-11-19T20:54:35Z` | Prior host tests pass; `host_logout_login_during_slow_post_readopts_new_session_on_next_ack` passes. |
-| `2026-11-19T20:54:36Z` | **`host_logout_open_ack_during_slow_post_stays_locked_without_session` FAIL** — `Assert.True` expected `True`, actual `False` at `KioskHostStatusTimerTests.cs:739` (via `RunLogoutOpenAckDuringSlowPostOnDispatcherAsync` → `:755` → scenario `:652` → `:662`). |
-| `2026-11-19T20:54:38Z` | Integration TRX **29 passed / 1 failed**; step exit **1** (mutations/orphan/stability still run via `if: always()` on downstream steps). |
-
-**Assertion meaning (main `5574ce0` code):** after a second **Open** heartbeat ack while `LogoutAsync` is in flight with `LogoutHttpDelay=800ms`, the test requires `_logoutInProgress == true` (`KioskHostStatusTimerTests.cs` ~738). The flake is `_logoutInProgress` already **false** — cleared in `KioskHostService.LogoutAsync` `finally` at **`KioskHostService.cs:297`** while slow logout is still supposed to be in progress.
-
-Mutants `Host_logout_http_before_lock` and `Host_logout_no_guard_before_http` both list this test as killer (job log ~20:54:44Z).
-
-### Stability failure (after full integration order)
+### A) Integration — `host_logout_open_ack_during_slow_post_stays_locked_without_session`
 
 | UTC | Event |
 |-----|--------|
-| `2026-11-19T20:57:22Z` | WPF stability loop starts (post integration, mutations, orphan). |
-| `2026-11-19T20:57:47Z`–`20:58:33Z` | Stability runs **1–4/20** pass (~8–9s each). |
-| `2026-11-19T20:58:34Z` | Stability run **5/20** starts. |
-| `2026-11-19T21:00:11Z` | Run **5/20** FAIL — assert `WindowsKioskWpfSmokeTests.cs:186` after **90.9s** poll. |
+| `2026-11-19T20:54:36Z` | FAIL — `Assert.True` expected `True`, actual `False` at **`KioskHostStatusTimerTests.cs:739`** (helper `:755`, scenario `:652`, `:662`). |
+| `2026-11-19T20:54:38Z` | Integration **29/30** pass; step exit **1** (downstream steps use `if: always()`). |
 
-**Diagnostics (job log):** `lastStatusText='Locked — PC-WPF-1b4930b2 · connected'`; `IsTransportConnected=True`; `runtimeState=Locked`; `shellPhase=Locked`; **`hostSessionId=00000000-0000-0000-0000-000000000000`**; **`runtimeSessionId=00000000-0000-0000-0000-000000000000`**; `walletTopUpHttp=200`; `credentialPutHttp=204`.
+**Meaning:** after second **Open** ack during `LogoutAsync` with `LogoutHttpDelay=800ms`, `_logoutInProgress` must stay **true** (`KioskHostStatusTimerTests.cs` **738**). Flake: flag already **false**, cleared in **`KioskHostService.LogoutAsync` `finally` at line 297** before slow POST window ends. Mutants `Host_logout_http_before_lock` / `Host_logout_no_guard_before_http` kill this test.
 
-Setup funding HTTP succeeded; kiosk stayed on **Locked** lock-screen copy with transport **connected** and **no** bound session for remaining-time display (`KioskHostService.RefreshStationStatusText` lock path ~513–526; no `~hh:mm:ss left`).
+### B) Stability run 5/20 — `wpf_remaining_time_matches_funded_session_within_one_tick`
 
-With observability (probe branch only), `OnHeartbeatAck` with empty host `sessionId` falls through to **`KioskShellOrchestrator.cs:108`** (`Locked`; `lockedReason=other:empty_host_session`). Runtime mirror: **`KioskRuntime.cs:391–393`** (`_sessionId == Guid.Empty` → `Locked`).
+| UTC | Event |
+|-----|--------|
+| `2026-11-19T20:58:34Z` | Run **5/20** starts. |
+| `2026-11-19T21:00:11Z` | FAIL **`WindowsKioskWpfSmokeTests.cs:186`** after **90.9s** poll. |
 
-No `HB_ACK` lines on staging head `13e5a4e` (logging not on that commit).
+**Diagnostics:** `Locked — PC-WPF-1b4930b2 · connected`; transport **Connected**; `runtimeState=Locked`; `shellPhase=Locked`; **`hostSessionId`/`runtimeSessionId` all-zero**; `walletTopUpHttp=200`; `credentialPutHttp=204`. Symptom: **`KioskHostService.RefreshStationStatusText` lock path (~513–526)** without display; orchestrator fall-through **`KioskShellOrchestrator.cs:108`** (`lockedReason=other:empty_host_session` when HB_ACK logging present).
 
-## Do both failures share a cause?
+## Shared cause? (both failures)
 
-**Same subsystem (kiosk session + lock + heartbeat/logout interleaving), not the same single line.**
+| Test | Primary file:line | Mechanism |
+|------|-------------------|-----------|
+| Logout / slow POST | **`KioskHostService.cs:297`**, assert **`KioskHostStatusTimerTests.cs:738–739`** | `_logoutInProgress` drops early → Open ack path at **`OnHeartbeatAcknowledged` 354, 378** no longer blocks Playing while logout in flight. |
+| Remaining-time stability | **`WindowsKioskWpfSmokeTests.cs:186`**, **`KioskShellOrchestrator.cs:79–108`** | Login/fund HTTP OK but **`_sessionId` stays empty** → Open acks → **Locked** UI with no `~hh:mm:ss left`; runtime **`KioskRuntime.cs:391–393`**. |
 
-| Failure | Primary locus | Mechanism |
-|---------|----------------|-----------|
-| `host_logout_open_ack_…` | `KioskHostService.cs:257–297` (`_logoutInProgress`), assert `KioskHostStatusTimerTests.cs:738–739` | Slow-logout guard drops too early → Open ack handling no longer treats logout as in-flight (`OnHeartbeatAcknowledged` Open branch uses `!_logoutInProgress` at **354**, **378**). |
-| `wpf_remaining_time…` | `WindowsKioskWpfSmokeTests.cs:186`; orchestrator **`KioskShellOrchestrator.cs:79–108`**; UI **`KioskHostService.cs:513–526`** | After fund/login HTTP **200/204**, **`_sessionId` remains empty** through poll → Open acks resolve to **Locked**, status shows **Locked — · connected** without lease display. |
+**Verdict:** **Same kiosk subsystem** (session bind vs heartbeat/logout ordering). **Not the same line or always the same flake:** on [44609799325](https://github.com/sadiloo/game-club-manager/actions/runs/44609799325) both failed in one job; phase 2 probe below shows **stability can fail while integration + 20× host-logout loop are green** — so co-failure is **not required**.
 
-**Coupling on run 44609799325:** integration step already failed the logout/ack contract at **20:54:36Z**; stability failed **5/20** at **21:00:11Z** in the **same job** after mutations/orphan (leftover **process/DB state from earlier steps** possible; pre-batch registry not captured on that run). Both are **kiosk src** timing/state bugs, not harness assertion mistakes or transport-down.
+## Phase 1 — `cursor/kiosk-locked-probe-v2` @ `5574ce0`
 
-**Verdict:** **Related family** — session lifecycle vs heartbeat/logout ordering — **not proven identical root cause** without probe `HB_ACK` on a matching stability failure. The logout flake is a **direct** regression on `_logoutInProgress` lifetime; the stability flake is **empty `hostSessionId` + Locked shell** (login bind or post-login clear).
+| Run | Job id | Stability (b1/b2/b3) | Host logout 20× |
+|-----|--------|----------------------|-----------------|
+| [44620409125](https://github.com/sadiloo/game-club-manager/actions/runs/44620409125) | [135900224360](https://github.com/sadiloo/game-club-manager/actions/runs/44620409125/job/135900224360) | **0 / 0 / 0** (60/60) | **0/20** |
 
-## Probe v2 CI (this agent)
+Full order (integration → mutations → orphan → host loop → 3×20 stability) passed.
 
-| Item | Value |
-|------|--------|
-| Branch | `cursor/kiosk-locked-probe-v2` |
-| Commits | cherry-pick `b83f578` + CI scripts (`502a042` …) |
-| Order | postgres → integration → reconnect mutations → orphan → **20× `host_logout_open_ack_during_slow_post_stays_locked_without_session`** → 3×20 WPF stability (`FAIL_LATE`, pre-batch diagnostics, failure evidence) |
+## Phase 2 — `cursor/kiosk-locked-probe-v2-pr42` @ `32c9ad9`
 
-### Phase 1 runs
+| Run | Job id | Stability (b1/b2/b3) | Host logout 20× | Integration host suite |
+|-----|--------|----------------------|-----------------|------------------------|
+| [44625751429](https://github.com/sadiloo/game-club-manager/actions/runs/44625751429) | [135919000961](https://github.com/sadiloo/game-club-manager/actions/runs/44625751429/job/135919000961) | **0 / 1 / 0** | **0/20** | **30/30** pass (no `host_logout…` flake) |
 
-| Run | Head SHA | Job id | Status | Stability failures (batch 1/2/3) | Host logout loop failures |
-|-----|-----------|--------|--------|-----------------------------------|---------------------------|
-| *(fill when CI completes)* | | | | | |
+Workflow also failed unrelated **`windows-2022 shell`** ([135919000273](https://github.com/sadiloo/game-club-manager/actions/runs/44625751429/job/135919000273)); kiosk job still produced probe evidence.
 
-### Phase 2
+### Phase 2 stability failure timeline (global **25**, batch 2 run **5/20**)
 
-Not started unless phase 1 stability totals **0/60** failures.
+| UTC | Event |
+|-----|--------|
+| `2026-11-19T22:31:27Z` | `STAB_STEP … run_begin` global=25 |
+| `2026-11-19T22:33:03Z` | `WPF_STABILITY_FAIL global=25`; assert **`WindowsKioskWpfSmokeTests.cs:188`** (same poll contract as :186 on main). |
+| Evidence | Station **`PC-WPF-6e5f9ab7`**; Postgres **`sessions` 0 rows** for that station at failure time; integration-step HB_ACK samples show **`lockedReason=other:empty_host_session`** with **`hostSessionId=000…000`** (`KioskShellOrchestrator.cs:108`). |
 
-## STOP — minimal fix (report only, not applied)
+## STOP — minimal fix (report only; kiosk src; not applied)
 
-1. **Logout guard:** keep `_logoutInProgress` true until logout HTTP + session clear complete (defer `finally` at `KioskHostService.cs:297` or set flag only after post-await relock), so Open acks during slow POST cannot widen session state (`KioskHostStatusTimerTests.cs:738` contract).
-
-2. **Stability / empty session:** after successful `LoginAsync` (`KioskHostService.cs:189–191`), ensure heartbeat path cannot leave `_sessionId` empty while Open lease acks arrive — e.g. bind from lease when login response and ack race (`KioskHostService.cs:368–375`) or gate `RefreshStationStatusText` lock copy until first verified Open ack with display (`ApplyHeartbeatDisplay` ~320–328).
-
-Re-run probe v2 after fix; expect both **20/20 host loop** and **60/60 stability** green in real CI order.
+1. **`KioskHostService.cs:297`** — keep `_logoutInProgress` true for full slow-logout + relock window (`KioskHostStatusTimerTests.cs:738`).
+2. **`KioskHostService.cs:368–375`** + **`KioskShellOrchestrator.cs:79–108`** — after successful login, bind/adopt session before Open acks paint **Locked** lock screen; do not leave `hostSessionId` empty while transport is connected.
