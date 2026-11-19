@@ -59,3 +59,11 @@ One JSON object per line; `GuardInternetPipeLineReader` (byte cap 64KiB, single 
 |-----|------|------|
 | **44606002155** | `5af88ae` | Literal evidence table above |
 | **44598481278** | R18e | Prior `write_begin` hang reference |
+
+## R20 (test-only)
+
+Branch `cursor/pr40-r20-staging` on `ba17f902`.
+
+1. **L17 station id:** `WindowsPcInternetApplyFailureLiveTests` uses `.ToUpperInvariant()` on the generated station suffix so created IDs match kiosk/API uppercase expectations.
+2. **Accept-loop leak:** `LineFramingPipeStub.StartAcceptLoop` / `AcceptLoopHandle` cancels and joins the stub thread (unblock client connect) so pipe framing tests do not leave background accept loops running.
+3. **Pipe close proof:** No-newline and oversize stub tests pass a `ConcurrentQueue` into `ReadLine` logging; assertions require `pipe_read_timeout` / `pipe_line_oversize` log lines and tolerate `IOException` when the server closes before the client finishes writing.

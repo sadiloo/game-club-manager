@@ -49,7 +49,7 @@ public sealed class WindowsPcInternetApplyFailureLiveTests
         {
             var api = new HttpClient { BaseAddress = new Uri(serverUrl.TrimEnd('/') + "/") };
             api.DefaultRequestHeaders.Add("X-Api-Key", apiKey);
-            var stationId = "PC-FAIL-" + Guid.NewGuid().ToString("N").Substring(0, 6);
+            var stationId = "PC-FAIL-" + Guid.NewGuid().ToString("N").Substring(0, 6).ToUpperInvariant();
             (await api.PostAsJsonAsync("/api/stations", new { id = stationId, name = stationId, groupId = PilotSeed.PcNormalGroupId }))
                 .EnsureSuccessStatusCode();
 

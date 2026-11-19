@@ -19,15 +19,7 @@ public sealed class GuardInternetPipeFramingTests
             return;
         }
 
-        using var cts = new CancellationTokenSource();
-        var ready = new ManualResetEventSlim(false);
-        var pipeThread = new Thread(() => LineFramingPipeStub.RunAcceptLoop(ready, cts.Token, LineFramingPipeStub.HandleStatusOrApplyStub))
-        {
-            IsBackground = true,
-            Name = "LineFramingStub",
-        };
-        pipeThread.Start();
-        Assert.True(ready.Wait(TimeSpan.FromSeconds(5)));
+        using var acceptLoop = LineFramingPipeStub.StartAcceptLoop(LineFramingPipeStub.HandleStatusOrApplyStub);
 
         var sw = Stopwatch.StartNew();
         var body = await new GuardInternetClient().GetStatusAsync(default);
@@ -45,14 +37,7 @@ public sealed class GuardInternetPipeFramingTests
             return;
         }
 
-        using var cts = new CancellationTokenSource();
-        var ready = new ManualResetEventSlim(false);
-        var pipeThread = new Thread(() => LineFramingPipeStub.RunAcceptLoop(ready, cts.Token, LineFramingPipeStub.HandleStatusOrApplyStub))
-        {
-            IsBackground = true,
-        };
-        pipeThread.Start();
-        Assert.True(ready.Wait(TimeSpan.FromSeconds(5)));
+        using var acceptLoop = LineFramingPipeStub.StartAcceptLoop(LineFramingPipeStub.HandleStatusOrApplyStub);
 
         var statusJson = await new GuardInternetClient().GetStatusAsync(default);
         using var statusDoc = JsonDocument.Parse(statusJson);
@@ -94,7 +79,8 @@ public sealed class GuardInternetPipeFramingTests
             using var cts = new CancellationTokenSource();
             var ready = new ManualResetEventSlim(false);
             var sawTimeout = new ManualResetEventSlim(false);
-            var pipeThread = new Thread(() => LineFramingPipeStub.RunNoNewlineServer(ready, sawTimeout, cts.Token))
+            var serverLog = new System.Collections.Concurrent.ConcurrentQueue<string>();
+            var pipeThread = new Thread(() => LineFramingPipeStub.RunNoNewlineServer(ready, sawTimeout, cts.Token, serverLog))
             {
                 IsBackground = true,
             };
@@ -104,9 +90,18 @@ public sealed class GuardInternetPipeFramingTests
             using var client = new NamedPipeClientStream(".", GuardInternetClient.PipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
             await client.ConnectAsync(3000);
             var partial = Encoding.UTF8.GetBytes("{\"verb\":\"status\"}");
-            await client.WriteAsync(partial, 0, partial.Length);
-            await client.FlushAsync();
-            Assert.True(sawTimeout.Wait(TimeSpan.FromSeconds(3)), "server read timeout not observed");
+            try
+            {
+                await client.WriteAsync(partial, 0, partial.Length);
+                await client.FlushAsync();
+            }
+            catch (IOException) when (sawTimeout.Wait(TimeSpan.FromSeconds(3)) && serverLog.Any(l => l.StartsWith("pipe_read_timeout", StringComparison.Ordinal)))
+            {
+                /* server closed on purpose (pipe_read_timeout logged, no reply sent) before our write landed */
+            }
+
+            Assert.True(sawTimeout.Wait(TimeSpan.FromSeconds(5)), "server read timeout not observed");
+            Assert.Contains(serverLog, l => l.StartsWith("pipe_read_timeout", StringComparison.Ordinal));
         }
         finally
         {
@@ -123,15 +118,7 @@ public sealed class GuardInternetPipeFramingTests
             return;
         }
 
-        using var cts = new CancellationTokenSource();
-        var ready = new ManualResetEventSlim(false);
-        var pipeThread = new Thread(() =>
-            LineFramingPipeStub.RunAcceptLoop(ready, cts.Token, LineFramingPipeStub.HandleStatusOrApplyStub))
-        {
-            IsBackground = true,
-        };
-        pipeThread.Start();
-        Assert.True(ready.Wait(TimeSpan.FromSeconds(5)));
+        using var acceptLoop = LineFramingPipeStub.StartAcceptLoop(LineFramingPipeStub.HandleStatusOrApplyStub);
 
         await GuardInternetPipeOrderingTest.AssertGuardWritesOnlyAfterFullRequestLineAsync(
             connect: async client => { await client.ConnectAsync(3_000); },
@@ -147,15 +134,7 @@ public sealed class GuardInternetPipeFramingTests
         }
 
         const string persian = "چیپس و نوشابه";
-        using var cts = new CancellationTokenSource();
-        var ready = new ManualResetEventSlim(false);
-        var pipeThread = new Thread(() =>
-            LineFramingPipeStub.RunAcceptLoop(ready, cts.Token, LineFramingPipeStub.HandleEchoNoteStub))
-        {
-            IsBackground = true,
-        };
-        pipeThread.Start();
-        Assert.True(ready.Wait(TimeSpan.FromSeconds(5)));
+        using var acceptLoop = LineFramingPipeStub.StartAcceptLoop(LineFramingPipeStub.HandleEchoNoteStub);
 
         var requestJson = JsonSerializer.Serialize(new { verb = "status", note = persian });
         var response = await InvokeGuardClientSendAsync(requestJson);
@@ -174,7 +153,8 @@ public sealed class GuardInternetPipeFramingTests
         using var cts = new CancellationTokenSource();
         var ready = new ManualResetEventSlim(false);
         var sawOversize = new ManualResetEventSlim(false);
-        var pipeThread = new Thread(() => LineFramingPipeStub.RunOversizeServer(ready, sawOversize, cts.Token))
+        var serverLog = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        var pipeThread = new Thread(() => LineFramingPipeStub.RunOversizeServer(ready, sawOversize, cts.Token, serverLog))
         {
             IsBackground = true,
         };
@@ -185,9 +165,18 @@ public sealed class GuardInternetPipeFramingTests
         await client.ConnectAsync(3000);
         var oversize = new string('a', GuardInternetPipeProtocol.MaxLineBytes + 1);
         var line = Encoding.UTF8.GetBytes(oversize + "\n");
-        await client.WriteAsync(line, 0, line.Length);
-        await client.FlushAsync();
+        try
+        {
+            await client.WriteAsync(line, 0, line.Length);
+            await client.FlushAsync();
+        }
+        catch (IOException) when (sawOversize.Wait(TimeSpan.FromSeconds(3)) && serverLog.Any(l => l.StartsWith("pipe_line_oversize", StringComparison.Ordinal)))
+        {
+            /* server closed on purpose after pipe_line_oversize while the trailing bytes were still being written */
+        }
+
         Assert.True(sawOversize.Wait(TimeSpan.FromSeconds(3)));
+        Assert.Contains(serverLog, l => l.StartsWith("pipe_line_oversize", StringComparison.Ordinal));
     }
 
     private static Task<string> InvokeGuardClientSendAsync(string requestJson)
@@ -306,6 +295,39 @@ internal static class GuardInternetPipeOrderingTest
 
 internal static class LineFramingPipeStub
 {
+    internal sealed class AcceptLoopHandle : IDisposable
+    {
+        private readonly CancellationTokenSource _cts = new();
+        private readonly Thread _thread;
+
+        internal AcceptLoopHandle(Func<string, string> handle)
+        {
+            var ready = new ManualResetEventSlim(false);
+            _thread = new Thread(() => RunAcceptLoop(ready, _cts.Token, handle)) { IsBackground = true };
+            _thread.Start();
+            Assert.True(ready.Wait(TimeSpan.FromSeconds(5)));
+        }
+
+        public void Dispose()
+        {
+            _cts.Cancel();
+            try
+            {
+                using var unblock = new NamedPipeClientStream(".", GuardInternetClient.PipeName, PipeDirection.InOut);
+                unblock.Connect(1_000);
+            }
+            catch (Exception)
+            {
+                /* loop already between instances; it re-checks the token */
+            }
+
+            Assert.True(_thread.Join(TimeSpan.FromSeconds(5)), "accept loop did not stop");
+            _cts.Dispose();
+        }
+    }
+
+    internal static AcceptLoopHandle StartAcceptLoop(Func<string, string> handle) => new(handle);
+
     internal static void RunAcceptLoop(ManualResetEventSlim ready, CancellationToken ct, Func<string, string> handle)
     {
         ready.Set();
@@ -338,7 +360,7 @@ internal static class LineFramingPipeStub
         }
     }
 
-    internal static void RunNoNewlineServer(ManualResetEventSlim ready, ManualResetEventSlim sawTimeout, CancellationToken ct)
+    internal static void RunNoNewlineServer(ManualResetEventSlim ready, ManualResetEventSlim sawTimeout, CancellationToken ct, System.Collections.Concurrent.ConcurrentQueue<string> log)
     {
         ready.Set();
         try
@@ -350,7 +372,7 @@ internal static class LineFramingPipeStub
                 PipeTransmissionMode.Byte,
                 PipeOptions.Asynchronous);
             server.WaitForConnection();
-            var line = ReadLine(server, 400);
+            var line = ReadLine(server, 1_500, log.Enqueue);
             if (line is null)
             {
                 sawTimeout.Set();
@@ -362,7 +384,7 @@ internal static class LineFramingPipeStub
         }
     }
 
-    internal static void RunOversizeServer(ManualResetEventSlim ready, ManualResetEventSlim sawOversize, CancellationToken ct)
+    internal static void RunOversizeServer(ManualResetEventSlim ready, ManualResetEventSlim sawOversize, CancellationToken ct, System.Collections.Concurrent.ConcurrentQueue<string> log)
     {
         ready.Set();
         try
@@ -374,7 +396,7 @@ internal static class LineFramingPipeStub
                 PipeTransmissionMode.Byte,
                 PipeOptions.Asynchronous);
             server.WaitForConnection();
-            var line = ReadLine(server, 5_000);
+            var line = ReadLine(server, 5_000, log.Enqueue);
             if (line is null)
             {
                 sawOversize.Set();
@@ -420,11 +442,11 @@ internal static class LineFramingPipeStub
         return HandleStatusOrApplyStub(line);
     }
 
-    private static string? ReadLine(Stream stream, int timeoutMs)
+    private static string? ReadLine(Stream stream, int timeoutMs, Action<string>? log = null)
         => GuardInternetPipeLineReader.ReadLine(
             stream,
             timeoutMs,
             GuardInternetPipeProtocol.MaxLineBytes,
             handlerThread: 0,
-            appendLog: null);
+            appendLog: log);
 }
