@@ -582,6 +582,8 @@ try {
     Start-CiGameClubTestHost -ServerDll $serverDll -BandArgs $script:ServerPcBandArgs -StdoutLog $serverLog -StderrLog $serverErr -ExpectedBand day -PhaseLabel "day-post-net10"
 
     Write-Host "Running windows guard/wpf integration (net48, live server env)..."
+    Write-Host "Restoring firewall after server integration (guard-wpf host timers need clean egress)..."
+    Invoke-CiFirewallRestore -LogDir $logDir -FirewallLog $firewallLog
     Write-CiPhaseFirewallProbe -label "before-dotnet-test-net48-guard-wpf"
     $env:CHECKPOINT_SERVER_PC_BAND = 'night'
     Set-CiServerPcBandArgs -Mode night
@@ -623,6 +625,30 @@ try {
 
     if ($serverTestExit -ne 0) { $script:FinalExitCode = $serverTestExit }
     if ($guardTestExit -ne 0 -and $script:FinalExitCode -eq 0) { $script:FinalExitCode = $guardTestExit }
+
+    Write-Host "Running PcSpecialBandLiveRateCardOracleTests (net10)..."
+    $oracleFilter = "FullyQualifiedName~PcSpecialBandLiveRateCardOracleTests"
+    Write-VstestPhaseList -phaseName "dotnet-test-pc-special-band-oracle" -framework "net10.0" -filterExpr $oracleFilter | Out-Null
+    $oracleArgs = @(
+        "test", "tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj",
+        "-c", "Release", "-f", "net10.0", "--no-build", "--nologo",
+        "--filter", $oracleFilter,
+        "--logger", "console;verbosity=detailed"
+    )
+    $oracleExit = Invoke-DotNetWithWatchdog -PhaseName "dotnet-test-pc-special-band-oracle" -ArgumentList $oracleArgs -PhaseCapMs (3 * 60 * 1000)
+    if ($oracleExit -ne 0 -and $script:FinalExitCode -eq 0) { $script:FinalExitCode = $oracleExit }
+
+    Write-Host "Running PC internet off verification unit tests (Category=PcInternetFirewall, Core)..."
+    $coreFwFilter = "Category=PcInternetFirewall&FullyQualifiedName~PcInternetFirewallOffVerificationTests"
+    Write-VstestPhaseList -phaseName "dotnet-test-pc-internet-firewall-core" -framework "net10.0" -filterExpr $coreFwFilter | Out-Null
+    $coreFwArgs = @(
+        "test", "tests/GameClub.Kiosk.Core.Tests/GameClub.Kiosk.Core.Tests.csproj",
+        "-c", "Release", "-f", "net10.0", "--no-build", "--nologo",
+        "--filter", $coreFwFilter,
+        "--logger", "console;verbosity=detailed"
+    )
+    $coreFwExit = Invoke-DotNetWithWatchdog -PhaseName "dotnet-test-pc-internet-firewall-core" -ArgumentList $coreFwArgs -PhaseCapMs (2 * 60 * 1000)
+    if ($coreFwExit -ne 0 -and $script:FinalExitCode -eq 0) { $script:FinalExitCode = $coreFwExit }
 
     Write-Host "Running PC internet firewall integration (Category=PcInternetFirewall)..."
     Write-CiPhaseFirewallProbe -label "before-dotnet-test-pc-internet-firewall"

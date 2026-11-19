@@ -32,7 +32,13 @@ jobs:
         with:
           dotnet-version: 10.0.403
       - name: test net10
-        run: dotnet test GameClub.slnx -c Release -f net10.0 --nologo -m:1 --filter "Category!=LiveCheckpointServer"
+        run: dotnet test GameClub.slnx -c Release -f net10.0 --nologo -m:1 --filter "Category!=LiveCheckpointServer&Category!=PcInternetFirewall"
+      - name: pc internet off verification unit tests
+        run: |
+          set -euo pipefail
+          dotnet test tests/GameClub.Kiosk.Core.Tests/GameClub.Kiosk.Core.Tests.csproj -c Release -f net10.0 --nologo \
+            --filter "Category=PcInternetFirewall" \
+            --logger "console;verbosity=normal"
       - name: build GameClub.Server.TestHost for live kiosk tests
         run: dotnet build tests/GameClub.Server.TestHost/GameClub.Server.TestHost.csproj -c Release --nologo
       - name: kiosk owned-server G2 and re-pair oracle
@@ -53,6 +59,14 @@ jobs:
             --filter "FullyQualifiedName~live_server_two_outages_bill_matches_main_g2_oracle|FullyQualifiedName~live_server_re_pair_new_device_key_heartbeats_resume" \
             --logger "console;verbosity=normal"
           echo "UBUNTU_G2_TEST_COUNT 1 passed"
+      - name: pc special band live rate card oracle
+        run: |
+          set -euo pipefail
+          dotnet build tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj -c Release -f net10.0 --nologo
+          dotnet test tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj \
+            -c Release -f net10.0 --no-build --nologo \
+            --filter "FullyQualifiedName~PcSpecialBandLiveRateCardOracleTests" \
+            --logger "console;verbosity=normal"
       - name: post-test orphan postgres writers
         if: always()
         env:
