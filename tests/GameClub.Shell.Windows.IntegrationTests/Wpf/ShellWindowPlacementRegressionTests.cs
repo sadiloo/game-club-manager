@@ -33,11 +33,18 @@ public sealed class ShellWindowPlacementRegressionTests
             _fixture.RunAsync(() =>
             {
                 var window = new MainWindow();
+                WriteShellGeom("infinity-round-trip", "PreShow", window);
+                window.SourceInitialized += (_, _) =>
+                    WriteShellGeom("infinity-round-trip", "SourceInitialized-after-ApplyBounds", window);
                 window.Loaded += (_, _) =>
+                {
+                    WriteShellGeom("infinity-round-trip", "Loaded", window);
                     WriteGeometryTimeline("infinity-round-trip", "Loaded", window);
+                };
                 window.ContentRendered += (_, _) =>
                     WriteGeometryTimeline("infinity-round-trip", "ContentRendered", window);
                 window.Show();
+                WriteShellGeom("infinity-round-trip", "Show", window);
                 WriteGeometryTimeline("infinity-round-trip", "Show", window);
                 Assert.Equal(WindowState.Maximized, window.WindowState);
                 window.Close();
@@ -114,6 +121,16 @@ public sealed class ShellWindowPlacementRegressionTests
         Console.WriteLine(
             $"SHELL-GEOMETRY test={test} phase={phase} UTC={DateTime.UtcNow:O} "
             + $"state={window.WindowState} left={window.Left:0} top={window.Top:0} width={window.Width:0} height={window.Height:0}");
+    }
+
+    private static void WriteShellGeom(string test, string phase, Window window)
+    {
+        var area = Screen.PrimaryScreen!.WorkingArea;
+        Console.WriteLine(
+            $"SHELL-GEOM test={test} phase={phase} UTC={DateTime.UtcNow:O} "
+            + $"state={window.WindowState} left={window.Left:0} top={window.Top:0} width={window.Width:0} height={window.Height:0} "
+            + $"minW={window.MinWidth:0} minH={window.MinHeight:0} sizeToContent={window.SizeToContent} "
+            + $"workAreaW={area.Width} workAreaH={area.Height}");
     }
 }
 #endif

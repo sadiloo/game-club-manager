@@ -103,11 +103,18 @@ public sealed class ShellPlanAIntegrationTests
             _fixture.RunAsync(() =>
             {
                 var window = new MainWindow();
+                WriteShellGeom("placement-restore", "PreShow", window);
+                window.SourceInitialized += (_, _) =>
+                    WriteShellGeom("placement-restore", "SourceInitialized-after-ApplyBounds", window);
                 window.Loaded += (_, _) =>
+                {
+                    WriteShellGeom("placement-restore", "Loaded", window);
                     WriteGeometryTimeline("placement-restore", "Loaded", window);
+                };
                 window.ContentRendered += (_, _) =>
                     WriteGeometryTimeline("placement-restore", "ContentRendered", window);
                 window.Show();
+                WriteShellGeom("placement-restore", "Show", window);
                 WriteGeometryTimeline("placement-restore", "Show", window);
                 Assert.Equal(WindowState.Maximized, window.WindowState);
                 // CI runner work area is 1024×728; effective size follows WindowPlacementStore work-area clamp.
@@ -234,6 +241,18 @@ public sealed class ShellPlanAIntegrationTests
             throw new InvalidOperationException(
                 $"SHELL-MONEY elapsed whole minutes below billing wait floor ({minWholeMinutes} from {waitSeconds}s): "
                 + $"REF={refElapsed} A3={shellElapsed}; "
+                + $"REF start={refBill.FirstSegmentStartUtc:O} frozen={refBill.FrozenAtUtc:O}; "
+                + $"A3 start={shellBill.FirstSegmentStartUtc:O} frozen={shellBill.FrozenAtUtc:O}");
+        }
+
+        const long minimumAccruedTimeGrossToman = 2667L;
+        if (refBill.TimeGrossToman <= minimumAccruedTimeGrossToman
+            || shellBill.TimeGrossToman <= minimumAccruedTimeGrossToman)
+        {
+            throw new InvalidOperationException(
+                $"SHELL-MONEY timeGrossToman at or below minimum-charge floor ({minimumAccruedTimeGrossToman}): "
+                + $"REF elapsed={refElapsed} timeGross={refBill.TimeGrossToman} collectible={refBill.CollectibleToman}; "
+                + $"A3 elapsed={shellElapsed} timeGross={shellBill.TimeGrossToman} collectible={shellBill.CollectibleToman}; "
                 + $"REF start={refBill.FirstSegmentStartUtc:O} frozen={refBill.FrozenAtUtc:O}; "
                 + $"A3 start={shellBill.FirstSegmentStartUtc:O} frozen={shellBill.FrozenAtUtc:O}");
         }
@@ -432,6 +451,9 @@ public sealed class ShellPlanAIntegrationTests
                     while (DateTime.UtcNow < textDeadline)
                     {
                         await Task.Delay(300);
+                        var serviceStatus = ReadCheckpointServiceStatus();
+                        Console.WriteLine(
+                            $"SHELL-OFFLINE poll UTC={DateTime.UtcNow:O} service={serviceStatus} webViewReady={wv?.CoreWebView2 is not null} uri={wv?.Source}");
                         if (wv?.CoreWebView2 is null)
                         {
                             continue;
@@ -852,6 +874,16 @@ public sealed class ShellPlanAIntegrationTests
         Console.WriteLine(
             $"SHELL-GEOMETRY test={test} phase={phase} UTC={DateTime.UtcNow:O} "
             + $"state={window.WindowState} left={window.Left:0} top={window.Top:0} width={window.Width:0} height={window.Height:0}");
+    }
+
+    private static void WriteShellGeom(string test, string phase, Window window)
+    {
+        var area = Screen.PrimaryScreen!.WorkingArea;
+        Console.WriteLine(
+            $"SHELL-GEOM test={test} phase={phase} UTC={DateTime.UtcNow:O} "
+            + $"state={window.WindowState} left={window.Left:0} top={window.Top:0} width={window.Width:0} height={window.Height:0} "
+            + $"minW={window.MinWidth:0} minH={window.MinHeight:0} sizeToContent={window.SizeToContent} "
+            + $"workAreaW={area.Width} workAreaH={area.Height}");
     }
 
     private static string ReadCheckpointServiceStatus()

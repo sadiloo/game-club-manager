@@ -37,8 +37,9 @@ public sealed class ShellPollerCloseRaceTests
         {
             if (e.ExceptionObject is Exception ex)
             {
-                Console.WriteLine(
-                    $"SHELL-RACE domainUnhandled type={ex.GetType().FullName} message={ex.Message} stack={ex.StackTrace}");
+                LogShellRace(
+                    "domain-unhandled",
+                    $"type={ex.GetType().FullName} message={ex.Message} stack={ex.StackTrace}");
             }
 
             Interlocked.Increment(ref domainUnhandled);
@@ -46,8 +47,9 @@ public sealed class ShellPollerCloseRaceTests
 
         void OnDispatcherUnhandled(object sender, System.Windows.Threading.DispatcherUnhandledExceptionEventArgs e)
         {
-            Console.WriteLine(
-                $"SHELL-RACE dispatcherUnhandled type={e.Exception.GetType().FullName} message={e.Exception.Message} stack={e.Exception.StackTrace}");
+            LogShellRace(
+                "dispatcher-unhandled",
+                $"type={e.Exception.GetType().FullName} message={e.Exception.Message} stack={e.Exception.StackTrace}");
             Interlocked.Increment(ref dispatcherUnhandled);
         }
 
@@ -71,6 +73,12 @@ public sealed class ShellPollerCloseRaceTests
                 window.Show();
                 window.Hide();
 
+                AttachPollerChangedProbe(
+                    window,
+                    snap => LogShellRace(
+                        "poller-changed",
+                        $"visual={snap.VisualState} operatorAnswers={snap.OperatorAnswers}"));
+
                 await Task.Run(() =>
                 {
                     if (!buildEntered.Wait(TimeSpan.FromSeconds(30)))
@@ -89,22 +97,36 @@ public sealed class ShellPollerCloseRaceTests
 
                 var navBeforeClose = window.NavigationStartingCount;
                 var logBeforeClose = ReadShellLogTail();
+
+                window.Closed += (_, _) => LogShellRace("window-closed-event", "");
+
                 Volatile.Write(ref closedFlag, 1);
                 ShellEnvironment.ForceExit = true;
+                LogShellRace("before-window-close", "");
                 window.Close();
+                LogShellRace("after-window-close", "");
                 ShellEnvironment.ForceExit = false;
 
+                LogPollerCloseFlags("after-close-immediate", window);
+
+                LogShellRace("before-buildGate-set", "");
                 buildGate.Set();
+                LogShellRace("after-buildGate-set", "");
+
+                await Task.Delay(TimeSpan.FromSeconds(3));
+                LogPollerCloseFlags("after-close-plus-3s", window);
+
+                var lastLoggedNav = navBeforeClose;
                 for (var i = 0; i < 30; i++)
                 {
                     await Task.Delay(100);
                     var navNow = window.NavigationStartingCount;
-                    if (navNow != navBeforeClose)
+                    if (navNow > lastLoggedNav)
                     {
-                        var delta = navNow - navBeforeClose;
-                        Console.WriteLine(
-                            $"SHELL-RACE navigation-after-close delta={delta} navCount={navNow} stack={Environment.StackTrace}");
-                        break;
+                        LogShellRace(
+                            "navigation-after-close",
+                            $"navCount={navNow} delta={navNow - navBeforeClose} stack={Environment.StackTrace}");
+                        lastLoggedNav = navNow;
                     }
                 }
 
@@ -115,13 +137,21 @@ public sealed class ShellPollerCloseRaceTests
                     .Contains("panel-navigate", StringComparison.Ordinal);
                 if (panelNavigateAfterClose)
                 {
-                    Console.WriteLine($"SHELL-RACE panel-navigate-after-close stack={Environment.StackTrace}");
+                    LogShellRace("panel-navigate-after-close", $"stack={Environment.StackTrace}");
                 }
 
-                Assert.True(Volatile.Read(ref domainUnhandled) == 0, "AppDomain.UnhandledException fired during poller-close race");
-                Assert.True(Volatile.Read(ref dispatcherUnhandled) == 0, "Dispatcher.UnhandledException fired during poller-close race");
-                Assert.True(Volatile.Read(ref updateSnapshotAfterClose) == 0, "Tray status line updated after MainWindow close");
-                Assert.True(navDelta == 0, "NavigationStarting fired after MainWindow close");
+                var du = Volatile.Read(ref domainUnhandled);
+                var disp = Volatile.Read(ref dispatcherUnhandled);
+                var trayUpdates = Volatile.Read(ref updateSnapshotAfterClose);
+                Console.WriteLine(
+                    $"SHELL-RACE counters-pre-assert UTC={DateTime.UtcNow:O} thread={Thread.CurrentThread.ManagedThreadId} "
+                    + $"dispatcher={OnDispatcherThread()} domainUnhandled={du} dispatcherUnhandled={disp} "
+                    + $"updateSnapshotAfterClose={trayUpdates} navDelta={navDelta} panelNavigateAfterClose={panelNavigateAfterClose}");
+
+                AssertZero(du, "AppDomain.UnhandledException fired during poller-close race");
+                AssertZero(disp, "Dispatcher.UnhandledException fired during poller-close race");
+                AssertZero(trayUpdates, "Tray status line updated after MainWindow close");
+                AssertZero(navDelta, "NavigationStarting fired after MainWindow close");
                 Assert.False(panelNavigateAfterClose, "panel-navigate log line appeared after window close");
             }, TimeSpan.FromSeconds(60));
         }
@@ -132,6 +162,72 @@ public sealed class ShellPollerCloseRaceTests
             ShellSeams.BeforeBuildSnapshot = null;
             buildGate.Set();
         }
+    }
+
+    private static void AssertZero(int actual, string message)
+    {
+        if (actual != 0)
+        {
+            throw new Xunit.Sdk.XunitException($"{message} (actual={actual}).");
+        }
+
+        Assert.Equal(0, actual);
+    }
+
+    private static void LogPollerCloseFlags(string phase, MainWindow window)
+    {
+        var mainClosed = ReadMainWindowClosed(window);
+        var pollerDisposed = ReadPollerDisposed(window);
+        LogShellRace(
+            $"flags-{phase}",
+            $"MainWindow._closed={mainClosed} ServerStatePoller._disposed={pollerDisposed}");
+    }
+
+    private static bool ReadMainWindowClosed(MainWindow window)
+    {
+        var field = typeof(MainWindow).GetField("_closed", BindingFlags.Instance | BindingFlags.NonPublic);
+        return field is not null && (bool)field.GetValue(window)!;
+    }
+
+    private static bool ReadPollerDisposed(MainWindow window)
+    {
+        var poller = GetPoller(window);
+        if (poller is null)
+        {
+            return false;
+        }
+
+        var field = typeof(ServerStatePoller).GetField("_disposed", BindingFlags.Instance | BindingFlags.NonPublic);
+        return field is not null && (bool)field.GetValue(poller)!;
+    }
+
+    private static ServerStatePoller? GetPoller(MainWindow window)
+    {
+        var field = typeof(MainWindow).GetField("_poller", BindingFlags.Instance | BindingFlags.NonPublic);
+        return field?.GetValue(window) as ServerStatePoller;
+    }
+
+    private static void AttachPollerChangedProbe(MainWindow window, Action<ServerStateSnapshot> handler)
+    {
+        var poller = GetPoller(window);
+        if (poller is null)
+        {
+            return;
+        }
+
+        var add = typeof(ServerStatePoller).GetEvent("Changed", BindingFlags.Instance | BindingFlags.Public)!
+            .GetAddMethod(nonPublic: true)!;
+        add.Invoke(poller, new object[] { handler });
+    }
+
+    private static bool OnDispatcherThread() =>
+        System.Windows.Application.Current?.Dispatcher?.CheckAccess() == true;
+
+    private static void LogShellRace(string tag, string detail)
+    {
+        Console.WriteLine(
+            $"SHELL-RACE tag={tag} UTC={DateTime.UtcNow:O} thread={Thread.CurrentThread.ManagedThreadId} "
+            + $"dispatcher={OnDispatcherThread()} {detail}");
     }
 
     private static object? GetTrayHost(MainWindow window)
@@ -155,7 +251,7 @@ public sealed class ShellPollerCloseRaceTests
         {
             if (closedFlagReader() != 0)
             {
-                Console.WriteLine($"SHELL-RACE tray-status-line-after-close stack={Environment.StackTrace}");
+                LogShellRace("tray-status-line-after-close", $"stack={Environment.StackTrace}");
                 recordUpdateAfterClose();
             }
         };
