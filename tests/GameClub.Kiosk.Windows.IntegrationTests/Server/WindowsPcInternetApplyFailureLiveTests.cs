@@ -37,6 +37,7 @@ public sealed class WindowsPcInternetApplyFailureLiveTests
         }
 
         LiveDatabaseResetInvoker.ResetViaHarnessTest();
+        CiGuardKioskProcessCleanup.KillOrphanedGuardAndKiosk("before_l17_live");
 
         var apiKey = Environment.GetEnvironmentVariable("GAMECLUB_API_KEY") ?? "ci-test-key";
         KioskRuntime runtime = null;
@@ -261,6 +262,8 @@ public sealed class WindowsPcInternetApplyFailureLiveTests
             {
                 await runtime.DisposeAsync();
             }
+
+            CiGuardKioskProcessCleanup.KillOrphanedGuardAndKiosk("after_l17_live");
         }
     }
 

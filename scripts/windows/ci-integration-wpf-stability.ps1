@@ -85,6 +85,12 @@ function Stop-OrphanedGameClubTestHosts() {
 }
 
 try {
+    foreach ($name in @("GameClub.Kiosk.Guard", "GameClub.Kiosk")) {
+        foreach ($p in @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -eq $name })) {
+            & taskkill.exe /T /F /PID $p.Id 2>$null | Out-Null
+            $global:LASTEXITCODE = 0
+        }
+    }
     Stop-OrphanedGameClubTestHosts
     $uri = [Uri]$env:CHECKPOINT_SERVER_URL
     $port = if ($uri.Port -gt 0) { $uri.Port } else { 80 }
@@ -121,24 +127,39 @@ try {
     }
     foreach ($bandLine in $bandLines) { Write-Host $bandLine.Line }
 
+    function Copy-KioskDiagnosticLogs([int]$RunNumber) {
+        $kioskLogDir = Join-Path $env:ProgramData "Checkpoint\kiosk"
+        if (Test-Path $kioskLogDir) {
+            Get-ChildItem -Path $kioskLogDir -Filter "*.log" -ErrorAction SilentlyContinue | ForEach-Object {
+                Copy-Item $_.FullName (Join-Path $logDir ("wpf-stability-" + $RunNumber + "-" + $_.Name)) -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
+
     $wpfFilter = 'FullyQualifiedName~wpf_remaining_time_matches_funded_session_within_one_tick'
     for ($run = 1; $run -le $runs; $run++) {
         Write-Host "WPF stability run $run/$runs"
         $env:WPF_STABILITY_LOGIN = "fund" + [guid]::NewGuid().ToString("N").Substring(0, 8)
+        $runLog = Join-Path $logDir ("wpf-stability-run-" + $run + ".log")
+        $runErr = Join-Path $logDir ("wpf-stability-run-" + $run + "-err.log")
+        if (Test-Path $runLog) { Remove-Item -Force $runLog }
+        if (Test-Path $runErr) { Remove-Item -Force $runErr }
         $wpfArgs = @(
             'test', 'tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj',
             '-c', 'Release', '-f', 'net48', '--no-build', '--nologo',
             '--filter', $wpfFilter,
             '--blame-hang', '--blame-hang-timeout', '3m'
         )
-        $wpfProc = Start-Process -FilePath 'dotnet' -ArgumentList $wpfArgs -PassThru -NoNewWindow -WorkingDirectory $repoRoot
+        $wpfProc = Start-Process -FilePath 'dotnet' -ArgumentList $wpfArgs -PassThru -NoNewWindow -WorkingDirectory $repoRoot `
+            -RedirectStandardOutput $runLog -RedirectStandardError $runErr
         $wpfDone = $wpfProc.WaitForExit(240000)
         if (-not $wpfDone) {
             Stop-ServerTree -processId $wpfProc.Id
             throw "WPF stability run $run timed out after 240s"
         }
         if ($wpfProc.ExitCode -ne 0) {
-            throw "WPF stability run $run failed with exit $($wpfProc.ExitCode); see $serverErr"
+            Copy-KioskDiagnosticLogs -RunNumber $run
+            throw "WPF stability run $run failed with exit $($wpfProc.ExitCode); see $serverErr and $runLog"
         }
         Write-Host "WPF_STABILITY_PROGRESS $run/$runs"
     }

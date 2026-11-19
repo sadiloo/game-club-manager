@@ -32,6 +32,7 @@ internal static class InternetPowerShellRunner
 
     public static string Run(string script, int timeoutMs = 120_000, string? stepName = null)
     {
+        var stepSw = Stopwatch.StartNew();
         Interlocked.Increment(ref RunCallCount);
         if (ReconcilePathThread)
         {
@@ -83,6 +84,9 @@ internal static class InternetPowerShellRunner
             }
 
             var tail = stdout.Trim().Split('\n').LastOrDefault()?.Trim();
+            var stepLabel = string.IsNullOrWhiteSpace(stepName) ? "powershell" : stepName;
+            GuardWatchdogLog.Append(
+                $"powershell_step step={stepLabel} outcome=ok elapsed_ms={stepSw.ElapsedMilliseconds} budget_ms={timeoutMs}");
             return string.IsNullOrEmpty(tail) ? "" : tail!;
         }
         catch (Exception ex)

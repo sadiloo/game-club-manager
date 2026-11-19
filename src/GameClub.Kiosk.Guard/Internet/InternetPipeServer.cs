@@ -147,10 +147,13 @@ internal sealed class InternetPipeServer
                     () => !_reconcileAbandoned);
                 if (!_reconcileAbandoned)
                 {
+                    var reassert = Stopwatch.StartNew();
                     lock (_firewallGate)
                     {
                         ReassertPersistedLocked();
                     }
+
+                    GuardWatchdogLog.Append($"reconcile_step reassert elapsed_ms={reassert.ElapsedMilliseconds}");
                 }
                 else
                 {

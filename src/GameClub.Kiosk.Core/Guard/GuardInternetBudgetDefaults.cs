@@ -7,14 +7,14 @@ public static class GuardInternetBudgetDefaults
     public const int ReconcileWallTimeoutMs = 120_000;
     public const int ReconcilePlanMarginMs = 10_000;
 
-    /// <summary>Reconcile orphan path: localhost cleanup.</summary>
-    public const int ReconcileLocalhostCleanupMs = 8_000;
-    /// <summary>Reconcile orphan path: initial readback capture.</summary>
-    public const int ReconcileReadbackCaptureMs = 8_000;
+    /// <summary>Reconcile orphan path: localhost cleanup (3× CI measured max 4178 ms).</summary>
+    public const int ReconcileLocalhostCleanupMs = 13_000;
+    /// <summary>Reconcile orphan path: initial readback capture (3× CI measured max 3967 ms).</summary>
+    public const int ReconcileReadbackCaptureMs = 12_000;
     /// <summary>Reconcile orphan path: reset script.</summary>
     public const int ReconcileResetScriptMs = 28_000;
-    /// <summary>Reconcile orphan path: post-reset readback.</summary>
-    public const int ReconcilePostResetReadbackMs = 8_000;
+    /// <summary>Reconcile orphan path: post-reset readback (3× planning parity with readback capture).</summary>
+    public const int ReconcilePostResetReadbackMs = 12_000;
 
     /// <summary>Apply path (each pipe apply and reassert tail).</summary>
     public const int ApplyLocalhostCleanupMs = 4_000;

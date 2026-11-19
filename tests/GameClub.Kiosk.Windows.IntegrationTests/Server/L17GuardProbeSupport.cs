@@ -47,6 +47,7 @@ internal static class L17GuardProbeSupport
                 Console.WriteLine(
                     $"L17_PROBE_PIPE_READY pipe_name={GuardInternetClient.PipeName} attempt={attempt} "
                     + $"elapsed_ms={elapsedMs} timeout_ms={(int)timeout.TotalMilliseconds}");
+                Console.Out.Flush();
                 return;
             }
             catch (TimeoutException)
@@ -55,6 +56,7 @@ internal static class L17GuardProbeSupport
                 Console.WriteLine(
                     $"L17_PROBE_PIPE_WAIT pipe_name={GuardInternetClient.PipeName} attempt={attempt} "
                     + $"elapsed_ms={elapsedMs} timeout_ms={(int)timeout.TotalMilliseconds}");
+                Console.Out.Flush();
             }
 
             await Task.Delay(500, ct).ConfigureAwait(false);

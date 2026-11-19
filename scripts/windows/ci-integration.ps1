@@ -76,6 +76,15 @@ function Stop-ProcessTree([int]$rootProcId) {
     $global:LASTEXITCODE = 0
 }
 
+function Stop-OrphanedGuardAndKiosk([string]$Reason) {
+    foreach ($name in @("GameClub.Kiosk.Guard", "GameClub.Kiosk")) {
+        foreach ($p in @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -eq $name })) {
+            Write-Host "CI_ORPHAN_KILL reason=$Reason name=$name pid=$($p.Id)"
+            Stop-ProcessTree -rootProcId $p.Id
+        }
+    }
+}
+
 function Write-GameClubServerProcessAudit() {
     foreach ($p in Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -match 'GameClub\.Server\.dll' }) {
         $cmd = if ($p.CommandLine) { $p.CommandLine } else { "" }
@@ -561,6 +570,7 @@ try {
     if ($serverTestExit -eq 124) { throw "server test watchdog" }
 
     Write-Host "Running net48 LiveCheckpointServer tests (L17 apply-failure harness)..."
+    Stop-OrphanedGuardAndKiosk -Reason "before_live_checkpoint_net48"
     $liveNet48Filter = "Category=LiveCheckpointServer"
     Write-VstestPhaseList -phaseName "dotnet-test-net48-live-checkpoint" -framework "net48" -filterExpr $liveNet48Filter | Out-Null
     $liveNet48Args = @(
@@ -766,7 +776,15 @@ try {
     Write-Host "CI_PROCESS_LEAK_GUARD count=$($leakGuard.Count)"
     Write-Host "CI_PROCESS_LEAK_KIOSK count=$($leakKiosk.Count)"
     if ($leakGuard.Count -gt 0 -or $leakKiosk.Count -gt 0) {
-        if ($script:FinalExitCode -eq 0) { $script:FinalExitCode = 1 }
+        foreach ($p in $leakGuard) { Stop-ProcessTree -rootProcId $p.Id }
+        foreach ($p in $leakKiosk) { Stop-ProcessTree -rootProcId $p.Id }
+        $leakGuard = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -eq "GameClub.Kiosk.Guard" })
+        $leakKiosk = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -eq "GameClub.Kiosk" })
+        Write-Host "CI_PROCESS_LEAK_GUARD_AFTER_KILL count=$($leakGuard.Count)"
+        Write-Host "CI_PROCESS_LEAK_KIOSK_AFTER_KILL count=$($leakKiosk.Count)"
+        if ($leakGuard.Count -gt 0 -or $leakKiosk.Count -gt 0) {
+            if ($script:FinalExitCode -eq 0) { $script:FinalExitCode = 1 }
+        }
     }
 
     Stop-CiManagedGameClubServerPids

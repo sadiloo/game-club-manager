@@ -158,6 +158,16 @@ jobs:
         env:
           WPF_STABILITY_RUNS: "20"
         run: ./scripts/windows/ci-integration-wpf-stability.ps1
+      - name: upload wpf stability logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kiosk-wpf-stability-logs
+          if-no-files-found: warn
+          path: |
+            artifacts/kiosk-windows-logs/wpf-stability-server-out.log
+            artifacts/kiosk-windows-logs/wpf-stability-server-err.log
+            artifacts/kiosk-windows-logs/wpf-stability-*.log
       - name: reset kiosk ci firewall and probe egress
         if: always()
         timeout-minutes: 3

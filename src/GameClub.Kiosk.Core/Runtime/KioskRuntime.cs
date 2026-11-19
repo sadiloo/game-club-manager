@@ -392,9 +392,7 @@ public sealed class KioskRuntime : IAsyncDisposable
         }
         catch (Exception ex)
         {
-            var code = ex is TimeoutException
-                ? ex.Message
-                : $"pipe_client_failed:{ex.GetType().Name}";
+            var code = GuardInternetClientErrorCodes.MapException(ex);
             _lastInternetReport = new KioskInternetAppliedReport
             {
                 Epoch = command.Payload.Epoch,

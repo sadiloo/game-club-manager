@@ -197,4 +197,14 @@ public sealed class PcInternetKioskCoreTests
             Environment.SetEnvironmentVariable("CHECKPOINT_INTERNET_PIPE_CONNECT_MS", prior);
         }
     }
+
+    [Fact]
+    public void PcInternet_guard_client_error_mapper_maps_io_and_generic_errors()
+    {
+        Assert.Equal("pipe_connect_timeout", GuardInternetClientErrorCodes.MapException(new TimeoutException("pipe_connect_timeout")));
+        Assert.Equal("pipe_io_timeout", GuardInternetClientErrorCodes.MapException(new TimeoutException("pipe_io_timeout")));
+        Assert.Equal("pipe_io_timeout", GuardInternetClientErrorCodes.MapException(new TimeoutException("pipe_read_timeout")));
+        Assert.Equal("pipe_connect_timeout", GuardInternetClientErrorCodes.MapException(new TimeoutException("The operation has timed out.")));
+        Assert.Equal("pipe_error", GuardInternetClientErrorCodes.MapException(new InvalidOperationException("boom")));
+    }
 }

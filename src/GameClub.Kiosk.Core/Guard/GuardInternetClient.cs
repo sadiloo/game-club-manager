@@ -37,7 +37,11 @@ public sealed class GuardInternetClient
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            throw new TimeoutException("pipe_connect_timeout");
+            throw new TimeoutException(GuardInternetClientErrorCodes.ConnectTimeout);
+        }
+        catch (TimeoutException)
+        {
+            throw new TimeoutException(GuardInternetClientErrorCodes.ConnectTimeout);
         }
 #else
         try
@@ -46,7 +50,7 @@ public sealed class GuardInternetClient
         }
         catch (TimeoutException)
         {
-            throw new TimeoutException("pipe_connect_timeout");
+            throw new TimeoutException(GuardInternetClientErrorCodes.ConnectTimeout);
         }
 
         await Task.CompletedTask;
@@ -81,7 +85,7 @@ public sealed class GuardInternetClient
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            throw new TimeoutException("pipe_write_timeout");
+            throw new TimeoutException(GuardInternetClientErrorCodes.IoTimeout);
         }
     }
 
@@ -95,7 +99,7 @@ public sealed class GuardInternetClient
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            throw new TimeoutException("pipe_write_timeout");
+            throw new TimeoutException(GuardInternetClientErrorCodes.IoTimeout);
         }
     }
 
@@ -112,7 +116,7 @@ public sealed class GuardInternetClient
         var completed = await Task.WhenAny(readTask, delayTask).ConfigureAwait(false);
         if (completed != readTask)
         {
-            throw new TimeoutException("pipe_read_timeout");
+            throw new TimeoutException(GuardInternetClientErrorCodes.IoTimeout);
         }
 
         return await readTask.ConfigureAwait(false);

@@ -15,6 +15,7 @@ internal static class GuardProcessLifecycle
         }
 
         var rootPid = guard.Id;
+        var waitMs = (int)Math.Max(1, timeout.TotalMilliseconds);
         try
         {
             using var killer = Process.Start(new ProcessStartInfo("taskkill", $"/T /F /PID {rootPid}")
@@ -22,7 +23,7 @@ internal static class GuardProcessLifecycle
                 UseShellExecute = false,
                 CreateNoWindow = true,
             });
-            killer?.WaitForExit((int)Math.Max(1, timeout.TotalMilliseconds));
+            killer?.WaitForExit(waitMs);
         }
         catch
         {
@@ -36,7 +37,24 @@ internal static class GuardProcessLifecycle
             }
         }
 
-        guard.WaitForExit((int)Math.Max(1, timeout.TotalMilliseconds));
+        if (!guard.WaitForExit(waitMs))
+        {
+            try
+            {
+                using var killer = Process.Start(new ProcessStartInfo("taskkill", $"/T /F /PID {rootPid}")
+                {
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                });
+                killer?.WaitForExit(waitMs);
+            }
+            catch
+            {
+                /* best-effort */
+            }
+
+            guard.WaitForExit(waitMs);
+        }
         foreach (var childName in new[] { "GameClub.Kiosk", "GameClub.Kiosk.Guard" })
         {
             foreach (var proc in Process.GetProcessesByName(childName))
