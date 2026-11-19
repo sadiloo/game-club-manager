@@ -620,10 +620,8 @@ try {
         "--logger", "console;verbosity=detailed"
     )
     $hostTimerFailExit = Invoke-DotNetWithWatchdog -PhaseName "dotnet-test-net48-host-timer-fail" -ArgumentList $hostTimerFailArgs -PhaseCapMs (5 * 60 * 1000)
-    if ($hostTimerFailExit -ne 0) {
-        $script:FinalExitCode = $hostTimerFailExit
-        throw "host timer heartbeat-fail tests failed"
-    }
+    if ($hostTimerFailExit -ne 0 -and $script:FinalExitCode -eq 0) { $script:FinalExitCode = $hostTimerFailExit }
+    if ($hostTimerFailExit -eq 124) { throw "host timer heartbeat-fail watchdog" }
 
     $hostTimerFailExclude = @(
         "FullyQualifiedName!~host_boot_path_shows_no_server_response_when_heartbeats_fail",

@@ -267,8 +267,6 @@ public sealed class KioskHostStatusTimerTests
                 Guid.NewGuid(),
                 "device-key",
                 "PC-HOST-D5");
-            runtime.TestHeartbeatInterval = TimeSpan.FromMilliseconds(200);
-            runtime.TestDelayAsync = (_, _) => Task.CompletedTask;
 
             await runtime.StartAsync(CancellationToken.None);
             if (!lateConnect)
