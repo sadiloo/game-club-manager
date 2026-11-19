@@ -274,7 +274,9 @@ internal static class GuardInternetPipeOrderingTest
             var readTask = stream.ReadAsync(one, 0, 1);
             if (await Task.WhenAny(readTask, Task.Delay(remaining)) != readTask)
             {
-                continue;
+                var partial = Encoding.UTF8.GetString(buffer.ToArray());
+                Assert.Fail(
+                    $"timed out waiting for response newline after {wait.TotalSeconds:0}s; bytes so far ({buffer.Length}): {partial}");
             }
 
             var n = await readTask;
@@ -285,7 +287,8 @@ internal static class GuardInternetPipeOrderingTest
 
             if (one[0] == (byte)'\n')
             {
-                break;
+                Assert.True(buffer.Length > 0, "expected a non-empty response line before newline");
+                return buffer.ToArray();
             }
 
             if (one[0] != (byte)'\r')
@@ -294,8 +297,10 @@ internal static class GuardInternetPipeOrderingTest
             }
         }
 
-        Assert.True(buffer.Length > 0, "expected a response line within the deadline");
-        return buffer.ToArray();
+        var tail = Encoding.UTF8.GetString(buffer.ToArray());
+        Assert.Fail(
+            $"timed out waiting for response newline after {wait.TotalSeconds:0}s; bytes so far ({buffer.Length}): {tail}");
+        throw new InvalidOperationException("unreachable");
     }
 }
 

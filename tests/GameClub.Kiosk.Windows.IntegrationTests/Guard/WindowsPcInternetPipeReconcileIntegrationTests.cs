@@ -557,7 +557,7 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
             client.Connect(3_000);
             client.Write(encoded, 0, splitAt);
             client.Flush();
-            await AssertNoReadableBytesWithinAsync(client, TimeSpan.FromSeconds(1));
+            AssertNoServerBytesPeekFor(client, TimeSpan.FromSeconds(1));
 
             var rest = new byte[encoded.Length - splitAt + 1];
             Array.Copy(encoded, splitAt, rest, 0, encoded.Length - splitAt);
@@ -582,28 +582,28 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
         }
     }
 
-    private static async Task AssertNoReadableBytesWithinAsync(Stream stream, TimeSpan wait)
+    private static void AssertNoServerBytesPeekFor(NamedPipeClientStream client, TimeSpan wait)
     {
-        using var cts = new CancellationTokenSource();
-        var one = new byte[1];
-        var readTask = stream.ReadAsync(one, 0, 1, cts.Token);
-        var completed = await Task.WhenAny(readTask, Task.Delay(wait));
-        if (completed == readTask)
-        {
-            var n = await readTask;
-            Assert.Equal(0, n);
-            return;
-        }
+        var handle = client.SafePipeHandle;
+        Assert.NotNull(handle);
+        Assert.False(handle.IsInvalid, "pipe handle unavailable for PeekNamedPipe");
 
-        cts.Cancel();
-        try
+        var deadline = DateTime.UtcNow.Add(wait);
+        while (DateTime.UtcNow < deadline)
         {
-            await readTask;
-            Assert.Fail("server returned bytes before the request line was complete");
-        }
-        catch (OperationCanceledException)
-        {
-            /* expected */
+            if (!PeekNamedPipe(
+                    handle.DangerousGetHandle(),
+                    null,
+                    0,
+                    out _,
+                    out var totalBytesAvail,
+                    out _))
+            {
+                Assert.Fail($"PeekNamedPipe failed, win32={Marshal.GetLastWin32Error()}");
+            }
+
+            Assert.Equal(0u, totalBytesAvail);
+            Thread.Sleep(50);
         }
     }
 
@@ -618,7 +618,9 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
             var readTask = stream.ReadAsync(one, 0, 1);
             if (await Task.WhenAny(readTask, Task.Delay(remaining)) != readTask)
             {
-                continue;
+                var partial = Encoding.UTF8.GetString(buffer.ToArray());
+                Assert.Fail(
+                    $"timed out waiting for response newline after {wait.TotalSeconds:0}s; bytes so far ({buffer.Length}): {partial}");
             }
 
             var n = await readTask;
@@ -629,7 +631,8 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
 
             if (one[0] == (byte)'\n')
             {
-                break;
+                Assert.True(buffer.Length > 0, "expected a non-empty response line before newline");
+                return buffer.ToArray();
             }
 
             if (one[0] != (byte)'\r')
@@ -638,9 +641,20 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
             }
         }
 
-        Assert.True(buffer.Length > 0, "expected a response line within the deadline");
-        return buffer.ToArray();
+        var tail = Encoding.UTF8.GetString(buffer.ToArray());
+        Assert.Fail(
+            $"timed out waiting for response newline after {wait.TotalSeconds:0}s; bytes so far ({buffer.Length}): {tail}");
+        throw new InvalidOperationException("unreachable");
     }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool PeekNamedPipe(
+        IntPtr hNamedPipe,
+        byte[] lpBuffer,
+        uint nBufferSize,
+        out uint lpBytesRead,
+        out uint lpTotalBytesAvail,
+        out uint lpBytesLeftThisMessage);
 
     [Fact(Timeout = 30_000)]
     public async Task internet_pipe_utf8_persian_field_round_trips_on_real_pipe()
