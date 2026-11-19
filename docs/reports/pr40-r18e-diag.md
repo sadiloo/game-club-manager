@@ -60,4 +60,14 @@ Red CI: run `44583927556` (ubuntu job `135771642703`, windows kiosk `13577164313
 | `cursor/pr40-r18e-diag` | `24f04f0` | `DIAG_BUFFET_*` logging + `pr40-r18e-diag-money.yml` 5× buffet test |
 | `cursor/main-5574ce0-diag` | `5574ce0` | Same logging/workflow on main for comparison |
 
-Update with commit SHAs and workflow run ids after push.
+| Branch | HEAD |
+|--------|------|
+| `cursor/pr40-r18e-diag` | `b3a57f007522c9dbfe793a1b8352bb7543085062` |
+| `cursor/main-5574ce0-diag` | `2cd902f2be0417a028ac45f06129d4658080f1a5` |
+
+### Diag workflow runs (in progress)
+
+| Branch | Workflow | Run |
+|--------|----------|-----|
+| `cursor/pr40-r18e-diag` | `pr40-r18e-diag-money` | `44597546143` |
+| `cursor/main-5574ce0-diag` | `pr40-r18e-diag-money` | `44597562592` |
