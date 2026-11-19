@@ -28,6 +28,10 @@ internal static class WindowPlacementStore
         void ApplyNow()
         {
             var (left, top) = ClampToWorkingArea(placement.Left, placement.Top, placement.Width, placement.Height);
+            var area = System.Windows.Forms.Screen.PrimaryScreen?.WorkingArea;
+            ShellFileLog.Write(
+                $"placement-apply SourceInitialized workArea=({area?.Left},{area?.Top},{area?.Width},{area?.Height}) " +
+                $"target=({left},{top},{placement.Width},{placement.Height}) maximize={placement.IsMaximized}");
             window.WindowState = WindowState.Normal;
             window.Left = left;
             window.Top = top;
@@ -37,6 +41,9 @@ internal static class WindowPlacementStore
             {
                 window.WindowState = WindowState.Maximized;
             }
+
+            ShellFileLog.Write(
+                $"placement-after-apply windowState={window.WindowState} bounds=({window.Left},{window.Top},{window.Width},{window.Height})");
         }
 
         // SourceInitialized runs once the HWND exists and before the first Show(); applying

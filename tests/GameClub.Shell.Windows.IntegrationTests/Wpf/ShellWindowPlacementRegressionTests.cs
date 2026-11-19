@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using System.Windows;
 using GameClub.Shell;
 using GameClub.Shell.Shell;
+using GameClub.Shell.Windows.IntegrationTests.Shell;
 using Xunit;
 
 namespace GameClub.Shell.Windows.IntegrationTests.Wpf;
@@ -33,6 +34,7 @@ public sealed class ShellWindowPlacementRegressionTests
             {
                 var window = new MainWindow();
                 window.Show();
+                Pr42DiagLog.Write($"infinity-after-show state={window.WindowState} w={window.Width} h={window.Height}");
                 Assert.Equal(WindowState.Maximized, window.WindowState);
                 window.Close();
 
@@ -67,6 +69,7 @@ public sealed class ShellWindowPlacementRegressionTests
             {
                 var window = new MainWindow();
                 window.Show();
+                Pr42DiagLog.Write($"corrupt-after-show state={window.WindowState} w={window.Width} h={window.Height}");
                 Assert.Equal(1280, window.Width);
                 Assert.Equal(800, window.Height);
                 window.Close();

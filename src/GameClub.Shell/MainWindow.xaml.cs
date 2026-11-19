@@ -131,6 +131,8 @@ public partial class MainWindow : Window
 
     private void OnNavigationCompleted(object? sender, CoreWebView2NavigationCompletedEventArgs e)
     {
+        ShellFileLog.Write(
+            $"navigation-completed utc={DateTime.UtcNow:O} success={e.IsSuccess} uri={_lastNavigationUri ?? ""} webError={e.WebErrorStatus}");
         if (e.IsSuccess || !IsLoopbackPanelTarget(_lastNavigationUri ?? ""))
         {
             return;
@@ -235,6 +237,8 @@ public partial class MainWindow : Window
             _ => "stopped",
         };
 
+        ShellFileLog.Write($"show-offline-async utc={DateTime.UtcNow:O} state={state} webViewReady={_webViewReady} visual={snap.VisualState}");
+
         if (!_webViewReady)
         {
             _pendingOffline = true;
@@ -262,10 +266,12 @@ public partial class MainWindow : Window
         {
             _pendingOffline = true;
             _pendingOfflineState = state;
+            ShellFileLog.Write($"offline-pending utc={DateTime.UtcNow:O} state={state} webViewReady=false");
             return Task.CompletedTask;
         }
 
         var html = LoadOfflineHtml(state);
+        ShellFileLog.Write($"offline-navigate-to-string utc={DateTime.UtcNow:O} state={state} htmlLen={html.Length}");
         PanelWebView.NavigateToString(html);
         return Task.CompletedTask;
     }

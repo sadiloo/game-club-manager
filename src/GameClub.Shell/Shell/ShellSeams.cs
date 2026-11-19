@@ -227,6 +227,7 @@ public static class ShellSeams
     public static Action? BeforeBuildSnapshot { get; set; }
     public static Action? OnTickEntered { get; set; }
     public static Action? OnTickSkippedReentrant { get; set; }
+    public static Action<string>? OnTickDiag { get; set; }
 
     public static DialogResult ShowMessageBox(
         string text,

@@ -5,6 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using GameClub.Shell.Shell;
 using GameClub.Shell.Windows.IntegrationTests.Seams;
+using GameClub.Shell.Windows.IntegrationTests.Shell;
 using Xunit;
 
 namespace GameClub.Shell.Windows.IntegrationTests.Wpf;
@@ -36,6 +37,7 @@ public sealed class ShellPollerReentrancyTests
 
         _fixture.RunAsync(async () =>
         {
+            ShellSeams.OnTickDiag = msg => Pr42DiagLog.Write(msg);
             using var poller = new ServerStatePoller();
             await Task.Delay(500);
             Interlocked.Exchange(ref slowSnapshots, 1);
@@ -58,6 +60,7 @@ public sealed class ShellPollerReentrancyTests
 
         _fixture.RunAsync(async () =>
         {
+            ShellSeams.OnTickDiag = msg => Pr42DiagLog.Write(msg);
             using var poller = new ServerStatePoller();
             await Task.Delay(500);
             FakeShellSeams.Http.Answers = false;

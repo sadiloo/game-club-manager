@@ -4,6 +4,7 @@ using System.ServiceProcess;
 using System.Threading.Tasks;
 using GameClub.Shell.Shell;
 using GameClub.Shell.Windows.IntegrationTests.Seams;
+using GameClub.Shell.Windows.IntegrationTests.Shell;
 using GameClub.Shell.Windows.IntegrationTests.Wpf;
 using Xunit;
 
@@ -77,12 +78,15 @@ public sealed class ShellTrayStatusTests
         FakeShellSeams.Http.Answers = true;
         _fixture.RunAsync(async () =>
         {
+            ShellSeams.OnTickDiag = msg => Pr42DiagLog.Write(msg);
             using var poller = new ServerStatePoller();
             await Task.Delay(200);
             FakeShellSeams.Service.Status = ServiceControllerStatus.Stopped;
             FakeShellSeams.Http.Answers = false;
             await Task.Delay(6000);
+            Pr42DiagLog.Write($"unexpected-stop-count-mid={FakeShellSeams.Notifications.UnexpectedStopCount}");
             await Task.Delay(6000);
+            Pr42DiagLog.Write($"unexpected-stop-count-final={FakeShellSeams.Notifications.UnexpectedStopCount}");
             Assert.Equal(1, FakeShellSeams.Notifications.UnexpectedStopCount);
         }, TimeSpan.FromSeconds(30));
     }

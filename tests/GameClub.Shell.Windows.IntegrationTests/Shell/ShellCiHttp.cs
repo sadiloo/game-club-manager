@@ -61,6 +61,38 @@ internal static class ShellCiHttp
 
     internal readonly record struct OpenBillSnapshot(long AmountToman, int? MinutesPlayed);
 
+    public static async Task<string> DescribeSessionBillDiagAsync(string stationId, Guid sessionId, string label)
+    {
+        string? groupId = null;
+        try
+        {
+            var req = WebRequest.Create(BaseUrl + "/api/stations");
+            req.Headers["X-Api-Key"] = ApiKey;
+            req.Timeout = 5000;
+            using var resp = (HttpWebResponse)await req.GetResponseAsync();
+            using var stream = resp.GetResponseStream();
+            using var reader = new StreamReader(stream!);
+            var json = JsonDocument.Parse(await reader.ReadToEndAsync());
+            foreach (var st in json.RootElement.EnumerateArray())
+            {
+                if (st.TryGetProperty("id", out var id) && id.GetString() == stationId)
+                {
+                    groupId = st.TryGetProperty("groupId", out var g) ? g.GetString() : null;
+                    break;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            groupId = $"stations-error:{ex.Message}";
+        }
+
+        var bill = await GetOpenSessionLiveBillAsync(sessionId);
+        return
+            $"{label} station={stationId} sessionId={sessionId} groupId={groupId ?? "?"} " +
+            $"amountToman={bill.AmountToman} minutesPlayed={bill.MinutesPlayed?.ToString() ?? "null"}";
+    }
+
     public static async Task<Guid> CreateOpenSessionAsync(string stationId)
     {
         var client = WebRequest.Create(BaseUrl + "/api/stations");

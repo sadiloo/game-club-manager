@@ -8,6 +8,7 @@ using System.Windows;
 using System.Windows.Threading;
 using GameClub.Shell;
 using GameClub.Shell.Windows.IntegrationTests.Seams;
+using GameClub.Shell.Windows.IntegrationTests.Shell;
 
 namespace GameClub.Shell.Windows.IntegrationTests.Wpf;
 
@@ -81,7 +82,9 @@ public sealed class WpfStaApplicationFixture : IDisposable
         {
             _app?.Dispatcher.Invoke(() =>
             {
-                foreach (var window in _app.Windows.OfType<Window>().ToList())
+                var windows = _app.Windows.OfType<Window>().ToList();
+                Pr42DiagLog.Write($"close-all-windows openCount={windows.Count} types={string.Join(",", windows.Select(w => w.GetType().Name))}");
+                foreach (var window in windows)
                 {
                     window.Close();
                 }

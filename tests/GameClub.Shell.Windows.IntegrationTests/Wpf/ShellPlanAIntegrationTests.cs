@@ -103,6 +103,7 @@ public sealed class ShellPlanAIntegrationTests
             {
                 var window = new MainWindow();
                 window.Show();
+                Pr42DiagLog.Write($"placement-after-show state={window.WindowState} w={window.Width} h={window.Height}");
                 Assert.Equal(WindowState.Maximized, window.WindowState);
                 Assert.Equal(1024, window.Width);
                 Assert.Equal(700, window.Height);
@@ -203,8 +204,11 @@ public sealed class ShellPlanAIntegrationTests
             shellProc.Dispose();
         }
 
+        Pr42DiagLog.Write(ShellCiHttp.DescribeSessionBillDiagAsync(shellStation, shellSession, "SHELL-A3").GetAwaiter().GetResult());
+        Pr42DiagLog.Write(ShellCiHttp.DescribeSessionBillDiagAsync(refStation, refSession, "SHELL-REF").GetAwaiter().GetResult());
         var afterRef = ShellCiHttp.GetOpenSessionLiveBillAsync(refSession).GetAwaiter().GetResult();
         var afterShell = ShellCiHttp.GetOpenSessionLiveBillAsync(shellSession).GetAwaiter().GetResult();
+        Pr42DiagLog.Write($"A3-compare-1 refAmount={afterRef.AmountToman} shellAmount={afterShell.AmountToman} refMin={afterRef.MinutesPlayed} shellMin={afterShell.MinutesPlayed}");
         Assert.Equal(afterRef.AmountToman, afterShell.AmountToman);
         if (afterRef.MinutesPlayed is int refMin && afterShell.MinutesPlayed is int shellMin)
         {
@@ -346,6 +350,7 @@ public sealed class ShellPlanAIntegrationTests
                     }
 
                     Assert.NotNull(wv?.CoreWebView2);
+                    Pr42DiagLog.Write($"offline-when-stopped innerText={UnquoteWebViewScriptString(html)} shellLogs={ReadShellLogTail()}");
                     Assert.Contains("سرور", html);
                 }
                 finally
@@ -415,6 +420,7 @@ public sealed class ShellPlanAIntegrationTests
                     }
 
                     Assert.NotNull(wv?.CoreWebView2);
+                    Pr42DiagLog.Write($"offline-post-stop innerText={UnquoteWebViewScriptString(html)} shellLogs={ReadShellLogTail()}");
                     Assert.Contains("سرور", html);
                 }
                 finally
@@ -522,6 +528,7 @@ public sealed class ShellPlanAIntegrationTests
                     };
                     _ = wv.CoreWebView2.ExecuteScriptAsync("alert('سلام');");
                     var seen = await Task.WhenAny(tcs.Task, Task.Delay(5000)) == tcs.Task;
+                    Pr42DiagLog.Write($"page-alert seen={seen} source={wv.Source}");
                     Assert.True(seen);
                 }
                 finally
@@ -661,6 +668,31 @@ public sealed class ShellPlanAIntegrationTests
         else
         {
             key.SetValue(ShellPaths.AutostartValueName, value);
+        }
+    }
+
+    private static string ReadShellLogTail()
+    {
+        try
+        {
+            var dir = ShellPaths.ShellLogsDir;
+            if (!Directory.Exists(dir))
+            {
+                return "(no log dir)";
+            }
+
+            var files = Directory.GetFiles(dir, "shell-*.log").OrderByDescending(File.GetLastWriteTimeUtc).ToArray();
+            if (files.Length == 0)
+            {
+                return "(no log files)";
+            }
+
+            var text = File.ReadAllText(files[0]);
+            return text.Length <= 4000 ? text : text[^4000..];
+        }
+        catch (Exception ex)
+        {
+            return $"(log read error: {ex.Message})";
         }
     }
 

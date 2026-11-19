@@ -46,6 +46,8 @@ internal sealed class ServerStatePoller : IDisposable
 
     private void Tick()
     {
+        ShellSeams.OnTickDiag?.Invoke(
+            $"poller-tick realUtc={DateTime.UtcNow:O} seamUtc={ShellSeams.UtcNow():O} inProgress={Volatile.Read(ref _tickInProgress)}");
         if (Interlocked.CompareExchange(ref _tickInProgress, 1, 0) != 0)
         {
             ShellSeams.OnTickSkippedReentrant?.Invoke();
