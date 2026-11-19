@@ -1,6 +1,7 @@
 #if NET48
 using System;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Runtime.ExceptionServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -17,6 +18,8 @@ public sealed class WpfStaApplicationFixture : IDisposable
     private readonly Thread _staThread;
     private Application _app = null!;
     private Exception? _dispatcherUnhandledException;
+    private string? _activeTestName;
+    private volatile string? _shutdownCausingTestName;
 
     public WpfStaApplicationFixture()
     {
@@ -30,6 +33,14 @@ public sealed class WpfStaApplicationFixture : IDisposable
                 _dispatcherUnhandledException = e.Exception;
                 e.Handled = true;
             };
+            _app.Exit += (_, _) =>
+            {
+                var name = _activeTestName;
+                if (!string.IsNullOrEmpty(name))
+                {
+                    _shutdownCausingTestName = name;
+                }
+            };
             ready.Set();
             _app.Run();
         });
@@ -42,37 +53,54 @@ public sealed class WpfStaApplicationFixture : IDisposable
         }
     }
 
-    public void RunAsync(Func<Task> body, TimeSpan timeout)
+    public void RunAsync(Func<Task> body, TimeSpan timeout, [CallerMemberName] string testName = "")
     {
+        if (_app.Dispatcher.HasShutdownStarted || _app.Dispatcher.HasShutdownFinished)
+        {
+            var culprit = _shutdownCausingTestName ?? "(unknown — Application.Exit fired without an active test name)";
+            throw new InvalidOperationException(
+                $"Shared WPF Application is shut down; later tests cannot run on this fixture. " +
+                $"Likely root cause: test '{culprit}' called MainWindow.ExitShell() or Application.Shutdown() via the harness. " +
+                $"Current test: '{testName}'.");
+        }
+
         _dispatcherUnhandledException = null;
-        FakeShellSeams.ResetHarnessStatics();
-        CloseAllWindows();
-        var invokeOp = _app.Dispatcher.InvokeAsync(body);
-        var task = invokeOp.Task.Unwrap();
+        _activeTestName = testName;
         try
         {
-            if (!task.Wait(timeout))
+            FakeShellSeams.ResetHarnessStatics();
+            CloseAllWindows();
+            var invokeOp = _app.Dispatcher.InvokeAsync(body);
+            var task = invokeOp.Task.Unwrap();
+            try
+            {
+                if (!task.Wait(timeout))
+                {
+                    CloseAllWindows();
+                    throw new TimeoutException($"WPF test body did not complete within {timeout}.");
+                }
+            }
+            catch
             {
                 CloseAllWindows();
-                throw new TimeoutException($"WPF test body did not complete within {timeout}.");
+                throw;
+            }
+
+            CloseAllWindows();
+
+            if (_dispatcherUnhandledException is not null)
+            {
+                ExceptionDispatchInfo.Capture(_dispatcherUnhandledException).Throw();
+            }
+
+            if (task.IsFaulted)
+            {
+                throw task.Exception!.GetBaseException();
             }
         }
-        catch
+        finally
         {
-            CloseAllWindows();
-            throw;
-        }
-
-        CloseAllWindows();
-
-        if (_dispatcherUnhandledException is not null)
-        {
-            ExceptionDispatchInfo.Capture(_dispatcherUnhandledException).Throw();
-        }
-
-        if (task.IsFaulted)
-        {
-            throw task.Exception!.GetBaseException();
+            _activeTestName = null;
         }
     }
 
@@ -87,12 +115,6 @@ public sealed class WpfStaApplicationFixture : IDisposable
                 {
                     foreach (var window in _app.Windows.OfType<Window>().ToList())
                     {
-                        if (window is MainWindow mw)
-                        {
-                            mw.ExitShell();
-                            continue;
-                        }
-
                         window.Close();
                     }
                 }

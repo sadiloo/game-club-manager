@@ -514,8 +514,18 @@ public sealed class ShellPlanAIntegrationTests
                 const string popupHost = "popup.blocked.test";
                 var window = new MainWindow();
                 window.Show();
-                await Task.Delay(4000);
-                var wv = window.FindName("PanelWebView") as Microsoft.Web.WebView2.Wpf.WebView2;
+                Microsoft.Web.WebView2.Wpf.WebView2? wv = null;
+                var webViewDeadline = DateTime.UtcNow.AddSeconds(30);
+                while (DateTime.UtcNow < webViewDeadline)
+                {
+                    await Task.Delay(300);
+                    wv = window.FindName("PanelWebView") as Microsoft.Web.WebView2.Wpf.WebView2;
+                    if (wv?.CoreWebView2 is not null)
+                    {
+                        break;
+                    }
+                }
+
                 Assert.NotNull(wv?.CoreWebView2);
                 ShellFileLog.Write("new-window-baseline");
                 var before = Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log").Select(File.ReadAllText).Aggregate("", string.Concat);
