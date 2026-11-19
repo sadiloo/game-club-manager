@@ -356,6 +356,124 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
     }
 
     [Fact]
+    public void internet_off_first_apply_succeeds_when_checkpoint_rule_group_is_empty()
+    {
+        RequireWindowsAdmin();
+        var ips = ResolveServerIps();
+        Assert.True(ips.Length > 0, "Could not resolve api.github.com for server allow-list.");
+
+        var applier = new InternetFirewallApplier();
+        var config = new InternetGuardConfig
+        {
+            StationId = "CI-EMPTY-GROUP",
+            ServerHost = "api.github.com",
+            ServerPort = 443,
+            ServerIps = ips,
+            ExtraAllowPrograms = CiExtraPrograms(),
+        };
+        try
+        {
+            applier.RunResetScript();
+            Thread.Sleep(500);
+            var preCount = RunPowerShell(
+                "(Get-NetFirewallRule -PolicyStore localhost -Group 'Checkpoint Internet Off' -ErrorAction SilentlyContinue | Measure-Object).Count").Trim();
+            Assert.True(int.TryParse(preCount, out var count) && count == 0, "precondition: Checkpoint Internet Off group must be empty.");
+
+            var result = applier.Apply(config, on: false);
+            Assert.Equal("applied", result);
+            AssertCheckpointOffRuleGroupPresent();
+            Assert.True(TryTcp("api.github.com", 443, 5_000), "first apply must leave server host reachable.");
+        }
+        finally
+        {
+            applier.RunResetScript();
+        }
+    }
+
+    [Fact]
+    public void internet_off_reapply_after_rules_removed_while_blocked_restores_server_allow()
+    {
+        RequireWindowsAdmin();
+        var ips = ResolveServerIps();
+        Assert.True(ips.Length > 0, "Could not resolve api.github.com for server allow-list.");
+
+        var applier = new InternetFirewallApplier();
+        var config = new InternetGuardConfig
+        {
+            StationId = "CI-REAPPLY",
+            ServerHost = "api.github.com",
+            ServerPort = 443,
+            ServerIps = ips,
+            ExtraAllowPrograms = CiExtraPrograms(),
+        };
+        try
+        {
+            Assert.Equal("applied", applier.Apply(config, on: false));
+            RunPowerShell(
+                "Get-NetFirewallRule -PolicyStore localhost -Group 'Checkpoint Internet Off' | Remove-NetFirewallRule -PolicyStore localhost");
+            Assert.False(TryTcp("api.github.com", 443, 3_000), "precondition: blocked profiles without allow rules must drop server egress.");
+
+            var result = applier.Apply(config, on: false);
+            Assert.Equal("applied", result);
+            Assert.True(TryTcp("api.github.com", 443, 5_000), "re-apply must recreate allow rules before verification.");
+        }
+        finally
+        {
+            applier.RunResetScript();
+        }
+    }
+
+    [Fact]
+    public void internet_off_apply_failure_after_profiles_set_rolls_back_localhost_profiles()
+    {
+        RequireWindowsAdmin();
+        var ips = ResolveServerIps();
+        Assert.True(ips.Length > 0, "Could not resolve api.github.com for server allow-list.");
+
+        var applier = new InternetFirewallApplier();
+        var config = new InternetGuardConfig
+        {
+            StationId = "CI-ROLLBACK",
+            ServerHost = "api.github.com",
+            ServerPort = 443,
+            ServerIps = ips,
+            ExtraAllowPrograms = CiExtraPrograms(),
+        };
+        try
+        {
+            Assert.Equal("applied", applier.Apply(config, on: false));
+            var rollbackProbe = RunPowerShell(
+                """
+                $ErrorActionPreference = 'Stop'
+                $profilesBlocked = $false
+                try {
+                  foreach ($prof in @('Domain','Private','Public')) {
+                    Set-NetFirewallProfile -PolicyStore localhost -Name $prof -DefaultOutboundAction Block
+                  }
+                  $profilesBlocked = $true
+                  throw 'apply_failed:verification:missing_checkpoint_off_rules'
+                } catch {
+                  if ($profilesBlocked) {
+                    foreach ($prof in @('Domain','Private','Public')) {
+                      Set-NetFirewallProfile -PolicyStore localhost -Name $prof -DefaultOutboundAction NotConfigured -AllowLocalFirewallRules NotConfigured -ErrorAction SilentlyContinue
+                    }
+                  }
+                  $_.Exception.Message
+                }
+                """);
+            Assert.Contains("apply_failed:verification", rollbackProbe, StringComparison.Ordinal);
+            var profileJson = RunPowerShell(
+                "Get-NetFirewallProfile -PolicyStore localhost | Select-Object Name,DefaultOutboundAction | ConvertTo-Json");
+            Assert.DoesNotContain("Block", profileJson, StringComparison.OrdinalIgnoreCase);
+            Assert.True(TryTcp("api.github.com", 443, 5_000), "server allow rules from prior apply must keep server reachable.");
+        }
+        finally
+        {
+            applier.RunResetScript();
+        }
+    }
+
+    [Fact]
     public void internet_off_missing_server_config_returns_firewall_not_configured()
     {
         var applier = new InternetFirewallApplier();

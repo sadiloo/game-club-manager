@@ -30,10 +30,8 @@ $ErrorActionPreference = 'Stop'
 $ips = @({ips})
 $port = {config.ServerPort}
 $group = '{GroupName}'
-foreach ($prof in @('Domain','Private','Public')) {{
-  Set-NetFirewallProfile -PolicyStore localhost -Name $prof -Enabled True -DefaultOutboundAction Block -AllowLocalFirewallRules False
-}}
-$existing = @(Get-NetFirewallRule -PolicyStore localhost -Group $group -ErrorAction Stop)
+$existing = @(Get-NetFirewallRule -PolicyStore localhost -Group $group -ErrorAction SilentlyContinue)
+if ($null -eq $existing) {{ $existing = @() }}
 if ($existing.Count -gt 0) {{
   $existing | Remove-NetFirewallRule -PolicyStore localhost -ErrorAction Stop
 }}
@@ -44,15 +42,29 @@ if ('{extra}' -ne '') {{
     if ($p) {{ New-NetFirewallRule -PolicyStore localhost -DisplayName ""$group - $p"" -Group $group -Direction Outbound -Action Allow -Program $p | Out-Null }}
   }}
 }}
-$profiles = Get-NetFirewallProfile -PolicyStore localhost | Where-Object {{ $_.DefaultOutboundAction -ne 'Block' }}
-if (@($profiles).Count -gt 0) {{
-  throw ""apply_failed:verification:localhost_profiles_not_block""
+$profilesBlocked = $false
+try {{
+  foreach ($prof in @('Domain','Private','Public')) {{
+    Set-NetFirewallProfile -PolicyStore localhost -Name $prof -Enabled True -DefaultOutboundAction Block -AllowLocalFirewallRules False -ErrorAction Stop
+  }}
+  $profilesBlocked = $true
+  $profiles = Get-NetFirewallProfile -PolicyStore localhost | Where-Object {{ $_.DefaultOutboundAction -ne 'Block' }}
+  if (@($profiles).Count -gt 0) {{
+    throw ""apply_failed:verification:localhost_profiles_not_block""
+  }}
+  $rules = @(Get-NetFirewallRule -PolicyStore localhost -Group $group -ErrorAction Stop)
+  if ($rules.Count -lt 1) {{
+    throw ""apply_failed:verification:missing_checkpoint_off_rules""
+  }}
+  'applied'
+}} catch {{
+  if ($profilesBlocked) {{
+    foreach ($prof in @('Domain','Private','Public')) {{
+      Set-NetFirewallProfile -PolicyStore localhost -Name $prof -DefaultOutboundAction NotConfigured -AllowLocalFirewallRules NotConfigured -ErrorAction SilentlyContinue
+    }}
+  }}
+  throw
 }}
-$rules = @(Get-NetFirewallRule -PolicyStore localhost -Group $group -ErrorAction Stop)
-if ($rules.Count -lt 1) {{
-  throw ""apply_failed:verification:missing_checkpoint_off_rules""
-}}
-'applied'
 ";
         return RunPowerShell(script);
     }
