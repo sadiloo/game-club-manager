@@ -54,7 +54,13 @@ internal static class ProbeHttpCallTrace
         }
     }
 
-    internal static void Clear() => lock (Gate) { Lines.Clear(); }
+    internal static void Clear()
+    {
+        lock (Gate)
+        {
+            Lines.Clear();
+        }
+    }
 
     internal static string Redact(string body)
     {
