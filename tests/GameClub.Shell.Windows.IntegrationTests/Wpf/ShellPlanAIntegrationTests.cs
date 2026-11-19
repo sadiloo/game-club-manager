@@ -314,6 +314,49 @@ public sealed class ShellPlanAIntegrationTests
     public void shell_shows_persian_offline_when_service_stopped()
     {
         if (!WebView2RuntimePresent()) throw new InvalidOperationException("WebView2 runtime required");
+        StopServiceIfRunning();
+        var root = AllocateShellDataRoot();
+        try
+        {
+            _fixture.RunAsync(async () =>
+            {
+                var window = new MainWindow();
+                window.Show();
+                Microsoft.Web.WebView2.Wpf.WebView2? wv = null;
+                var html = "";
+                var deadline = DateTime.UtcNow.AddSeconds(30);
+                while (DateTime.UtcNow < deadline)
+                {
+                    await Task.Delay(300);
+                    wv = window.FindName("PanelWebView") as Microsoft.Web.WebView2.Wpf.WebView2;
+                    if (wv?.CoreWebView2 is null)
+                    {
+                        continue;
+                    }
+
+                    html = await wv.CoreWebView2.ExecuteScriptAsync("document.body.innerText");
+                    if (!string.IsNullOrWhiteSpace(UnquoteWebViewScriptString(html)))
+                    {
+                        break;
+                    }
+                }
+
+                Assert.NotNull(wv?.CoreWebView2);
+                Assert.Contains("سرور", html);
+                window.Close();
+            }, TimeSpan.FromSeconds(45));
+        }
+        finally
+        {
+            CleanupShellDataRoot(root);
+            EnsureServiceRunning();
+        }
+    }
+
+    [Fact]
+    public void shell_shows_persian_offline_after_service_stops_post_webview_ready()
+    {
+        if (!WebView2RuntimePresent()) throw new InvalidOperationException("WebView2 runtime required");
         EnsureServiceRunning();
         var root = AllocateShellDataRoot();
         try
@@ -322,7 +365,18 @@ public sealed class ShellPlanAIntegrationTests
             {
                 var window = new MainWindow();
                 window.Show();
-                await Task.Delay(4000);
+                var webViewDeadline = DateTime.UtcNow.AddSeconds(30);
+                Microsoft.Web.WebView2.Wpf.WebView2? wv = null;
+                while (DateTime.UtcNow < webViewDeadline)
+                {
+                    await Task.Delay(300);
+                    wv = window.FindName("PanelWebView") as Microsoft.Web.WebView2.Wpf.WebView2;
+                    if (wv?.CoreWebView2 is not null)
+                    {
+                        break;
+                    }
+                }
+
                 using (var sc = new ServiceController("CheckpointServer"))
                 {
                     if (sc.Status != ServiceControllerStatus.Stopped)
@@ -332,13 +386,27 @@ public sealed class ShellPlanAIntegrationTests
                     }
                 }
 
-                await Task.Delay(8000);
-                var wv = window.FindName("PanelWebView") as Microsoft.Web.WebView2.Wpf.WebView2;
+                var html = "";
+                var textDeadline = DateTime.UtcNow.AddSeconds(30);
+                while (DateTime.UtcNow < textDeadline)
+                {
+                    await Task.Delay(300);
+                    if (wv?.CoreWebView2 is null)
+                    {
+                        continue;
+                    }
+
+                    html = await wv.CoreWebView2.ExecuteScriptAsync("document.body.innerText");
+                    if (!string.IsNullOrWhiteSpace(UnquoteWebViewScriptString(html)))
+                    {
+                        break;
+                    }
+                }
+
                 Assert.NotNull(wv?.CoreWebView2);
-                var html = await wv.CoreWebView2.ExecuteScriptAsync("document.body.innerText");
                 Assert.Contains("سرور", html);
                 window.Close();
-            }, TimeSpan.FromSeconds(45));
+            }, TimeSpan.FromSeconds(90));
         }
         finally
         {
@@ -571,6 +639,23 @@ public sealed class ShellPlanAIntegrationTests
         else
         {
             key.SetValue(ShellPaths.AutostartValueName, value);
+        }
+    }
+
+    private static string UnquoteWebViewScriptString(string json)
+    {
+        if (string.IsNullOrWhiteSpace(json) || string.Equals(json, "null", StringComparison.OrdinalIgnoreCase))
+        {
+            return "";
+        }
+
+        try
+        {
+            return JsonSerializer.Deserialize<string>(json) ?? "";
+        }
+        catch
+        {
+            return json.Trim('"');
         }
     }
 }
