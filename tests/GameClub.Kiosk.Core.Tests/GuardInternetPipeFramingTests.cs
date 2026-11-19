@@ -116,6 +116,29 @@ public sealed class GuardInternetPipeFramingTests
     }
 
     [Fact]
+    public async Task internet_pipe_guard_writes_nothing_until_full_request_line()
+    {
+        if (!OperatingSystem.IsWindows() && !OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        using var cts = new CancellationTokenSource();
+        var ready = new ManualResetEventSlim(false);
+        var pipeThread = new Thread(() =>
+            LineFramingPipeStub.RunAcceptLoop(ready, cts.Token, LineFramingPipeStub.HandleStatusOrApplyStub))
+        {
+            IsBackground = true,
+        };
+        pipeThread.Start();
+        Assert.True(ready.Wait(TimeSpan.FromSeconds(5)));
+
+        await GuardInternetPipeOrderingTest.AssertGuardWritesOnlyAfterFullRequestLineAsync(
+            connect: async client => { await client.ConnectAsync(3_000); },
+            flush: stream => stream.Flush());
+    }
+
+    [Fact]
     public async Task internet_pipe_utf8_persian_field_round_trips_on_real_pipe()
     {
         if (!OperatingSystem.IsWindows() && !OperatingSystem.IsLinux())
@@ -174,6 +197,105 @@ public sealed class GuardInternetPipeFramingTests
             BindingFlags.Static | BindingFlags.NonPublic);
         Assert.NotNull(method);
         return (Task<string>)method!.Invoke(null, new object[] { requestJson, "test", CancellationToken.None })!;
+    }
+}
+
+internal static class GuardInternetPipeOrderingTest
+{
+    internal static async Task AssertGuardWritesOnlyAfterFullRequestLineAsync(
+        Func<NamedPipeClientStream, Task> connect,
+        Action<Stream> flush)
+    {
+        const string lineBody = "{\"verb\":\"status\"}";
+        var encoded = Encoding.UTF8.GetBytes(lineBody);
+        var splitAt = 10;
+        Assert.True(splitAt < encoded.Length);
+
+        using var client = new NamedPipeClientStream(
+            ".",
+            GuardInternetClient.PipeName,
+            PipeDirection.InOut,
+            PipeOptions.Asynchronous);
+        await connect(client);
+        await client.WriteAsync(encoded, 0, splitAt);
+        flush(client);
+        await AssertNoReadableBytesWithinAsync(client, TimeSpan.FromSeconds(1));
+
+        var rest = new byte[encoded.Length - splitAt + 1];
+        Array.Copy(encoded, splitAt, rest, 0, encoded.Length - splitAt);
+        rest[rest.Length - 1] = (byte)'\n';
+        await client.WriteAsync(rest, 0, rest.Length);
+        flush(client);
+
+        var responseBytes = await ReadLineBytesWithinAsync(client, TimeSpan.FromSeconds(2));
+        Assert.True(responseBytes.Length >= 1);
+        if (responseBytes.Length >= 3)
+        {
+            Assert.False(responseBytes[0] == 0xEF && responseBytes[1] == 0xBB && responseBytes[2] == 0xBF);
+        }
+
+        using var doc = JsonDocument.Parse(Encoding.UTF8.GetString(responseBytes));
+        Assert.True(doc.RootElement.TryGetProperty("on", out _));
+    }
+
+    private static async Task AssertNoReadableBytesWithinAsync(Stream stream, TimeSpan wait)
+    {
+        using var cts = new CancellationTokenSource();
+        var one = new byte[1];
+        var readTask = stream.ReadAsync(one, 0, 1, cts.Token);
+        var completed = await Task.WhenAny(readTask, Task.Delay(wait));
+        if (completed == readTask)
+        {
+            var n = await readTask;
+            Assert.Equal(0, n);
+            return;
+        }
+
+        cts.Cancel();
+        try
+        {
+            await readTask;
+            Assert.Fail("server returned bytes before the request line was complete");
+        }
+        catch (OperationCanceledException)
+        {
+            /* expected: no bytes within the wait window */
+        }
+    }
+
+    private static async Task<byte[]> ReadLineBytesWithinAsync(Stream stream, TimeSpan wait)
+    {
+        using var buffer = new MemoryStream();
+        var deadline = DateTime.UtcNow.Add(wait);
+        var one = new byte[1];
+        while (DateTime.UtcNow < deadline)
+        {
+            var remaining = (int)Math.Max(1, (deadline - DateTime.UtcNow).TotalMilliseconds);
+            var readTask = stream.ReadAsync(one, 0, 1);
+            if (await Task.WhenAny(readTask, Task.Delay(remaining)) != readTask)
+            {
+                continue;
+            }
+
+            var n = await readTask;
+            if (n == 0)
+            {
+                continue;
+            }
+
+            if (one[0] == (byte)'\n')
+            {
+                break;
+            }
+
+            if (one[0] != (byte)'\r')
+            {
+                buffer.WriteByte(one[0]);
+            }
+        }
+
+        Assert.True(buffer.Length > 0, "expected a response line within the deadline");
+        return buffer.ToArray();
     }
 }
 

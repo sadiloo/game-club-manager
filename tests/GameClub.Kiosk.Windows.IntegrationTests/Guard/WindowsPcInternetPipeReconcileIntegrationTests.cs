@@ -532,6 +532,117 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
     }
 
     [Fact(Timeout = 30_000)]
+    public async Task internet_pipe_guard_writes_nothing_until_full_request_line()
+    {
+        RequireWindowsAdmin();
+        using var rsa = RSA.Create(2048);
+        var config = BuildConfig(ExportPublicKeyPem(rsa));
+        CancellationTokenSource cts = null;
+        Thread pipeThread = null;
+        try
+        {
+            cts = new CancellationTokenSource();
+            pipeThread = new Thread(() => new InternetPipeServer(config).Run(cts.Token)) { IsBackground = true };
+            pipeThread.Start();
+            await Task.Delay(500);
+
+            const string lineBody = "{\"verb\":\"status\"}";
+            var encoded = Encoding.UTF8.GetBytes(lineBody);
+            const int splitAt = 10;
+            using var client = new NamedPipeClientStream(
+                ".",
+                GuardInternetClient.PipeName,
+                PipeDirection.InOut,
+                PipeOptions.Asynchronous);
+            client.Connect(3_000);
+            client.Write(encoded, 0, splitAt);
+            client.Flush();
+            await AssertNoReadableBytesWithinAsync(client, TimeSpan.FromSeconds(1));
+
+            var rest = new byte[encoded.Length - splitAt + 1];
+            Array.Copy(encoded, splitAt, rest, 0, encoded.Length - splitAt);
+            rest[rest.Length - 1] = (byte)'\n';
+            client.Write(rest, 0, rest.Length);
+            client.Flush();
+
+            var responseBytes = await ReadLineBytesWithinAsync(client, TimeSpan.FromSeconds(2));
+            Assert.True(responseBytes.Length >= 1);
+            if (responseBytes.Length >= 3)
+            {
+                Assert.False(responseBytes[0] == 0xEF && responseBytes[1] == 0xBB && responseBytes[2] == 0xBF);
+            }
+
+            using var doc = JsonDocument.Parse(Encoding.UTF8.GetString(responseBytes));
+            Assert.True(doc.RootElement.TryGetProperty("on", out _));
+        }
+        finally
+        {
+            cts?.Cancel();
+            pipeThread?.Join(TimeSpan.FromSeconds(5));
+        }
+    }
+
+    private static async Task AssertNoReadableBytesWithinAsync(Stream stream, TimeSpan wait)
+    {
+        using var cts = new CancellationTokenSource();
+        var one = new byte[1];
+        var readTask = stream.ReadAsync(one, 0, 1, cts.Token);
+        var completed = await Task.WhenAny(readTask, Task.Delay(wait));
+        if (completed == readTask)
+        {
+            var n = await readTask;
+            Assert.Equal(0, n);
+            return;
+        }
+
+        cts.Cancel();
+        try
+        {
+            await readTask;
+            Assert.Fail("server returned bytes before the request line was complete");
+        }
+        catch (OperationCanceledException)
+        {
+            /* expected */
+        }
+    }
+
+    private static async Task<byte[]> ReadLineBytesWithinAsync(Stream stream, TimeSpan wait)
+    {
+        using var buffer = new MemoryStream();
+        var deadline = DateTime.UtcNow.Add(wait);
+        var one = new byte[1];
+        while (DateTime.UtcNow < deadline)
+        {
+            var remaining = (int)Math.Max(1, (deadline - DateTime.UtcNow).TotalMilliseconds);
+            var readTask = stream.ReadAsync(one, 0, 1);
+            if (await Task.WhenAny(readTask, Task.Delay(remaining)) != readTask)
+            {
+                continue;
+            }
+
+            var n = await readTask;
+            if (n == 0)
+            {
+                continue;
+            }
+
+            if (one[0] == (byte)'\n')
+            {
+                break;
+            }
+
+            if (one[0] != (byte)'\r')
+            {
+                buffer.WriteByte(one[0]);
+            }
+        }
+
+        Assert.True(buffer.Length > 0, "expected a response line within the deadline");
+        return buffer.ToArray();
+    }
+
+    [Fact(Timeout = 30_000)]
     public async Task internet_pipe_utf8_persian_field_round_trips_on_real_pipe()
     {
         RequireWindowsAdmin();
