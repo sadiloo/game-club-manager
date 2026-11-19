@@ -10,16 +10,19 @@ internal sealed class InternetFirewallApplier : IInternetFirewallApplier
 
     public string Apply(InternetGuardConfig config, bool on)
     {
-        InternetFirewallLocalhostStoreCleanup.CleanupLegacyLocalhostArtifacts();
+        InternetFirewallLocalhostStoreCleanup.CleanupLegacyLocalhostArtifacts(
+            InternetGuardReconcilePolicy.ResolveApplyLocalhostCleanupBudgetMs());
         if (on)
         {
-            var scriptResult = RunResetScriptInternal();
+            var scriptResult = RunResetScriptInternal(InternetGuardReconcilePolicy.ResolveApplyResetScriptBudgetMs());
             if (!string.Equals(scriptResult, "firewall_script_ok", StringComparison.Ordinal))
             {
                 return scriptResult;
             }
 
-            var onReadback = InternetFirewallOffApplyReadback.Capture(config);
+            var onReadback = InternetFirewallOffApplyReadback.Capture(
+                config,
+                InternetGuardReconcilePolicy.ResolveApplyReadbackBudgetMs());
             var onFailed = onReadback.Model.ClassifyOnReset();
             return onFailed ?? "applied";
         }
@@ -78,20 +81,29 @@ try {{
   throw
 }}
 ";
-        var powerShellResult = InternetPowerShellRunner.Run(script);
+        var powerShellResult = InternetPowerShellRunner.Run(
+            script,
+            InternetGuardReconcilePolicy.ResolveApplyOffScriptBudgetMs(),
+            stepName: "apply_off");
         if (!string.Equals(powerShellResult, "firewall_script_ok", StringComparison.Ordinal))
         {
             return powerShellResult;
         }
 
-        var readback = InternetFirewallOffApplyReadback.Capture(config);
+        var readback = InternetFirewallOffApplyReadback.Capture(
+            config,
+            InternetGuardReconcilePolicy.ResolveApplyReadbackBudgetMs());
         var failed = readback.ClassifyOff(requireVerifiedStateFile: false);
         return failed ?? "applied";
     }
 
-    public string RunResetScript() => RunResetScriptInternal();
+    public string RunResetScript() =>
+        RunResetScriptInternal(InternetGuardReconcilePolicy.ResolveApplyResetScriptBudgetMs());
 
-    private static string RunResetScriptInternal()
+    internal string RunResetScriptForReconcile() =>
+        RunResetScriptInternal(InternetGuardReconcilePolicy.ResolveResetScriptBudgetMs());
+
+    private static string RunResetScriptInternal(int timeoutMs)
     {
         var script = $@"
 $ErrorActionPreference = 'Stop'
@@ -102,7 +114,7 @@ foreach ($prof in @('Domain','Private','Public')) {{
 }}
 'firewall_script_ok'
 ";
-        return InternetPowerShellRunner.Run(script);
+        return InternetPowerShellRunner.Run(script, timeoutMs, stepName: "reset_script");
     }
 }
 

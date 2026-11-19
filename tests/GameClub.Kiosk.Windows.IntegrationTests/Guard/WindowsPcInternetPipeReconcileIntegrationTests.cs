@@ -224,7 +224,8 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
                 IssuedAtUtc = DateTime.UtcNow,
             });
             var applyBody = await new GuardInternetClient().ApplyAsync(onCommand);
-            Assert.Contains("reconcile_busy", applyBody, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("applied", applyBody, StringComparison.OrdinalIgnoreCase);
+            Console.WriteLine($"internet_pipe_apply_after_reconcile_timeout body={applyBody}");
         }
         finally
         {
@@ -232,6 +233,134 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
             cts?.Cancel();
             pipeThread?.Join(TimeSpan.FromSeconds(10));
             Environment.SetEnvironmentVariable("CHECKPOINT_INTERNET_RECONCILE_TIMEOUT_MS", priorBudget);
+            new InternetFirewallApplier().RunResetScript();
+            TryDeleteState();
+        }
+    }
+
+    [Fact(Timeout = 120_000)]
+    public async Task internet_pipe_apply_after_hung_reconcile_timeout_removes_off_rules_when_server_sends_on()
+    {
+        RequireWindowsAdmin();
+        using var rsa = RSA.Create(2048);
+        var config = BuildConfig(ExportPublicKeyPem(rsa));
+        var hung = new HungReconcileInternetFirewallApplier();
+        var priorBudget = Environment.GetEnvironmentVariable("CHECKPOINT_INTERNET_RECONCILE_TIMEOUT_MS");
+        Environment.SetEnvironmentVariable("CHECKPOINT_INTERNET_RECONCILE_TIMEOUT_MS", "2000");
+        CancellationTokenSource cts = null;
+        Thread pipeThread = null;
+        try
+        {
+            var prep = new InternetFirewallApplier();
+            Assert.Equal("applied", prep.Apply(config, on: false));
+            var offPayload = new InternetCommandPayload
+            {
+                StationId = config.StationId,
+                Epoch = Guid.NewGuid(),
+                Version = 1,
+                On = false,
+                IssuedAtUtc = DateTime.UtcNow,
+            };
+            new InternetGuardStateStore().SaveVerified(offPayload);
+            TryDeleteState();
+
+            cts = new CancellationTokenSource();
+            pipeThread = new Thread(() => new InternetPipeServer(config, hung).Run(cts.Token)) { IsBackground = true };
+            pipeThread.Start();
+            await Task.Delay(500);
+
+            var deadline = DateTime.UtcNow.AddSeconds(10);
+            while (DateTime.UtcNow < deadline)
+            {
+                var status = await new GuardInternetClient().GetStatusAsync(default);
+                if (status.Contains("reconcile_timeout", StringComparison.OrdinalIgnoreCase))
+                {
+                    break;
+                }
+
+                await Task.Delay(200);
+            }
+
+            var onCommand = Sign(rsa, new InternetCommandPayload
+            {
+                StationId = config.StationId,
+                Epoch = Guid.NewGuid(),
+                Version = 2,
+                On = true,
+                IssuedAtUtc = DateTime.UtcNow,
+            });
+            var applyBody = await new GuardInternetClient().ApplyAsync(onCommand);
+            Assert.Contains("applied", applyBody, StringComparison.OrdinalIgnoreCase);
+
+            var ruleCount = RunPowerShell(
+                "(Get-NetFirewallRule -Group 'Checkpoint Internet Off' -ErrorAction SilentlyContinue | Measure-Object).Count").Trim();
+            Assert.True(int.TryParse(ruleCount, out var count) && count == 0, $"rule_count={ruleCount}");
+        }
+        finally
+        {
+            hung.Release();
+            cts?.Cancel();
+            pipeThread?.Join(TimeSpan.FromSeconds(10));
+            Environment.SetEnvironmentVariable("CHECKPOINT_INTERNET_RECONCILE_TIMEOUT_MS", priorBudget);
+            new InternetFirewallApplier().RunResetScript();
+            TryDeleteState();
+        }
+    }
+
+    [Fact(Timeout = 60_000)]
+    public async Task internet_drift_watchdog_starts_after_reconcile_timeout()
+    {
+        RequireWindowsAdmin();
+        using var rsa = RSA.Create(2048);
+        var config = BuildConfig(ExportPublicKeyPem(rsa));
+        var hung = new HungReconcileInternetFirewallApplier();
+        var priorBudget = Environment.GetEnvironmentVariable("CHECKPOINT_INTERNET_RECONCILE_TIMEOUT_MS");
+        var priorDrift = Environment.GetEnvironmentVariable("CHECKPOINT_INTERNET_DRIFT_INTERVAL_MS");
+        Environment.SetEnvironmentVariable("CHECKPOINT_INTERNET_RECONCILE_TIMEOUT_MS", "2000");
+        Environment.SetEnvironmentVariable("CHECKPOINT_INTERNET_DRIFT_INTERVAL_MS", "500");
+        var logPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+            "Checkpoint",
+            "guard",
+            "watchdog.log");
+        CancellationTokenSource cts = null;
+        Thread pipeThread = null;
+        try
+        {
+            Assert.Equal("applied", hung.Apply(config, on: false));
+            TryDeleteState();
+            cts = new CancellationTokenSource();
+            pipeThread = new Thread(() => new InternetPipeServer(config, hung).Run(cts.Token)) { IsBackground = true };
+            pipeThread.Start();
+            await Task.Delay(300);
+
+            var startedAt = File.Exists(logPath) ? new FileInfo(logPath).Length : 0L;
+            var deadline = DateTime.UtcNow.AddSeconds(15);
+            var sawDrift = false;
+            while (DateTime.UtcNow < deadline)
+            {
+                if (File.Exists(logPath))
+                {
+                    var text = File.ReadAllText(logPath);
+                    if (text.Contains("drift_watchdog_start", StringComparison.Ordinal))
+                    {
+                        sawDrift = true;
+                        break;
+                    }
+                }
+
+                await Task.Delay(200);
+            }
+
+            Assert.True(sawDrift, $"drift_watchdog_start missing in {logPath} after offset={startedAt}");
+        }
+        finally
+        {
+            hung.Release();
+            cts?.Cancel();
+            pipeThread?.Join(TimeSpan.FromSeconds(10));
+            Environment.SetEnvironmentVariable("CHECKPOINT_INTERNET_RECONCILE_TIMEOUT_MS", priorBudget);
+            Environment.SetEnvironmentVariable("CHECKPOINT_INTERNET_DRIFT_INTERVAL_MS", priorDrift);
             new InternetFirewallApplier().RunResetScript();
             TryDeleteState();
         }
@@ -303,6 +432,21 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
         using var writer = new StringWriter();
         new PemWriter(writer).WriteObject(pub);
         return writer.ToString();
+    }
+
+    private static string RunPowerShell(string script)
+    {
+        var psi = new ProcessStartInfo
+        {
+            FileName = "powershell.exe",
+            Arguments = $"-NoProfile -NonInteractive -EncodedCommand {Convert.ToBase64String(Encoding.Unicode.GetBytes(script))}",
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            CreateNoWindow = true,
+        };
+        using var proc = Process.Start(psi) ?? throw new InvalidOperationException("powershell");
+        proc.WaitForExit(60_000);
+        return proc.StandardOutput.ReadToEnd();
     }
 
     private static void TryDeleteState()

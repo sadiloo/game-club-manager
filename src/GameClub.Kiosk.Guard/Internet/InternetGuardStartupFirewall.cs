@@ -11,12 +11,15 @@ internal static class InternetGuardStartupFirewall
     {
         var total = Stopwatch.StartNew();
         var step = Stopwatch.StartNew();
-        _ = InternetFirewallLocalhostStoreCleanup.CleanupLegacyLocalhostArtifacts();
+        _ = InternetFirewallLocalhostStoreCleanup.CleanupLegacyLocalhostArtifacts(
+            InternetGuardReconcilePolicy.ResolveLocalhostCleanupBudgetMs());
         GuardWatchdogLog.Append($"reconcile_step localhost_cleanup elapsed_ms={step.ElapsedMilliseconds}");
 
         step.Restart();
         var persisted = new InternetGuardStateStore().Load();
-        var readback = InternetFirewallOffApplyReadback.Capture(config);
+        var readback = InternetFirewallOffApplyReadback.Capture(
+            config,
+            InternetGuardReconcilePolicy.ResolveReadbackCaptureBudgetMs());
         GuardWatchdogLog.Append($"reconcile_step readback_capture elapsed_ms={step.ElapsedMilliseconds}");
         var model = readback.Model;
         var firewallLooksOff = model.ActiveStoreGuardRuleCount > 0 || model.AnyActiveProfileBlock;
@@ -25,7 +28,9 @@ internal static class InternetGuardStartupFirewall
         if (firewallLooksOff && !statePresent)
         {
             step.Restart();
-            var scriptResult = firewall.RunResetScript();
+            var scriptResult = firewall is InternetFirewallApplier concrete
+                ? concrete.RunResetScriptForReconcile()
+                : firewall.RunResetScript();
             GuardWatchdogLog.Append($"reconcile_step reset_script elapsed_ms={step.ElapsedMilliseconds}");
             string reconcileOutcome;
             if (!string.Equals(scriptResult, "firewall_script_ok", StringComparison.Ordinal))
@@ -35,7 +40,9 @@ internal static class InternetGuardStartupFirewall
             else
             {
                 step.Restart();
-                var post = InternetFirewallOffApplyReadback.Capture(config);
+                var post = InternetFirewallOffApplyReadback.Capture(
+                    config,
+                    InternetGuardReconcilePolicy.ResolvePostResetReadbackBudgetMs());
                 GuardWatchdogLog.Append($"reconcile_step post_reset_readback elapsed_ms={step.ElapsedMilliseconds}");
                 reconcileOutcome = post.Model.ClassifyOnReset() ?? "applied";
             }

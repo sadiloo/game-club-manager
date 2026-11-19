@@ -37,7 +37,7 @@ internal sealed class InternetFirewallOffApplyReadback
             + Model.StateFilePresent);
     }
 
-    public static InternetFirewallOffApplyReadback Capture(InternetGuardConfig config)
+    public static InternetFirewallOffApplyReadback Capture(InternetGuardConfig config, int? captureTimeoutMs = null)
     {
         var script = $@"
 $group = '{GroupName}'
@@ -58,7 +58,8 @@ $localRules = @(Get-NetFirewallRule -PolicyStore localhost -Group $group -ErrorA
   localRuleCount = $localRules.Count
 }} | ConvertTo-Json -Compress
 ";
-        var json = RunPowerShell(script);
+        var budget = captureTimeoutMs ?? InternetGuardReconcilePolicy.ResolveApplyReadbackBudgetMs();
+        var json = RunPowerShell(script, budget);
         List<string> active = [];
         List<string> local = [];
         var activeCount = 0;
@@ -147,5 +148,6 @@ $localRules = @(Get-NetFirewallRule -PolicyStore localhost -Group $group -ErrorA
         return false;
     }
 
-    private static string RunPowerShell(string script) => InternetPowerShellRunner.Run(script, 60_000);
+    private static string RunPowerShell(string script, int timeoutMs, string stepName = "readback_capture")
+        => InternetPowerShellRunner.Run(script, timeoutMs, stepName);
 }

@@ -7,7 +7,7 @@ internal static class InternetFirewallLocalhostStoreCleanup
 {
     private const string GroupName = "Checkpoint Internet Off";
 
-    public static string CleanupLegacyLocalhostArtifacts()
+    public static string CleanupLegacyLocalhostArtifacts(int? timeoutMs = null)
     {
         var script = $@"
 $ErrorActionPreference = 'SilentlyContinue'
@@ -21,7 +21,11 @@ foreach ($prof in @('Domain','Private','Public')) {{
 }}
 'cleanup_ok'
 ";
-        var result = InternetPowerShellRunner.Run(script, 60_000);
+        var budget = timeoutMs ?? InternetGuardReconcilePolicy.ResolveApplyLocalhostCleanupBudgetMs();
+        var result = InternetPowerShellRunner.Run(
+            script,
+            budget,
+            stepName: "localhost_cleanup");
         var outcome = string.Equals(result, "cleanup_ok", StringComparison.Ordinal)
             ? "applied"
             : string.IsNullOrWhiteSpace(result)

@@ -25,6 +25,7 @@ internal sealed class InternetPipeServer
     private bool _on = true;
     private volatile int _reconcilePhase;
     private volatile bool _reconcileTimedOutWithWorkAlive;
+    private volatile bool _reconcileAbandoned;
     private Thread? _reconcileWorkThread;
 
     public InternetPipeServer(InternetGuardConfig config, IInternetFirewallApplier? firewall = null)
@@ -136,10 +137,20 @@ internal sealed class InternetPipeServer
         var timeoutMs = InternetGuardReconcilePolicy.ResolveReconcileTimeoutMs();
         _reconcileWorkThread = new Thread(() =>
         {
-            lock (_firewallGate)
+            try
             {
                 InternetGuardStartupFirewall.ReconcileOnPipeStart(_config, _firewall);
-                ReassertPersistedLocked();
+                if (!_reconcileAbandoned)
+                {
+                    lock (_firewallGate)
+                    {
+                        ReassertPersistedLocked();
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                GuardWatchdogLog.Append($"reconcile_failed error={ex.Message}");
             }
         })
         {
@@ -156,16 +167,13 @@ internal sealed class InternetPipeServer
         }
         else
         {
-            _reconcileTimedOutWithWorkAlive = true;
-            GuardWatchdogLog.Append($"reconcile_timeout elapsed_ms={sw.ElapsedMilliseconds} budget_ms={timeoutMs}");
+            AbandonReconcileAfterTimeout(sw);
             var work = _reconcileWorkThread;
             new Thread(() =>
             {
-                work.Join();
+                work?.Join();
                 _reconcileTimedOutWithWorkAlive = false;
-                _reconcilePhase = 2;
                 GuardWatchdogLog.Append($"reconcile_end completed=false elapsed_ms={sw.ElapsedMilliseconds}");
-                _reconcileWorkFinished.Set();
             })
             {
                 IsBackground = true,
@@ -174,13 +182,26 @@ internal sealed class InternetPipeServer
         }
     }
 
+    private void AbandonReconcileAfterTimeout(Stopwatch sw)
+    {
+        _reconcileTimedOutWithWorkAlive = true;
+        _reconcileAbandoned = true;
+        _reconcilePhase = 2;
+        var timeoutMs = InternetGuardReconcilePolicy.ResolveReconcileTimeoutMs();
+        GuardWatchdogLog.Append(
+            $"reconcile_timeout elapsed_ms={sw.ElapsedMilliseconds} budget_ms={timeoutMs}");
+        GuardWatchdogLog.Append("reconcile_gate_released abandoned=true");
+        _reconcileWorkFinished.Set();
+    }
+
     private void RunDriftWatchdog(CancellationToken ct)
     {
-        if (!_reconcileWorkFinished.Wait(TimeSpan.FromMilliseconds(InternetGuardReconcilePolicy.ResolveReconcileTimeoutMs() + 120_000)))
+        if (!_reconcileWorkFinished.Wait(TimeSpan.FromMilliseconds(InternetGuardReconcilePolicy.ResolveReconcileTimeoutMs() + 30_000)))
         {
             return;
         }
 
+        GuardWatchdogLog.Append("drift_watchdog_start");
         while (!ct.IsCancellationRequested)
         {
             try
@@ -278,6 +299,12 @@ internal sealed class InternetPipeServer
     {
         busyError = null;
         var totalWaitMs = InternetGuardReconcilePolicy.ResolveApplyWaitDuringReconcileMs();
+        if (!WaitForReconcileApplyWindow(totalWaitMs))
+        {
+            busyError = "reconcile_busy";
+            return false;
+        }
+
         if (Monitor.TryEnter(_firewallGate, totalWaitMs))
         {
             return true;
@@ -285,6 +312,27 @@ internal sealed class InternetPipeServer
 
         busyError = "reconcile_busy";
         return false;
+    }
+
+    private bool WaitForReconcileApplyWindow(int totalWaitMs)
+    {
+        if (_reconcilePhase != 1 || _reconcileAbandoned)
+        {
+            return true;
+        }
+
+        var deadline = DateTime.UtcNow.AddMilliseconds(totalWaitMs);
+        while (DateTime.UtcNow < deadline)
+        {
+            if (_reconcilePhase != 1 || _reconcileAbandoned)
+            {
+                return true;
+            }
+
+            Thread.Sleep(25);
+        }
+
+        return _reconcilePhase != 1 || _reconcileAbandoned;
     }
 
     private string HandleApplyLocked(JsonDocument doc)
@@ -322,7 +370,9 @@ internal sealed class InternetPipeServer
         _state.SaveVerified(p);
         if (!p.On)
         {
-            var readback = InternetFirewallOffApplyReadback.Capture(_config);
+            var readback = InternetFirewallOffApplyReadback.Capture(
+                _config,
+                InternetGuardReconcilePolicy.ResolveApplyReadbackBudgetMs());
             var postStateFailure = readback.ClassifyOff(requireVerifiedStateFile: true);
             if (postStateFailure is not null)
             {
