@@ -85,6 +85,52 @@ function Get-CiMatchingFirewallRules {
     return $rules
 }
 
+function Test-CiTcpConnect {
+    param(
+        [string]$TargetHost,
+        [int]$Port,
+        [int]$TimeoutMs = 3000
+    )
+    try {
+        $client = New-Object System.Net.Sockets.TcpClient
+        $connectTask = $client.ConnectAsync($TargetHost, $Port)
+        $ok = $connectTask.Wait($TimeoutMs)
+        try { $client.Close() } catch { }
+        return $ok
+    } catch {
+        return $false
+    }
+}
+
+function Add-CiCheckpointPublicEgressEvidence {
+    param([string]$Path)
+
+    $checkpointHost = "127.0.0.1"
+    $checkpointPort = 5225
+    $serverUrl = $env:CHECKPOINT_SERVER_URL
+    if (-not [string]::IsNullOrWhiteSpace($serverUrl)) {
+        try {
+            $uri = [Uri]$serverUrl
+            if ($uri.Host) { $checkpointHost = $uri.Host }
+            if ($uri.Port -gt 0) { $checkpointPort = $uri.Port }
+        } catch {
+        }
+    }
+
+    $publicBlocked = -not (Test-CiTcpConnect -TargetHost "1.1.1.1" -Port 443 -TimeoutMs 2000)
+    $serverReachable = Test-CiTcpConnect -TargetHost $checkpointHost -Port $checkpointPort -TimeoutMs 2000
+    $publicLine = "CI_EGRESS internet_off public=1.1.1.1:443 blocked=$publicBlocked"
+    $serverLine = "CI_EGRESS internet_off checkpoint=${checkpointHost}:${checkpointPort} reachable=$serverReachable"
+    try {
+        Add-Content -Path $Path -Value $publicLine -Encoding UTF8
+        Add-Content -Path $Path -Value $serverLine -Encoding UTF8
+    } catch {
+        Write-Host "Add-CiCheckpointPublicEgressEvidence failed: $($_.Exception.Message)"
+    }
+    Write-Host $publicLine
+    Write-Host $serverLine
+}
+
 function Write-CiFirewallEvidence {
     param(
         [string]$Path,
@@ -101,6 +147,7 @@ function Write-CiFirewallEvidence {
             $ruleLine = "  rule name=$($rule.DisplayName) group=$($rule.Group) enabled=$($rule.Enabled) dir=$($rule.Direction) action=$($rule.Action)"
             Add-Content -Path $Path -Value $ruleLine -Encoding UTF8
         }
+        Add-CiCheckpointPublicEgressEvidence -Path $Path
     } catch {
         Write-Host "Write-CiFirewallEvidence failed: $($_.Exception.Message)"
     }

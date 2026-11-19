@@ -215,6 +215,8 @@ public sealed class WindowsPcInternetApplyFailureLiveTests
 
             Assert.Equal("Offline", modes[modes.Count - 1]);
             Assert.True(starts[starts.Count - 1].ToUniversalTime() >= pressAt.AddSeconds(-8), "Offline segment must start at toggle press.");
+            Console.WriteLine(
+                $"L17_CI internetError={internetError} offlineAtPressUtc={starts[starts.Count - 1].ToUniversalTime():o} pressAtUtc={pressAt:o}");
         }
         finally
         {

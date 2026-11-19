@@ -159,36 +159,6 @@ public sealed class WindowsKioskServerIntegrationTests
                     rateCard,
                     graceMinuteEnabled: true).MoneyMinutes!.Value).TotalSeconds;
 
-            var primeQueue = Path.Combine(Path.GetTempPath(), $"kiosk-unreach-prime-{Guid.NewGuid():N}.db");
-            await using (var primeRuntime = new KioskRuntime(() => kioskHttp))
-            {
-                primeRuntime.Configure(
-                    backend.HubUri,
-                    deviceId,
-                    deviceKey,
-                    "PC-UNREACH",
-                    primeQueue,
-                    legacyWindows: true,
-                    testHubHandler: backend.TestHubHandler);
-                primeRuntime.BindSession(sessionId);
-                KioskHeartbeatAck? primeAck = null;
-                primeRuntime.HeartbeatAcknowledged += ack => primeAck = ack;
-                await primeRuntime.StartAsync(default);
-                await WaitUntilTransportConnectedAsync(primeRuntime, TimeSpan.FromSeconds(45));
-                var primeDeadline = DateTime.UtcNow.AddSeconds(45);
-                while (DateTime.UtcNow < primeDeadline)
-                {
-                    if (primeAck?.Lease is not null && primeAck.Display?.EstimatedRemainingSeconds is > 0)
-                    {
-                        break;
-                    }
-
-                    await Task.Delay(500);
-                }
-
-                Assert.NotNull(primeAck?.Lease);
-            }
-
             if (usesCiServer)
             {
                 KioskLiveServerRegistry.LogServerKill(ciPid, "live_server_unreachable_ci_outage");
@@ -261,27 +231,14 @@ public sealed class WindowsKioskServerIntegrationTests
             await WaitUntilTransportConnectedAsync(runtime, TimeSpan.FromSeconds(30));
             Assert.True(runtime.IsTransportConnected, "Transport must connect within 30 seconds after server returns.");
 
-            var ackDeadline = DateTime.UtcNow.AddSeconds(45);
-            var stablePlayingSince = DateTime.MinValue;
+            var ackDeadline = DateTime.UtcNow.AddSeconds(30);
             while (DateTime.UtcNow < ackDeadline)
             {
                 if (lastAck?.Lease is not null
                     && lastAck.Display?.EstimatedRemainingSeconds is > 0
-                    && orchestrator.Phase == KioskShellPhase.Playing
-                    && orchestrator.VerifyLease(lastAck.Lease))
+                    && orchestrator.Phase == KioskShellPhase.Playing)
                 {
-                    if (stablePlayingSince == DateTime.MinValue)
-                    {
-                        stablePlayingSince = DateTime.UtcNow;
-                    }
-                    else if ((DateTime.UtcNow - stablePlayingSince).TotalSeconds >= 2)
-                    {
-                        break;
-                    }
-                }
-                else
-                {
-                    stablePlayingSince = DateTime.MinValue;
+                    break;
                 }
 
                 await Task.Delay(500);

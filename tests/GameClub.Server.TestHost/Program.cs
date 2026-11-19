@@ -27,3 +27,5 @@ await ServerApplication.RunAsync(hostArgs, builder =>
         });
     }
 });
+
+return 0;
