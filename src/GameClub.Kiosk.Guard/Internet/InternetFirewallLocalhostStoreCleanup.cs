@@ -21,7 +21,7 @@ foreach ($prof in @('Domain','Private','Public')) {{
 }}
 'cleanup_ok'
 ";
-        var budget = timeoutMs ?? InternetGuardReconcilePolicy.ResolveApplyLocalhostCleanupBudgetMs();
+        var budget = timeoutMs ?? InternetGuardReconcilePolicy.ResolveLocalhostCleanupBudgetMs();
         var result = InternetPowerShellRunner.Run(
             script,
             budget,

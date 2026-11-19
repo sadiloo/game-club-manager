@@ -385,17 +385,15 @@ internal sealed class InternetPipeServer
         }
 
         _state.SaveVerified(p);
-        if (!p.On)
+        if (!p.On && !File.Exists(InternetGuardPaths.StatePath))
         {
-            var readback = InternetFirewallOffApplyReadback.Capture(
-                _config,
-                InternetGuardReconcilePolicy.ResolveApplyReadbackBudgetMs());
-            var postStateFailure = readback.ClassifyOff(requireVerifiedStateFile: true);
-            if (postStateFailure is not null)
+            _firewall.Apply(_config, on: true);
+            return JsonSerializer.Serialize(new
             {
-                _firewall.Apply(_config, on: true);
-                return JsonSerializer.Serialize(new { error = postStateFailure, on = _on, version = _appliedVersion });
-            }
+                error = "apply_failed:verified_state_missing",
+                on = _on,
+                version = _appliedVersion,
+            });
         }
 
         return JsonSerializer.Serialize(new

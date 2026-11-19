@@ -121,6 +121,60 @@ $localRules = @(Get-NetFirewallRule -PolicyStore localhost -Group $group -ErrorA
     public static void WriteL17Diagnostics(InternetGuardConfig config, Action<string> writeLine)
         => Capture(config).WriteL17DiagnosticLines(writeLine);
 
+    public static InternetFirewallOffApplyReadback ParseFromPowerShellJson(string json, InternetGuardConfig config)
+    {
+        List<string> active = [];
+        List<string> local = [];
+        var activeCount = 0;
+        var localCount = 0;
+        using (var doc = JsonDocument.Parse(json))
+        {
+            var root = doc.RootElement;
+            if (root.TryGetProperty("activeOut", out var a) && a.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var el in a.EnumerateArray())
+                {
+                    active.Add(el.GetString() ?? "");
+                }
+            }
+
+            if (root.TryGetProperty("localOut", out var l) && l.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var el in l.EnumerateArray())
+                {
+                    local.Add(el.GetString() ?? "");
+                }
+            }
+
+            if (root.TryGetProperty("activeRuleCount", out var arc))
+            {
+                activeCount = arc.GetInt32();
+            }
+
+            if (root.TryGetProperty("localRuleCount", out var lrc))
+            {
+                localCount = lrc.GetInt32();
+            }
+        }
+
+        var model = new InternetFirewallOffReadbackModel
+        {
+            AllActiveProfilesBlock = active.Count == 3 && active.All(v => string.Equals(v, "Block", StringComparison.OrdinalIgnoreCase)),
+            AnyActiveProfileBlock = active.Any(v => string.Equals(v, "Block", StringComparison.OrdinalIgnoreCase)),
+            AllLocalhostProfilesBlock = local.Count == 3 && local.All(v => string.Equals(v, "Block", StringComparison.OrdinalIgnoreCase)),
+            ActiveStoreGuardRuleCount = activeCount,
+            LocalhostStoreGuardRuleCount = localCount,
+            CheckpointServerReachable = ProbeServer(config),
+            StateFilePresent = File.Exists(InternetGuardPaths.StatePath),
+        };
+        return new InternetFirewallOffApplyReadback
+        {
+            Model = model,
+            ActiveProfileOutbound = active,
+            LocalhostProfileOutbound = local,
+        };
+    }
+
     private static bool ProbeServer(InternetGuardConfig config)
     {
         if (config.ServerIps.Length == 0 || config.ServerPort <= 0)

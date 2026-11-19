@@ -40,25 +40,20 @@ internal static class InternetGuardReconcilePolicy
             "CHECKPOINT_INTERNET_RECONCILE_POST_RESET_READBACK_MS",
             GuardInternetBudgetDefaults.ReconcilePostResetReadbackMs);
 
-    internal static int ResolveApplyResetScriptBudgetMs()
+    internal static int ResolveApplyMergedBudgetMs()
         => ResolveBudgetMs(
-            "CHECKPOINT_INTERNET_APPLY_RESET_MS",
-            GuardInternetBudgetDefaults.ApplyFirewallScriptMs);
-
-    internal static int ResolveApplyOffScriptBudgetMs()
-        => ResolveBudgetMs(
-            "CHECKPOINT_INTERNET_APPLY_OFF_SCRIPT_MS",
-            GuardInternetBudgetDefaults.ApplyFirewallScriptMs);
+            "CHECKPOINT_INTERNET_APPLY_MERGED_MS",
+            GuardInternetBudgetDefaults.ApplyMergedPowerShellBudgetMs);
 
     internal static int ResolveApplyReadbackBudgetMs()
         => ResolveBudgetMs(
             "CHECKPOINT_INTERNET_APPLY_READBACK_MS",
-            GuardInternetBudgetDefaults.ApplyReadbackCaptureMs);
+            GuardInternetBudgetDefaults.ReconcileReadbackCaptureMs);
 
-    internal static int ResolveApplyLocalhostCleanupBudgetMs()
+    internal static int ResolveApplyResetScriptBudgetMs()
         => ResolveBudgetMs(
-            "CHECKPOINT_INTERNET_APPLY_LOCALHOST_CLEANUP_MS",
-            GuardInternetBudgetDefaults.ApplyLocalhostCleanupMs);
+            "CHECKPOINT_INTERNET_APPLY_RESET_MS",
+            GuardInternetBudgetDefaults.ReconcileResetScriptMs);
 
     internal static bool ApplyWaitBudgetIsBelowClientIoTimeout()
         => ResolveApplyWaitDuringReconcileMs() < GuardInternetClient.DefaultIoTimeoutMs;
