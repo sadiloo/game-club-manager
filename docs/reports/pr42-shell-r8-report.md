@@ -5,15 +5,14 @@ Parent SHA: `13e5a4ed2137b852e2519809d17ddf8a743ec4d8` (`cursor/sub-round-a-shel
 ## ls-remote
 
 ```
-612191aeaeee50d6f937b075b9e23eb9efeb3b54	refs/heads/cursor/pr42-r8-staging
+11f86d725399549e0a323fe208aaed322a456b04	refs/heads/cursor/pr42-r8-staging
 ```
 
-*(Harness fix for race test `BeforeBuildSnapshot` cleared by `WpfStaApplicationFixture.ResetHarnessStatics` pushed after this CI run.)*
+## CI run (latest)
 
-## CI run
-
-- **Run id:** [44620171740](https://github.com/sadiloo/game-club-manager/actions/runs/44620171740)
-- **Trigger:** push `cursor/pr42-r8-staging` @ `612191a`
+- **Run id:** [44625983743](https://github.com/sadiloo/game-club-manager/actions/runs/44625983743)
+- **Trigger:** push `cursor/pr42-r8-staging` @ `11f86d7`
+- **Prior run:** [44620171740](https://github.com/sadiloo/game-club-manager/actions/runs/44620171740) @ `612191a`
 
 ### Per-job results
 
@@ -40,18 +39,24 @@ No `Timer.Dispose(WaitHandle)` on the UI thread.
 3. **`ShellPollerCloseRaceTests.cs`** — new race test (see below).
 4. **`ShellTrayStatusTests.shell_tray_menu_status_line_shows_tehran_start_time_when_running`** — fixed `UtcNow` + `ReadLocalStatus.StartedAtUtc` on same Tehran day; **assert.Equal** `سرور: روشن — از ساعت ۰۹:۰۰` (CI **passed**).
 
-## Race test result (run 44620171740)
+## Race test result
 
-`shell_poller_tick_completing_after_main_window_close_does_not_touch_tray_or_panel` — **FAILED** (15 s)
+### Run 44625983743 (harness fix @ `11f86d7`)
+
+`shell_poller_tick_completing_after_main_window_close_does_not_touch_tray_or_panel` — **FAILED** (3 s)
 
 ```
-System.TimeoutException : Timed out waiting for poller tick to enter BuildSnapshot.
-  at ShellPollerCloseRaceTests.cs:64
+Assert.Equal() Failure: Expected: 0  Actual: 1
+  at ShellPollerCloseRaceTests.cs:97 (compiled lambda; post-close guard assertion)
 ```
 
-**Cause (diagnose):** `ShellSeams.BeforeBuildSnapshot` was assigned *before* `_fixture.RunAsync`, but `WpfStaApplicationFixture.RunAsync` calls `FakeShellSeams.ResetHarnessStatics()` (`WpfStaApplicationFixture.cs:71`) and clears that hook, so the tick never blocked. Fix: assign `BeforeBuildSnapshot` inside the async body after `FakeShellSeams.Install()` (committed after this run).
+Tick blocking works after moving `BeforeBuildSnapshot` inside `RunAsync` (`11f86d7`). Failure is a **1 vs 0** on one of: unhandled count, tray `TextChanged` after close, or `NavigationStartingCount` delta — not a harness timeout.
 
-**Regression check:** Run `44620171740` log has **no** `NullReferenceException` / `NotifyIcon` lines (prior run `44610139270` had unhandled NRE at `ShellTrayHost.UpdateSnapshot` during close).
+### Run 44620171740 @ `612191a`
+
+**FAILED** — `TimeoutException` (hook cleared by `ResetHarnessStatics` before fix).
+
+**Regression check:** Runs `44620171740` and `44625983743` have **no** `NullReferenceException` / `NotifyIcon` lines (run `44610139270` had unhandled NRE at `ShellTrayHost.UpdateSnapshot` during close).
 
 ## Item 5 — geometry (diagnose only, unchanged assertions)
 
