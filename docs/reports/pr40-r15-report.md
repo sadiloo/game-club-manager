@@ -31,8 +31,8 @@ Guard OFF: allow rules on **ActiveStore** (no `-PolicyStore`) **before** profile
 
 ## Staging SHA
 
-_(after push — full sha from `git rev-parse HEAD`)_
+`12a575cecafda759c91fa675535ef05c7a22e585`
 
-## Open question (L17 state assertion)
+## State file (product path)
 
-Probe still calls applier only; `state_present=True` requires signed `InternetPipeServer` apply (same path as production). Applier intentionally uses `requireVerifiedStateFile: false`. If L17 must pass applier-only, need PM rule; otherwise wire probe through pipe with signed command without changing assertion text.
+R14 `state_present=False` on L17: probe calls `InternetFirewallApplier` only; `InternetGuardStateStore.SaveVerified` runs in `InternetPipeServer` after signed `apply`. R15: pipe re-reads with `requireVerifiedStateFile: true` after save. L17 probe still uses applier-only (`requireVerifiedStateFile: false`); `state_present` stays false until probe goes through pipe + server-signed command (L17 assertion lines unchanged).
