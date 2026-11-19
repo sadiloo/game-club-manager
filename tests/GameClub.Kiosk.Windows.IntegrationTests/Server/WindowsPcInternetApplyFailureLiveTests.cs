@@ -152,6 +152,8 @@ public sealed class WindowsPcInternetApplyFailureLiveTests
 
                     probeGuard.Dispose();
                 }
+
+                L17GuardProbeSupport.RestoreFirewallAfterProbeGuard(config);
             }
 
             pipe = new Thread(() => new InternetPipeServer(config, new FaultInjectingInternetFirewallApplier()).Run(pipeCts.Token))

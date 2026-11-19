@@ -2,9 +2,11 @@
 #nullable disable
 using System;
 using System.Diagnostics;
+using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using GameClub.Kiosk.Core.Guard;
+using GameClub.Kiosk.Guard.Internet;
 
 namespace GameClub.Kiosk.Windows.IntegrationTests.Server;
 
@@ -60,6 +62,49 @@ internal static class L17GuardProbeSupport
 
         throw new InvalidOperationException(
             $"L17 probe pipe {GuardInternetClient.PipeName} not ready within {(int)timeout.TotalSeconds}s");
+    }
+
+    internal static void RestoreFirewallAfterProbeGuard(InternetGuardConfig config)
+    {
+        var applier = new InternetFirewallApplier();
+        applier.Apply(config, on: true);
+        applier.RunResetScript();
+        try
+        {
+            if (File.Exists(InternetGuardPaths.StatePath))
+            {
+                File.Delete(InternetGuardPaths.StatePath);
+            }
+        }
+        catch
+        {
+            /* best-effort */
+        }
+
+        var ruleCount = ReadCheckpointInternetOffRuleCount();
+        Console.WriteLine($"L17_PROBE_CLEANUP checkpoint_internet_off_rule_count={ruleCount}");
+    }
+
+    private static int ReadCheckpointInternetOffRuleCount()
+    {
+        try
+        {
+            var script =
+                "(Get-NetFirewallRule -Group 'Checkpoint Internet Off' -ErrorAction SilentlyContinue | Measure-Object).Count";
+            var psi = new ProcessStartInfo("powershell", "-NoProfile -Command " + script)
+            {
+                RedirectStandardOutput = true,
+                UseShellExecute = false,
+            };
+            using var p = Process.Start(psi);
+            var text = p!.StandardOutput.ReadToEnd().Trim();
+            p.WaitForExit(10_000);
+            return int.TryParse(text, out var count) ? count : -1;
+        }
+        catch
+        {
+            return -1;
+        }
     }
 }
 #endif

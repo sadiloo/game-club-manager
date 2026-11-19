@@ -673,7 +673,6 @@ try {
     $guardHostTimerExit = Invoke-DotNetWithWatchdog -PhaseName "dotnet-test-net48-guard-wpf-host-timers" -ArgumentList $guardHostTimerArgs -PhaseCapMs $guardHostTimerBudgetMs -DiagLogPath $guardHostTimerDiag
     Publish-ServerLeaseBuildEvidence -phaseName "dotnet-test-net48-guard-wpf-host-timers" -TrxPath (Join-Path $artifactDir "kiosk-windows-guard-host-timers.trx")
     if ($guardHostTimerExit -ne 0 -and $script:FinalExitCode -eq 0) { $script:FinalExitCode = $guardHostTimerExit }
-    if ($guardHostTimerExit -eq 124) { throw "guard-wpf host-timers watchdog" }
 
     $guardWpfServerArgs = @(
         "test", "tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj",
@@ -692,6 +691,7 @@ try {
     Assert-NightLineOnlyInNightPhase
     Write-CiPhaseFirewallProbe -label "after-dotnet-test-net48-guard-wpf"
     if ($guardWpfServerExit -ne 0 -and $script:FinalExitCode -eq 0) { $script:FinalExitCode = $guardWpfServerExit }
+    if ($guardHostTimerExit -eq 124) { throw "guard-wpf host-timers watchdog" }
     if ($guardWpfServerExit -eq 124) { throw "guard-wpf wpf-server watchdog" }
 
     $guardTestExit = if ($guardHostTimerExit -ne 0) { $guardHostTimerExit } elseif ($guardWpfServerExit -ne 0) { $guardWpfServerExit } else { 0 }
