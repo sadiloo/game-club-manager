@@ -133,13 +133,18 @@ internal sealed class InternetPipeServer
     {
         _reconcilePhase = 1;
         var sw = Stopwatch.StartNew();
+        InternetPowerShellRunner.ResetReconcileRunTelemetry();
         GuardWatchdogLog.Append("reconcile_start");
         var timeoutMs = InternetGuardReconcilePolicy.ResolveReconcileTimeoutMs();
         _reconcileWorkThread = new Thread(() =>
         {
+            InternetPowerShellRunner.SetReconcilePathThread(true);
             try
             {
-                InternetGuardStartupFirewall.ReconcileOnPipeStart(_config, _firewall);
+                InternetGuardStartupFirewall.ReconcileOnPipeStart(
+                    _config,
+                    _firewall,
+                    () => !_reconcileAbandoned);
                 if (!_reconcileAbandoned)
                 {
                     lock (_firewallGate)
@@ -147,10 +152,18 @@ internal sealed class InternetPipeServer
                         ReassertPersistedLocked();
                     }
                 }
+                else
+                {
+                    GuardWatchdogLog.Append("reconcile_step_skipped_abandoned step=reassert_apply");
+                }
             }
             catch (Exception ex)
             {
                 GuardWatchdogLog.Append($"reconcile_failed error={ex.Message}");
+            }
+            finally
+            {
+                InternetPowerShellRunner.SetReconcilePathThread(false);
             }
         })
         {
@@ -191,6 +204,7 @@ internal sealed class InternetPipeServer
         GuardWatchdogLog.Append(
             $"reconcile_timeout elapsed_ms={sw.ElapsedMilliseconds} budget_ms={timeoutMs}");
         GuardWatchdogLog.Append("reconcile_gate_released abandoned=true");
+        InternetPowerShellRunner.MarkAbandonBoundary();
         _reconcileWorkFinished.Set();
     }
 

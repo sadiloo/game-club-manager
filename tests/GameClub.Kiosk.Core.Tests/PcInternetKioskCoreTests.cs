@@ -126,8 +126,31 @@ public sealed class PcInternetKioskCoreTests
     public void PcInternet_server_apply_wait_default_is_below_client_io_timeout()
     {
         Assert.Equal(30_000, GuardInternetClient.DefaultIoTimeoutMs);
-        Assert.True(GuardInternetClient.DefaultServerApplyWaitMs < GuardInternetClient.DefaultIoTimeoutMs);
+        Assert.True(GuardInternetBudgetDefaults.ApplyGateWaitFitsClientIo());
         Assert.True(GuardInternetClient.DefaultIoTimeoutMs - GuardInternetClient.DefaultServerApplyWaitMs >= 5_000);
+    }
+
+    [Fact]
+    public void PcInternet_apply_powershell_worst_case_with_kill_waits_fits_client_io()
+    {
+        Assert.Equal(30_000, GuardInternetClient.DefaultIoTimeoutMs);
+        Assert.True(GuardInternetBudgetDefaults.ApplyPathWorstCaseFitsClientIo());
+        Assert.Equal(
+            GuardInternetBudgetDefaults.ApplyPathPowerShellBudgetSumMs()
+            + (GuardInternetBudgetDefaults.ApplyPathPowerShellCallCountWorstCase
+               * GuardInternetBudgetDefaults.PowerShellKillAfterExitWaitMs),
+            GuardInternetBudgetDefaults.ApplyPathWorstCaseWithKillWaitsMs());
+    }
+
+    [Fact]
+    public void PcInternet_reconcile_powershell_worst_case_with_kill_waits_fits_wall_with_margin()
+    {
+        Assert.Equal(120_000, GuardInternetBudgetDefaults.ReconcileWallTimeoutMs);
+        Assert.True(GuardInternetBudgetDefaults.ReconcileWorstCaseFitsWallWithMargin());
+        Assert.True(
+            GuardInternetBudgetDefaults.ReconcileWallTimeoutMs
+            - GuardInternetBudgetDefaults.ReconcileWorstCaseWithKillWaitsMs()
+            >= GuardInternetBudgetDefaults.ReconcilePlanMarginMs);
     }
 
     [Fact]

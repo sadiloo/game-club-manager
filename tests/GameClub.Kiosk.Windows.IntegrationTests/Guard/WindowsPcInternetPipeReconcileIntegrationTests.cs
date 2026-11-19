@@ -180,7 +180,7 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
     }
 
     [Fact(Timeout = 60_000)]
-    public async Task internet_pipe_status_reports_reconcile_timeout_while_work_thread_hung()
+    public async Task internet_pipe_apply_succeeds_after_reconcile_timeout_while_reset_work_thread_hung()
     {
         RequireWindowsAdmin();
         using var rsa = RSA.Create(2048);
@@ -232,6 +232,63 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
             hung.Release();
             cts?.Cancel();
             pipeThread?.Join(TimeSpan.FromSeconds(10));
+            Environment.SetEnvironmentVariable("CHECKPOINT_INTERNET_RECONCILE_TIMEOUT_MS", priorBudget);
+            new InternetFirewallApplier().RunResetScript();
+            TryDeleteState();
+        }
+    }
+
+    [Fact(Timeout = 90_000)]
+    public async Task internet_reconcile_abandoned_work_thread_makes_no_further_powershell_calls_after_apply()
+    {
+        RequireWindowsAdmin();
+        using var rsa = RSA.Create(2048);
+        var config = BuildConfig(ExportPublicKeyPem(rsa));
+        var priorBudget = Environment.GetEnvironmentVariable("CHECKPOINT_INTERNET_RECONCILE_TIMEOUT_MS");
+        var hangRelease = new ManualResetEventSlim(false);
+        InternetGuardReconcileTestSeams.HangBeforeLocalhostCleanup = hangRelease;
+        Environment.SetEnvironmentVariable("CHECKPOINT_INTERNET_RECONCILE_TIMEOUT_MS", "2000");
+        CancellationTokenSource cts = null;
+        Thread pipeThread = null;
+        try
+        {
+            Assert.Equal("applied", new InternetFirewallApplier().Apply(config, on: false));
+            TryDeleteState();
+            cts = new CancellationTokenSource();
+            pipeThread = new Thread(() => new InternetPipeServer(config).Run(cts.Token)) { IsBackground = true };
+            pipeThread.Start();
+            await Task.Delay(600);
+
+            var status = await new GuardInternetClient().GetStatusAsync(default);
+            Assert.Contains("reconcile_timeout", status, StringComparison.OrdinalIgnoreCase);
+
+            var callsAtAbandon = InternetPowerShellRunner.ReconcileRunCallCountAtAbandon;
+            Assert.True(callsAtAbandon >= 0, "abandon boundary should be recorded");
+
+            var onCommand = Sign(rsa, new InternetCommandPayload
+            {
+                StationId = config.StationId,
+                Epoch = Guid.NewGuid(),
+                Version = 1,
+                On = true,
+                IssuedAtUtc = DateTime.UtcNow,
+            });
+            var applyBody = await new GuardInternetClient().ApplyAsync(onCommand);
+            Assert.Contains("applied", applyBody, StringComparison.OrdinalIgnoreCase);
+
+            hangRelease.Set();
+            pipeThread.Join(TimeSpan.FromSeconds(10));
+
+            Assert.Equal(callsAtAbandon, InternetPowerShellRunner.ReconcileRunCallCount);
+            Console.WriteLine(
+                $"reconcile_abandon_runner_calls_stable at_abandon={callsAtAbandon} final={InternetPowerShellRunner.ReconcileRunCallCount}");
+        }
+        finally
+        {
+            InternetGuardReconcileTestSeams.HangBeforeLocalhostCleanup = null;
+            hangRelease.Dispose();
+            cts?.Cancel();
+            pipeThread?.Join(TimeSpan.FromSeconds(5));
             Environment.SetEnvironmentVariable("CHECKPOINT_INTERNET_RECONCILE_TIMEOUT_MS", priorBudget);
             new InternetFirewallApplier().RunResetScript();
             TryDeleteState();

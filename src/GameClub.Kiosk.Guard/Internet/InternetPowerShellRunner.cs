@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using GameClub.Kiosk.Guard;
 
@@ -8,8 +9,34 @@ namespace GameClub.Kiosk.Guard.Internet;
 
 internal static class InternetPowerShellRunner
 {
+    [ThreadStatic]
+    private static bool ReconcilePathThread;
+
+    internal static int RunCallCount;
+    internal static int ReconcileRunCallCount;
+    internal static int ReconcileRunCallCountAtAbandon = -1;
+
+    internal static void SetReconcilePathThread(bool active) => ReconcilePathThread = active;
+
+    internal static void ResetReconcileRunTelemetry()
+    {
+        Interlocked.Exchange(ref ReconcileRunCallCount, 0);
+        Interlocked.Exchange(ref ReconcileRunCallCountAtAbandon, -1);
+    }
+
+    internal static void MarkAbandonBoundary()
+    {
+        ReconcileRunCallCountAtAbandon = Volatile.Read(ref ReconcileRunCallCount);
+        GuardWatchdogLog.Append($"reconcile_abandon_runner_calls={ReconcileRunCallCountAtAbandon}");
+    }
+
     public static string Run(string script, int timeoutMs = 120_000, string? stepName = null)
     {
+        Interlocked.Increment(ref RunCallCount);
+        if (ReconcilePathThread)
+        {
+            Interlocked.Increment(ref ReconcileRunCallCount);
+        }
         Process? proc = null;
         try
         {

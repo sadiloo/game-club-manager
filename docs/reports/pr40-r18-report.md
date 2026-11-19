@@ -47,23 +47,37 @@
 - `InternetPowerShellRunner.cs:24-26` — stdout/stderr `ReadToEnd()` ran before `WaitForExit`, so reconcile/apply PowerShell could ignore the timeout, deadlock on pipes, and read `ExitCode` from a live process.
 - `InternetPipeServer.cs:139-143` — reconcile work held `_firewallGate` for the entire `ReconcileOnPipeStart`. On `reconcile_timeout` only status reflected the hang; apply stayed `reconcile_busy` and drift never started until hung `Join` completed.
 
-### Per-step budget table (defaults)
+### Per-call budget table (defaults, `InternetPowerShellRunner.Run`)
 
-| Step | Env override | Default ms |
-|------|----------------|------------|
-| localhost_cleanup (reconcile) | `CHECKPOINT_INTERNET_RECONCILE_LOCALHOST_CLEANUP_MS` | 15 000 |
-| readback_capture (reconcile) | `CHECKPOINT_INTERNET_RECONCILE_READBACK_MS` | 15 000 |
-| reset_script (reconcile) | `CHECKPOINT_INTERNET_RECONCILE_RESET_MS` | 45 000 |
-| post_reset readback (reconcile) | `CHECKPOINT_INTERNET_RECONCILE_POST_RESET_READBACK_MS` | 15 000 |
-| reassert apply (reconcile tail) | `CHECKPOINT_INTERNET_RECONCILE_REASSERT_MS` | 15 000 |
-| **Reconcile steps sum** | — | **105 000** |
-| **Reconcile wall Join** | `CHECKPOINT_INTERNET_RECONCILE_TIMEOUT_MS` | **120 000** |
-| apply localhost cleanup | `CHECKPOINT_INTERNET_APPLY_LOCALHOST_CLEANUP_MS` | 10 000 |
-| apply OFF script | `CHECKPOINT_INTERNET_APPLY_OFF_SCRIPT_MS` | 25 000 |
-| apply reset | `CHECKPOINT_INTERNET_APPLY_RESET_MS` | 25 000 |
-| apply readback | `CHECKPOINT_INTERNET_APPLY_READBACK_MS` | 15 000 |
-| server apply wait during reconcile | `CHECKPOINT_INTERNET_APPLY_WAIT_RECONCILE_MS` | 20 000 |
-| client pipe IO | `CHECKPOINT_INTERNET_PIPE_IO_MS` / default | 30 000 |
+Single source: `GuardInternetBudgetDefaults` in Core; Guard resolves env overrides per column.
+
+**Reconcile worst path (orphan OFF + reassert `Apply`):**
+
+| # | Call site | stepName | Env override | Budget ms |
+|---|-----------|----------|--------------|-----------|
+| 1 | `InternetGuardStartupFirewall` | localhost_cleanup | `CHECKPOINT_INTERNET_RECONCILE_LOCALHOST_CLEANUP_MS` | 8 000 |
+| 2 | `InternetGuardStartupFirewall` | readback_capture | `CHECKPOINT_INTERNET_RECONCILE_READBACK_MS` | 8 000 |
+| 3 | `InternetFirewallApplier` (reconcile reset) | reset_script | `CHECKPOINT_INTERNET_RECONCILE_RESET_MS` | 28 000 |
+| 4 | `InternetGuardStartupFirewall` | post_reset readback | `CHECKPOINT_INTERNET_RECONCILE_POST_RESET_READBACK_MS` | 8 000 |
+| 5 | reassert `Apply` → localhost cleanup | apply localhost | `CHECKPOINT_INTERNET_APPLY_LOCALHOST_CLEANUP_MS` | 4 000 |
+| 6 | reassert `Apply` → reset or OFF script | apply reset/off | `CHECKPOINT_INTERNET_APPLY_RESET_MS` / `_OFF_` | 8 000 |
+| 7 | reassert `Apply` → readback | apply readback | `CHECKPOINT_INTERNET_APPLY_READBACK_MS` | 8 000 |
+| | **PowerShell budgets Σ** | | | **72 000** |
+| | **+ kill-wait (7 × 3 000)** | | | **21 000** |
+| | **Planned worst-case total** | | | **93 000** |
+| | **+ planning margin** | | | **10 000** |
+| | **Reconcile wall Join** | `CHECKPOINT_INTERNET_RECONCILE_TIMEOUT_MS` | | **120 000** (**27 000** headroom) |
+
+**Pipe apply path (single signed apply, worst OFF path):**
+
+| # | Call site | Budget ms |
+|---|-----------|-----------|
+| 1–3 | localhost + firewall script + readback | 4 000 + 8 000 + 8 000 = **20 000** |
+| | + kill-wait (3 × 3 000) | **9 000** |
+| | **Apply worst-case** | **29 000** |
+| | Client pipe IO (`DefaultIoTimeoutMs`) | **30 000** |
+
+During active reconcile the kiosk does **not** stack gate wait and apply PowerShell in one IO window: `DefaultServerApplyWaitMs` (**20 000**) is only how long the Guard will wait on `_firewallGate` before returning `reconcile_busy`; full apply PowerShell runs on a later heartbeat after reconcile completes or abandons (`PcInternet_apply_powershell_worst_case_with_kill_waits_fits_client_io`).
 
 ### Tests (R18b → condition)
 
@@ -72,5 +86,8 @@
 | `internet_powershell_runner_times_out_hung_child_and_kills_process_tree` | hung PowerShell → `apply_failed:powershell_timeout` within budget; child pid gone |
 | `internet_pipe_apply_after_hung_reconcile_timeout_removes_off_rules_when_server_sends_on` | orphan OFF + hung reconcile + timeout → ON apply clears `Checkpoint Internet Off` (0 rules) |
 | `internet_drift_watchdog_starts_after_reconcile_timeout` | `watchdog.log` contains `drift_watchdog_start` after reconcile timeout |
-| `internet_pipe_status_reports_reconcile_timeout_while_work_thread_hung` (apply path) | apply succeeds after timeout abandon (not permanent `reconcile_busy`) |
+| `internet_pipe_apply_succeeds_after_reconcile_timeout_while_reset_work_thread_hung` | status `reconcile_timeout` then apply `applied` |
+| `internet_reconcile_abandoned_work_thread_makes_no_further_powershell_calls_after_apply` | after abandon, reconcile-thread `InternetPowerShellRunner` count unchanged |
+| `PcInternet_apply_powershell_worst_case_with_kill_waits_fits_client_io` | Core constant contract |
+| `PcInternet_reconcile_powershell_worst_case_with_kill_waits_fits_wall_with_margin` | Core constant contract |
 | R18 matrix above | status ≤2s, reconcile apply window, client timeout, apply during slow apply unchanged |

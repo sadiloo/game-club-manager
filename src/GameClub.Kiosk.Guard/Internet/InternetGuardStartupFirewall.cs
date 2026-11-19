@@ -7,13 +7,36 @@ namespace GameClub.Kiosk.Guard.Internet;
 /// <summary>Reconcile persistent-store firewall with verified state at Guard/pipe start (PR40-R15 iii).</summary>
 internal static class InternetGuardStartupFirewall
 {
-    public static void ReconcileOnPipeStart(InternetGuardConfig config, IInternetFirewallApplier firewall)
+    public static void ReconcileOnPipeStart(
+        InternetGuardConfig config,
+        IInternetFirewallApplier firewall,
+        Func<bool>? shouldContinue = null)
     {
+        shouldContinue ??= () => true;
         var total = Stopwatch.StartNew();
+        if (!shouldContinue())
+        {
+            GuardWatchdogLog.Append("reconcile_step_skipped_abandoned step=reconcile_begin");
+            return;
+        }
+
+        InternetGuardReconcileTestSeams.WaitHangBeforeLocalhostCleanupIfConfigured(shouldContinue);
+        if (!shouldContinue())
+        {
+            GuardWatchdogLog.Append("reconcile_step_skipped_abandoned step=localhost_cleanup");
+            return;
+        }
+
         var step = Stopwatch.StartNew();
         _ = InternetFirewallLocalhostStoreCleanup.CleanupLegacyLocalhostArtifacts(
             InternetGuardReconcilePolicy.ResolveLocalhostCleanupBudgetMs());
         GuardWatchdogLog.Append($"reconcile_step localhost_cleanup elapsed_ms={step.ElapsedMilliseconds}");
+
+        if (!shouldContinue())
+        {
+            GuardWatchdogLog.Append("reconcile_step_skipped_abandoned step=readback_capture");
+            return;
+        }
 
         step.Restart();
         var persisted = new InternetGuardStateStore().Load();
@@ -27,6 +50,12 @@ internal static class InternetGuardStartupFirewall
 
         if (firewallLooksOff && !statePresent)
         {
+            if (!shouldContinue())
+            {
+                GuardWatchdogLog.Append("reconcile_step_skipped_abandoned step=reset_script");
+                return;
+            }
+
             step.Restart();
             var scriptResult = firewall is InternetFirewallApplier concrete
                 ? concrete.RunResetScriptForReconcile()
@@ -39,6 +68,12 @@ internal static class InternetGuardStartupFirewall
             }
             else
             {
+                if (!shouldContinue())
+                {
+                    GuardWatchdogLog.Append("reconcile_step_skipped_abandoned step=post_reset_readback");
+                    return;
+                }
+
                 step.Restart();
                 var post = InternetFirewallOffApplyReadback.Capture(
                     config,

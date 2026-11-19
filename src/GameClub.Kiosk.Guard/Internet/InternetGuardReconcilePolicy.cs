@@ -5,21 +5,8 @@ namespace GameClub.Kiosk.Guard.Internet;
 
 internal static class InternetGuardReconcilePolicy
 {
-    internal const int DefaultReconcileTimeoutMs = 120_000;
+    internal const int DefaultReconcileTimeoutMs = GuardInternetBudgetDefaults.ReconcileWallTimeoutMs;
     internal const int DefaultApplyWaitDuringReconcileMs = GuardInternetClient.DefaultServerApplyWaitMs;
-
-    /// <summary>Per-step budgets along the reconcile path (sum must stay below <see cref="DefaultReconcileTimeoutMs"/>).</summary>
-    internal const int DefaultLocalhostCleanupBudgetMs = 15_000;
-    internal const int DefaultReadbackCaptureBudgetMs = 15_000;
-    internal const int DefaultResetScriptBudgetMs = 45_000;
-    internal const int DefaultPostResetReadbackBudgetMs = 15_000;
-    internal const int DefaultReassertApplyBudgetMs = 15_000;
-
-    /// <summary>Apply-path PowerShell reset (must fit under client IO minus apply wait slack).</summary>
-    internal const int DefaultApplyResetScriptBudgetMs = 25_000;
-    internal const int DefaultApplyOffScriptBudgetMs = 25_000;
-    internal const int DefaultApplyReadbackBudgetMs = 15_000;
-    internal const int DefaultApplyLocalhostCleanupBudgetMs = 10_000;
 
     internal static int ResolveReconcileTimeoutMs()
     {
@@ -34,38 +21,44 @@ internal static class InternetGuardReconcilePolicy
     }
 
     internal static int ResolveLocalhostCleanupBudgetMs()
-        => ResolveBudgetMs("CHECKPOINT_INTERNET_RECONCILE_LOCALHOST_CLEANUP_MS", DefaultLocalhostCleanupBudgetMs);
+        => ResolveBudgetMs(
+            "CHECKPOINT_INTERNET_RECONCILE_LOCALHOST_CLEANUP_MS",
+            GuardInternetBudgetDefaults.ReconcileLocalhostCleanupMs);
 
     internal static int ResolveReadbackCaptureBudgetMs()
-        => ResolveBudgetMs("CHECKPOINT_INTERNET_RECONCILE_READBACK_MS", DefaultReadbackCaptureBudgetMs);
+        => ResolveBudgetMs(
+            "CHECKPOINT_INTERNET_RECONCILE_READBACK_MS",
+            GuardInternetBudgetDefaults.ReconcileReadbackCaptureMs);
 
     internal static int ResolveResetScriptBudgetMs()
-        => ResolveBudgetMs("CHECKPOINT_INTERNET_RECONCILE_RESET_MS", DefaultResetScriptBudgetMs);
+        => ResolveBudgetMs(
+            "CHECKPOINT_INTERNET_RECONCILE_RESET_MS",
+            GuardInternetBudgetDefaults.ReconcileResetScriptMs);
 
     internal static int ResolvePostResetReadbackBudgetMs()
-        => ResolveBudgetMs("CHECKPOINT_INTERNET_RECONCILE_POST_RESET_READBACK_MS", DefaultPostResetReadbackBudgetMs);
-
-    internal static int ResolveReassertApplyBudgetMs()
-        => ResolveBudgetMs("CHECKPOINT_INTERNET_RECONCILE_REASSERT_MS", DefaultReassertApplyBudgetMs);
+        => ResolveBudgetMs(
+            "CHECKPOINT_INTERNET_RECONCILE_POST_RESET_READBACK_MS",
+            GuardInternetBudgetDefaults.ReconcilePostResetReadbackMs);
 
     internal static int ResolveApplyResetScriptBudgetMs()
-        => ResolveBudgetMs("CHECKPOINT_INTERNET_APPLY_RESET_MS", DefaultApplyResetScriptBudgetMs);
+        => ResolveBudgetMs(
+            "CHECKPOINT_INTERNET_APPLY_RESET_MS",
+            GuardInternetBudgetDefaults.ApplyFirewallScriptMs);
 
     internal static int ResolveApplyOffScriptBudgetMs()
-        => ResolveBudgetMs("CHECKPOINT_INTERNET_APPLY_OFF_SCRIPT_MS", DefaultApplyOffScriptBudgetMs);
+        => ResolveBudgetMs(
+            "CHECKPOINT_INTERNET_APPLY_OFF_SCRIPT_MS",
+            GuardInternetBudgetDefaults.ApplyFirewallScriptMs);
 
     internal static int ResolveApplyReadbackBudgetMs()
-        => ResolveBudgetMs("CHECKPOINT_INTERNET_APPLY_READBACK_MS", DefaultApplyReadbackBudgetMs);
+        => ResolveBudgetMs(
+            "CHECKPOINT_INTERNET_APPLY_READBACK_MS",
+            GuardInternetBudgetDefaults.ApplyReadbackCaptureMs);
 
     internal static int ResolveApplyLocalhostCleanupBudgetMs()
-        => ResolveBudgetMs("CHECKPOINT_INTERNET_APPLY_LOCALHOST_CLEANUP_MS", DefaultApplyLocalhostCleanupBudgetMs);
-
-    internal static int ReconcileStepBudgetTotalMs()
-        => ResolveLocalhostCleanupBudgetMs()
-           + ResolveReadbackCaptureBudgetMs()
-           + ResolveResetScriptBudgetMs()
-           + ResolvePostResetReadbackBudgetMs()
-           + ResolveReassertApplyBudgetMs();
+        => ResolveBudgetMs(
+            "CHECKPOINT_INTERNET_APPLY_LOCALHOST_CLEANUP_MS",
+            GuardInternetBudgetDefaults.ApplyLocalhostCleanupMs);
 
     internal static bool ApplyWaitBudgetIsBelowClientIoTimeout()
         => ResolveApplyWaitDuringReconcileMs() < GuardInternetClient.DefaultIoTimeoutMs;
