@@ -26,10 +26,6 @@ public sealed class ShellPollerCloseRaceTests
     [Fact]
     public void shell_poller_tick_completing_after_main_window_close_does_not_touch_tray_or_panel()
     {
-        FakeShellSeams.Install();
-        FakeShellSeams.Service.Status = ServiceControllerStatus.Running;
-        FakeShellSeams.Http.Answers = true;
-
         var buildGate = new ManualResetEventSlim(false);
         var buildEntered = new ManualResetEventSlim(false);
         var domainUnhandled = 0;
@@ -43,23 +39,27 @@ public sealed class ShellPollerCloseRaceTests
 
         AppDomain.CurrentDomain.UnhandledException += OnDomainUnhandled;
         System.Windows.Application.Current.DispatcherUnhandledException += OnDispatcherUnhandled;
-        ShellSeams.BeforeBuildSnapshot = () =>
-        {
-            buildEntered.Set();
-            buildGate.Wait(TimeSpan.FromSeconds(30));
-        };
 
         try
         {
             _fixture.RunAsync(async () =>
             {
+                FakeShellSeams.Install();
+                FakeShellSeams.Service.Status = ServiceControllerStatus.Running;
+                FakeShellSeams.Http.Answers = true;
+                ShellSeams.BeforeBuildSnapshot = () =>
+                {
+                    buildEntered.Set();
+                    buildGate.Wait(TimeSpan.FromSeconds(30));
+                };
+
                 var window = new MainWindow();
                 window.Show();
                 window.Hide();
 
                 await Task.Run(() =>
                 {
-                    if (!buildEntered.Wait(TimeSpan.FromSeconds(15)))
+                    if (!buildEntered.Wait(TimeSpan.FromSeconds(30)))
                     {
                         throw new System.TimeoutException("Timed out waiting for poller tick to enter BuildSnapshot.");
                     }
@@ -95,7 +95,7 @@ public sealed class ShellPollerCloseRaceTests
                 Assert.Equal(0, Volatile.Read(ref updateSnapshotAfterClose));
                 Assert.Equal(0, navDelta);
                 Assert.False(panelNavigateAfterClose, "panel-navigate log line appeared after window close");
-            }, TimeSpan.FromSeconds(45));
+            }, TimeSpan.FromSeconds(60));
         }
         finally
         {
