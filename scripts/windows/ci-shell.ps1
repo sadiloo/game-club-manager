@@ -13,9 +13,9 @@ New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 $env:GAMECLUB_DATABASE = $env:GAMECLUB_DATABASE ?? "Host=127.0.0.1;Port=5432;Database=gameclub_test;Username=postgres;Password=postgres;SSL Mode=Disable"
 $env:GAMECLUB_API_KEY = $env:GAMECLUB_API_KEY ?? "ci-test-key"
 $env:OperatorSessionSecret = $env:OperatorSessionSecret ?? "ci-operator-secret-r11"
-$env:GAMECLUB_MUTABLE_CLOCK = "1"
 $env:CHECKPOINT_SERVER_URL = "http://127.0.0.1:5000"
 $env:ASPNETCORE_URLS = "http://127.0.0.1:5000"
+$env:SHELL_A3_BILLING_WAIT_SECONDS = "600"
 
 $configDir = "C:\ProgramData\Checkpoint\config"
 New-Item -ItemType Directory -Force -Path $configDir | Out-Null
@@ -25,17 +25,15 @@ New-Item -ItemType Directory -Force -Path $configDir | Out-Null
   "ConnectionStrings": {
     "Default": "$($env:GAMECLUB_DATABASE)"
   },
-  "OperatorSessionSecret": "$($env:OperatorSessionSecret)",
-  "GAMECLUB_MUTABLE_CLOCK": "1"
+  "OperatorSessionSecret": "$($env:OperatorSessionSecret)"
 }
 "@ | Set-Content -Path (Join-Path $configDir "server.json") -Encoding UTF8
-
-[Environment]::SetEnvironmentVariable("ASPNETCORE_URLS", "http://127.0.0.1:5000", "Machine")
-[Environment]::SetEnvironmentVariable("GAMECLUB_MUTABLE_CLOCK", "1", "Machine")
 
 if (-not (Get-Service -Name postgresql* -ErrorAction SilentlyContinue)) {
     choco install postgresql17 --params '/Password:postgres' -y --no-progress
 }
+
+[Environment]::SetEnvironmentVariable("ASPNETCORE_URLS", "http://127.0.0.1:5000", "Machine")
 
 Write-Host "Publishing GameClub.Server win-x64"
 dotnet publish src/GameClub.Server/GameClub.Server.csproj -c Release -f net10.0 -r win-x64 `

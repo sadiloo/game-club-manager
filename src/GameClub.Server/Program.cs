@@ -48,18 +48,7 @@ public partial class Program
         builder.Services.AddEndpointsApiExplorer();
         builder.Services.AddSwaggerGen();
         builder.Services.AddSingleton<IOperatorPanelNotifier, OperatorPanelNotifier>();
-        var mutableClockEnabled = string.Equals(Environment.GetEnvironmentVariable("GAMECLUB_MUTABLE_CLOCK"), "1", StringComparison.Ordinal)
-            || string.Equals(builder.Configuration["GAMECLUB_MUTABLE_CLOCK"], "1", StringComparison.Ordinal);
-        if (mutableClockEnabled)
-        {
-            var mutableClock = new MutableClock(DateTimeOffset.UtcNow);
-            builder.Services.AddSingleton(mutableClock);
-            builder.Services.AddSingleton<IClock>(mutableClock);
-        }
-        else
-        {
-            builder.Services.AddSingleton<IClock, SystemClock>();
-        }
+        builder.Services.AddSingleton<IClock, SystemClock>();
         builder.Services.AddScoped<OperatorContext>();
         builder.Services.AddSingleton<OperatorPolicies>();
         builder.Services.Configure<DeadPcSweepOptions>(builder.Configuration.GetSection(DeadPcSweepOptions.SectionName));
@@ -140,19 +129,12 @@ public partial class Program
         app.MapHub<OperatorHub>("/hubs/operator");
         app.MapHub<KioskHub>("/hubs/kiosk");
 
-        var skipMigrate = string.Equals(
-            Environment.GetEnvironmentVariable("GAMECLUB_SKIP_DB_MIGRATE"),
-            "1",
-            StringComparison.Ordinal);
         using (var scope = app.Services.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            if (!skipMigrate)
-            {
-                await db.Database.MigrateAsync();
-                await DatabaseSeed.EnsureAsync(db);
-                await ApplyAuditImmutabilityAsync(db);
-            }
+            await db.Database.MigrateAsync();
+            await DatabaseSeed.EnsureAsync(db);
+            await ApplyAuditImmutabilityAsync(db);
         }
 
         await app.RunAsync();

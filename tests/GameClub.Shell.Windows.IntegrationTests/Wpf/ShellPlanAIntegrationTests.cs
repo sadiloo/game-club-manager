@@ -171,17 +171,25 @@ public sealed class ShellPlanAIntegrationTests
     [Fact]
     public void shell_events_do_not_change_open_session_amount_after_ten_minutes()
     {
-        if (!IsMutableClockEnabled())
-        {
-            throw new InvalidOperationException("GAMECLUB_MUTABLE_CLOCK=1 is required for billing isolation");
-        }
-
+        FakeShellSeams.RestoreProduction();
         EnsureServiceRunning();
         var shellStation = "SHELL-A3-" + Guid.NewGuid().ToString("N")[..6].ToUpperInvariant();
         var refStation = "SHELL-REF-" + Guid.NewGuid().ToString("N")[..6].ToUpperInvariant();
         var shellSession = ShellCiHttp.CreateOpenSessionAsync(shellStation).GetAwaiter().GetResult();
         var refSession = ShellCiHttp.CreateOpenSessionAsync(refStation).GetAwaiter().GetResult();
-        var baseline = ShellCiHttp.GetOpenSessionLiveAmountTomanAsync(refSession).GetAwaiter().GetResult();
+        var baseline = ShellCiHttp.GetOpenSessionLiveBillAsync(refSession).GetAwaiter().GetResult();
+
+        _fixture.RunAsync(async () =>
+        {
+            var window = new MainWindow();
+            window.Show();
+            window.Hide();
+            window.ShowFromTray();
+            window.ReloadPanel();
+            await Task.Delay(500);
+            window.Close();
+            await Task.Delay(300);
+        }, TimeSpan.FromSeconds(40));
 
         var shellProc = LaunchShellProcess();
         try
@@ -195,11 +203,26 @@ public sealed class ShellPlanAIntegrationTests
             shellProc.Dispose();
         }
 
-        ShellCiHttp.AdvanceClockSeconds(600);
-        var refAmount = ShellCiHttp.GetOpenSessionLiveAmountTomanAsync(refSession).GetAwaiter().GetResult();
-        var shellAmount = ShellCiHttp.GetOpenSessionLiveAmountTomanAsync(shellSession).GetAwaiter().GetResult();
-        Assert.Equal(refAmount, shellAmount);
-        Assert.True(refAmount >= baseline);
+        var afterRef = ShellCiHttp.GetOpenSessionLiveBillAsync(refSession).GetAwaiter().GetResult();
+        var afterShell = ShellCiHttp.GetOpenSessionLiveBillAsync(shellSession).GetAwaiter().GetResult();
+        Assert.Equal(afterRef.AmountToman, afterShell.AmountToman);
+        if (afterRef.MinutesPlayed is int refMin && afterShell.MinutesPlayed is int shellMin)
+        {
+            Assert.Equal(refMin, shellMin);
+        }
+
+        var waitSeconds = ResolveBillingWaitSeconds();
+        Thread.Sleep(TimeSpan.FromSeconds(waitSeconds));
+
+        var finalRef = ShellCiHttp.GetOpenSessionLiveBillAsync(refSession).GetAwaiter().GetResult();
+        var finalShell = ShellCiHttp.GetOpenSessionLiveBillAsync(shellSession).GetAwaiter().GetResult();
+        Assert.Equal(finalRef.AmountToman, finalShell.AmountToman);
+        if (finalRef.MinutesPlayed is int refMin2 && finalShell.MinutesPlayed is int shellMin2)
+        {
+            Assert.Equal(refMin2, shellMin2);
+        }
+
+        Assert.True(finalRef.AmountToman >= baseline.AmountToman);
     }
 
     [Fact]
@@ -475,8 +498,16 @@ public sealed class ShellPlanAIntegrationTests
         return Process.Start(psi)!;
     }
 
-    private static bool IsMutableClockEnabled()
-        => string.Equals(Environment.GetEnvironmentVariable("GAMECLUB_MUTABLE_CLOCK"), "1", StringComparison.Ordinal);
+    private static int ResolveBillingWaitSeconds()
+    {
+        var raw = Environment.GetEnvironmentVariable("SHELL_A3_BILLING_WAIT_SECONDS");
+        if (int.TryParse(raw, out var seconds) && seconds >= 0)
+        {
+            return seconds;
+        }
+
+        return 600;
+    }
 
     private static void EnsureServiceRunning()
     {

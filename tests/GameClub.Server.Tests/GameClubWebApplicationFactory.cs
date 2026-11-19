@@ -7,10 +7,12 @@ using GameClub.Server.Services;
 using GameClub.Server.Time;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using System.Net;
 
 namespace GameClub.Server.Tests;
@@ -25,8 +27,8 @@ public class GameClubWebApplicationFactory : WebApplicationFactory<Program>
     /// <summary>Overrides the PostgreSQL connection string for this host only.</summary>
     public string? ConnectionStringOverride { get; set; }
 
-    /// <summary>Skip EF migrate/seed on host startup (probe-only hosts).</summary>
-    public bool SkipDbMigrateOnStartup { get; set; }
+    /// <summary>Makes <c>SELECT 1</c> fail so GET /api/local/server-status returns dbOk=false.</summary>
+    public bool FailSelectOneProbe { get; set; }
 
     /// <summary>
     /// When false (default), the test host does not run periodic dead-PC sweeps.
@@ -63,9 +65,6 @@ public class GameClubWebApplicationFactory : WebApplicationFactory<Program>
 
         Environment.SetEnvironmentVariable("GAMECLUB_DATABASE", ConnectionString);
         Environment.SetEnvironmentVariable("GAMECLUB_API_KEY", "dev-key");
-        Environment.SetEnvironmentVariable(
-            "GAMECLUB_SKIP_DB_MIGRATE",
-            SkipDbMigrateOnStartup ? "1" : null);
         Environment.SetEnvironmentVariable("DeadPc__SweepIntervalSeconds", "1");
 
         builder.UseSetting("ConnectionStrings:Default", ConnectionString);
@@ -84,25 +83,28 @@ public class GameClubWebApplicationFactory : WebApplicationFactory<Program>
                 services.AddSingleton<IStartupFilter>(new NonLoopbackRemoteIpStartupFilter(SimulatedRemoteIpAddress));
             }
         });
+
+        if (FailSelectOneProbe)
+        {
+            builder.ConfigureTestServices(services =>
+            {
+                services.TryAddSingleton<SelectOneFaultInterceptor>();
+                services.TryAddEnumerable(
+                    ServiceDescriptor.Singleton<IDbContextOptionsConfiguration<AppDbContext>, SelectOneFaultDbContextOptions>());
+            });
+        }
     }
 
     protected override IHost CreateHost(IHostBuilder builder)
     {
-        if (!SkipDbMigrateOnStartup)
+        var options = new DbContextOptionsBuilder<AppDbContext>().UseNpgsql(ConnectionString).Options;
+        using (var bootstrap = new AppDbContext(options))
         {
-            var options = new DbContextOptionsBuilder<AppDbContext>().UseNpgsql(ConnectionString).Options;
-            using (var bootstrap = new AppDbContext(options))
-            {
-                bootstrap.Database.EnsureDeleted();
-            }
+            bootstrap.Database.EnsureDeleted();
         }
 
         var host = base.CreateHost(builder);
-        if (!SkipDbMigrateOnStartup)
-        {
-            SeedDatabase(host);
-        }
-
+        SeedDatabase(host);
         return host;
     }
 

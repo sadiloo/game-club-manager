@@ -45,16 +45,22 @@ public sealed class LocalServerStatusEndpointTests(GameClubWebApplicationFactory
     {
         await using var isolated = new GameClubWebApplicationFactory
         {
-            SkipDbMigrateOnStartup = true,
-            ConnectionStringOverride =
-                "Host=203.0.113.1;Port=9;Database=gameclub_unreachable;Username=postgres;Password=postgres;Timeout=1;Command Timeout=1",
+            FailSelectOneProbe = true,
         };
         var client = isolated.CreateClient();
+        SelectOneFaultInterceptor.FaultEnabled = true;
+        try
+        {
         var response = await client.GetAsync("/api/local/server-status");
         response.EnsureSuccessStatusCode();
         var body = await response.Content.ReadFromJsonAsync<LocalStatusDto>();
         Assert.NotNull(body);
         Assert.False(body!.DbOk);
+        }
+        finally
+        {
+            SelectOneFaultInterceptor.FaultEnabled = false;
+        }
     }
 
     private sealed record LocalStatusDto(DateTimeOffset? StartedAtUtc, bool DbOk);

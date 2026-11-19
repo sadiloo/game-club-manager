@@ -31,27 +31,7 @@ internal static class ShellCiHttp
         }
     }
 
-    public static void AdvanceClockSeconds(int seconds)
-    {
-        var req = WebRequest.Create(BaseUrl + "/api/local/advance-clock");
-        req.Method = "POST";
-        req.ContentType = "application/json";
-        req.Headers["X-Api-Key"] = ApiKey;
-        var payload = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new { seconds }));
-        req.ContentLength = payload.Length;
-        using (var s = req.GetRequestStream())
-        {
-            s.Write(payload, 0, payload.Length);
-        }
-
-        using var resp = (HttpWebResponse)req.GetResponse();
-        if (resp.StatusCode != HttpStatusCode.OK)
-        {
-            throw new InvalidOperationException("advance-clock failed: " + resp.StatusCode);
-        }
-    }
-
-    public static async Task<long> GetOpenSessionLiveAmountTomanAsync(Guid sessionId)
+    public static async Task<OpenBillSnapshot> GetOpenSessionLiveBillAsync(Guid sessionId)
     {
         var cookie = await LoginOperatorAsync();
         var req = WebRequest.Create(BaseUrl + $"/api/operator/sessions/{sessionId}/bill/open");
@@ -61,8 +41,13 @@ internal static class ShellCiHttp
         using var stream = resp.GetResponseStream();
         using var reader = new StreamReader(stream!);
         var json = JsonDocument.Parse(reader.ReadToEnd());
-        return json.RootElement.GetProperty("amountToman").GetInt64();
+        var root = json.RootElement;
+        var amount = root.GetProperty("amountToman").GetInt64();
+        var minutes = root.TryGetProperty("minutesPlayed", out var m) ? m.GetInt32() : (int?)null;
+        return new OpenBillSnapshot(amount, minutes);
     }
+
+    internal readonly record struct OpenBillSnapshot(long AmountToman, int? MinutesPlayed);
 
     public static async Task<Guid> CreateOpenSessionAsync(string stationId)
     {
