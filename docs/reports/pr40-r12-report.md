@@ -4,7 +4,7 @@
 
 | Field | Value |
 |-------|--------|
-| **Head SHA** | `e161903c8b8f8e8b8f8e8b8f8e8b8f8e8b8f8e8b` _(see git log after push)_ |
+| **Head SHA** | `8b0392ebac1580b029a543422541e3fbd745e1df` |
 | **Parent** | `6d32abda53709308b8fee1b83c196035bac48bbc` |
 | **Branch** | `cursor/pr40-r12-staging` |
 
