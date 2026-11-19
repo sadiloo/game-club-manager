@@ -123,6 +123,14 @@ public sealed class PcInternetKioskCoreTests
     }
 
     [Fact]
+    public void PcInternet_server_apply_wait_default_is_below_client_io_timeout()
+    {
+        Assert.Equal(30_000, GuardInternetClient.DefaultIoTimeoutMs);
+        Assert.True(GuardInternetClient.DefaultServerApplyWaitMs < GuardInternetClient.DefaultIoTimeoutMs);
+        Assert.True(GuardInternetClient.DefaultIoTimeoutMs - GuardInternetClient.DefaultServerApplyWaitMs >= 5_000);
+    }
+
+    [Fact]
     public async Task PcInternet_kiosk_runtime_records_pipe_client_timeout_as_internet_error()
     {
         if (!OperatingSystem.IsWindows())
@@ -155,7 +163,7 @@ public sealed class PcInternetKioskCoreTests
             var method = typeof(KioskRuntime).GetMethod("ApplyInternetCommandAsync", BindingFlags.Instance | BindingFlags.NonPublic);
             Assert.NotNull(method);
             var task = (Task)method!.Invoke(runtime, new object[] { command, CancellationToken.None })!;
-            await task.ConfigureAwait(false);
+            await task;
             var field = typeof(KioskRuntime).GetField("_lastInternetReport", BindingFlags.Instance | BindingFlags.NonPublic);
             var report = field!.GetValue(runtime) as KioskInternetAppliedReport;
             Assert.NotNull(report);

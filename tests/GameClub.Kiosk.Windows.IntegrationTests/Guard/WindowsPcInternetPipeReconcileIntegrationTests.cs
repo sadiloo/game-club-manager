@@ -10,7 +10,6 @@ using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Security.Principal;
 using System.Text;
-using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using GameClub.Kiosk.Core.Guard;
@@ -86,12 +85,12 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
             {
                 try
                 {
-                    status = await new GuardInternetClient().GetStatusAsync(default).ConfigureAwait(false);
+                    status = await new GuardInternetClient().GetStatusAsync(default);
                     break;
                 }
                 catch (TimeoutException)
                 {
-                    await Task.Delay(50).ConfigureAwait(false);
+                    await Task.Delay(50);
                 }
             }
 
@@ -130,7 +129,7 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
                 IsBackground = true,
             };
             pipeThread.Start();
-            await Task.Delay(300).ConfigureAwait(false);
+            await Task.Delay(300);
 
             var onCommand = Sign(rsa, new InternetCommandPayload
             {
@@ -141,7 +140,7 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
                 IssuedAtUtc = DateTime.UtcNow,
             });
             var client = new GuardInternetClient();
-            var response = await client.ApplyAsync(onCommand).ConfigureAwait(false);
+            var response = await client.ApplyAsync(onCommand);
             if (response.Contains("reconcile_busy", StringComparison.OrdinalIgnoreCase))
             {
                 Console.WriteLine($"internet_pipe_apply_reconcile_busy body={response}");
@@ -170,13 +169,123 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
         {
             var sw = Stopwatch.StartNew();
             await Assert.ThrowsAsync<TimeoutException>(async () =>
-                await new GuardInternetClient().GetStatusAsync(default).ConfigureAwait(false));
+                await new GuardInternetClient().GetStatusAsync(default));
             Assert.True(sw.ElapsedMilliseconds < 5_000, $"connect wait was {sw.ElapsedMilliseconds}ms");
             Console.WriteLine($"internet_guard_client_connect_timeout elapsed_ms={sw.ElapsedMilliseconds}");
         }
         finally
         {
             Environment.SetEnvironmentVariable("CHECKPOINT_INTERNET_PIPE_CONNECT_MS", priorConnect);
+        }
+    }
+
+    [Fact(Timeout = 60_000)]
+    public async Task internet_pipe_status_reports_reconcile_timeout_while_work_thread_hung()
+    {
+        RequireWindowsAdmin();
+        using var rsa = RSA.Create(2048);
+        var config = BuildConfig(ExportPublicKeyPem(rsa));
+        var hung = new HungReconcileInternetFirewallApplier();
+        var priorBudget = Environment.GetEnvironmentVariable("CHECKPOINT_INTERNET_RECONCILE_TIMEOUT_MS");
+        Environment.SetEnvironmentVariable("CHECKPOINT_INTERNET_RECONCILE_TIMEOUT_MS", "2000");
+        CancellationTokenSource cts = null;
+        Thread pipeThread = null;
+        try
+        {
+            Assert.Equal("applied", hung.Apply(config, on: false));
+            TryDeleteState();
+            cts = new CancellationTokenSource();
+            pipeThread = new Thread(() => new InternetPipeServer(config, hung).Run(cts.Token)) { IsBackground = true };
+            pipeThread.Start();
+            await Task.Delay(500);
+
+            var deadline = DateTime.UtcNow.AddSeconds(8);
+            string status = null;
+            while (DateTime.UtcNow < deadline)
+            {
+                status = await new GuardInternetClient().GetStatusAsync(default);
+                if (status.Contains("reconcile_timeout", StringComparison.OrdinalIgnoreCase))
+                {
+                    break;
+                }
+
+                await Task.Delay(200);
+            }
+
+            Assert.NotNull(status);
+            Assert.Contains("reconcile_timeout", status, StringComparison.OrdinalIgnoreCase);
+
+            var onCommand = Sign(rsa, new InternetCommandPayload
+            {
+                StationId = config.StationId,
+                Epoch = Guid.NewGuid(),
+                Version = 1,
+                On = true,
+                IssuedAtUtc = DateTime.UtcNow,
+            });
+            var applyBody = await new GuardInternetClient().ApplyAsync(onCommand);
+            Assert.Contains("reconcile_busy", applyBody, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            hung.Release();
+            cts?.Cancel();
+            pipeThread?.Join(TimeSpan.FromSeconds(10));
+            Environment.SetEnvironmentVariable("CHECKPOINT_INTERNET_RECONCILE_TIMEOUT_MS", priorBudget);
+            new InternetFirewallApplier().RunResetScript();
+            TryDeleteState();
+        }
+    }
+
+    [Fact(Timeout = 90_000)]
+    public async Task internet_pipe_status_answers_within_2s_while_apply_holds_firewall_gate()
+    {
+        RequireWindowsAdmin();
+        using var rsa = RSA.Create(2048);
+        var pub = ExportPublicKeyPem(rsa);
+        var config = BuildConfig(pub);
+        var applier = new SlowApplyInternetFirewallApplier(applyOnDelayMs: 30_000);
+        CancellationTokenSource cts = null;
+        Thread pipeThread = null;
+        try
+        {
+            cts = new CancellationTokenSource();
+            pipeThread = new Thread(() => new InternetPipeServer(config, applier).Run(cts.Token)) { IsBackground = true };
+            pipeThread.Start();
+            await Task.Delay(500);
+
+            var onCommand = Sign(rsa, new InternetCommandPayload
+            {
+                StationId = config.StationId,
+                Epoch = Guid.NewGuid(),
+                Version = 2,
+                On = true,
+                IssuedAtUtc = DateTime.UtcNow,
+            });
+
+            var applyTask = Task.Run(async () => await new GuardInternetClient().ApplyAsync(onCommand));
+            await Task.Delay(400);
+            var statusSw = Stopwatch.StartNew();
+            var status = await new GuardInternetClient().GetStatusAsync(default);
+            Assert.True(statusSw.ElapsedMilliseconds < 2_500, $"status blocked {statusSw.ElapsedMilliseconds}ms");
+            Assert.False(string.IsNullOrWhiteSpace(status));
+            Console.WriteLine($"internet_pipe_status_during_slow_apply elapsed_ms={statusSw.ElapsedMilliseconds} body={status}");
+
+            cts.Cancel();
+            try
+            {
+                applyTask.Wait(TimeSpan.FromSeconds(35));
+            }
+            catch
+            {
+                /* pipe closed */
+            }
+        }
+        finally
+        {
+            cts?.Cancel();
+            pipeThread?.Join(TimeSpan.FromSeconds(5));
+            new InternetFirewallApplier().RunResetScript();
         }
     }
 

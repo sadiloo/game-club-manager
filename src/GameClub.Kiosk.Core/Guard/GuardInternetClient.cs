@@ -11,6 +11,8 @@ public sealed class GuardInternetClient
     public const string PipeName = "CheckpointGuardInternet";
     public const int DefaultConnectTimeoutMs = 5_000;
     public const int DefaultIoTimeoutMs = 30_000;
+    /// <summary>Guard server default apply gate wait; must remain below <see cref="DefaultIoTimeoutMs"/>.</summary>
+    public const int DefaultServerApplyWaitMs = 20_000;
 
     public Task<string> ApplyAsync(SignedInternetCommand command, CancellationToken ct = default)
     {

@@ -18,12 +18,14 @@ internal sealed class InternetPipeServer
     private readonly IInternetFirewallApplier _firewall;
     private readonly InternetCommandVerifier _verifier;
     private readonly object _firewallGate = new();
-    private readonly ManualResetEventSlim _reconcileCompleted = new(false);
+    private readonly ManualResetEventSlim _reconcileWorkFinished = new(false);
     private InternetCommandPayload? _applied;
     private long _appliedVersion;
     private Guid _epoch = Guid.NewGuid();
     private bool _on = true;
     private volatile int _reconcilePhase;
+    private volatile bool _reconcileTimedOutWithWorkAlive;
+    private Thread? _reconcileWorkThread;
 
     public InternetPipeServer(InternetGuardConfig config, IInternetFirewallApplier? firewall = null)
     {
@@ -78,22 +80,50 @@ internal sealed class InternetPipeServer
         {
             try
             {
-                using var server = new NamedPipeServerStream(
+                var server = new NamedPipeServerStream(
                     GuardInternetClient.PipeName,
                     PipeDirection.InOut,
                     NamedPipeServerStream.MaxAllowedServerInstances,
                     PipeTransmissionMode.Byte,
                     PipeOptions.Asynchronous);
                 server.WaitForConnection();
+                var pipe = server;
+                var handler = new Thread(() => HandleConnectedClient(pipe))
+                {
+                    IsBackground = true,
+                    Name = "CheckpointInternetPipeClient",
+                };
+                handler.Start();
+            }
+            catch
+            {
+                Thread.Sleep(200);
+            }
+        }
+    }
+
+    private void HandleConnectedClient(NamedPipeServerStream server)
+    {
+        try
+        {
+            using (server)
+            {
                 using var reader = new StreamReader(server, Encoding.UTF8, false, 8192, leaveOpen: true);
                 using var writer = new StreamWriter(server, Encoding.UTF8, 4096, leaveOpen: true) { AutoFlush = true };
                 var body = reader.ReadToEnd();
                 var response = HandleRequest(body);
                 writer.Write(response);
             }
+        }
+        catch
+        {
+            try
+            {
+                server.Dispose();
+            }
             catch
             {
-                Thread.Sleep(200);
+                /* listener continues */
             }
         }
     }
@@ -103,51 +133,50 @@ internal sealed class InternetPipeServer
         _reconcilePhase = 1;
         var sw = Stopwatch.StartNew();
         GuardWatchdogLog.Append("reconcile_start");
-        var completed = false;
         var timeoutMs = InternetGuardReconcilePolicy.ResolveReconcileTimeoutMs();
-        try
+        _reconcileWorkThread = new Thread(() =>
         {
-            var work = new Thread(() =>
+            lock (_firewallGate)
             {
-                lock (_firewallGate)
-                {
-                    InternetGuardStartupFirewall.ReconcileOnPipeStart(_config, _firewall);
-                    ReassertPersistedLocked();
-                }
+                InternetGuardStartupFirewall.ReconcileOnPipeStart(_config, _firewall);
+                ReassertPersistedLocked();
+            }
+        })
+        {
+            IsBackground = true,
+            Name = "CheckpointInternetReconcileWork",
+        };
+        _reconcileWorkThread.Start();
+        var joined = _reconcileWorkThread.Join(TimeSpan.FromMilliseconds(timeoutMs));
+        if (joined)
+        {
+            _reconcilePhase = 2;
+            GuardWatchdogLog.Append($"reconcile_end completed=true elapsed_ms={sw.ElapsedMilliseconds}");
+            _reconcileWorkFinished.Set();
+        }
+        else
+        {
+            _reconcileTimedOutWithWorkAlive = true;
+            GuardWatchdogLog.Append($"reconcile_timeout elapsed_ms={sw.ElapsedMilliseconds} budget_ms={timeoutMs}");
+            var work = _reconcileWorkThread;
+            new Thread(() =>
+            {
+                work.Join();
+                _reconcileTimedOutWithWorkAlive = false;
+                _reconcilePhase = 2;
+                GuardWatchdogLog.Append($"reconcile_end completed=false elapsed_ms={sw.ElapsedMilliseconds}");
+                _reconcileWorkFinished.Set();
             })
             {
                 IsBackground = true,
-                Name = "CheckpointInternetReconcileWork",
-            };
-            work.Start();
-            if (!work.Join(TimeSpan.FromMilliseconds(timeoutMs)))
-            {
-                GuardWatchdogLog.Append($"reconcile_timeout elapsed_ms={sw.ElapsedMilliseconds} budget_ms={timeoutMs}");
-            }
-            else
-            {
-                completed = true;
-                GuardWatchdogLog.Append($"reconcile_end completed=true elapsed_ms={sw.ElapsedMilliseconds}");
-            }
-        }
-        catch (Exception ex)
-        {
-            GuardWatchdogLog.Append($"reconcile_failed:{ex.Message}");
-        }
-        finally
-        {
-            _reconcilePhase = 2;
-            _reconcileCompleted.Set();
-            if (!completed)
-            {
-                GuardWatchdogLog.Append($"reconcile_end completed=false elapsed_ms={sw.ElapsedMilliseconds}");
-            }
+                Name = "CheckpointInternetReconcileJoin",
+            }.Start();
         }
     }
 
     private void RunDriftWatchdog(CancellationToken ct)
     {
-        if (!_reconcileCompleted.Wait(TimeSpan.FromMilliseconds(InternetGuardReconcilePolicy.ResolveReconcileTimeoutMs() + 5_000)))
+        if (!_reconcileWorkFinished.Wait(TimeSpan.FromMilliseconds(InternetGuardReconcilePolicy.ResolveReconcileTimeoutMs() + 120_000)))
         {
             return;
         }
@@ -172,6 +201,24 @@ internal sealed class InternetPipeServer
         }
     }
 
+    private string ResolveStatusState()
+    {
+        if (ReconcileWorkStillAliveAfterTimeout())
+        {
+            return "reconcile_timeout";
+        }
+
+        if (_reconcilePhase == 1)
+        {
+            return "reconciling";
+        }
+
+        return null;
+    }
+
+    private bool ReconcileWorkStillAliveAfterTimeout()
+        => _reconcileTimedOutWithWorkAlive && _reconcileWorkThread is { IsAlive: true };
+
     private string HandleRequest(string body)
     {
         try
@@ -180,11 +227,12 @@ internal sealed class InternetPipeServer
             var verb = doc.RootElement.GetProperty("verb").GetString();
             if (string.Equals(verb, "status", StringComparison.OrdinalIgnoreCase))
             {
-                if (_reconcilePhase == 1)
+                var state = ResolveStatusState();
+                if (state is not null)
                 {
                     return JsonSerializer.Serialize(new
                     {
-                        state = "reconciling",
+                        state,
                         epoch = _epoch,
                         version = _appliedVersion,
                         on = _on,
@@ -230,15 +278,6 @@ internal sealed class InternetPipeServer
     {
         busyError = null;
         var totalWaitMs = InternetGuardReconcilePolicy.ResolveApplyWaitDuringReconcileMs();
-        if (_reconcilePhase == 1)
-        {
-            if (!_reconcileCompleted.Wait(TimeSpan.FromMilliseconds(totalWaitMs)))
-            {
-                busyError = "reconcile_busy";
-                return false;
-            }
-        }
-
         if (Monitor.TryEnter(_firewallGate, totalWaitMs))
         {
             return true;
