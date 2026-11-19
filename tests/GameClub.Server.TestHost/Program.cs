@@ -9,12 +9,13 @@ if (harness is not { Enabled: true })
     return 2;
 }
 
-var bandMode = PcBandHarnessDiagnostics.TryParseBandModeFromHostArgs(string.Join(' ', args))!;
+var bandMode = PcBandHarnessDiagnostics.BandModeLabelForHostArgs(string.Join(' ', args));
 Console.WriteLine(PcBandHarnessDiagnostics.FormatLogLine(bandMode, harness));
 PcBandHarnessDiagnostics.AssertLiveTestHarnessActive(harness);
 
 await ServerApplication.RunAsync(hostArgs, builder =>
 {
+    builder.Services.AddHostedService<LeaseKeyFingerprintStartup>();
     if (harness is { Enabled: true })
     {
         builder.Services.Configure<PcSpecialBandHarnessOptions>(_ =>

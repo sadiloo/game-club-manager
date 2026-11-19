@@ -117,8 +117,21 @@ internal sealed class OutOfProcessLiveServer : IAsyncDisposable
 
     private async Task LaunchAndWaitReadyAsync(CancellationToken ct)
     {
-        var outLog = Path.Combine(Path.GetTempPath(), $"gcm-server-out-{Guid.NewGuid():N}.log");
-        var errLog = Path.Combine(Path.GetTempPath(), $"gcm-server-err-{Guid.NewGuid():N}.log");
+        var logDir = Environment.GetEnvironmentVariable("CI_KIOSK_LOG_DIR");
+        string outLog;
+        string errLog;
+        var pidPlaceholder = Guid.NewGuid().ToString("N");
+        if (!string.IsNullOrWhiteSpace(logDir))
+        {
+            Directory.CreateDirectory(logDir);
+            outLog = Path.Combine(logDir, $"server-relaunch-{pidPlaceholder}-out.log");
+            errLog = Path.Combine(logDir, $"server-relaunch-{pidPlaceholder}-err.log");
+        }
+        else
+        {
+            outLog = Path.Combine(Path.GetTempPath(), $"gcm-server-out-{pidPlaceholder}.log");
+            errLog = Path.Combine(Path.GetTempPath(), $"gcm-server-err-{pidPlaceholder}.log");
+        }
         var execArgs = string.IsNullOrWhiteSpace(_hostArgs)
             ? $"exec \"{_hostDll}\""
             : $"exec \"{_hostDll}\" {_hostArgs}";
@@ -135,12 +148,18 @@ internal sealed class OutOfProcessLiveServer : IAsyncDisposable
         psi.Environment["ASPNETCORE_URLS"] = BaseUrl;
         PcBandHarnessDiagnostics.LogLiveTestServerStart("live_server_start", _hostArgs);
         _process = Process.Start(psi) ?? throw new InvalidOperationException("Failed to start GameClub.Server.TestHost.");
+        if (!string.IsNullOrWhiteSpace(logDir))
+        {
+            var pid = _process.Id;
+            outLog = Path.Combine(logDir, $"server-relaunch-{pid}-out.log");
+            errLog = Path.Combine(logDir, $"server-relaunch-{pid}-err.log");
+        }
+
         KioskLiveServerRegistry.RegisterOwned(_process.Id, $"dll={_hostDll} args={_hostArgs}");
         Environment.SetEnvironmentVariable("GAMECLUB_SERVER_DLL", _hostDll);
         Environment.SetEnvironmentVariable("GAMECLUB_SERVER_HOST_ARGS", _hostArgs);
 
-        _ = Task.Run(() => File.AppendAllText(outLog, _process.StandardOutput.ReadToEnd()));
-        _ = Task.Run(() => File.AppendAllText(errLog, _process.StandardError.ReadToEnd()));
+        BeginStreamingProcessLog(_process, outLog, errLog);
 
         var apiKey = Environment.GetEnvironmentVariable("GAMECLUB_API_KEY") ?? "ci-test-key";
         using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
@@ -172,9 +191,37 @@ internal sealed class OutOfProcessLiveServer : IAsyncDisposable
         throw new InvalidOperationException($"GameClub.Server.TestHost did not become ready at {BaseUrl} (dll={_hostDll}).");
     }
 
+    private static void BeginStreamingProcessLog(Process process, string outLog, string errLog)
+    {
+        var outWriter = new StreamWriter(outLog, append: true) { AutoFlush = true };
+        var errWriter = new StreamWriter(errLog, append: true) { AutoFlush = true };
+        process.OutputDataReceived += (_, e) =>
+        {
+            if (e.Data is null)
+            {
+                return;
+            }
+
+            outWriter.WriteLine(e.Data);
+            if (e.Data.StartsWith("LEASE_BUILD", StringComparison.Ordinal))
+            {
+                Console.WriteLine(e.Data);
+            }
+        };
+        process.ErrorDataReceived += (_, e) =>
+        {
+            if (e.Data is not null)
+            {
+                errWriter.WriteLine(e.Data);
+            }
+        };
+        process.BeginOutputReadLine();
+        process.BeginErrorReadLine();
+    }
+
     private void CopyServerEnvironment(ProcessStartInfo psi)
     {
-        foreach (var key in new[] { "GAMECLUB_DATABASE", "GAMECLUB_TEST_DATABASE", "GAMECLUB_API_KEY", "OperatorSessionSecret", "ASPNETCORE_ENVIRONMENT" })
+        foreach (var key in new[] { "GAMECLUB_DATABASE", "GAMECLUB_TEST_DATABASE", "GAMECLUB_API_KEY", "OperatorSessionSecret", "ASPNETCORE_ENVIRONMENT", "CI_KIOSK_LOG_DIR" })
         {
             var value = Environment.GetEnvironmentVariable(key);
             if (!string.IsNullOrWhiteSpace(value))

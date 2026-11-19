@@ -141,6 +141,8 @@ public sealed class WindowsKioskServerIntegrationTests
             await backend.RegisterPcAsync(backend.CreateApiClient(), "PC-UNREACH");
             await backend.SeedCustomerWithCredentialAsync("unreach", "pass", 200_000);
             var (deviceId, deviceKey, leasePem) = await backend.PairAsync("PC-UNREACH");
+            Console.WriteLine(GameClub.Server.Testing.KioskLeaseSigningKeyDiagnostics.FormatFingerprintLine(leasePem));
+            var leaseKeyBefore = GameClub.Server.Testing.KioskLeaseSigningKeyDiagnostics.Sha256Prefix16(leasePem);
             var kioskHttp = backend.CreateKioskHttpClient(deviceId, deviceKey);
             var login = await kioskHttp.PostAsJsonAsync(
                 "/api/kiosk/auth/login",
@@ -228,6 +230,7 @@ public sealed class WindowsKioskServerIntegrationTests
 
             await ownedServer!.RelaunchAsync();
             serverStoppedForOutage = false;
+            Console.WriteLine($"LEASE_BUILD_SERVER pid={ownedServer.ProcessId}");
 
             await WaitUntilTransportConnectedAsync(runtime, TimeSpan.FromSeconds(30));
             Assert.True(runtime.IsTransportConnected, "Transport must connect within 30 seconds after server returns.");
@@ -253,6 +256,13 @@ public sealed class WindowsKioskServerIntegrationTests
             Assert.True(lastAck.Display.EstimatedRemainingSeconds <= fundedPlaySeconds + 5);
             Assert.True(lastAck.Display.EstimatedRemainingSeconds >= fundedPlaySeconds - elapsedSeconds - 60);
             Assert.Equal(KioskShellPhase.Playing, orchestrator.Phase);
+
+            var sigOk = new GameClub.Kiosk.Core.Lease.LeaseVerifier(leasePem).TryVerify(lastAck.Lease!);
+            var leaseKeyAfter = await backend.LeaseSigningKeyFingerprintFromDatabaseAsync();
+            Console.WriteLine(
+                $"LEASE_VERIFY sig_ok={sigOk} authorizedUntilUtc={lastAck.Lease!.Payload.AuthorizedUntilUtc:O} "
+                + $"nowUtc={DateTime.UtcNow:O} phase={orchestrator.Phase} lease_key_k1={leaseKeyBefore} lease_key_k2={leaseKeyAfter} "
+                + $"keys_match={string.Equals(leaseKeyBefore, leaseKeyAfter, StringComparison.Ordinal)}");
 
             var stop = await backend.CreateApiClient().PostAsync($"/api/sessions/{sessionId}/stop", null);
             stop.EnsureSuccessStatusCode();

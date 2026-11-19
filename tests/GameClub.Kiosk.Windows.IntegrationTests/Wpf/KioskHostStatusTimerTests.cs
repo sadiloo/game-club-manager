@@ -1,5 +1,6 @@
 #if NET48
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Net.Http;
@@ -249,11 +250,8 @@ public sealed class KioskHostStatusTimerTests
     private static async Task RunScenarioOnDispatcherAsync(bool lateConnect, bool operatorStopLock)
     {
         WritePairedDeviceState("PC-HOST-D5");
-        var host = CreateHost(
-            out var status,
-            out var lockPanel,
-            out var playingPanel,
-            new KioskHostTestSeam { SkipStartupRefresh = true });
+        var host = CreateHost(out var status, out var lockPanel, out var playingPanel);
+        var statusHistory = new List<string>();
         try
         {
             await Task.Delay(300);
@@ -261,6 +259,7 @@ public sealed class KioskHostStatusTimerTests
             var runtime = GetRuntime(host);
             await runtime.ResetForReconfigureAsync();
             var transport = new HostTestHubTransport(lateConnect);
+            Exception lastHeartbeatException = null;
             runtime.ConfigureForTests(
                 transport,
                 new SqliteOfflineEventQueue(Path.Combine(Path.GetTempPath(), $"host-d5-{Guid.NewGuid():N}.db")),
@@ -295,7 +294,11 @@ public sealed class KioskHostStatusTimerTests
                 await WaitForTransportConnectedAsync(runtime, TimeSpan.FromSeconds(30));
             }
 
-            transport.HeartbeatHandler = _ => throw new InvalidOperationException("hb down");
+            transport.HeartbeatHandler = _ =>
+            {
+                lastHeartbeatException = new InvalidOperationException("hb down");
+                throw lastHeartbeatException;
+            };
             var deadline = DateTime.UtcNow.AddSeconds(20);
             var sawNoResponse = false;
             var sawBareConnected = false;
@@ -305,6 +308,7 @@ public sealed class KioskHostStatusTimerTests
             {
                 await Task.Delay(500);
                 var text = status.Text ?? "";
+                statusHistory.Add($"{DateTime.UtcNow:O} {text}");
                 if (text.IndexOf("no server response", StringComparison.OrdinalIgnoreCase) >= 0)
                 {
                     sawNoResponse = true;
@@ -342,15 +346,65 @@ public sealed class KioskHostStatusTimerTests
                 }
             }
 
-            Assert.True(sawNoResponse, $"expected 'no server response' within timer window; last status={status.Text}");
+            var diag = BuildHostTimerDiagnosticMessage(
+                statusHistory,
+                runtime,
+                transport,
+                lastHeartbeatException,
+                status.Text ?? "");
+            Assert.True(sawNoResponse, $"expected 'no server response' within timer window; {diag}");
             var finalText = status.Text ?? "";
             Assert.Contains("no server response", finalText, StringComparison.OrdinalIgnoreCase);
-            Assert.False(sawBareConnected, $"must not show bare connected while heartbeats fail; last status={finalText}");
+            Assert.False(sawBareConnected, $"must not show bare connected while heartbeats fail; {diag}");
         }
         finally
         {
             await host.DisposeAsync();
         }
+    }
+
+    private static string BuildHostTimerDiagnosticMessage(
+        List<string> statusHistory,
+        KioskRuntime runtime,
+        HostTestHubTransport transport,
+        Exception lastHeartbeatException,
+        string lastStatus)
+    {
+        var heartbeatLoopStarts = -1;
+        try
+        {
+            var loopProp = runtime.GetType().GetProperty(
+                "HeartbeatLoopStartCount",
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            if (loopProp is not null)
+            {
+                heartbeatLoopStarts = (int)(loopProp.GetValue(runtime) ?? -1);
+            }
+        }
+        catch
+        {
+            /* diagnostic only */
+        }
+        var tail = statusHistory.Count <= 12 ? statusHistory : statusHistory.GetRange(statusHistory.Count - 12, 12);
+        var history = string.Join(" | ", tail);
+        return "last status="
+            + lastStatus
+            + " statusHistory="
+            + history
+            + " consecutiveFailures="
+            + runtime.ConsecutiveHeartbeatFailures
+            + " transportPhase="
+            + runtime.TransportPhase
+            + " transportConnected="
+            + runtime.IsTransportConnected
+            + " heartbeatLoopStartCount="
+            + heartbeatLoopStarts
+            + " hubStartCount="
+            + transport.StartCount
+            + " hubInvokeCount="
+            + transport.InvokeCount
+            + " lastHeartbeatException="
+            + (lastHeartbeatException == null ? "" : lastHeartbeatException.Message);
     }
 
     private static async Task RunD7OnDispatcherAsync(bool leaseExpiredLock)
@@ -1328,7 +1382,7 @@ public sealed class KioskHostStatusTimerTests
     private static async Task RunOpenSessionNoDisplayOnDispatcherAsync()
     {
         WritePairedDeviceState("PC-HOST-O4D");
-        var host = CreateHost(out var status, out _, out _, new KioskHostTestSeam { SkipStartupRefresh = true });
+        var host = CreateHost(out var status, out _, out _);
         var sessionId = Guid.NewGuid();
         try
         {
@@ -1726,6 +1780,10 @@ public sealed class KioskHostStatusTimerTests
 
         public Func<CancellationToken, Task<KioskHeartbeatAck>> HeartbeatHandler { get; set; }
 
+        public int StartCount => _starts;
+
+        public int InvokeCount { get; private set; }
+
         public HubConnectionState State => _state;
 
         public bool SignalRAutoReconnecting => false;
@@ -1758,6 +1816,7 @@ public sealed class KioskHostStatusTimerTests
                 throw new InvalidOperationException(methodName);
             }
 
+            InvokeCount++;
             if (HeartbeatHandler is null)
             {
                 return (T)(object)new KioskHeartbeatAck { SessionStatus = "Locked" };

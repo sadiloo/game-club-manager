@@ -64,6 +64,33 @@ public sealed class PcSpecialBandHarnessTests(GameClubWebApplicationFactory fact
     }
 
     [Fact]
+    public void live_test_guard_and_test_host_parse_explicit_pc_band_args_identically()
+    {
+        const string hostArgs = "--pc-normal-start 20:13 --pc-normal-end 20:43 --pc-vip-start 20:13 --pc-vip-end 20:43";
+        var (_, harnessFromParser) = PcSpecialBandHostArgs.ParseFromCommandLine(hostArgs);
+        var harnessFromGuard = PcBandHarnessDiagnostics.OptionsFromHostArgs(hostArgs);
+        Assert.NotNull(harnessFromParser);
+        Assert.NotNull(harnessFromGuard);
+        Assert.Equal(harnessFromParser!.PcNormalStart, harnessFromGuard!.PcNormalStart);
+        Assert.Equal(harnessFromParser.PcNormalEnd, harnessFromGuard.PcNormalEnd);
+        Assert.Equal("explicit", PcBandHarnessDiagnostics.BandModeLabelForHostArgs(hostArgs));
+        PcBandHarnessDiagnostics.AssertLiveTestHarnessActive(harnessFromGuard);
+    }
+
+    [Fact]
+    public void live_test_guard_rejects_empty_and_production_pc_band_args()
+    {
+        Assert.Null(PcBandHarnessDiagnostics.OptionsFromHostArgs(null));
+        Assert.Throws<InvalidOperationException>(() =>
+            PcBandHarnessDiagnostics.LogLiveTestServerStart("test", null));
+        var productionArgs = "--pc-normal-start 00:00 --pc-normal-end 08:30 --pc-vip-start 00:00 --pc-vip-end 08:30";
+        var harness = PcBandHarnessDiagnostics.OptionsFromHostArgs(productionArgs);
+        Assert.NotNull(harness);
+        Assert.Throws<InvalidOperationException>(() =>
+            PcBandHarnessDiagnostics.AssertLiveTestHarnessActive(harness));
+    }
+
+    [Fact]
     public async Task harness_pc_band_override_applies_when_enabled_in_test_host()
     {
         var local = new GameClubWebApplicationFactory

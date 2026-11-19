@@ -10,6 +10,7 @@ New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
 
 $logDir = Join-Path $artifactDir "kiosk-windows-logs"
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+$env:CI_KIOSK_LOG_DIR = $logDir
 $phaseLog = Join-Path $logDir "ci-phase.log"
 $timeoutMarker = Join-Path $artifactDir "ci-timeout-marker.log"
 $heartbeatLog = Join-Path $logDir "ci-heartbeat.log"
@@ -252,34 +253,47 @@ function Write-VstestPhaseList([string]$phaseName, [string]$framework, [string]$
 }
 
 function Publish-ServerLeaseBuildEvidence([string]$phaseName, [string]$TrxPath) {
-    $logPaths = @(
+    $allLogs = @(
         (Join-Path $logDir "server-day-out.log"),
         (Join-Path $logDir "server-night-out.log"),
         (Join-Path $logDir "server-day-err.log"),
         (Join-Path $logDir "server-night-err.log")
     )
-    foreach ($logPath in $logPaths) {
+    $allLogs += @(Get-ChildItem -Path $logDir -Filter 'server-relaunch-*-out.log' -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })
+    $reconnectLogs = @()
+
+    foreach ($logPath in $allLogs) {
         if (-not (Test-Path $logPath)) { continue }
-        $dest = Join-Path $artifactDir ([IO.Path]::GetFileName($logPath))
+        $destName = [IO.Path]::GetFileName($logPath)
+        $dest = Join-Path $artifactDir $destName
         Copy-Item -Path $logPath -Destination $dest -Force
         $lines = @(Select-String -Path $logPath -Pattern '^LEASE_BUILD\b' -ErrorAction SilentlyContinue)
         foreach ($line in $lines) {
-            Write-PhaseLog "LEASE_BUILD phase=$phaseName sourceLog=$([IO.Path]::GetFileName($logPath)) $($line.Line)"
-            Write-Host $line.Line
+            Write-PhaseLog "LEASE_BUILD phase=$phaseName sourceLog=$destName $($line.Line)"
+            Write-Host "LEASE_BUILD phase=$phaseName sourceLog=$destName $($line.Line)"
+        }
+        if ($logPath -like '*server-relaunch-*-out.log' -or $destName -eq 'server-day-out.log') {
+            $reconnectLogs += $logPath
         }
     }
 
-    if ($phaseName -ne 'dotnet-test-net10-server') { return }
-    if (-not (Test-Path $TrxPath)) { return }
+    if ($phaseName -ne 'dotnet-test-net10-server') { return $null }
+    if (-not (Test-Path $TrxPath)) { return $null }
     [xml]$trx = Get-Content $TrxPath
     $ranReconnect = @($trx.TestRun.Results.UnitTestResult | Where-Object { $_.testName -like '*live_server_kiosk_reconnects_when_server_unreachable_at_start*' })
-    if ($ranReconnect.Count -eq 0) { return }
-    $dayLog = Join-Path $logDir "server-day-out.log"
-    if (-not (Test-Path $dayLog)) { throw 'LEASE_BUILD missing (server-day-out.log not found)' }
-    $leaseLines = @(Select-String -Path $dayLog -Pattern '^LEASE_BUILD\b' -ErrorAction SilentlyContinue)
-    if ($leaseLines.Count -eq 0) {
-        throw 'LEASE_BUILD missing'
+    if ($ranReconnect.Count -eq 0) { return $null }
+    $found = $false
+    foreach ($logPath in ($reconnectLogs | Select-Object -Unique)) {
+        if (-not (Test-Path $logPath)) { continue }
+        $leaseLines = @(Select-String -Path $logPath -Pattern '^LEASE_BUILD\b' -ErrorAction SilentlyContinue)
+        if ($leaseLines.Count -gt 0) {
+            $found = $true
+        }
     }
+    if (-not $found) {
+        return 'LEASE_BUILD missing'
+    }
+    return $null
 }
 
 function Assert-NightLineOnlyInNightPhase {
@@ -541,8 +555,9 @@ try {
 )
     $serverDiag = Join-Path $logDir "vstest-diag-dotnet-test-net10-server.log"
     $serverTestExit = Invoke-DotNetWithWatchdog -PhaseName "dotnet-test-net10-server" -ArgumentList $serverTestArgs -PhaseCapMs (10 * 60 * 1000) -DiagLogPath $serverDiag
-    Publish-ServerLeaseBuildEvidence -phaseName "dotnet-test-net10-server" -TrxPath (Join-Path $artifactDir "kiosk-windows-server.trx")
+    $leaseBuildError = Publish-ServerLeaseBuildEvidence -phaseName "dotnet-test-net10-server" -TrxPath (Join-Path $artifactDir "kiosk-windows-server.trx")
     Write-CiPhaseFirewallProbe -label "after-dotnet-test-net10-server"
+    if ($leaseBuildError) { throw $leaseBuildError }
     if ($serverTestExit -eq 124) { throw "server test watchdog" }
 
     Write-Host "Running net48 LiveCheckpointServer tests (L17 apply-failure harness)..."

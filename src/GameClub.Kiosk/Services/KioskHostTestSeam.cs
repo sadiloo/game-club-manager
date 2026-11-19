@@ -15,7 +15,4 @@ public sealed class KioskHostTestSeam
 
     /// <summary>When set, skips real HTTP and treats this status as the logout POST result.</summary>
     public int? LogoutHttpSimulatedStatusCode { get; init; }
-
-    /// <summary>When true, the ctor does not start the production runtime via <see cref="KioskHostService"/> refresh.</summary>
-    public bool SkipStartupRefresh { get; init; }
 }

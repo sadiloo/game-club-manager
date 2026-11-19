@@ -1,6 +1,7 @@
 #if NET10_0_OR_GREATER
 using System;
 using System.Net.Http.Json;
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text;
 using GameClub.Billing;
@@ -8,6 +9,7 @@ using GameClub.Server;
 using GameClub.Server.Data;
 using GameClub.Server.Data.Entities;
 using GameClub.Server.Kiosk;
+using GameClub.Server.Testing;
 using GameClub.Server.Tests;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -65,6 +67,25 @@ internal sealed class KioskIntegrationBackend
 
         await LiveDatabaseMigration.EnsureMigratedAsync();
         await LiveDatabaseReset.ResetAsync();
+    }
+
+    public async Task<string> LeaseSigningKeyFingerprintFromDatabaseAsync()
+    {
+        await using var conn = new NpgsqlConnection(ResolveConnectionString());
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            """SELECT "PrivateKeyPem" FROM kiosk_lease_signing_keys ORDER BY "Id" LIMIT 1""",
+            conn);
+        var pem = await cmd.ExecuteScalarAsync() as string;
+        if (string.IsNullOrWhiteSpace(pem))
+        {
+            return "none";
+        }
+
+        using var rsa = RSA.Create();
+        rsa.ImportFromPem(pem);
+        var pub = rsa.ExportSubjectPublicKeyInfoPem();
+        return KioskLeaseSigningKeyDiagnostics.Sha256Prefix16(pub);
     }
 
     public static bool UsesCiManagedServer =>

@@ -35,15 +35,37 @@ public static class PcBandHarnessDiagnostics
         return null;
     }
 
-    public static PcSpecialBandHarnessOptions? OptionsFromHostArgs(string? hostArgs)
+    public static string BandModeLabelForHostArgs(string? hostArgs)
     {
         var mode = TryParseBandModeFromHostArgs(hostArgs);
-        return mode is null ? null : PcSpecialBandHarnessSchedule.OptionsForBand(mode);
+        if (!string.IsNullOrWhiteSpace(mode))
+        {
+            return mode!;
+        }
+
+        var (_, harness) = PcSpecialBandHostArgs.ParseFromCommandLine(hostArgs);
+        return harness is { Enabled: true } ? "explicit" : "production";
+    }
+
+    public static PcSpecialBandHarnessOptions? OptionsFromHostArgs(string? hostArgs)
+    {
+        var (_, harness) = PcSpecialBandHostArgs.ParseFromCommandLine(hostArgs);
+        if (harness is not { Enabled: true })
+        {
+            return null;
+        }
+
+        if (TryParseBandModeFromHostArgs(hostArgs) is { } mode)
+        {
+            return PcSpecialBandHarnessSchedule.OptionsForBand(mode);
+        }
+
+        return harness;
     }
 
     public static void LogLiveTestServerStart(string source, string? hostArgs)
     {
-        var mode = TryParseBandModeFromHostArgs(hostArgs) ?? "production";
+        var mode = BandModeLabelForHostArgs(hostArgs);
         var harness = OptionsFromHostArgs(hostArgs);
         var line = FormatLogLine(mode, harness);
         Console.WriteLine($"{source} {line}");

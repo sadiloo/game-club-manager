@@ -177,9 +177,21 @@ function Add-CiFirewallInternetOffDiagnostics {
 }
 
 function Add-CiCheckpointPublicEgressEvidence {
-    param([string]$Path)
+    param(
+        [string]$Path,
+        [string]$Label = "baseline"
+    )
 
     Add-CiFirewallInternetOffDiagnostics -Path $Path
+
+    $guardRuleCount = 0
+    try {
+        $guardRuleCount = @(Get-NetFirewallRule -PolicyStore localhost -Group "Checkpoint Internet Off" -ErrorAction SilentlyContinue).Count
+    } catch {
+        $guardRuleCount = -1
+    }
+    $statePath = Join-Path $env:ProgramData "Checkpoint\guard\internet-state.json"
+    $statePresent = Test-Path $statePath
 
     $checkpointHost = "127.0.0.1"
     $checkpointPort = 5225
@@ -195,8 +207,8 @@ function Add-CiCheckpointPublicEgressEvidence {
 
     $publicBlocked = -not (Test-CiTcpConnect -TargetHost "1.1.1.1" -Port 443 -TimeoutMs 2000)
     $serverReachable = Test-CiTcpConnect -TargetHost $checkpointHost -Port $checkpointPort -TimeoutMs 2000
-    $publicLine = "CI_EGRESS internet_off public=1.1.1.1:443 blocked=$publicBlocked"
-    $serverLine = "CI_EGRESS internet_off checkpoint=${checkpointHost}:${checkpointPort} reachable=$serverReachable"
+    $publicLine = "CI_EGRESS label=$Label guard_rules=$guardRuleCount state_present=$statePresent public=1.1.1.1:443 blocked=$publicBlocked"
+    $serverLine = "CI_EGRESS label=$Label checkpoint=${checkpointHost}:${checkpointPort} reachable=$serverReachable guard_rules=$guardRuleCount state_present=$statePresent"
     try {
         Add-Content -Path $Path -Value $publicLine -Encoding UTF8
         Add-Content -Path $Path -Value $serverLine -Encoding UTF8
@@ -223,7 +235,7 @@ function Write-CiFirewallEvidence {
             $ruleLine = "  rule name=$($rule.DisplayName) group=$($rule.Group) enabled=$($rule.Enabled) dir=$($rule.Direction) action=$($rule.Action)"
             Add-Content -Path $Path -Value $ruleLine -Encoding UTF8
         }
-        Add-CiCheckpointPublicEgressEvidence -Path $Path
+        Add-CiCheckpointPublicEgressEvidence -Path $Path -Label $Label
     } catch {
         Write-Host "Write-CiFirewallEvidence failed: $($_.Exception.Message)"
     }

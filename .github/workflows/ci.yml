@@ -39,11 +39,20 @@ jobs:
         if: always()
         timeout-minutes: 25
         run: |
+          set -euo pipefail
           dotnet build tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj -c Release -f net10.0 --nologo
+          G2_FILTER='FullyQualifiedName~live_server_two_outages_bill_matches_main_g2_oracle'
+          G2_LISTED=$(dotnet test tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj \
+            -c Release -f net10.0 --no-build --nologo --list-tests --filter "$G2_FILTER" | grep -c 'live_server_two_outages_bill_matches_main_g2_oracle' || true)
+          if [ "$G2_LISTED" -lt 1 ]; then
+            echo "UBUNTU_G2_TEST_COUNT 0 listed — G2 oracle did not run"
+            exit 1
+          fi
           dotnet test tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj \
             -c Release -f net10.0 --no-build --nologo \
             --filter "FullyQualifiedName~live_server_two_outages_bill_matches_main_g2_oracle|FullyQualifiedName~live_server_re_pair_new_device_key_heartbeats_resume" \
             --logger "console;verbosity=normal"
+          echo "UBUNTU_G2_TEST_COUNT 1 passed"
       - name: post-test orphan postgres writers
         if: always()
         env:

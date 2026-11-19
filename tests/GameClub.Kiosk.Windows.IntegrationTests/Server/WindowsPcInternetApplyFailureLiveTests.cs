@@ -118,6 +118,7 @@ public sealed class WindowsPcInternetApplyFailureLiveTests
             };
             Directory.CreateDirectory(Path.GetDirectoryName(InternetGuardPaths.ConfigPath));
             File.WriteAllText(InternetGuardPaths.ConfigPath, JsonSerializer.Serialize(config));
+            AssertRealInternetOffGuardProbe(config);
             pipe = new Thread(() => new InternetPipeServer(config, new FaultInjectingInternetFirewallApplier()).Run(pipeCts.Token))
             {
                 IsBackground = true,
@@ -384,6 +385,28 @@ public sealed class WindowsPcInternetApplyFailureLiveTests
         catch
         {
             return -1;
+        }
+    }
+
+    private static void AssertRealInternetOffGuardProbe(InternetGuardConfig config)
+    {
+        var applier = new InternetFirewallApplier();
+        try
+        {
+            var applyResult = applier.Apply(config, on: false);
+            var ruleCount = ReadGuardRuleCount();
+            var blocked = ProbeEgress("1.1.1.1", 443);
+            var statePresent = File.Exists(InternetGuardPaths.StatePath);
+            Console.WriteLine(
+                $"L17_GUARD_OFF_PROBE apply_result={applyResult} blocked={blocked} guard_rule_count={ruleCount} "
+                + $"state_present={statePresent} state_path={InternetGuardPaths.StatePath}");
+            Assert.True(blocked, "real internet-off probe expected public egress blocked");
+            Assert.True(ruleCount >= 1, "real internet-off probe expected guard_rule_count >= 1");
+            Assert.True(statePresent, "real internet-off probe expected guard state file present");
+        }
+        finally
+        {
+            applier.Apply(config, on: true);
         }
     }
 
