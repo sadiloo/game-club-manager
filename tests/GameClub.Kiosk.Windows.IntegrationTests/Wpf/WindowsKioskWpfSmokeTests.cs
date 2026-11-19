@@ -228,7 +228,7 @@ public sealed class WindowsKioskWpfSmokeTests
         const long startWalletToman = 48_667;
         var at = GameClub.Billing.TehranTime.FromUtc(DateTime.UtcNow);
         var card = new RateCardBuilder()
-            .AddBase("pc-normal", PlayMode.Online, 1, 80_000)
+            .AddBase("pc-normal", PlayMode.Online, null, 80_000)
             .AddBand(PilotSeed.PcNormalSpecialHours)
             .AddBandRate(PilotSeed.PcNormalBandId, "pc-normal", PlayMode.Online, null, 100_000)
             .Build();

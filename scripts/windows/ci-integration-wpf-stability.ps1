@@ -41,10 +41,12 @@ if ($LASTEXITCODE -ne 0) {
     throw "LiveDatabaseReset harness failed"
 }
 
-$serverDll = Join-Path $repoRoot "src/GameClub.Server/bin/Release/net10.0/GameClub.Server.dll"
+$serverDll = Join-Path $repoRoot "tests/GameClub.Server.TestHost/bin/Release/net10.0/GameClub.Server.TestHost.dll"
 if (-not (Test-Path $serverDll)) {
-    dotnet build src/GameClub.Server/GameClub.Server.csproj -c Release --nologo
+    dotnet build tests/GameClub.Server.TestHost/GameClub.Server.TestHost.csproj -c Release --nologo
 }
+$script:WpfStabilityServerBandArgs = @('--pc-band', 'day')
+$env:GAMECLUB_SERVER_HOST_ARGS = ($script:WpfStabilityServerBandArgs -join ' ')
 $serverLog = Join-Path $logDir "wpf-stability-server-out.log"
 $serverErr = Join-Path $logDir "wpf-stability-server-err.log"
 $serverProc = $null
@@ -56,7 +58,8 @@ function Stop-ServerTree([int]$processId) {
 }
 
 try {
-    $serverProc = Start-Process -FilePath "dotnet" -ArgumentList @("exec", $serverDll) -PassThru -NoNewWindow `
+    Write-Host "live_server_wpf_stability pc_band=day start=(harness) end=(harness)"
+    $serverProc = Start-Process -FilePath "dotnet" -ArgumentList (@("exec", $serverDll) + $script:WpfStabilityServerBandArgs) -PassThru -NoNewWindow `
         -RedirectStandardOutput $serverLog -RedirectStandardError $serverErr -WorkingDirectory $repoRoot
     $env:GAMECLUB_SERVER_PID = $serverProc.Id
     $env:GAMECLUB_SERVER_DLL = $serverDll
@@ -71,7 +74,10 @@ try {
             Start-Sleep -Seconds 2
         }
     }
-    if (-not $ready) { throw "GameClub.Server not ready for WPF stability" }
+    if (-not $ready) { throw "GameClub.Server.TestHost not ready for WPF stability" }
+    if (Test-Path $serverLog) {
+        Select-String -Path $serverLog -Pattern '^pc_band=' -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_.Line }
+    }
 
     $wpfFilter = 'FullyQualifiedName~wpf_remaining_time_matches_funded_session_within_one_tick'
     for ($run = 1; $run -le $runs; $run++) {

@@ -340,7 +340,9 @@ try {
     if (-not (Test-Path $serverDll)) { throw "GameClub.Server.TestHost.dll not found at $serverDll" }
     $serverLog = Join-Path $logDir "server-out.log"
     $serverErr = Join-Path $logDir "server-err.log"
-    Write-PhaseLog "START phase=server-start"
+    $env:GAMECLUB_SERVER_HOST_ARGS = ($script:ServerPcBandArgs -join ' ')
+    Write-PhaseLog "START phase=server-start host_args=$($env:GAMECLUB_SERVER_HOST_ARGS)"
+    Write-Host "live_server_ci band_args=$($env:GAMECLUB_SERVER_HOST_ARGS)"
     $script:serverProc = Start-Process -FilePath "dotnet" -ArgumentList (@("exec", $serverDll) + $script:ServerPcBandArgs) -PassThru -NoNewWindow -RedirectStandardOutput $serverLog -RedirectStandardError $serverErr -WorkingDirectory $repoRoot
     $null = $script:serverProc.Handle
     $env:GAMECLUB_SERVER_PID = $script:serverProc.Id
@@ -369,7 +371,31 @@ try {
         throw "server not ready"
     }
     Write-PhaseLog "END phase=server-ready exit=0"
+    if (Test-Path $serverLog) {
+        $bandLines = Select-String -Path $serverLog -Pattern '^pc_band=' -ErrorAction SilentlyContinue
+        foreach ($bandLine in $bandLines) {
+            Write-PhaseLog $bandLine.Line
+            Write-Host $bandLine.Line
+        }
+    }
     Write-CiPhaseFirewallProbe -label "after-server-ready"
+
+    Write-Host "Listing LiveCheckpointServer tests (must not be zero)..."
+    $liveListArgs = @(
+        "test", "tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj",
+        "-c", "Release", "-f", "net10.0", "--no-build", "--nologo",
+        "--list-tests", "--filter", "Category=LiveCheckpointServer"
+    )
+    $liveListOut = & dotnet @liveListArgs 2>&1
+    $liveTestNames = @($liveListOut | Where-Object { $_ -match '^\s+GameClub\.Kiosk\.Windows\.IntegrationTests\.' })
+    Write-PhaseLog "LIVE_CHECKPOINT_TEST_COUNT $($liveTestNames.Count)"
+    foreach ($name in $liveTestNames) {
+        Write-PhaseLog "LIVE_CHECKPOINT_TEST $($name.Trim())"
+        Write-Host "LIVE_CHECKPOINT_TEST $($name.Trim())"
+    }
+    if ($liveTestNames.Count -eq 0) {
+        throw "LiveCheckpointServer filter matched 0 tests on windows-2022"
+    }
 
     Write-Host "Running windows server integration (net10.0, live server)..."
     Write-CiPhaseFirewallProbe -label "before-dotnet-test-net10-server"
@@ -395,6 +421,8 @@ try {
         Stop-ProcessTree -rootProcId $script:serverProc.Id
         $script:serverProc = $null
     }
+    $env:GAMECLUB_SERVER_HOST_ARGS = ($script:ServerPcBandArgs -join ' ')
+    Write-Host "live_server_ci night restart band_args=$($env:GAMECLUB_SERVER_HOST_ARGS)"
     $script:serverProc = Start-Process -FilePath "dotnet" -ArgumentList (@("exec", $serverDll) + $script:ServerPcBandArgs) -PassThru -NoNewWindow -RedirectStandardOutput $serverLog -RedirectStandardError $serverErr -WorkingDirectory $repoRoot
     $env:GAMECLUB_SERVER_PID = $script:serverProc.Id
     $nightReady = $false
@@ -406,6 +434,13 @@ try {
         } catch { Start-Sleep -Seconds 2 }
     }
     if (-not $nightReady) { throw "server not ready for night-band WPF test" }
+    if (Test-Path $serverLog) {
+        $nightBandLines = Select-String -Path $serverLog -Pattern '^pc_band=night' -ErrorAction SilentlyContinue
+        foreach ($bandLine in $nightBandLines) {
+            Write-PhaseLog $bandLine.Line
+            Write-Host $bandLine.Line
+        }
+    }
   $nightWpfArgs = @(
         "test", "tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj",
         "-c", "Release", "-f", "net48", "--no-build", "--nologo",
@@ -420,8 +455,17 @@ try {
         Stop-ProcessTree -rootProcId $script:serverProc.Id
         $script:serverProc = $null
     }
+    $env:GAMECLUB_SERVER_HOST_ARGS = ($script:ServerPcBandArgs -join ' ')
+    Write-Host "live_server_ci day restart band_args=$($env:GAMECLUB_SERVER_HOST_ARGS)"
     $script:serverProc = Start-Process -FilePath "dotnet" -ArgumentList (@("exec", $serverDll) + $script:ServerPcBandArgs) -PassThru -NoNewWindow -RedirectStandardOutput $serverLog -RedirectStandardError $serverErr -WorkingDirectory $repoRoot
     $env:GAMECLUB_SERVER_PID = $script:serverProc.Id
+    if (Test-Path $serverLog) {
+        $dayBandLines = Select-String -Path $serverLog -Pattern '^pc_band=day' -ErrorAction SilentlyContinue
+        foreach ($bandLine in $dayBandLines) {
+            Write-PhaseLog $bandLine.Line
+            Write-Host $bandLine.Line
+        }
+    }
 
     $guardTestArgs = @(
         "test", "tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj",

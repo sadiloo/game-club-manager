@@ -199,7 +199,15 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
             Assert.False(TryTcp("1.1.1.1", 443, 2_000), "L3: OFF rule must stay on the PC when Checkpoint server is unreachable.");
 
             var dll = Environment.GetEnvironmentVariable("GAMECLUB_SERVER_DLL");
-            var psi = new ProcessStartInfo("dotnet", dll)
+            var hostArgs = Environment.GetEnvironmentVariable("GAMECLUB_SERVER_HOST_ARGS");
+            if (string.IsNullOrWhiteSpace(hostArgs))
+            {
+                hostArgs = "--pc-band day";
+            }
+
+            Console.WriteLine($"live_server_guard_restart {hostArgs}");
+            var execArgs = $"exec \"{dll}\" {hostArgs}";
+            var psi = new ProcessStartInfo("dotnet", execArgs)
             {
                 UseShellExecute = false,
                 CreateNoWindow = true,

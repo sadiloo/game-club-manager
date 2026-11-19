@@ -32,11 +32,14 @@ jobs:
         with:
           dotnet-version: 10.0.403
       - name: test net10
-        run: dotnet test GameClub.slnx -c Release -f net10.0 --nologo -m:1
+        run: dotnet test GameClub.slnx -c Release -f net10.0 --nologo -m:1 --filter "Category!=LiveCheckpointServer"
+      - name: build GameClub.Server.TestHost for live kiosk tests
+        run: dotnet build tests/GameClub.Server.TestHost/GameClub.Server.TestHost.csproj -c Release --nologo
       - name: kiosk owned-server G2 and re-pair oracle
         if: always()
         timeout-minutes: 25
         run: |
+          dotnet build tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj -c Release -f net10.0 --nologo
           dotnet test tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj \
             -c Release -f net10.0 --no-build --nologo \
             --filter "FullyQualifiedName~live_server_two_outages_bill_matches_main_g2_oracle|FullyQualifiedName~live_server_re_pair_new_device_key_heartbeats_resume" \

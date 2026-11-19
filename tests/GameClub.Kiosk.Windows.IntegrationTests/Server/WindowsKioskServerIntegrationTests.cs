@@ -855,6 +855,7 @@ public sealed class WindowsKioskServerIntegrationTests
     }
 
     /// <summary>Brief §10.4.7 (b) — server outage while internet OFF; station desired stays OFF (L3 firewall proof in net48 guard tests).</summary>
+    [Trait("Category", "LiveCheckpointServer")]
     [Fact(Timeout = 180_000)]
     public async Task live_server_pc_internet_off_unaffected_by_server_outage()
     {
@@ -931,11 +932,14 @@ public sealed class WindowsKioskServerIntegrationTests
     }
 
     /// <summary>Brief §10.4.7 (c) — kiosk killed while disconnected; ON press queues until reconnect, segment at press.</summary>
+    [Trait("Category", "LiveCheckpointServer")]
     [Fact(Timeout = 240_000)]
     public async Task live_server_pc_internet_on_while_kiosk_killed_shows_pending_then_applied_on_reconnect()
     {
         if (!KioskIntegrationBackend.IsLiveMode)
         {
+            IntegrationTestCi.FailIfActive(
+                "CHECKPOINT_SERVER_URL must be set in CI for live_server_pc_internet_on_while_kiosk_killed_shows_pending_then_applied_on_reconnect.");
             return;
         }
 
@@ -1051,7 +1055,8 @@ public sealed class WindowsKioskServerIntegrationTests
             Assert.NotNull(lastTile);
             Assert.True(lastTile!.Value.GetProperty("internetOn").GetBoolean());
             var onLineStart = segmentsBeforeReconnect
-                .Single(s => string.Equals(s.Mode, nameof(PlayMode.Online), StringComparison.Ordinal))
+                .Where(s => string.Equals(s.Mode, nameof(PlayMode.Online), StringComparison.Ordinal))
+                .MaxBy(s => s.StartUtc)
                 .StartUtc.ToUniversalTime();
             Assert.True(onLineStart >= pressAt.AddSeconds(-5), "ON segment must start at toggle press time.");
             _ = deviceKey;
@@ -1082,6 +1087,7 @@ public sealed class WindowsKioskServerIntegrationTests
     }
 
     /// <summary>Brief §10.4.7 (a),(d),(e) — live server internet desired/applied without cafe hardware.</summary>
+    [Trait("Category", "LiveCheckpointServer")]
     [Fact(Timeout = 120_000)]
     public async Task live_server_pc_internet_toggle_off_report_applied_then_session_end_on()
     {

@@ -22,6 +22,7 @@ namespace GameClub.Kiosk.Windows.IntegrationTests.Server;
 [Trait("Category", "WindowsServer")]
 public sealed class WindowsPcInternetApplyFailureLiveTests
 {
+    [Trait("Category", "LiveCheckpointServer")]
     [Fact(Timeout = 180_000)]
     public async Task live_server_pc_internet_guard_forced_apply_failure_shows_error_and_offline_at_press()
     {
