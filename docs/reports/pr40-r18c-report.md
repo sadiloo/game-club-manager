@@ -6,7 +6,7 @@
 |-------|--------|
 | **Staging branch** | `cursor/pr40-r18c-staging` |
 | **Parent** | `717a3c1ae499d648464530975db3799f6f85722a` |
-| **Staging sha** | `5081ef8` |
+| **Staging sha** | `8bdc019` |
 
 ### Files touched
 
