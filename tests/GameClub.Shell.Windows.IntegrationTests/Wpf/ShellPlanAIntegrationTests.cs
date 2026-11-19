@@ -813,6 +813,8 @@ public sealed class ShellPlanAIntegrationTests
         {
             var shellBill = ShellCiHttp.GetOpenSessionLiveBillAsync(shellSession).GetAwaiter().GetResult();
             var refBill = ShellCiHttp.GetOpenSessionLiveBillAsync(refSession).GetAwaiter().GetResult();
+            Console.WriteLine(
+                $"SHELL-A3 minutes-sync poll UTC={DateTime.UtcNow:O} shellMinutes={shellBill.MinutesPlayed?.ToString() ?? "null"} refMinutes={refBill.MinutesPlayed?.ToString() ?? "null"}");
             if (shellBill.MinutesPlayed is int shellMin
                 && refBill.MinutesPlayed is int refMin
                 && shellMin == refMin)

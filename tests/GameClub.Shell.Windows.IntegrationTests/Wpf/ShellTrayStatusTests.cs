@@ -45,13 +45,22 @@ public sealed class ShellTrayStatusTests
     public void shell_tray_menu_status_line_shows_tehran_start_time_when_running()
     {
         FakeShellSeams.Install();
-        FakeShellSeams.Service.ProcessStartLocalTime = DateTime.Today.AddHours(9);
+        var tehranZone = TimeZoneInfo.FindSystemTimeZoneById("Iran Standard Time");
+        var nowUtc = DateTime.UtcNow;
+        var todayTehran = TimeZoneInfo.ConvertTimeFromUtc(nowUtc, tehranZone).Date;
+        var startTehran = todayTehran.AddHours(9);
+        var startedUtc = new DateTimeOffset(TimeZoneInfo.ConvertTimeToUtc(startTehran, tehranZone), TimeSpan.Zero);
+        ShellSeams.UtcNow = () => nowUtc;
+        ShellSeams.ReadLocalStatus = () => new LocalServerStatusDto
+        {
+            DbOk = true,
+            StartedAtUtc = startedUtc,
+        };
         _fixture.RunAsync(async () =>
         {
             using var poller = new ServerStatePoller();
             await Task.Delay(200);
-            Assert.Contains("سرور: روشن", poller.Current.MenuStatusLine);
-            Assert.Contains("از ساعت", poller.Current.MenuStatusLine);
+            Assert.Equal("سرور: روشن — از ساعت ۰۹:۰۰", poller.Current.MenuStatusLine);
         }, TimeSpan.FromSeconds(15));
     }
 

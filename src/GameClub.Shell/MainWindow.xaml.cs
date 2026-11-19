@@ -24,6 +24,8 @@ public partial class MainWindow : Window
     private string _pendingOfflineState = "stopped";
     private string? _lastNavigationUri;
     private bool _offlineShown;
+    private bool _closed;
+    private Action<ServerStateSnapshot>? _onPollerChanged;
 
     public int NavigationStartingCount => _navigationStartingCount;
     public double CurrentZoomFactor => PanelWebView?.ZoomFactor ?? 1.0;
@@ -42,37 +44,45 @@ public partial class MainWindow : Window
     {
         _tray = new ShellTrayHost(this);
         _poller = new ServerStatePoller();
-        _poller.Changed += snap =>
-        {
-            Dispatcher.Invoke(() =>
-            {
-                _tray?.UpdateSnapshot(snap);
-                if (snap.VisualState == ShellServerVisualState.Running && _webViewReady)
-                {
-                    if (_offlineShown)
-                    {
-                        _offlineShown = false;
-                        var recoverUri = new Uri(ShellPaths.PanelUrl);
-                        LogPanelNavigate("RunningRecover", recoverUri);
-                        PanelWebView.Source = recoverUri;
-                    }
-                    else
-                    {
-                        _ = NavigatePanelAsync();
-                    }
-                }
-                else if (!snap.OperatorAnswers)
-                {
-                    _ = ShowOfflineAsync(snap);
-                }
-            });
-        };
+        _onPollerChanged = OnPollerSnapshotChanged;
+        _poller.Changed += _onPollerChanged;
 
         _flags = new FlagFileWatcher();
         _flags.FlagBalloon += (title, text) => ShellSeams.Notifications.ShowBalloon(title, text);
 
         AutostartRegistry.EnsureDefaultOn();
         await EnsureWebViewAsync();
+    }
+
+    private void OnPollerSnapshotChanged(ServerStateSnapshot snap)
+    {
+        Dispatcher.Invoke(() =>
+        {
+            if (_closed)
+            {
+                return;
+            }
+
+            _tray?.UpdateSnapshot(snap);
+            if (snap.VisualState == ShellServerVisualState.Running && _webViewReady)
+            {
+                if (_offlineShown)
+                {
+                    _offlineShown = false;
+                    var recoverUri = new Uri(ShellPaths.PanelUrl);
+                    LogPanelNavigate("RunningRecover", recoverUri);
+                    PanelWebView.Source = recoverUri;
+                }
+                else
+                {
+                    _ = NavigatePanelAsync();
+                }
+            }
+            else if (!snap.OperatorAnswers)
+            {
+                _ = ShowOfflineAsync(snap);
+            }
+        });
     }
 
     private async Task EnsureWebViewAsync()
@@ -358,6 +368,12 @@ public partial class MainWindow : Window
 
     protected override void OnClosed(EventArgs e)
     {
+        _closed = true;
+        if (_poller is not null && _onPollerChanged is not null)
+        {
+            _poller.Changed -= _onPollerChanged;
+        }
+
         _poller?.Dispose();
         _flags?.Dispose();
         _tray?.Dispose();

@@ -34,6 +34,7 @@ internal sealed class ServerStatePoller : IDisposable
     private bool _armedForUnexpectedToast = true;
     private DateTime _noAnswerSinceUtc = DateTime.MinValue;
     private int _tickInProgress;
+    private volatile bool _disposed;
 
     public event Action<ServerStateSnapshot>? Changed;
 
@@ -46,6 +47,11 @@ internal sealed class ServerStatePoller : IDisposable
 
     private void Tick()
     {
+        if (_disposed)
+        {
+            return;
+        }
+
         if (Interlocked.CompareExchange(ref _tickInProgress, 1, 0) != 0)
         {
             ShellSeams.OnTickSkippedReentrant?.Invoke();
@@ -77,6 +83,11 @@ internal sealed class ServerStatePoller : IDisposable
                 or ShellServerVisualState.Stopping;
             _lastIcon = snapshot.IconState;
             Current = snapshot;
+            if (_disposed)
+            {
+                return;
+            }
+
             Changed?.Invoke(snapshot);
         }
         finally
@@ -271,5 +282,9 @@ internal sealed class ServerStatePoller : IDisposable
         return new string(chars);
     }
 
-    public void Dispose() => _timer.Dispose();
+    public void Dispose()
+    {
+        _disposed = true;
+        _timer.Dispose();
+    }
 }
