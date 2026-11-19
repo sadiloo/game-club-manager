@@ -138,18 +138,9 @@ public sealed class WindowsPcInternetApplyFailureLiveTests
             }
             finally
             {
-                if (probeGuard is not null && !probeGuard.HasExited)
+                if (probeGuard is not null)
                 {
-                    try
-                    {
-                        probeGuard.Kill();
-                        probeGuard.WaitForExit(10_000);
-                    }
-                    catch
-                    {
-                        /* best-effort */
-                    }
-
+                    GuardProcessLifecycle.StopGuardProcessTree(probeGuard, TimeSpan.FromSeconds(15));
                     probeGuard.Dispose();
                 }
 

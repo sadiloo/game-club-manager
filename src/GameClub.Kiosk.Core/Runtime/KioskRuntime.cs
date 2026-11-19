@@ -390,8 +390,19 @@ public sealed class KioskRuntime : IAsyncDisposable
                     : DateTime.UtcNow,
             };
         }
-        catch
+        catch (Exception ex)
         {
+            var code = ex is TimeoutException
+                ? ex.Message
+                : $"pipe_client_failed:{ex.GetType().Name}";
+            _lastInternetReport = new KioskInternetAppliedReport
+            {
+                Epoch = command.Payload.Epoch,
+                Version = command.Payload.Version,
+                On = command.Payload.On,
+                AppliedAtUtc = DateTime.UtcNow,
+                Error = code,
+            };
         }
     }
 

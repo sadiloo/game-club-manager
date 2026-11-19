@@ -1,8 +1,10 @@
+using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 using GameClub.Kiosk.Core.Guard;
 using GameClub.Kiosk.Core.Lease;
 using GameClub.Kiosk.Core.Protocol;
+using GameClub.Kiosk.Core.Runtime;
 
 namespace GameClub.Kiosk.Core.Tests;
 
@@ -117,6 +119,51 @@ public sealed class PcInternetKioskCoreTests
         finally
         {
             File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task PcInternet_kiosk_runtime_records_pipe_client_timeout_as_internet_error()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var prior = Environment.GetEnvironmentVariable("CHECKPOINT_INTERNET_PIPE_CONNECT_MS");
+        Environment.SetEnvironmentVariable("CHECKPOINT_INTERNET_PIPE_CONNECT_MS", "200");
+        try
+        {
+            using var rsa = RSA.Create(2048);
+            var payload = new InternetCommandPayload
+            {
+                StationId = "PC-1",
+                Epoch = Guid.NewGuid(),
+                Version = 1,
+                On = false,
+                IssuedAtUtc = DateTime.UtcNow,
+            };
+            var command = new SignedInternetCommand
+            {
+                Payload = payload,
+                SignatureBase64 = Convert.ToBase64String(rsa.SignData(
+                    Encoding.UTF8.GetBytes(LeaseVerifier.CanonicalJson(payload)),
+                    HashAlgorithmName.SHA256,
+                    RSASignaturePadding.Pkcs1)),
+            };
+            var runtime = new KioskRuntime(() => new HttpClient());
+            var method = typeof(KioskRuntime).GetMethod("ApplyInternetCommandAsync", BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.NotNull(method);
+            var task = (Task)method!.Invoke(runtime, new object[] { command, CancellationToken.None })!;
+            await task.ConfigureAwait(false);
+            var field = typeof(KioskRuntime).GetField("_lastInternetReport", BindingFlags.Instance | BindingFlags.NonPublic);
+            var report = field!.GetValue(runtime) as KioskInternetAppliedReport;
+            Assert.NotNull(report);
+            Assert.Equal("pipe_connect_timeout", report!.Error);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("CHECKPOINT_INTERNET_PIPE_CONNECT_MS", prior);
         }
     }
 }

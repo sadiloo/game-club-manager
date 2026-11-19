@@ -761,6 +761,14 @@ try {
         try { New-Item -Force -Path $cancelFile -ItemType File | Out-Null } catch { }
     }
 
+    $leakGuard = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -eq "GameClub.Kiosk.Guard" })
+    $leakKiosk = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -eq "GameClub.Kiosk" })
+    Write-Host "CI_PROCESS_LEAK_GUARD count=$($leakGuard.Count)"
+    Write-Host "CI_PROCESS_LEAK_KIOSK count=$($leakKiosk.Count)"
+    if ($leakGuard.Count -gt 0 -or $leakKiosk.Count -gt 0) {
+        if ($script:FinalExitCode -eq 0) { $script:FinalExitCode = 1 }
+    }
+
     Stop-CiManagedGameClubServerPids
 
     $watchdog = Join-Path $env:ProgramData "Checkpoint\guard\watchdog.log"
