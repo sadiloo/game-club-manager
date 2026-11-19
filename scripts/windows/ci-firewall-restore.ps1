@@ -102,8 +102,84 @@ function Test-CiTcpConnect {
     }
 }
 
+function Add-CiFirewallInternetOffDiagnostics {
+    param([string]$Path)
+
+    try {
+        $mps = Get-Service -Name MpsSvc -ErrorAction SilentlyContinue
+        $mpsLine = "CI_FIREWALL MpsSvc status=$($mps.Status)"
+        Add-Content -Path $Path -Value $mpsLine -Encoding UTF8
+        Write-Host $mpsLine
+    } catch {
+        $fail = "CI_FIREWALL MpsSvc status=unknown error=$($_.Exception.Message)"
+        Add-Content -Path $Path -Value $fail -Encoding UTF8
+        Write-Host $fail
+    }
+
+    try {
+        foreach ($profName in @('Domain', 'Private', 'Public')) {
+            $active = Get-NetFirewallProfile -Name $profName -ErrorAction SilentlyContinue
+            if ($active) {
+                $line = "CI_FIREWALL active_profile name=$profName enabled=$($active.Enabled) in=$($active.DefaultInboundAction) out=$($active.DefaultOutboundAction)"
+                Add-Content -Path $Path -Value $line -Encoding UTF8
+                Write-Host $line
+            }
+
+            $local = Get-NetFirewallProfile -PolicyStore localhost -Name $profName -ErrorAction SilentlyContinue
+            if ($local) {
+                $line = "CI_FIREWALL localhost_profile name=$profName enabled=$($local.Enabled) in=$($local.DefaultInboundAction) out=$($local.DefaultOutboundAction)"
+                Add-Content -Path $Path -Value $line -Encoding UTF8
+                Write-Host $line
+            }
+        }
+    } catch {
+        Write-Host "Add-CiFirewallInternetOffDiagnostics profiles failed: $($_.Exception.Message)"
+    }
+
+    try {
+        foreach ($ncp in @(Get-NetConnectionProfile -ErrorAction SilentlyContinue)) {
+            $line = "CI_FIREWALL ConnectionProfile name=$($ncp.Name) interface=$($ncp.InterfaceAlias) category=$($ncp.NetworkCategory)"
+            Add-Content -Path $Path -Value $line -Encoding UTF8
+            Write-Host $line
+        }
+    } catch {
+        Write-Host "Add-CiFirewallInternetOffDiagnostics ConnectionProfile failed: $($_.Exception.Message)"
+    }
+
+    try {
+        $guardRules = @(Get-NetFirewallRule -PolicyStore localhost -Group "Checkpoint Internet Off" -ErrorAction SilentlyContinue)
+        $ruleLine = "CI_FIREWALL guard_rule_count localhost_group=Checkpoint Internet Off count=$($guardRules.Count)"
+        Add-Content -Path $Path -Value $ruleLine -Encoding UTF8
+        Write-Host $ruleLine
+        foreach ($rule in $guardRules) {
+            $detail = "CI_FIREWALL guard_rule name=$($rule.DisplayName) enabled=$($rule.Enabled) dir=$($rule.Direction) action=$($rule.Action)"
+            Add-Content -Path $Path -Value $detail -Encoding UTF8
+            Write-Host $detail
+        }
+    } catch {
+        Write-Host "Add-CiFirewallInternetOffDiagnostics guard rules failed: $($_.Exception.Message)"
+    }
+
+    $statePath = Join-Path $env:ProgramData "Checkpoint\guard\internet-state.json"
+    if (Test-Path $statePath) {
+        try {
+            $raw = Get-Content -Path $statePath -Raw -ErrorAction Stop
+            Add-Content -Path $Path -Value "CI_FIREWALL guard_state_path=$statePath payload=$raw" -Encoding UTF8
+            Write-Host "CI_FIREWALL guard_state_path=$statePath"
+        } catch {
+            Write-Host "Add-CiFirewallInternetOffDiagnostics guard state read failed: $($_.Exception.Message)"
+        }
+    } else {
+        $missing = "CI_FIREWALL guard_state_path=$statePath present=false"
+        Add-Content -Path $Path -Value $missing -Encoding UTF8
+        Write-Host $missing
+    }
+}
+
 function Add-CiCheckpointPublicEgressEvidence {
     param([string]$Path)
+
+    Add-CiFirewallInternetOffDiagnostics -Path $Path
 
     $checkpointHost = "127.0.0.1"
     $checkpointPort = 5225

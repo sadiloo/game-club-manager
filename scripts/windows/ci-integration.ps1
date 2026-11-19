@@ -225,6 +225,23 @@ function Write-CiPhaseFirewallProbe([string]$label) {
     Write-CiEgressToLogs -FirewallLog $firewallLog -WritePhase { param($line) Write-PhaseLog $line }
 }
 
+function Write-VstestPhaseList([string]$phaseName, [string]$framework, [string]$filterExpr) {
+    $listArgs = @(
+        "test", "tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj",
+        "-c", "Release", "-f", $framework, "--no-build", "--nologo",
+        "--list-tests", "--filter", $filterExpr
+    )
+    $listOut = & dotnet @listArgs 2>&1
+    $names = @($listOut | Where-Object { $_ -match '^\s+GameClub\.Kiosk\.Windows\.IntegrationTests\.' })
+    Write-PhaseLog "VSTEST_LIST phase=$phaseName framework=$framework count=$($names.Count) filter=$filterExpr"
+    foreach ($name in $names) {
+        $trim = $name.Trim()
+        Write-PhaseLog "VSTEST_LIST_TEST phase=$phaseName $trim"
+        Write-Host "VSTEST_LIST_TEST phase=$phaseName $trim"
+    }
+    return $names
+}
+
 function Invoke-DotNetWithWatchdog {
     param(
         [string]$PhaseName,
@@ -442,29 +459,29 @@ try {
     Write-PhaseLog "END phase=server-ready exit=0"
     Write-CiPhaseFirewallProbe -label "after-server-ready"
 
-    Write-Host "Listing LiveCheckpointServer tests (must not be zero)..."
-    $liveListArgs = @(
-        "test", "tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj",
-        "-c", "Release", "-f", "net10.0", "--no-build", "--nologo",
-        "--list-tests", "--filter", "Category=LiveCheckpointServer"
-    )
-    $liveListOut = & dotnet @liveListArgs 2>&1
-    $liveTestNames = @($liveListOut | Where-Object { $_ -match '^\s+GameClub\.Kiosk\.Windows\.IntegrationTests\.' })
-    Write-PhaseLog "LIVE_CHECKPOINT_TEST_COUNT $($liveTestNames.Count)"
-    foreach ($name in $liveTestNames) {
-        Write-PhaseLog "LIVE_CHECKPOINT_TEST $($name.Trim())"
-        Write-Host "LIVE_CHECKPOINT_TEST $($name.Trim())"
+    Write-Host "Listing LiveCheckpointServer tests (net10.0 + net48; must total 4)..."
+    $liveNet10Names = @(Write-VstestPhaseList -phaseName "live-checkpoint-inventory" -framework "net10.0" -filterExpr "Category=LiveCheckpointServer")
+    $liveNet48Names = @(Write-VstestPhaseList -phaseName "live-checkpoint-inventory" -framework "net48" -filterExpr "Category=LiveCheckpointServer")
+    $liveAll = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($n in $liveNet10Names) { [void]$liveAll.Add($n.Trim()) }
+    foreach ($n in $liveNet48Names) { [void]$liveAll.Add($n.Trim()) }
+    Write-PhaseLog "LIVE_CHECKPOINT_TEST_COUNT $($liveAll.Count)"
+    foreach ($name in ($liveAll | Sort-Object)) {
+        Write-PhaseLog "LIVE_CHECKPOINT_TEST $name"
+        Write-Host "LIVE_CHECKPOINT_TEST $name"
     }
-    if ($liveTestNames.Count -eq 0) {
-        throw "LiveCheckpointServer filter matched 0 tests on windows-2022"
+    if ($liveAll.Count -ne 4) {
+        throw "LiveCheckpointServer inventory expected 4 tests, saw $($liveAll.Count)"
     }
 
     Write-Host "Running windows server integration (net10.0, live server)..."
     Write-CiPhaseFirewallProbe -label "before-dotnet-test-net10-server"
+    $serverFilter = "Category=WindowsServer&Category!=UbuntuG2Oracle"
+    Write-VstestPhaseList -phaseName "dotnet-test-net10-server" -framework "net10.0" -filterExpr $serverFilter | Out-Null
     $serverTestArgs = @(
     "test", "tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj",
     "-c", "Release", "-f", "net10.0", "--no-build", "--nologo",
-    "--filter", "Category=WindowsServer&Category!=UbuntuG2Oracle",
+    "--filter", $serverFilter,
     "--logger", "trx;LogFileName=kiosk-windows-server.trx",
     "--results-directory", $artifactDir,
     "--blame-hang", "--blame-hang-timeout", "5m", "--blame-hang-dump-type", "none",
@@ -474,6 +491,21 @@ try {
     $serverTestExit = Invoke-DotNetWithWatchdog -PhaseName "dotnet-test-net10-server" -ArgumentList $serverTestArgs -PhaseCapMs (10 * 60 * 1000) -DiagLogPath $serverDiag
     Write-CiPhaseFirewallProbe -label "after-dotnet-test-net10-server"
     if ($serverTestExit -eq 124) { throw "server test watchdog" }
+
+    Write-Host "Running net48 LiveCheckpointServer tests (L17 apply-failure harness)..."
+    $liveNet48Filter = "Category=LiveCheckpointServer"
+    Write-VstestPhaseList -phaseName "dotnet-test-net48-live-checkpoint" -framework "net48" -filterExpr $liveNet48Filter | Out-Null
+    $liveNet48Args = @(
+        "test", "tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj",
+        "-c", "Release", "-f", "net48", "--no-build", "--nologo",
+        "--filter", $liveNet48Filter,
+        "--logger", "trx;LogFileName=kiosk-windows-live-checkpoint-net48.trx",
+        "--results-directory", $artifactDir,
+        "--logger", "console;verbosity=detailed"
+    )
+    $liveNet48Exit = Invoke-DotNetWithWatchdog -PhaseName "dotnet-test-net48-live-checkpoint" -ArgumentList $liveNet48Args -PhaseCapMs (6 * 60 * 1000)
+    if ($liveNet48Exit -ne 0 -and $script:FinalExitCode -eq 0) { $script:FinalExitCode = $liveNet48Exit }
+    if ($liveNet48Exit -eq 124) { throw "live checkpoint net48 watchdog" }
 
     Write-Host "Reconciling live server after net10 server integration (handover/relaunch may leave orphan PIDs)..."
     $serverLog = Join-Path $logDir "server-day-out.log"
@@ -487,10 +519,12 @@ try {
     $serverNightLog = Join-Path $logDir "server-night-out.log"
     $serverNightErr = Join-Path $logDir "server-night-err.log"
     Start-CiGameClubTestHost -ServerDll $serverDll -BandArgs $script:ServerPcBandArgs -StdoutLog $serverNightLog -StderrLog $serverNightErr -ExpectedBand night -PhaseLabel "night-wpf"
-  $nightWpfArgs = @(
+    $nightWpfFilter = "FullyQualifiedName~wpf_remaining_time_matches_funded_session_special_band_night_line"
+    Write-VstestPhaseList -phaseName "dotnet-test-net48-wpf-night" -framework "net48" -filterExpr $nightWpfFilter | Out-Null
+    $nightWpfArgs = @(
         "test", "tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj",
         "-c", "Release", "-f", "net48", "--no-build", "--nologo",
-        "--filter", "FullyQualifiedName~wpf_remaining_time_matches_funded_session_special_band_night_line",
+        "--filter", $nightWpfFilter,
         "--logger", "console;verbosity=detailed"
     )
     $nightWpfExit = Invoke-DotNetWithWatchdog -PhaseName "dotnet-test-net48-wpf-night" -ArgumentList $nightWpfArgs -PhaseCapMs (5 * 60 * 1000)
@@ -499,10 +533,12 @@ try {
     Set-CiServerPcBandArgs -Mode day
     Start-CiGameClubTestHost -ServerDll $serverDll -BandArgs $script:ServerPcBandArgs -StdoutLog $serverLog -StderrLog $serverErr -ExpectedBand day -PhaseLabel "day-post-night-wpf"
 
+    $guardWpfFilter = "(Category=WindowsWpf)|(Category=WindowsServer&Category!=LiveCheckpointServer&FullyQualifiedName!~wpf_remaining_time_matches_funded_session_special_band_night_line)"
+    Write-VstestPhaseList -phaseName "dotnet-test-net48-guard-wpf" -framework "net48" -filterExpr $guardWpfFilter | Out-Null
     $guardTestArgs = @(
         "test", "tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj",
         "-c", "Release", "-f", "net48", "--no-build", "--nologo",
-        "--filter", "Category=WindowsWpf|Category=WindowsServer&FullyQualifiedName!~wpf_remaining_time_matches_funded_session_special_band_night_line",
+        "--filter", $guardWpfFilter,
         "--logger", "trx;LogFileName=kiosk-windows-guard.trx",
         "--results-directory", $artifactDir,
         "--blame-hang", "--blame-hang-timeout", "5m", "--blame-hang-dump-type", "none",
@@ -518,10 +554,12 @@ try {
 
     Write-Host "Running PC internet firewall integration (Category=PcInternetFirewall)..."
     Write-CiPhaseFirewallProbe -label "before-dotnet-test-pc-internet-firewall"
+    $fwFilter = "Category=PcInternetFirewall"
+    Write-VstestPhaseList -phaseName "dotnet-test-pc-internet-firewall" -framework "net48" -filterExpr $fwFilter | Out-Null
     $fwTestArgs = @(
         "test", "tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj",
         "-c", "Release", "-f", "net48", "--no-build", "--nologo",
-        "--filter", "Category=PcInternetFirewall",
+        "--filter", $fwFilter,
         "--logger", "trx;LogFileName=kiosk-windows-pc-internet-firewall.trx",
         "--results-directory", $artifactDir,
         "--logger", "console;verbosity=detailed"

@@ -249,7 +249,11 @@ public sealed class KioskHostStatusTimerTests
     private static async Task RunScenarioOnDispatcherAsync(bool lateConnect, bool operatorStopLock)
     {
         WritePairedDeviceState("PC-HOST-D5");
-        var host = CreateHost(out var status, out var lockPanel, out var playingPanel);
+        var host = CreateHost(
+            out var status,
+            out var lockPanel,
+            out var playingPanel,
+            new KioskHostTestSeam { SkipStartupRefresh = true });
         try
         {
             await Task.Delay(300);
@@ -1324,7 +1328,7 @@ public sealed class KioskHostStatusTimerTests
     private static async Task RunOpenSessionNoDisplayOnDispatcherAsync()
     {
         WritePairedDeviceState("PC-HOST-O4D");
-        var host = CreateHost(out var status, out _, out _);
+        var host = CreateHost(out var status, out _, out _, new KioskHostTestSeam { SkipStartupRefresh = true });
         var sessionId = Guid.NewGuid();
         try
         {

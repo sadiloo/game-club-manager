@@ -143,28 +143,26 @@ public sealed class WindowsPcInternetApplyFailureLiveTests
             await runtime.StartAsync(default);
             await Task.Delay(2_000);
 
-            var gridText = await op.GetStringAsync("/api/operator/grid");
-            using var grid0 = JsonDocument.Parse(gridText);
-            uint rv = 0;
-            foreach (var tile in grid0.RootElement.EnumerateArray())
+            var pressAt = DateTime.UtcNow;
+            var rv = await ReadStationRowVersionAsync(op, stationId);
+            var toggle = await op.PostAsJsonAsync(
+                $"/api/operator/sessions/{sessionId}/internet",
+                new { on = false, expectedVersion = rv, commandId = Guid.NewGuid() });
+            if (toggle.StatusCode == System.Net.HttpStatusCode.Conflict)
             {
-                if (tile.GetProperty("id").GetString() == stationId)
-                {
-                    rv = tile.GetProperty("rowVersion").GetUInt32();
-                    break;
-                }
+                rv = await ReadStationRowVersionAsync(op, stationId);
+                toggle = await op.PostAsJsonAsync(
+                    $"/api/operator/sessions/{sessionId}/internet",
+                    new { on = false, expectedVersion = rv, commandId = Guid.NewGuid() });
             }
 
-            var pressAt = DateTime.UtcNow;
-            (await op.PostAsJsonAsync(
-                $"/api/operator/sessions/{sessionId}/internet",
-                new { on = false, expectedVersion = rv, commandId = Guid.NewGuid() })).EnsureSuccessStatusCode();
+            toggle.EnsureSuccessStatusCode();
 
             string internetError = null;
             var deadline = DateTime.UtcNow.AddSeconds(60);
             while (DateTime.UtcNow < deadline)
             {
-                gridText = await op.GetStringAsync("/api/operator/grid");
+                var gridText = await op.GetStringAsync("/api/operator/grid");
                 using var grid = JsonDocument.Parse(gridText);
                 foreach (var tile in grid.RootElement.EnumerateArray())
                 {
@@ -221,11 +219,27 @@ public sealed class WindowsPcInternetApplyFailureLiveTests
         finally
         {
             pipeCts.Cancel();
+            pipe?.Join(5_000);
             if (runtime is not null)
             {
                 await runtime.DisposeAsync();
             }
         }
+    }
+
+    private static async Task<uint> ReadStationRowVersionAsync(HttpClient op, string stationId)
+    {
+        var gridText = await op.GetStringAsync("/api/operator/grid");
+        using var grid = JsonDocument.Parse(gridText);
+        foreach (var tile in grid.RootElement.EnumerateArray())
+        {
+            if (tile.GetProperty("id").GetString() == stationId)
+            {
+                return tile.GetProperty("rowVersion").GetUInt32();
+            }
+        }
+
+        throw new InvalidOperationException($"station {stationId} missing from operator grid");
     }
 }
 #endif

@@ -927,6 +927,11 @@ public sealed class KioskHostService : IAsyncDisposable
 
     private async Task RefreshAsync()
     {
+        if (_testSeam?.SkipStartupRefresh == true)
+        {
+            return;
+        }
+
         if (string.IsNullOrEmpty(_stationId))
         {
             _status.Text = "Unpaired — use operator pairing code";
