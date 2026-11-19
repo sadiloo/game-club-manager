@@ -688,7 +688,7 @@ public sealed class ShellPlanAIntegrationTests
             }
 
             var text = File.ReadAllText(files[0]);
-            return text.Length <= 4000 ? text : text[^4000..];
+            return text.Length <= 4000 ? text : text.Substring(text.Length - 4000);
         }
         catch (Exception ex)
         {

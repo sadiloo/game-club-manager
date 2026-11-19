@@ -191,4 +191,5 @@ Add test extension on `shell_blocks_external_navigation_and_new_window_with_log_
 | Run | Job | Branch | Notes |
 |-----|-----|--------|-------|
 | 44588422453 | 135787573617 | `cursor/sub-round-a-shell-f022` | Baseline 11 failures |
-| *(fill after push)* | | `cursor/pr42-r6-diag` | `[pr42-r6-diag]` console + `ShellFileLog` lines |
+| 44595452402 | 135812379937 | `cursor/pr42-r6-diag` @ `7a3fe4e` | Build failed (net48 `Index` range in `ReadShellLogTail`); fixed in next push |
+| *(pending)* | | `cursor/pr42-r6-diag` | `[pr42-r6-diag]` console + `ShellFileLog` lines |
