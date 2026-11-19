@@ -74,7 +74,7 @@ jobs:
 
   windows-kiosk-integration:
     name: windows-2022 kiosk integration
-    timeout-minutes: ${{ (github.ref == 'refs/heads/cursor/kiosk-locked-probe' || github.ref == 'refs/heads/cursor/kiosk-locked-probe-v2') && 220 || 40 }}
+    timeout-minutes: ${{ (github.ref == 'refs/heads/cursor/kiosk-locked-probe' || github.ref == 'refs/heads/cursor/kiosk-locked-probe-v2') && 250 || 40 }}
     runs-on: windows-2022
     env:
       GAMECLUB_DATABASE: Host=localhost;Port=5432;Database=gameclub_test;Username=postgres;Password=postgres;SSL Mode=Disable
@@ -129,6 +129,14 @@ jobs:
         timeout-minutes: 2
         shell: pwsh
         run: ./scripts/windows/ci-orphan-check.ps1
+      - name: probe v2 host_logout_open_ack loop (20 runs)
+        if: always() && github.ref == 'refs/heads/cursor/kiosk-locked-probe-v2'
+        timeout-minutes: 30
+        shell: pwsh
+        env:
+          HOST_LOGOUT_LOOP_RUNS: "20"
+          HOST_LOGOUT_FAIL_LATE: "1"
+        run: ./scripts/windows/ci-probe-v2-host-logout-loop.ps1
       - name: wpf remaining time stability (20 runs)
         if: always() && github.ref != 'refs/heads/cursor/kiosk-locked-probe' && github.ref != 'refs/heads/cursor/kiosk-locked-probe-v2'
         timeout-minutes: 25
@@ -190,6 +198,8 @@ jobs:
           path: |
             artifacts/kiosk-windows-logs/wpf-stability-failure-evidence-*.log
             artifacts/kiosk-windows-logs/wpf-stability-run-*-err.log
+            artifacts/kiosk-windows-logs/host-logout-failure-evidence-*.log
+            artifacts/kiosk-windows-logs/host-logout-open-ack-*.log
       - name: probe wpf stability batch 1 of 3 (runs 1-20)
         if: github.ref == 'refs/heads/cursor/kiosk-locked-probe'
         timeout-minutes: 55
@@ -261,12 +271,17 @@ jobs:
           $summary = "artifacts/kiosk-windows-logs/wpf-stability-summary.log"
           if (-not (Test-Path $summary)) { throw "missing wpf-stability-summary.log" }
           $fails = Select-String -Path $summary -Pattern 'WPF_STABILITY_FAIL|WPF_STABILITY_BATCH_FAIL'
+          $hostSummary = "artifacts/kiosk-windows-logs/host-logout-open-ack-summary.log"
+          if (Test-Path $hostSummary) {
+            $hostFails = Select-String -Path $hostSummary -Pattern 'HOST_LOGOUT_FAIL|HOST_LOGOUT_LOOP_FAIL'
+            if ($hostFails) { $fails = @($fails) + @($hostFails) }
+          }
           if ($fails) {
-            Write-Host "probe v2 stability failures:"
+            Write-Host "probe v2 failures:"
             $fails | ForEach-Object { Write-Host $_.Line }
             exit 1
           }
-          Write-Host "probe v2 stability: 0 failures in summary"
+          Write-Host "probe v2: 0 failures in summaries"
       - name: upload kiosk integration artifacts
         if: always()
         uses: actions/upload-artifact@v4
