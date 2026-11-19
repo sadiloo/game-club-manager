@@ -4,7 +4,7 @@
 
 | Field | Value |
 |-------|--------|
-| **Head SHA** | `8b0392ebac1580b029a543422541e3fbd745e1df` |
+| **Head SHA** | `5957bd9478837ebca6fe83e418b5a17103937ec4` |
 | **Parent** | `6d32abda53709308b8fee1b83c196035bac48bbc` |
 | **Branch** | `cursor/pr40-r12-staging` |
 
