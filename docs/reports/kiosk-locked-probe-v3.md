@@ -6,8 +6,8 @@ Branches (pushed, no PR):
 
 | Phase | Branch | Base | Head (`git rev-parse`) |
 |-------|--------|------|-------------------------|
-| A | `cursor/kiosk-locked-probe-v3-pr42` | `cursor/kiosk-locked-probe-v2-pr42` @ `b718edd` | `dbc026c8deed369bb382ce52093f941b7ce9eb8e` |
-| B | `cursor/kiosk-locked-probe-v3` | `cursor/kiosk-locked-probe-v2` @ `10f7d6c` | `799abfdcad9d6a27431c4cf031022f3b6759c289` |
+| A | `cursor/kiosk-locked-probe-v3-pr42` | `cursor/kiosk-locked-probe-v2-pr42` @ `b718edd` | `a4d8d70` (after probe fix `dbf113e` equivalent on B) |
+| B | `cursor/kiosk-locked-probe-v3` | `cursor/kiosk-locked-probe-v2` @ `10f7d6c` | `dbf113e` |
 
 ## Instrumentation added (logging only)
 
@@ -20,12 +20,21 @@ Branches (pushed, no PR):
 
 CI order unchanged from v2 (integration → mutations → orphan → host_logout 20× → **5×20** stability = 100 runs). Branch heads above exclude any product fix.
 
-## CI runs (in progress)
+## CI attempt 1 (aborted — probe harness, not product)
+
+| Phase | Run | Outcome | Cause (label: **test-harness**) |
+|-------|-----|---------|----------------------------------|
+| A | [44632354599](https://github.com/sadiloo/game-club-manager/actions/runs/44632354599) | failed &lt;21m | net48 build: `ProbeHttpCallTrace.cs:57` expression-bodied `Clear()` with `lock`; ps1: `$Label:` parse in `Invoke-ProbePostgresQuery` |
+| B | [44632351764](https://github.com/sadiloo/game-club-manager/actions/runs/44632351764) | failed &lt;21m | same; integration step never reached WPF stability |
+
+Fix commit `fix: probe v3 net48 Clear() and ps1 Label interpolation` on both heads (above). **Re-run CI in progress** (no stability data from attempt 1).
+
+## CI attempt 2 (in progress)
 
 | Phase | Workflow run | Kiosk job |
 |-------|----------------|-----------|
-| A | [44632036277](https://github.com/sadiloo/game-club-manager/actions/runs/44632036277) | [135940899537](https://github.com/sadiloo/game-club-manager/actions/runs/44632036277/job/135940899537) |
-| B | [44632115360](https://github.com/sadiloo/game-club-manager/actions/runs/44632115360) | _(queued with run)_ |
+| A | _(pending push run for `a4d8d70`)_ | |
+| B | _(pending push run for `dbf113e`)_ | |
 
 ### Pass/fail counts (5 batches × 20)
 
