@@ -172,3 +172,47 @@ jobs:
             artifacts/ci-timeout-marker.log
             artifacts/**/*.trx
             artifacts/**/Sequence*.xml
+
+  windows-shell:
+    name: windows-2022 shell
+    timeout-minutes: 25
+    runs-on: windows-2022
+    env:
+      GAMECLUB_DATABASE: Host=localhost;Port=5432;Database=gameclub_test;Username=postgres;Password=postgres;SSL Mode=Disable
+      GAMECLUB_TEST_DATABASE: Host=localhost;Port=5432;Database=gameclub_test;Username=postgres;Password=postgres;SSL Mode=Disable
+      GAMECLUB_API_KEY: ci-test-key
+      OperatorSessionSecret: ci-operator-secret-r11
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.403
+      - name: install and start postgresql
+        shell: pwsh
+        run: |
+          choco install postgresql16 --params '/Password:postgres' -y --no-progress
+          $env:PGPASSWORD = 'postgres'
+          $pgIsReady = 'C:\Program Files\PostgreSQL\16\bin\pg_isready.exe'
+          $psql = 'C:\Program Files\PostgreSQL\16\bin\psql.exe'
+          $deadline = (Get-Date).AddMinutes(5)
+          while ((Get-Date) -lt $deadline) {
+            & $pgIsReady -U postgres 2>$null
+            if ($LASTEXITCODE -eq 0) { break }
+            Start-Sleep -Seconds 3
+          }
+          if ($LASTEXITCODE -ne 0) { throw 'postgresql service not ready' }
+          $exists = & $psql -h 127.0.0.1 -U postgres -c "SELECT 1 FROM pg_database WHERE datname='gameclub_test'" -tA 2>$null
+          if (-not $exists) { & $psql -h 127.0.0.1 -U postgres -c "CREATE DATABASE gameclub_test;" }
+      - name: windows shell integration
+        shell: pwsh
+        run: ./scripts/windows/ci-shell.ps1
+      - name: upload shell integration artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shell-windows-integration
+          if-no-files-found: warn
+          path: |
+            artifacts/shell-windows.trx
+            artifacts/window.json
+            artifacts/shell-windows-logs/**

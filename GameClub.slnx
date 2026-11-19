@@ -4,8 +4,10 @@
   <Project Path="src/GameClub.Kiosk/GameClub.Kiosk.csproj" />
   <Project Path="src/GameClub.Kiosk.Guard/GameClub.Kiosk.Guard.csproj" />
   <Project Path="src/GameClub.Server/GameClub.Server.csproj" />
+  <Project Path="src/GameClub.Shell/GameClub.Shell.csproj" />
   <Project Path="tests/GameClub.Billing.Tests/GameClub.Billing.Tests.csproj" />
   <Project Path="tests/GameClub.Kiosk.Core.Tests/GameClub.Kiosk.Core.Tests.csproj" />
   <Project Path="tests/GameClub.Server.Tests/GameClub.Server.Tests.csproj" />
   <Project Path="tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj" />
+  <Project Path="tests/GameClub.Shell.Windows.IntegrationTests/GameClub.Shell.Windows.IntegrationTests.csproj" />
 </Solution>
