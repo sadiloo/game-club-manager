@@ -129,11 +129,38 @@ internal sealed class ShellTrayHost : IDisposable
         return text.Substring(0, 60) + "…";
     }
 
+    internal static Icon LoadTrayIcon(string name) => LoadIcon(name);
+
     private static Icon LoadIcon(string name)
     {
-        var uri = new Uri($"pack://application:,,,/Assets/{name}", UriKind.Absolute);
-        using var stream = System.Windows.Application.GetResourceStream(uri)?.Stream;
-        return stream is null ? SystemIcons.Application : new Icon(stream);
+        const string assemblyName = "GameClub.Shell";
+        var uri = new Uri($"pack://application:,,,/{assemblyName};component/Assets/{name}", UriKind.Absolute);
+        try
+        {
+            var stream = System.Windows.Application.GetResourceStream(uri)?.Stream;
+            if (stream is not null)
+            {
+                using (stream)
+                {
+                    return new Icon(stream);
+                }
+            }
+        }
+        catch
+        {
+            // fall through to manifest resource
+        }
+
+        var manifestName = $"{assemblyName}.Assets.{name.Replace('/', '.')}";
+        using (var manifest = Assembly.GetExecutingAssembly().GetManifestResourceStream(manifestName))
+        {
+            if (manifest is not null)
+            {
+                return new Icon(manifest);
+            }
+        }
+
+        return SystemIcons.Application;
     }
 
     public void Dispose()

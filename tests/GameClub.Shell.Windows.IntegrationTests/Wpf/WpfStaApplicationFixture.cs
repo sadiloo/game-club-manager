@@ -5,6 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Threading;
+using GameClub.Shell;
 
 namespace GameClub.Shell.Windows.IntegrationTests.Wpf;
 
@@ -20,6 +21,7 @@ public sealed class WpfStaApplicationFixture : IDisposable
         _staThread = new Thread(() =>
         {
             _app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
+            Application.ResourceAssembly = typeof(MainWindow).Assembly;
             _app.DispatcherUnhandledException += (_, e) =>
             {
                 _dispatcherUnhandledException = e.Exception;

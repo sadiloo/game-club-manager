@@ -1,0 +1,17 @@
+{
+  "solution": {
+    "path": "GameClub.slnx",
+    "projects": [
+      "src/GameClub.Billing/GameClub.Billing.csproj",
+      "src/GameClub.Kiosk.Core/GameClub.Kiosk.Core.csproj",
+      "src/GameClub.Kiosk/GameClub.Kiosk.csproj",
+      "src/GameClub.Kiosk.Guard/GameClub.Kiosk.Guard.csproj",
+      "src/GameClub.Server/GameClub.Server.csproj",
+      "src/GameClub.Shell/GameClub.Shell.csproj",
+      "tests/GameClub.Billing.Tests/GameClub.Billing.Tests.csproj",
+      "tests/GameClub.Kiosk.Core.Tests/GameClub.Kiosk.Core.Tests.csproj",
+      "tests/GameClub.Server.Tests/GameClub.Server.Tests.csproj",
+      "tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj"
+    ]
+  }
+}

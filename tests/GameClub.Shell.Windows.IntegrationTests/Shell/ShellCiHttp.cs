@@ -34,7 +34,10 @@ internal static class ShellCiHttp
     public static async Task<OpenBillSnapshot> GetOpenSessionLiveBillAsync(Guid sessionId)
     {
         var cookie = await LoginOperatorAsync();
-        var req = WebRequest.Create(BaseUrl + $"/api/operator/sessions/{sessionId}/bill/open");
+        await PostOperatorAsync($"/api/operator/sessions/{sessionId}/bill/open", cookie);
+
+        var req = WebRequest.Create(BaseUrl + $"/api/operator/sessions/{sessionId}/bill");
+        req.Method = "GET";
         req.Headers["Cookie"] = cookie;
         req.Timeout = 10000;
         using var resp = (HttpWebResponse)await req.GetResponseAsync();
@@ -86,6 +89,15 @@ internal static class ShellCiHttp
         using var reader = new StreamReader(startStream!);
         var json = JsonDocument.Parse(reader.ReadToEnd());
         return json.RootElement.GetProperty("id").GetGuid();
+    }
+
+    private static async Task PostOperatorAsync(string path, string cookie)
+    {
+        var req = WebRequest.Create(BaseUrl + path);
+        req.Method = "POST";
+        req.Headers["Cookie"] = cookie;
+        req.ContentLength = 0;
+        using var _ = (HttpWebResponse)await req.GetResponseAsync();
     }
 
     private static async Task<string> LoginOperatorAsync()

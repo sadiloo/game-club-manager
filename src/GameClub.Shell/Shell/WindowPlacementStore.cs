@@ -18,9 +18,12 @@ internal sealed class WindowPlacement
 
 internal static class WindowPlacementStore
 {
+    private const double DefaultWidth = 1280;
+    private const double DefaultHeight = 800;
+
     public static void Apply(Window window)
     {
-        var placement = Load();
+        var placement = Normalize(Load());
         window.Width = placement.Width;
         window.Height = placement.Height;
         if (placement.IsMaximized)
@@ -41,7 +44,7 @@ internal static class WindowPlacementStore
         var bounds = window.WindowState == WindowState.Normal
             ? new Rect(window.Left, window.Top, window.Width, window.Height)
             : window.RestoreBounds;
-        var placement = new WindowPlacement
+        var placement = Normalize(new WindowPlacement
         {
             Left = bounds.Left,
             Top = bounds.Top,
@@ -49,7 +52,7 @@ internal static class WindowPlacementStore
             Height = bounds.Height,
             IsMaximized = window.WindowState == WindowState.Maximized,
             TrayHintShown = trayHintShown,
-        };
+        });
         Directory.CreateDirectory(ShellPaths.ShellRoot);
         File.WriteAllText(ShellPaths.WindowJsonPath, JsonSerializer.Serialize(placement));
     }
@@ -65,13 +68,34 @@ internal static class WindowPlacementStore
                 return new WindowPlacement();
             }
 
-            return JsonSerializer.Deserialize<WindowPlacement>(File.ReadAllText(ShellPaths.WindowJsonPath)) ?? new WindowPlacement();
+            var raw = JsonSerializer.Deserialize<WindowPlacement>(File.ReadAllText(ShellPaths.WindowJsonPath)) ?? new WindowPlacement();
+            return Normalize(raw);
         }
         catch
         {
             return new WindowPlacement();
         }
     }
+
+    private static WindowPlacement Normalize(WindowPlacement placement)
+    {
+        return new WindowPlacement
+        {
+            Left = SanitizePosition(placement.Left),
+            Top = SanitizePosition(placement.Top),
+            Width = SanitizeDimension(placement.Width, DefaultWidth),
+            Height = SanitizeDimension(placement.Height, DefaultHeight),
+            IsMaximized = placement.IsMaximized,
+            TrayHintShown = placement.TrayHintShown,
+        };
+    }
+
+    private static bool IsFinite(double value) => !double.IsNaN(value) && !double.IsInfinity(value);
+
+    private static double SanitizePosition(double value) => IsFinite(value) ? value : 0;
+
+    private static double SanitizeDimension(double value, double fallback) =>
+        IsFinite(value) && value > 0 ? value : fallback;
 
     internal static (double left, double top) ClampPositionForTests(double left, double top, double width, double height)
         => ClampToWorkingArea(left, top, width, height);
