@@ -79,8 +79,19 @@ internal static class FakeShellSeams
         ShellSeams.SystemUptime = () => TimeSpan.FromMilliseconds(Environment.TickCount & int.MaxValue);
     }
 
+    public static void ResetHarnessStatics()
+    {
+        Notifications.ResetCounts();
+        ShellSeams.TrayStopInProgress = false;
+        ShellSeams.MessageBoxHandler = null;
+        ShellSeams.BeforeBuildSnapshot = null;
+        ShellSeams.OnTickEntered = null;
+        ShellSeams.OnTickSkippedReentrant = null;
+    }
+
     public static void Install()
     {
+        ResetHarnessStatics();
         ShellSeams.Service = Service;
         ShellSeams.Notifications = Notifications;
         ShellSeams.HttpProbe = Http;

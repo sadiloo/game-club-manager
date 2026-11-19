@@ -27,27 +27,20 @@ internal static class WindowPlacementStore
 
         void ApplyNow()
         {
+            var (left, top) = ClampToWorkingArea(placement.Left, placement.Top, placement.Width, placement.Height);
+            window.WindowState = WindowState.Normal;
+            window.Left = left;
+            window.Top = top;
             window.Width = placement.Width;
             window.Height = placement.Height;
             if (placement.IsMaximized)
             {
                 window.WindowState = WindowState.Maximized;
             }
-            else
-            {
-                window.WindowState = WindowState.Normal;
-                var (left, top) = ClampToWorkingArea(placement.Left, placement.Top, placement.Width, placement.Height);
-                window.Left = left;
-                window.Top = top;
-            }
         }
 
-        if (window.IsLoaded)
-        {
-            ApplyNow();
-            return;
-        }
-
+        // SourceInitialized runs once the HWND exists and before the first Show(); applying
+        // restore bounds then WindowState here avoids WPF resetting Maximized when bounds are set earlier.
         window.SourceInitialized += OnSourceInitialized;
 
         void OnSourceInitialized(object? sender, EventArgs e)

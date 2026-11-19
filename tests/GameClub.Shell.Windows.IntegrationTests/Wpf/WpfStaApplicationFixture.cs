@@ -1,11 +1,13 @@
 #if NET48
 using System;
+using System.Linq;
 using System.Runtime.ExceptionServices;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Threading;
 using GameClub.Shell;
+using GameClub.Shell.Windows.IntegrationTests.Seams;
 
 namespace GameClub.Shell.Windows.IntegrationTests.Wpf;
 
@@ -42,12 +44,25 @@ public sealed class WpfStaApplicationFixture : IDisposable
     public void RunAsync(Func<Task> body, TimeSpan timeout)
     {
         _dispatcherUnhandledException = null;
+        FakeShellSeams.ResetHarnessStatics();
+        CloseAllWindows();
         var invokeOp = _app.Dispatcher.InvokeAsync(body);
         var task = invokeOp.Task.Unwrap();
-        if (!task.Wait(timeout))
+        try
         {
-            throw new TimeoutException($"WPF test body did not complete within {timeout}.");
+            if (!task.Wait(timeout))
+            {
+                CloseAllWindows();
+                throw new TimeoutException($"WPF test body did not complete within {timeout}.");
+            }
         }
+        catch
+        {
+            CloseAllWindows();
+            throw;
+        }
+
+        CloseAllWindows();
 
         if (_dispatcherUnhandledException is not null)
         {
@@ -57,6 +72,23 @@ public sealed class WpfStaApplicationFixture : IDisposable
         if (task.IsFaulted)
         {
             throw task.Exception!.GetBaseException();
+        }
+    }
+
+    private void CloseAllWindows()
+    {
+        try
+        {
+            _app?.Dispatcher.Invoke(() =>
+            {
+                foreach (var window in _app.Windows.OfType<Window>().ToList())
+                {
+                    window.Close();
+                }
+            });
+        }
+        catch
+        {
         }
     }
 

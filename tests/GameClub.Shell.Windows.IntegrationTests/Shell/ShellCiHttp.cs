@@ -1,5 +1,6 @@
 #if NET48
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Net;
 using System.Text;
@@ -9,6 +10,8 @@ namespace GameClub.Shell.Windows.IntegrationTests.Shell;
 
 internal static class ShellCiHttp
 {
+    private static readonly HashSet<Guid> BillOpenedSessionIds = new();
+
     private static string BaseUrl =>
         (Environment.GetEnvironmentVariable("CHECKPOINT_SERVER_URL") ?? "http://127.0.0.1:5000").TrimEnd('/');
 
@@ -34,7 +37,11 @@ internal static class ShellCiHttp
     public static async Task<OpenBillSnapshot> GetOpenSessionLiveBillAsync(Guid sessionId)
     {
         var cookie = await LoginOperatorAsync();
-        await PostOperatorAsync($"/api/operator/sessions/{sessionId}/bill/open", cookie);
+        if (!BillOpenedSessionIds.Contains(sessionId))
+        {
+            await PostOperatorAsync($"/api/operator/sessions/{sessionId}/bill/open", cookie);
+            BillOpenedSessionIds.Add(sessionId);
+        }
 
         var req = WebRequest.Create(BaseUrl + $"/api/operator/sessions/{sessionId}/bill");
         req.Method = "GET";

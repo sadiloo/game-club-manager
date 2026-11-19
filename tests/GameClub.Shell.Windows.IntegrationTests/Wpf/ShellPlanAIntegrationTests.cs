@@ -102,6 +102,7 @@ public sealed class ShellPlanAIntegrationTests
             _fixture.RunAsync(() =>
             {
                 var window = new MainWindow();
+                window.Show();
                 Assert.Equal(WindowState.Maximized, window.WindowState);
                 Assert.Equal(1024, window.Width);
                 Assert.Equal(700, window.Height);
@@ -320,30 +321,37 @@ public sealed class ShellPlanAIntegrationTests
         {
             _fixture.RunAsync(async () =>
             {
-                var window = new MainWindow();
-                window.Show();
-                Microsoft.Web.WebView2.Wpf.WebView2? wv = null;
-                var html = "";
-                var deadline = DateTime.UtcNow.AddSeconds(30);
-                while (DateTime.UtcNow < deadline)
+                MainWindow? window = null;
+                try
                 {
-                    await Task.Delay(300);
-                    wv = window.FindName("PanelWebView") as Microsoft.Web.WebView2.Wpf.WebView2;
-                    if (wv?.CoreWebView2 is null)
+                    window = new MainWindow();
+                    window.Show();
+                    Microsoft.Web.WebView2.Wpf.WebView2? wv = null;
+                    var html = "";
+                    var deadline = DateTime.UtcNow.AddSeconds(30);
+                    while (DateTime.UtcNow < deadline)
                     {
-                        continue;
+                        await Task.Delay(300);
+                        wv = window.FindName("PanelWebView") as Microsoft.Web.WebView2.Wpf.WebView2;
+                        if (wv?.CoreWebView2 is null)
+                        {
+                            continue;
+                        }
+
+                        html = await wv.CoreWebView2.ExecuteScriptAsync("document.body.innerText");
+                        if (!string.IsNullOrWhiteSpace(UnquoteWebViewScriptString(html)))
+                        {
+                            break;
+                        }
                     }
 
-                    html = await wv.CoreWebView2.ExecuteScriptAsync("document.body.innerText");
-                    if (!string.IsNullOrWhiteSpace(UnquoteWebViewScriptString(html)))
-                    {
-                        break;
-                    }
+                    Assert.NotNull(wv?.CoreWebView2);
+                    Assert.Contains("سرور", html);
                 }
-
-                Assert.NotNull(wv?.CoreWebView2);
-                Assert.Contains("سرور", html);
-                window.Close();
+                finally
+                {
+                    window?.Close();
+                }
             }, TimeSpan.FromSeconds(45));
         }
         finally
@@ -363,49 +371,56 @@ public sealed class ShellPlanAIntegrationTests
         {
             _fixture.RunAsync(async () =>
             {
-                var window = new MainWindow();
-                window.Show();
-                var webViewDeadline = DateTime.UtcNow.AddSeconds(30);
-                Microsoft.Web.WebView2.Wpf.WebView2? wv = null;
-                while (DateTime.UtcNow < webViewDeadline)
+                MainWindow? window = null;
+                try
                 {
-                    await Task.Delay(300);
-                    wv = window.FindName("PanelWebView") as Microsoft.Web.WebView2.Wpf.WebView2;
-                    if (wv?.CoreWebView2 is not null)
+                    window = new MainWindow();
+                    window.Show();
+                    var webViewDeadline = DateTime.UtcNow.AddSeconds(30);
+                    Microsoft.Web.WebView2.Wpf.WebView2? wv = null;
+                    while (DateTime.UtcNow < webViewDeadline)
                     {
-                        break;
+                        await Task.Delay(300);
+                        wv = window.FindName("PanelWebView") as Microsoft.Web.WebView2.Wpf.WebView2;
+                        if (wv?.CoreWebView2 is not null)
+                        {
+                            break;
+                        }
                     }
-                }
 
-                using (var sc = new ServiceController("CheckpointServer"))
+                    using (var sc = new ServiceController("CheckpointServer"))
+                    {
+                        if (sc.Status != ServiceControllerStatus.Stopped)
+                        {
+                            sc.Stop();
+                            sc.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(60));
+                        }
+                    }
+
+                    var html = "";
+                    var textDeadline = DateTime.UtcNow.AddSeconds(30);
+                    while (DateTime.UtcNow < textDeadline)
+                    {
+                        await Task.Delay(300);
+                        if (wv?.CoreWebView2 is null)
+                        {
+                            continue;
+                        }
+
+                        html = await wv.CoreWebView2.ExecuteScriptAsync("document.body.innerText");
+                        if (!string.IsNullOrWhiteSpace(UnquoteWebViewScriptString(html)))
+                        {
+                            break;
+                        }
+                    }
+
+                    Assert.NotNull(wv?.CoreWebView2);
+                    Assert.Contains("سرور", html);
+                }
+                finally
                 {
-                    if (sc.Status != ServiceControllerStatus.Stopped)
-                    {
-                        sc.Stop();
-                        sc.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(60));
-                    }
+                    window?.Close();
                 }
-
-                var html = "";
-                var textDeadline = DateTime.UtcNow.AddSeconds(30);
-                while (DateTime.UtcNow < textDeadline)
-                {
-                    await Task.Delay(300);
-                    if (wv?.CoreWebView2 is null)
-                    {
-                        continue;
-                    }
-
-                    html = await wv.CoreWebView2.ExecuteScriptAsync("document.body.innerText");
-                    if (!string.IsNullOrWhiteSpace(UnquoteWebViewScriptString(html)))
-                    {
-                        break;
-                    }
-                }
-
-                Assert.NotNull(wv?.CoreWebView2);
-                Assert.Contains("سرور", html);
-                window.Close();
             }, TimeSpan.FromSeconds(90));
         }
         finally
@@ -492,20 +507,27 @@ public sealed class ShellPlanAIntegrationTests
             _fixture.RunAsync(async () =>
             {
                 var tcs = new TaskCompletionSource<bool>();
-                var window = new MainWindow();
-                window.Show();
-                await Task.Delay(4000);
-                var wv = window.FindName("PanelWebView") as Microsoft.Web.WebView2.Wpf.WebView2;
-                Assert.NotNull(wv?.CoreWebView2);
-                wv.CoreWebView2.ScriptDialogOpening += (_, args) =>
+                MainWindow? window = null;
+                try
                 {
-                    tcs.TrySetResult(true);
-                    args.Accept();
-                };
-                await wv.CoreWebView2.ExecuteScriptAsync("alert('سلام');");
-                var seen = await Task.WhenAny(tcs.Task, Task.Delay(5000)) == tcs.Task;
-                Assert.True(seen);
-                window.Close();
+                    window = new MainWindow();
+                    window.Show();
+                    await Task.Delay(4000);
+                    var wv = window.FindName("PanelWebView") as Microsoft.Web.WebView2.Wpf.WebView2;
+                    Assert.NotNull(wv?.CoreWebView2);
+                    wv.CoreWebView2.ScriptDialogOpening += (_, args) =>
+                    {
+                        tcs.TrySetResult(true);
+                        args.Accept();
+                    };
+                    _ = wv.CoreWebView2.ExecuteScriptAsync("alert('سلام');");
+                    var seen = await Task.WhenAny(tcs.Task, Task.Delay(5000)) == tcs.Task;
+                    Assert.True(seen);
+                }
+                finally
+                {
+                    window?.Close();
+                }
             }, TimeSpan.FromSeconds(45));
         }
         finally

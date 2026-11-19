@@ -1,6 +1,8 @@
 using System;
 using System.IO;
 using System.Reflection;
+using System.Security.Cryptography;
+using System.Text;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
@@ -18,6 +20,9 @@ public partial class MainWindow : Window
     private int _navigationStartingCount;
     private bool _webViewReady;
     private DateTime _lastReconnectAttempt = DateTime.MinValue;
+    private bool _pendingOffline;
+    private string _pendingOfflineState = "stopped";
+    private string? _lastNavigationUri;
 
     public int NavigationStartingCount => _navigationStartingCount;
     public double CurrentZoomFactor => PanelWebView?.ZoomFactor ?? 1.0;
@@ -75,11 +80,21 @@ public partial class MainWindow : Window
 
             PanelWebView.CoreWebView2.NavigationStarting += (_, args) =>
             {
+                _lastNavigationUri = args.Uri;
                 _navigationStartingCount++;
                 if (!args.Uri.StartsWith(ShellPaths.PanelOrigin, StringComparison.OrdinalIgnoreCase))
                 {
                     args.Cancel = true;
-                    ShellFileLog.Write($"navigation-blocked url={args.Uri}");
+                    if (Uri.TryCreate(args.Uri, UriKind.Absolute, out var blocked))
+                    {
+                        var host = (blocked.Host ?? "").ToLowerInvariant();
+                        var hash8 = Sha256Hex8(host);
+                        ShellFileLog.Write($"navigation-blocked scheme={blocked.Scheme} host_hash8={hash8}");
+                    }
+                    else
+                    {
+                        ShellFileLog.Write("navigation-blocked scheme=unknown host_hash8=00000000");
+                    }
                 }
             };
 
@@ -89,10 +104,21 @@ public partial class MainWindow : Window
                 ShellFileLog.Write($"new-window-blocked url={args.Uri}");
             };
 
+            PanelWebView.CoreWebView2.NavigationCompleted += OnNavigationCompleted;
+
             _webViewReady = true;
             PanelWebView.Visibility = Visibility.Visible;
             NativeHost.Visibility = Visibility.Collapsed;
-            await NavigatePanelAsync();
+
+            if (_pendingOffline)
+            {
+                _pendingOffline = false;
+                await PresentOfflinePageAsync(_pendingOfflineState);
+            }
+            else
+            {
+                await NavigatePanelAsync();
+            }
         }
         catch
         {
@@ -101,6 +127,45 @@ public partial class MainWindow : Window
             NativeTitle.Text = "برای نمایش پنل، WebView2 لازم است";
             NativeBody.Text = "بستهٔ WebView2 روی این رایانه نصب نیست یا خراب است.";
         }
+    }
+
+    private void OnNavigationCompleted(object? sender, CoreWebView2NavigationCompletedEventArgs e)
+    {
+        if (e.IsSuccess || !IsLoopbackPanelTarget(_lastNavigationUri ?? ""))
+        {
+            return;
+        }
+
+        var state = _poller?.Current.VisualState switch
+        {
+            ShellServerVisualState.Starting => "starting",
+            _ => "stopped",
+        };
+        _ = PresentOfflinePageAsync(state);
+    }
+
+    private static bool IsLoopbackPanelTarget(string uriString)
+    {
+        if (!Uri.TryCreate(uriString, UriKind.Absolute, out var uri))
+        {
+            return false;
+        }
+
+        var host = (uri.Host ?? "").ToLowerInvariant();
+        return host is "127.0.0.1" or "localhost" or "::1";
+    }
+
+    private static string Sha256Hex8(string lowercaseHost)
+    {
+        using var sha = SHA256.Create();
+        var bytes = sha.ComputeHash(Encoding.UTF8.GetBytes(lowercaseHost));
+        var hex = new StringBuilder(bytes.Length * 2);
+        foreach (var b in bytes)
+        {
+            hex.Append(b.ToString("x2"));
+        }
+
+        return hex.Length >= 8 ? hex.ToString(0, 8) : hex.ToString().PadRight(8, '0');
     }
 
     private void OnShellPreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
@@ -164,8 +229,16 @@ public partial class MainWindow : Window
 
     private async Task ShowOfflineAsync(ServerStateSnapshot snap)
     {
+        var state = snap.VisualState switch
+        {
+            ShellServerVisualState.Starting => "starting",
+            _ => "stopped",
+        };
+
         if (!_webViewReady)
         {
+            _pendingOffline = true;
+            _pendingOfflineState = state;
             return;
         }
 
@@ -175,18 +248,26 @@ public partial class MainWindow : Window
         }
 
         _lastReconnectAttempt = DateTime.UtcNow;
-        var state = snap.VisualState switch
-        {
-            ShellServerVisualState.Starting => "starting",
-            _ => "stopped",
-        };
-        var html = LoadOfflineHtml(state);
-        PanelWebView.NavigateToString(html);
+        await PresentOfflinePageAsync(state);
         await Task.Delay(5000);
         if (_poller?.Current.OperatorAnswers == true)
         {
             await NavigatePanelAsync();
         }
+    }
+
+    private Task PresentOfflinePageAsync(string state)
+    {
+        if (!_webViewReady)
+        {
+            _pendingOffline = true;
+            _pendingOfflineState = state;
+            return Task.CompletedTask;
+        }
+
+        var html = LoadOfflineHtml(state);
+        PanelWebView.NavigateToString(html);
+        return Task.CompletedTask;
     }
 
     private static string LoadOfflineHtml(string state)

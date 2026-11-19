@@ -61,6 +61,7 @@ public sealed class ShellPollerReentrancyTests
             using var poller = new ServerStatePoller();
             await Task.Delay(500);
             FakeShellSeams.Http.Answers = false;
+            _ = poller.BuildSnapshotForTests();
             ShellSeams.UtcNow = () => t0.AddSeconds(91);
             await Task.Delay(6000);
             Assert.Equal(1, FakeShellSeams.Notifications.NoAnswerStopCount);
