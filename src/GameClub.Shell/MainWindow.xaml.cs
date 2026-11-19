@@ -23,6 +23,7 @@ public partial class MainWindow : Window
     private bool _pendingOffline;
     private string _pendingOfflineState = "stopped";
     private string? _lastNavigationUri;
+    private bool _offlineShown;
 
     public int NavigationStartingCount => _navigationStartingCount;
     public double CurrentZoomFactor => PanelWebView?.ZoomFactor ?? 1.0;
@@ -46,9 +47,19 @@ public partial class MainWindow : Window
             Dispatcher.Invoke(() =>
             {
                 _tray?.UpdateSnapshot(snap);
-                if (snap.OperatorAnswers && _webViewReady)
+                if (snap.VisualState == ShellServerVisualState.Running && _webViewReady)
                 {
-                    _ = NavigatePanelAsync();
+                    if (_offlineShown)
+                    {
+                        _offlineShown = false;
+                        var recoverUri = new Uri(ShellPaths.PanelUrl);
+                        LogPanelNavigate("RunningRecover", recoverUri);
+                        PanelWebView.Source = recoverUri;
+                    }
+                    else
+                    {
+                        _ = NavigatePanelAsync();
+                    }
                 }
                 else if (!snap.OperatorAnswers)
                 {
@@ -101,7 +112,15 @@ public partial class MainWindow : Window
             PanelWebView.CoreWebView2.NewWindowRequested += (_, args) =>
             {
                 args.Handled = true;
-                ShellFileLog.Write($"new-window-blocked url={args.Uri}");
+                if (Uri.TryCreate(args.Uri, UriKind.Absolute, out var blocked))
+                {
+                    var host = (blocked.Host ?? "").ToLowerInvariant();
+                    ShellFileLog.Write($"new-window-blocked scheme={blocked.Scheme} host_hash8={Sha256Hex8(host)}");
+                }
+                else
+                {
+                    ShellFileLog.Write("new-window-blocked scheme=unknown host_hash8=00000000");
+                }
             };
 
             PanelWebView.CoreWebView2.NavigationCompleted += OnNavigationCompleted;
@@ -131,6 +150,11 @@ public partial class MainWindow : Window
 
     private void OnNavigationCompleted(object? sender, CoreWebView2NavigationCompletedEventArgs e)
     {
+        if (_offlineShown)
+        {
+            return;
+        }
+
         if (e.IsSuccess || !IsLoopbackPanelTarget(_lastNavigationUri ?? ""))
         {
             return;
@@ -166,6 +190,17 @@ public partial class MainWindow : Window
         }
 
         return hex.Length >= 8 ? hex.ToString(0, 8) : hex.ToString().PadRight(8, '0');
+    }
+
+    private static void LogPanelNavigate(string caller, Uri uri)
+    {
+        var host = (uri.Host ?? "").ToLowerInvariant();
+        ShellFileLog.Write($"panel-navigate caller={caller} scheme={uri.Scheme} host_hash8={Sha256Hex8(host)}");
+    }
+
+    private void LogNavigateToString(string caller)
+    {
+        ShellFileLog.Write($"panel-navigate caller={caller} scheme=data host_hash8={Sha256Hex8("offline-html")}");
     }
 
     private void OnShellPreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
@@ -209,14 +244,27 @@ public partial class MainWindow : Window
         }
     }
 
-    public async Task NavigatePanelAsync()
+    public Task NavigatePanelAsync()
     {
         if (!_webViewReady)
         {
-            return;
+            return Task.CompletedTask;
         }
 
-        PanelWebView.Source = new Uri(ShellPaths.PanelUrl);
+        if (_offlineShown)
+        {
+            return Task.CompletedTask;
+        }
+
+        if (_poller?.Current.VisualState != ShellServerVisualState.Running)
+        {
+            return Task.CompletedTask;
+        }
+
+        var uri = new Uri(ShellPaths.PanelUrl);
+        LogPanelNavigate("NavigatePanel", uri);
+        PanelWebView.Source = uri;
+        return Task.CompletedTask;
     }
 
     public void ReloadPanel()
@@ -249,11 +297,6 @@ public partial class MainWindow : Window
 
         _lastReconnectAttempt = DateTime.UtcNow;
         await PresentOfflinePageAsync(state);
-        await Task.Delay(5000);
-        if (_poller?.Current.OperatorAnswers == true)
-        {
-            await NavigatePanelAsync();
-        }
     }
 
     private Task PresentOfflinePageAsync(string state)
@@ -265,7 +308,9 @@ public partial class MainWindow : Window
             return Task.CompletedTask;
         }
 
+        _offlineShown = true;
         var html = LoadOfflineHtml(state);
+        LogNavigateToString("PresentOffline");
         PanelWebView.NavigateToString(html);
         return Task.CompletedTask;
     }

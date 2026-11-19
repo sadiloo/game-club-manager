@@ -4,6 +4,7 @@ using System.IO;
 using System.Text.Json;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Forms;
 using GameClub.Shell;
 using GameClub.Shell.Shell;
 using Xunit;
@@ -67,8 +68,10 @@ public sealed class ShellWindowPlacementRegressionTests
             {
                 var window = new MainWindow();
                 window.Show();
-                Assert.Equal(1280, window.Width);
-                Assert.Equal(800, window.Height);
+                // CI runner work area is 1024×728; effective size follows WindowPlacementStore work-area clamp.
+                var area = Screen.PrimaryScreen!.WorkingArea;
+                Assert.Equal(Math.Min(1280, area.Width), window.Width, 0);
+                Assert.Equal(Math.Min(800, area.Height), window.Height, 0);
                 window.Close();
                 return Task.CompletedTask;
             }, TimeSpan.FromSeconds(20));

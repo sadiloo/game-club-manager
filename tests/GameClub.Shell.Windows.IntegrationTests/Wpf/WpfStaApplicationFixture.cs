@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Threading;
 using GameClub.Shell;
+using GameClub.Shell.Shell;
 using GameClub.Shell.Windows.IntegrationTests.Seams;
 
 namespace GameClub.Shell.Windows.IntegrationTests.Wpf;
@@ -81,9 +82,23 @@ public sealed class WpfStaApplicationFixture : IDisposable
         {
             _app?.Dispatcher.Invoke(() =>
             {
-                foreach (var window in _app.Windows.OfType<Window>().ToList())
+                ShellEnvironment.ForceExit = true;
+                try
                 {
-                    window.Close();
+                    foreach (var window in _app.Windows.OfType<Window>().ToList())
+                    {
+                        if (window is MainWindow mw)
+                        {
+                            mw.ExitShell();
+                            continue;
+                        }
+
+                        window.Close();
+                    }
+                }
+                finally
+                {
+                    ShellEnvironment.ForceExit = false;
                 }
             });
         }

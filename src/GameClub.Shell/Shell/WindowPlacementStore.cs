@@ -25,28 +25,35 @@ internal static class WindowPlacementStore
     {
         var placement = Normalize(Load());
 
-        void ApplyNow()
+        void ApplyBounds()
         {
             var (left, top) = ClampToWorkingArea(placement.Left, placement.Top, placement.Width, placement.Height);
+            var (width, height) = ClampDimensionsToWorkingArea(left, top, placement.Width, placement.Height);
             window.WindowState = WindowState.Normal;
             window.Left = left;
             window.Top = top;
-            window.Width = placement.Width;
-            window.Height = placement.Height;
-            if (placement.IsMaximized)
-            {
-                window.WindowState = WindowState.Maximized;
-            }
+            window.Width = width;
+            window.Height = height;
         }
 
         // SourceInitialized runs once the HWND exists and before the first Show(); applying
         // restore bounds then WindowState here avoids WPF resetting Maximized when bounds are set earlier.
         window.SourceInitialized += OnSourceInitialized;
+        window.Loaded += OnLoadedOnce;
 
         void OnSourceInitialized(object? sender, EventArgs e)
         {
             window.SourceInitialized -= OnSourceInitialized;
-            ApplyNow();
+            ApplyBounds();
+        }
+
+        void OnLoadedOnce(object? sender, EventArgs e)
+        {
+            window.Loaded -= OnLoadedOnce;
+            if (placement.IsMaximized)
+            {
+                window.WindowState = WindowState.Maximized;
+            }
         }
     }
 
@@ -110,6 +117,13 @@ internal static class WindowPlacementStore
 
     internal static (double left, double top) ClampPositionForTests(double left, double top, double width, double height)
         => ClampToWorkingArea(left, top, width, height);
+
+    private static (double width, double height) ClampDimensionsToWorkingArea(double left, double top, double width, double height)
+    {
+        var screen = Screen.FromPoint(new System.Drawing.Point((int)left, (int)top));
+        var area = screen.WorkingArea;
+        return (Math.Min(width, area.Width), Math.Min(height, area.Height));
+    }
 
     private static (double left, double top) ClampToWorkingArea(double left, double top, double width, double height)
     {

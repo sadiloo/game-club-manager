@@ -9,6 +9,7 @@ using System.Security;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Forms;
 using GameClub.Shell;
 using GameClub.Shell.ServerControl;
 using GameClub.Shell.Shell;
@@ -104,8 +105,10 @@ public sealed class ShellPlanAIntegrationTests
                 var window = new MainWindow();
                 window.Show();
                 Assert.Equal(WindowState.Maximized, window.WindowState);
-                Assert.Equal(1024, window.Width);
-                Assert.Equal(700, window.Height);
+                // CI runner work area is 1024×728; effective size follows WindowPlacementStore work-area clamp.
+                var area = Screen.PrimaryScreen!.WorkingArea;
+                Assert.Equal(Math.Min(1024, area.Width), window.Width, 0);
+                Assert.Equal(Math.Min(700, area.Height), window.Height, 0);
                 window.Close();
                 return Task.CompletedTask;
             }, TimeSpan.FromSeconds(15));
@@ -203,6 +206,7 @@ public sealed class ShellPlanAIntegrationTests
             shellProc.Dispose();
         }
 
+        WaitUntilBothSessionsShareMinutesPlayed(shellSession, refSession, TimeSpan.FromSeconds(90));
         var afterRef = ShellCiHttp.GetOpenSessionLiveBillAsync(refSession).GetAwaiter().GetResult();
         var afterShell = ShellCiHttp.GetOpenSessionLiveBillAsync(shellSession).GetAwaiter().GetResult();
         Assert.Equal(afterRef.AmountToman, afterShell.AmountToman);
@@ -214,6 +218,7 @@ public sealed class ShellPlanAIntegrationTests
         var waitSeconds = ResolveBillingWaitSeconds();
         Thread.Sleep(TimeSpan.FromSeconds(waitSeconds));
 
+        WaitUntilBothSessionsShareMinutesPlayed(shellSession, refSession, TimeSpan.FromSeconds(90));
         var finalRef = ShellCiHttp.GetOpenSessionLiveBillAsync(refSession).GetAwaiter().GetResult();
         var finalShell = ShellCiHttp.GetOpenSessionLiveBillAsync(shellSession).GetAwaiter().GetResult();
         Assert.Equal(finalRef.AmountToman, finalShell.AmountToman);
@@ -497,6 +502,115 @@ public sealed class ShellPlanAIntegrationTests
     }
 
     [Fact]
+    public void shell_new_window_blocked_log_redacts_host_in_shell_log()
+    {
+        if (!WebView2RuntimePresent()) throw new InvalidOperationException("WebView2 runtime required");
+        EnsureServiceRunning();
+        var root = AllocateShellDataRoot();
+        try
+        {
+            _fixture.RunAsync(async () =>
+            {
+                const string popupHost = "popup.blocked.test";
+                var window = new MainWindow();
+                window.Show();
+                await Task.Delay(4000);
+                var wv = window.FindName("PanelWebView") as Microsoft.Web.WebView2.Wpf.WebView2;
+                Assert.NotNull(wv?.CoreWebView2);
+                ShellFileLog.Write("new-window-baseline");
+                var before = Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log").Select(File.ReadAllText).Aggregate("", string.Concat);
+                await wv.CoreWebView2.ExecuteScriptAsync($"window.open('https://{popupHost}/secret-path');");
+                await Task.Delay(1500);
+                var after = Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log").Select(File.ReadAllText).Aggregate("", string.Concat);
+                var delta = after.Replace(before, "");
+                Assert.Contains("new-window-blocked", delta);
+                Assert.Contains("scheme=https", delta);
+                Assert.Contains("host_hash8=", delta);
+                Assert.DoesNotContain(popupHost, delta);
+                Assert.DoesNotContain("secret-path", delta);
+                window.Close();
+            }, TimeSpan.FromSeconds(45));
+        }
+        finally
+        {
+            CleanupShellDataRoot(root);
+        }
+    }
+
+    [Fact]
+    public void shell_offline_page_clears_when_service_returns_to_running()
+    {
+        if (!WebView2RuntimePresent()) throw new InvalidOperationException("WebView2 runtime required");
+        var root = AllocateShellDataRoot();
+        try
+        {
+            _fixture.RunAsync(async () =>
+            {
+                MainWindow? window = null;
+                try
+                {
+                    StopServiceIfRunning();
+                    window = new MainWindow();
+                    window.Show();
+                    Microsoft.Web.WebView2.Wpf.WebView2? wv = null;
+                    var offlineSeen = false;
+                    var offlineDeadline = DateTime.UtcNow.AddSeconds(45);
+                    while (DateTime.UtcNow < offlineDeadline)
+                    {
+                        await Task.Delay(300);
+                        wv = window.FindName("PanelWebView") as Microsoft.Web.WebView2.Wpf.WebView2;
+                        if (wv?.CoreWebView2 is null)
+                        {
+                            continue;
+                        }
+
+                        var html = await wv.CoreWebView2.ExecuteScriptAsync("document.body.innerText");
+                        if (UnquoteWebViewScriptString(html).Contains("سرور", StringComparison.Ordinal))
+                        {
+                            offlineSeen = true;
+                            break;
+                        }
+                    }
+
+                    Assert.True(offlineSeen, "Persian offline page was not shown while service stopped");
+
+                    EnsureServiceRunning();
+                    var panelDeadline = DateTime.UtcNow.AddSeconds(45);
+                    var panelOk = false;
+                    while (DateTime.UtcNow < panelDeadline)
+                    {
+                        await Task.Delay(500);
+                        if (wv?.Source is not null
+                            && wv.Source.ToString().Contains("/operator/", StringComparison.OrdinalIgnoreCase))
+                        {
+                            var html = await wv.CoreWebView2!.ExecuteScriptAsync("document.body.innerText");
+                            var text = UnquoteWebViewScriptString(html);
+                            if (text.Contains("سرور", StringComparison.Ordinal))
+                            {
+                                continue;
+                            }
+
+                            panelOk = true;
+                            break;
+                        }
+                    }
+
+                    Assert.True(panelOk, "Operator panel did not return after service start");
+                }
+                finally
+                {
+                    window?.Close();
+                }
+            }, TimeSpan.FromSeconds(120));
+        }
+        finally
+        {
+            CleanupShellDataRoot(root);
+            EnsureServiceRunning();
+        }
+    }
+
+    [Fact]
     public void shell_page_alert_still_shows_webview_default_dialog()
     {
         if (!WebView2RuntimePresent()) throw new InvalidOperationException("WebView2 runtime required");
@@ -515,12 +629,30 @@ public sealed class ShellPlanAIntegrationTests
                     await Task.Delay(4000);
                     var wv = window.FindName("PanelWebView") as Microsoft.Web.WebView2.Wpf.WebView2;
                     Assert.NotNull(wv?.CoreWebView2);
+                    var operatorNav = new TaskCompletionSource<bool>();
+                    void OnNavDone(object? _, CoreWebView2NavigationCompletedEventArgs args)
+                    {
+                        if (args.IsSuccess
+                            && (wv.Source?.ToString() ?? "").Contains("/operator/", StringComparison.OrdinalIgnoreCase))
+                        {
+                            operatorNav.TrySetResult(true);
+                        }
+                    }
+
+                    wv.CoreWebView2.NavigationCompleted += OnNavDone;
+                    var operatorDeadline = DateTime.UtcNow.AddSeconds(20);
+                    while (DateTime.UtcNow < operatorDeadline && !operatorNav.Task.IsCompleted)
+                    {
+                        await Task.Delay(200);
+                    }
+
+                    Assert.True(operatorNav.Task.IsCompleted, "operator page did not finish navigation");
                     wv.CoreWebView2.ScriptDialogOpening += (_, args) =>
                     {
                         tcs.TrySetResult(true);
                         args.Accept();
                     };
-                    _ = wv.CoreWebView2.ExecuteScriptAsync("alert('سلام');");
+                    await wv.CoreWebView2.ExecuteScriptAsync("alert('سلام');");
                     var seen = await Task.WhenAny(tcs.Task, Task.Delay(5000)) == tcs.Task;
                     Assert.True(seen);
                 }
@@ -662,6 +794,27 @@ public sealed class ShellPlanAIntegrationTests
         {
             key.SetValue(ShellPaths.AutostartValueName, value);
         }
+    }
+
+    private static void WaitUntilBothSessionsShareMinutesPlayed(Guid shellSession, Guid refSession, TimeSpan maxWait)
+    {
+        var deadline = DateTime.UtcNow.Add(maxWait);
+        while (DateTime.UtcNow < deadline)
+        {
+            var shellBill = ShellCiHttp.GetOpenSessionLiveBillAsync(shellSession).GetAwaiter().GetResult();
+            var refBill = ShellCiHttp.GetOpenSessionLiveBillAsync(refSession).GetAwaiter().GetResult();
+            if (shellBill.MinutesPlayed is int shellMin
+                && refBill.MinutesPlayed is int refMin
+                && shellMin == refMin)
+            {
+                return;
+            }
+
+            Thread.Sleep(500);
+        }
+
+        throw new InvalidOperationException(
+            $"SHELL-A3 and SHELL-REF did not report the same minutesPlayed within {maxWait.TotalSeconds:0}s.");
     }
 
     private static string UnquoteWebViewScriptString(string json)

@@ -41,6 +41,7 @@ public sealed class ShellPollerReentrancyTests
             Interlocked.Exchange(ref slowSnapshots, 1);
             FakeShellSeams.Service.Status = ServiceControllerStatus.Stopped;
             FakeShellSeams.Http.Answers = false;
+            poller.BuildSnapshotForTests();
             await Task.Delay(15000);
             Assert.True(skipped >= 1, $"expected at least one skipped reentrant tick; skipped={skipped}");
             Assert.Equal(1, FakeShellSeams.Notifications.UnexpectedStopCount);
