@@ -6,7 +6,7 @@
 |-------|--------|
 | **Branch** | `cursor/pr40-r18c-staging` (fast-forward only) |
 | **Parent** | `717a3c1ae499d648464530975db3799f6f85722a` |
-| **Staging sha** | *(set at push)* |
+| **Staging sha** | `a219008` |
 
 ## Item status
 
