@@ -24,18 +24,36 @@ internal static class WindowPlacementStore
     public static void Apply(Window window)
     {
         var placement = Normalize(Load());
-        window.Width = placement.Width;
-        window.Height = placement.Height;
-        if (placement.IsMaximized)
+
+        void ApplyNow()
         {
-            window.WindowState = WindowState.Maximized;
+            window.Width = placement.Width;
+            window.Height = placement.Height;
+            if (placement.IsMaximized)
+            {
+                window.WindowState = WindowState.Maximized;
+            }
+            else
+            {
+                window.WindowState = WindowState.Normal;
+                var (left, top) = ClampToWorkingArea(placement.Left, placement.Top, placement.Width, placement.Height);
+                window.Left = left;
+                window.Top = top;
+            }
         }
-        else
+
+        if (window.IsLoaded)
         {
-            window.WindowState = WindowState.Normal;
-            var (left, top) = ClampToWorkingArea(placement.Left, placement.Top, placement.Width, placement.Height);
-            window.Left = left;
-            window.Top = top;
+            ApplyNow();
+            return;
+        }
+
+        window.SourceInitialized += OnSourceInitialized;
+
+        void OnSourceInitialized(object? sender, EventArgs e)
+        {
+            window.SourceInitialized -= OnSourceInitialized;
+            ApplyNow();
         }
     }
 

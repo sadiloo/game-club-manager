@@ -45,7 +45,9 @@ internal static class ShellCiHttp
         using var reader = new StreamReader(stream!);
         var json = JsonDocument.Parse(reader.ReadToEnd());
         var root = json.RootElement;
-        var amount = root.GetProperty("amountToman").GetInt64();
+        var amount = root.TryGetProperty("collectibleToman", out var c)
+            ? c.GetInt64()
+            : root.GetProperty("amountToman").GetInt64();
         var minutes = root.TryGetProperty("minutesPlayed", out var m) ? m.GetInt32() : (int?)null;
         return new OpenBillSnapshot(amount, minutes);
     }
@@ -58,7 +60,7 @@ internal static class ShellCiHttp
         client.Method = "POST";
         client.ContentType = "application/json";
         client.Headers["X-Api-Key"] = ApiKey;
-        var body = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new { id = stationId, name = stationId, groupId = "pc-normal" }));
+        var body = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new { id = stationId, name = stationId, groupId = "ps5" }));
         client.ContentLength = body.Length;
         using (var s = client.GetRequestStream())
         {
@@ -97,7 +99,19 @@ internal static class ShellCiHttp
         req.Method = "POST";
         req.Headers["Cookie"] = cookie;
         req.ContentLength = 0;
-        using var _ = (HttpWebResponse)await req.GetResponseAsync();
+        try
+        {
+            using var _ = (HttpWebResponse)await req.GetResponseAsync();
+        }
+        catch (WebException ex) when (ex.Response is HttpWebResponse error)
+        {
+            using var stream = error.GetResponseStream();
+            using var reader = stream is null ? null : new StreamReader(stream);
+            var body = reader?.ReadToEnd() ?? "";
+            throw new InvalidOperationException(
+                $"POST {path} failed: {(int)error.StatusCode} {error.StatusDescription}; body={body}",
+                ex);
+        }
     }
 
     private static async Task<string> LoginOperatorAsync()

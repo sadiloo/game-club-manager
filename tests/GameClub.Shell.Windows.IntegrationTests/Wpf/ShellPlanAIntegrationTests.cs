@@ -314,7 +314,7 @@ public sealed class ShellPlanAIntegrationTests
     public void shell_shows_persian_offline_when_service_stopped()
     {
         if (!WebView2RuntimePresent()) throw new InvalidOperationException("WebView2 runtime required");
-        StopServiceIfRunning();
+        EnsureServiceRunning();
         var root = AllocateShellDataRoot();
         try
         {
@@ -322,6 +322,16 @@ public sealed class ShellPlanAIntegrationTests
             {
                 var window = new MainWindow();
                 window.Show();
+                await Task.Delay(4000);
+                using (var sc = new ServiceController("CheckpointServer"))
+                {
+                    if (sc.Status != ServiceControllerStatus.Stopped)
+                    {
+                        sc.Stop();
+                        sc.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(60));
+                    }
+                }
+
                 await Task.Delay(8000);
                 var wv = window.FindName("PanelWebView") as Microsoft.Web.WebView2.Wpf.WebView2;
                 Assert.NotNull(wv?.CoreWebView2);
@@ -387,9 +397,8 @@ public sealed class ShellPlanAIntegrationTests
                 await Task.Delay(4000);
                 var wv = window.FindName("PanelWebView") as Microsoft.Web.WebView2.Wpf.WebView2;
                 Assert.NotNull(wv?.CoreWebView2);
-                var before = Directory.Exists(ShellPaths.ShellLogsDir)
-                    ? Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log").Select(File.ReadAllText).Aggregate("", string.Concat)
-                    : "";
+                ShellFileLog.Write("shell-integration-baseline");
+                var before = Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log").Select(File.ReadAllText).Aggregate("", string.Concat);
                 wv.CoreWebView2.Navigate("https://example.com/");
                 await Task.Delay(1000);
                 var after = Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log").Select(File.ReadAllText).Aggregate("", string.Concat);
@@ -420,7 +429,11 @@ public sealed class ShellPlanAIntegrationTests
                 await Task.Delay(4000);
                 var wv = window.FindName("PanelWebView") as Microsoft.Web.WebView2.Wpf.WebView2;
                 Assert.NotNull(wv?.CoreWebView2);
-                wv.CoreWebView2.ScriptDialogOpening += (_, _) => tcs.TrySetResult(true);
+                wv.CoreWebView2.ScriptDialogOpening += (_, args) =>
+                {
+                    tcs.TrySetResult(true);
+                    args.Accept();
+                };
                 await wv.CoreWebView2.ExecuteScriptAsync("alert('سلام');");
                 var seen = await Task.WhenAny(tcs.Task, Task.Delay(5000)) == tcs.Task;
                 Assert.True(seen);
