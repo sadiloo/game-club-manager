@@ -88,6 +88,8 @@ internal sealed class InternetPipeServer
                     PipeTransmissionMode.Byte,
                     PipeOptions.Asynchronous);
                 server.WaitForConnection();
+                GuardWatchdogLog.Append(
+                    $"pipe_accept thread={Thread.CurrentThread.ManagedThreadId}");
                 var pipe = server;
                 var handler = new Thread(() => HandleConnectedClient(pipe))
                 {
@@ -105,13 +107,18 @@ internal sealed class InternetPipeServer
 
     private void HandleConnectedClient(NamedPipeServerStream server)
     {
+        var handlerThread = Thread.CurrentThread.ManagedThreadId;
         try
         {
             using (server)
             {
+                GuardWatchdogLog.Append($"pipe_client_handler_begin thread={handlerThread}");
                 using var reader = new StreamReader(server, Encoding.UTF8, false, 8192, leaveOpen: true);
                 using var writer = new StreamWriter(server, Encoding.UTF8, 4096, leaveOpen: true) { AutoFlush = true };
+                GuardWatchdogLog.Append($"pipe_read_begin thread={handlerThread}");
                 var body = reader.ReadToEnd();
+                GuardWatchdogLog.Append(
+                    $"pipe_read_ok thread={handlerThread} bytes={Encoding.UTF8.GetByteCount(body)}");
                 var response = HandleRequest(body);
                 writer.Write(response);
             }
@@ -304,6 +311,7 @@ internal sealed class InternetPipeServer
             finally
             {
                 Monitor.Exit(_firewallGate);
+                GuardWatchdogLog.Append("pipe_gate_exit");
             }
         }
         catch (Exception ex)
@@ -316,17 +324,22 @@ internal sealed class InternetPipeServer
     {
         busyError = null;
         var totalWaitMs = InternetGuardReconcilePolicy.ResolveApplyWaitDuringReconcileMs();
+        GuardWatchdogLog.Append($"pipe_gate_wait_begin budget_ms={totalWaitMs}");
         if (!WaitForReconcileApplyWindow(totalWaitMs))
         {
+            GuardWatchdogLog.Append("pipe_gate_wait_exit entered=false reason=reconcile_window");
             busyError = "reconcile_busy";
             return false;
         }
 
+        GuardWatchdogLog.Append("pipe_gate_wait_exit entered=true");
         if (Monitor.TryEnter(_firewallGate, totalWaitMs))
         {
+            GuardWatchdogLog.Append("pipe_gate_enter ok=true");
             return true;
         }
 
+        GuardWatchdogLog.Append("pipe_gate_enter ok=false");
         busyError = "reconcile_busy";
         return false;
     }

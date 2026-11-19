@@ -27,6 +27,16 @@ function Write-PhaseLog([string]$message) {
     Add-Content -Path $phaseLog -Value $line -Encoding UTF8
 }
 
+function Assert-TestPhaseExit([string]$PhaseName, [int]$Exit) {
+    if ($Exit -eq 124) {
+        throw "$PhaseName watchdog"
+    }
+
+    if ($Exit -ne 0) {
+        throw "$PhaseName failed with exit code $Exit"
+    }
+}
+
 function Write-TimeoutLine([string]$message) {
     $line = "{0:u}  {1}" -f (Get-Date), $message
     Add-Content -Path $phaseLog -Value $line -Encoding UTF8
@@ -582,7 +592,7 @@ try {
     $leaseBuildError = Publish-ServerLeaseBuildEvidence -phaseName "dotnet-test-net10-server" -TrxPath (Join-Path $artifactDir "kiosk-windows-server.trx")
     Write-CiPhaseFirewallProbe -label "after-dotnet-test-net10-server"
     if ($leaseBuildError) { throw $leaseBuildError }
-    if ($serverTestExit -eq 124) { throw "server test watchdog" }
+    Assert-TestPhaseExit -PhaseName "dotnet-test-net10-server" -Exit $serverTestExit
 
     Write-Host "Running net48 LiveCheckpointServer tests (L17 apply-failure harness)..."
     Stop-OrphanedGuardAndKiosk -Reason "before_live_checkpoint_net48"
@@ -602,8 +612,13 @@ try {
     Copy-Item $serverLog (Join-Path $logDir "live-checkpoint-server-out.log") -Force -ErrorAction SilentlyContinue
     Copy-Item $serverErr (Join-Path $logDir "live-checkpoint-server-err.log") -Force -ErrorAction SilentlyContinue
     Publish-ServerLeaseBuildEvidence -phaseName "dotnet-test-net48-live-checkpoint" -TrxPath (Join-Path $artifactDir "kiosk-windows-live-checkpoint-net48.trx")
-    if ($liveNet48Exit -ne 0 -and $script:FinalExitCode -eq 0) { $script:FinalExitCode = $liveNet48Exit }
-    if ($liveNet48Exit -eq 124) { throw "live checkpoint net48 watchdog" }
+    if (Test-Path $liveNet48Out) {
+        Write-Host "--- live-checkpoint-net48-console.log (L17 net48) ---"
+        Get-Content -Path $liveNet48Out -Encoding UTF8 | ForEach-Object { Write-Host $_ }
+        Write-Host "--- end live-checkpoint-net48-console.log ---"
+    }
+
+    Assert-TestPhaseExit -PhaseName "dotnet-test-net48-live-checkpoint" -Exit $liveNet48Exit
 
     Write-Host "Reconciling live server after net10 server integration (handover/relaunch may leave orphan PIDs)..."
     $serverLog = Join-Path $logDir "server-day-out.log"
@@ -649,8 +664,7 @@ try {
         "--logger", "console;verbosity=detailed"
     )
     $hostTimerFailExit = Invoke-DotNetWithWatchdog -PhaseName "dotnet-test-net48-host-timer-fail" -ArgumentList $hostTimerFailArgs -PhaseCapMs (5 * 60 * 1000)
-    if ($hostTimerFailExit -ne 0 -and $script:FinalExitCode -eq 0) { $script:FinalExitCode = $hostTimerFailExit }
-    if ($hostTimerFailExit -eq 124) { throw "host timer heartbeat-fail watchdog" }
+    Assert-TestPhaseExit -PhaseName "dotnet-test-net48-host-timer-fail" -Exit $hostTimerFailExit
 
     $hostTimerFailExclude = @(
         "FullyQualifiedName!~host_boot_path_shows_no_server_response_when_heartbeats_fail",
@@ -701,7 +715,7 @@ try {
     Write-Host "GUARD_WPF_PHASE_BUDGET phase=dotnet-test-net48-guard-wpf-host-timers cap_ms=$guardHostTimerBudgetMs"
     $guardHostTimerExit = Invoke-DotNetWithWatchdog -PhaseName "dotnet-test-net48-guard-wpf-host-timers" -ArgumentList $guardHostTimerArgs -PhaseCapMs $guardHostTimerBudgetMs -DiagLogPath $guardHostTimerDiag
     Publish-ServerLeaseBuildEvidence -phaseName "dotnet-test-net48-guard-wpf-host-timers" -TrxPath (Join-Path $artifactDir "kiosk-windows-guard-host-timers.trx")
-    if ($guardHostTimerExit -ne 0 -and $script:FinalExitCode -eq 0) { $script:FinalExitCode = $guardHostTimerExit }
+    Assert-TestPhaseExit -PhaseName "dotnet-test-net48-guard-wpf-host-timers" -Exit $guardHostTimerExit
 
     $guardWpfServerArgs = @(
         "test", "tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj",
@@ -719,14 +733,7 @@ try {
     Publish-ServerLeaseBuildEvidence -phaseName "dotnet-test-net48-guard-wpf-wpf-server" -TrxPath (Join-Path $artifactDir "kiosk-windows-guard.trx")
     Assert-NightLineOnlyInNightPhase
     Write-CiPhaseFirewallProbe -label "after-dotnet-test-net48-guard-wpf"
-    if ($guardWpfServerExit -ne 0 -and $script:FinalExitCode -eq 0) { $script:FinalExitCode = $guardWpfServerExit }
-    if ($guardHostTimerExit -eq 124) { throw "guard-wpf host-timers watchdog" }
-    if ($guardWpfServerExit -eq 124) { throw "guard-wpf wpf-server watchdog" }
-
-    $guardTestExit = if ($guardHostTimerExit -ne 0) { $guardHostTimerExit } elseif ($guardWpfServerExit -ne 0) { $guardWpfServerExit } else { 0 }
-
-    if ($serverTestExit -ne 0) { $script:FinalExitCode = $serverTestExit }
-    if ($guardTestExit -ne 0 -and $script:FinalExitCode -eq 0) { $script:FinalExitCode = $guardTestExit }
+    Assert-TestPhaseExit -PhaseName "dotnet-test-net48-guard-wpf-wpf-server" -Exit $guardWpfServerExit
 
     Write-Host "Running PcSpecialBandLiveRateCardOracleTests (net10)..."
     $oracleFilter = "FullyQualifiedName~PcSpecialBandLiveRateCardOracleTests"
@@ -738,7 +745,7 @@ try {
         "--logger", "console;verbosity=detailed"
     )
     $oracleExit = Invoke-DotNetWithWatchdog -PhaseName "dotnet-test-pc-special-band-oracle" -ArgumentList $oracleArgs -PhaseCapMs (3 * 60 * 1000)
-    if ($oracleExit -ne 0 -and $script:FinalExitCode -eq 0) { $script:FinalExitCode = $oracleExit }
+    Assert-TestPhaseExit -PhaseName "dotnet-test-pc-special-band-oracle" -Exit $oracleExit
 
     Write-Host "Running PC internet off verification unit tests (Category=PcInternetFirewall, Core)..."
     $coreFwFilter = "Category=PcInternetFirewall&FullyQualifiedName~PcInternetFirewallOffVerificationTests"
@@ -750,7 +757,7 @@ try {
         "--logger", "console;verbosity=detailed"
     )
     $coreFwExit = Invoke-DotNetWithWatchdog -PhaseName "dotnet-test-pc-internet-firewall-core" -ArgumentList $coreFwArgs -PhaseCapMs (2 * 60 * 1000)
-    if ($coreFwExit -ne 0 -and $script:FinalExitCode -eq 0) { $script:FinalExitCode = $coreFwExit }
+    Assert-TestPhaseExit -PhaseName "dotnet-test-pc-internet-firewall-core" -Exit $coreFwExit
 
     Write-Host "Running PC internet firewall integration (Category=PcInternetFirewall)..."
     Write-CiPhaseFirewallProbe -label "before-dotnet-test-pc-internet-firewall"
@@ -767,7 +774,7 @@ try {
     $fwTestExit = Invoke-DotNetWithWatchdog -PhaseName "dotnet-test-pc-internet-firewall" -ArgumentList $fwTestArgs -PhaseCapMs (5 * 60 * 1000)
     Publish-ServerLeaseBuildEvidence -phaseName "dotnet-test-pc-internet-firewall" -TrxPath (Join-Path $artifactDir "kiosk-windows-pc-internet-firewall.trx")
     Write-CiPhaseFirewallProbe -label "after-dotnet-test-pc-internet-firewall"
-    if ($fwTestExit -ne 0 -and $script:FinalExitCode -eq 0) { $script:FinalExitCode = $fwTestExit }
+    Assert-TestPhaseExit -PhaseName "dotnet-test-pc-internet-firewall" -Exit $fwTestExit
 
     $wpfStabilityRuns = 0
     if ($env:WPF_STABILITY_RUNS -match '^\d+$') {

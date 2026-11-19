@@ -3,6 +3,7 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.IO.Pipes;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
@@ -176,6 +177,59 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
         finally
         {
             Environment.SetEnvironmentVariable("CHECKPOINT_INTERNET_PIPE_CONNECT_MS", priorConnect);
+        }
+    }
+
+    [Fact(Timeout = 30_000)]
+    public async Task internet_guard_client_write_timeout_when_server_accepts_but_never_reads()
+    {
+        RequireWindowsAdmin();
+        var priorIo = Environment.GetEnvironmentVariable("CHECKPOINT_INTERNET_PIPE_IO_MS");
+        Environment.SetEnvironmentVariable("CHECKPOINT_INTERNET_PIPE_IO_MS", "800");
+        NamedPipeServerStream acceptPipe = null;
+        Thread acceptThread = null;
+        var connected = new ManualResetEventSlim(false);
+        try
+        {
+            acceptThread = new Thread(() =>
+            {
+                acceptPipe = new NamedPipeServerStream(
+                    GuardInternetClient.PipeName,
+                    PipeDirection.InOut,
+                    1,
+                    PipeTransmissionMode.Byte,
+                    PipeOptions.Asynchronous);
+                acceptPipe.WaitForConnection();
+                connected.Set();
+                Thread.Sleep(Timeout.Infinite);
+            })
+            {
+                IsBackground = true,
+                Name = "StubNeverReadPipeServer",
+            };
+            acceptThread.Start();
+            Assert.True(connected.Wait(TimeSpan.FromSeconds(5)), "stub pipe never accepted");
+
+            var sw = Stopwatch.StartNew();
+            var ex = await Assert.ThrowsAsync<TimeoutException>(async () =>
+                await new GuardInternetClient().GetStatusAsync(default));
+            Assert.Equal(GuardInternetClientErrorCodes.IoTimeout, ex.Message);
+            Assert.True(sw.ElapsedMilliseconds < 5_000, $"write io wait was {sw.ElapsedMilliseconds}ms");
+            Console.WriteLine($"internet_guard_client_write_timeout elapsed_ms={sw.ElapsedMilliseconds}");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("CHECKPOINT_INTERNET_PIPE_IO_MS", priorIo);
+            try
+            {
+                acceptPipe?.Dispose();
+            }
+            catch
+            {
+                /* stub teardown */
+            }
+
+            acceptThread?.Join(TimeSpan.FromSeconds(2));
         }
     }
 

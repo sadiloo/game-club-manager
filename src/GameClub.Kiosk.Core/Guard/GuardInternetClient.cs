@@ -29,11 +29,14 @@ public sealed class GuardInternetClient
     {
         ObservabilityLogFormats.WriteGuardPipeStep(verb, "start");
         var sw = Stopwatch.StartNew();
+        NamedPipeClientStream? pipe = null;
         try
         {
             var connectMs = ResolveTimeoutMs("CHECKPOINT_INTERNET_PIPE_CONNECT_MS", DefaultConnectTimeoutMs);
             var ioMs = ResolveTimeoutMs("CHECKPOINT_INTERNET_PIPE_IO_MS", DefaultIoTimeoutMs);
-            using var pipe = new NamedPipeClientStream(".", PipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+            ObservabilityLogFormats.WriteGuardPipeSubStep(verb, $"config connect_ms={connectMs} io_ms={ioMs}");
+            pipe = new NamedPipeClientStream(".", PipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+            ObservabilityLogFormats.WriteGuardPipeSubStep(verb, "connect_begin");
 #if NET10_0_OR_GREATER
             using var connectCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             connectCts.CancelAfter(connectMs);
@@ -61,11 +64,18 @@ public sealed class GuardInternetClient
 
             await Task.CompletedTask;
 #endif
+            ObservabilityLogFormats.WriteGuardPipeSubStep(verb, "connect_ok");
             var req = Encoding.UTF8.GetBytes(requestJson);
+            ObservabilityLogFormats.WriteGuardPipeSubStep(verb, "write_begin");
             await WriteWithTimeoutAsync(pipe, req, 0, req.Length, ioMs, ct).ConfigureAwait(false);
+            ObservabilityLogFormats.WriteGuardPipeSubStep(verb, "write_ok");
+            ObservabilityLogFormats.WriteGuardPipeSubStep(verb, "flush_begin");
             await FlushWithTimeoutAsync(pipe, ioMs, ct).ConfigureAwait(false);
+            ObservabilityLogFormats.WriteGuardPipeSubStep(verb, "flush_ok");
             var buf = new byte[16_384];
+            ObservabilityLogFormats.WriteGuardPipeSubStep(verb, "read_begin");
             var read = await ReadWithTimeoutAsync(pipe, buf, 0, buf.Length, ioMs, ct).ConfigureAwait(false);
+            ObservabilityLogFormats.WriteGuardPipeSubStep(verb, "read_ok");
             var response = Encoding.UTF8.GetString(buf, 0, read);
             ObservabilityLogFormats.WriteGuardPipeStep(verb, "end", (int)sw.ElapsedMilliseconds, errorCode: "ok");
             return response;
@@ -73,8 +83,18 @@ public sealed class GuardInternetClient
         catch (Exception ex)
         {
             var code = GuardInternetClientErrorCodes.MapException(ex);
+            ObservabilityLogFormats.WriteGuardPipeSubStep(verb, $"error_{code}");
             ObservabilityLogFormats.WriteGuardPipeStep(verb, "end", (int)sw.ElapsedMilliseconds, errorCode: code);
             throw;
+        }
+        finally
+        {
+            if (pipe is not null)
+            {
+                ObservabilityLogFormats.WriteGuardPipeSubStep(verb, "dispose_begin");
+                pipe.Dispose();
+                ObservabilityLogFormats.WriteGuardPipeSubStep(verb, "dispose_ok");
+            }
         }
     }
 
@@ -92,6 +112,7 @@ public sealed class GuardInternetClient
         int timeoutMs,
         CancellationToken ct)
     {
+#if NET10_0_OR_GREATER
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeoutCts.CancelAfter(timeoutMs);
         try
@@ -102,10 +123,28 @@ public sealed class GuardInternetClient
         {
             throw new TimeoutException(GuardInternetClientErrorCodes.IoTimeout);
         }
+#else
+        var writeTask = Task.Factory.FromAsync(
+            pipe.BeginWrite,
+            pipe.EndWrite,
+            buffer,
+            offset,
+            count,
+            null);
+        var delayTask = Task.Delay(timeoutMs, ct);
+        var completed = await Task.WhenAny(writeTask, delayTask).ConfigureAwait(false);
+        if (completed != writeTask)
+        {
+            throw new TimeoutException(GuardInternetClientErrorCodes.IoTimeout);
+        }
+
+        await writeTask.ConfigureAwait(false);
+#endif
     }
 
     private static async Task FlushWithTimeoutAsync(Stream pipe, int timeoutMs, CancellationToken ct)
     {
+#if NET10_0_OR_GREATER
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeoutCts.CancelAfter(timeoutMs);
         try
@@ -116,6 +155,17 @@ public sealed class GuardInternetClient
         {
             throw new TimeoutException(GuardInternetClientErrorCodes.IoTimeout);
         }
+#else
+        var flushTask = Task.Run(() => pipe.Flush(), ct);
+        var delayTask = Task.Delay(timeoutMs, ct);
+        var completed = await Task.WhenAny(flushTask, delayTask).ConfigureAwait(false);
+        if (completed != flushTask)
+        {
+            throw new TimeoutException(GuardInternetClientErrorCodes.IoTimeout);
+        }
+
+        await flushTask.ConfigureAwait(false);
+#endif
     }
 
     private static async Task<int> ReadWithTimeoutAsync(
