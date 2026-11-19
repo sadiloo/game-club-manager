@@ -28,10 +28,18 @@ if ($runs -le 0) {
     exit 0
 }
 
+$batchIndex = 1
+$batchOffset = 0
+if ($env:WPF_STABILITY_BATCH -match '^\d+$') { $batchIndex = [int]$env:WPF_STABILITY_BATCH }
+if ($env:WPF_STABILITY_BATCH_OFFSET -match '^\d+$') { $batchOffset = [int]$env:WPF_STABILITY_BATCH_OFFSET }
+$failLate = $env:WPF_STABILITY_FAIL_LATE -eq '1'
+$probeV2 = $env:WPF_STABILITY_PROBE_V2 -eq '1'
+
 dotnet build tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj -c Release -f net10.0 --nologo
 dotnet build tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj -c Release -f net48 --nologo
+dotnet build src/GameClub.Kiosk/GameClub.Kiosk.csproj -c Release -f net48 --nologo
 
-Write-Host "Resetting live database before WPF stability runs..."
+Write-Host "Resetting live database before WPF stability runs (batch=$batchIndex)..."
 $resetExit = dotnet test tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj `
     -c Release -f net10.0 --no-build --nologo `
     --filter "Category=LiveDbResetHarness" `
@@ -47,12 +55,109 @@ if (-not (Test-Path $serverDll)) {
 }
 $serverLog = Join-Path $logDir "wpf-stability-server-out.log"
 $serverErr = Join-Path $logDir "wpf-stability-server-err.log"
+if ($batchIndex -gt 1) {
+    $serverLog = Join-Path $logDir ("wpf-stability-server-out-batch" + $batchIndex + ".log")
+    $serverErr = Join-Path $logDir ("wpf-stability-server-err-batch" + $batchIndex + ".log")
+}
 $serverProc = $null
 $exitCode = 0
+$failureCount = 0
+$summaryPath = Join-Path $logDir "wpf-stability-summary.log"
 
 function Stop-ServerTree([int]$processId) {
     & taskkill.exe /T /F /PID $processId 2>$null | Out-Null
     $global:LASTEXITCODE = 0
+}
+
+function Copy-KioskDiagnosticLogs([int]$RunNumber) {
+    $kioskLogDir = Join-Path $env:ProgramData "Checkpoint\kiosk"
+    if (Test-Path $kioskLogDir) {
+        Get-ChildItem -Path $kioskLogDir -Filter "*.log" -ErrorAction SilentlyContinue | ForEach-Object {
+            Copy-Item $_.FullName (Join-Path $logDir ("wpf-stability-" + $RunNumber + "-" + $_.Name)) -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+function Write-StabilitySummaryLine([string]$line) {
+    Add-Content -Path $summaryPath -Value $line -Encoding UTF8
+    Write-Host $line
+}
+
+function Write-ProbeFailureEvidence(
+    [int]$GlobalRun,
+    [string]$ServerOutLog,
+    [string]$ServerErrLog,
+    [string]$RunLog,
+    [string]$RunErr
+) {
+    $evidencePath = Join-Path $logDir ("wpf-stability-failure-evidence-" + $GlobalRun + ".log")
+  $utc = [datetime]::UtcNow.ToString("o")
+    $lines = New-Object System.Collections.Generic.List[string]
+    $append = { param($s) $lines.Add($s); Write-Host $s }
+    & $append "PROBE_V2_FAILURE_EVIDENCE utc=$utc global_run=$GlobalRun"
+
+    & $append "--- HB_ACK and lease lines (run log) ---"
+    if (Test-Path $RunLog) {
+        Select-String -Path $RunLog -Pattern 'HB_ACK|lease|lockedReason|STAB_STEP' -ErrorAction SilentlyContinue |
+            ForEach-Object { & $append $_.Line }
+    }
+    if (Test-Path $RunErr) {
+        Select-String -Path $RunErr -Pattern 'HB_ACK|lease|lockedReason|STAB_STEP' -ErrorAction SilentlyContinue |
+            ForEach-Object { & $append $_.Line }
+    }
+
+    & $append "--- full server stdout for this batch ---"
+    if (Test-Path $ServerOutLog) { Get-Content $ServerOutLog | ForEach-Object { & $append $_ } }
+    & $append "--- full server stderr for this batch ---"
+    if (Test-Path $ServerErrLog) { Get-Content $ServerErrLog | ForEach-Object { & $append $_ } }
+
+    & $append "--- /api/kiosk lines (server logs + run output) ---"
+    $kioskPatterns = @('/api/kiosk', 'POST /api/kiosk', 'GET /api/kiosk', 'kiosk.login', 'kiosk\.')
+    foreach ($path in @($ServerOutLog, $ServerErrLog, $RunLog, $RunErr)) {
+        if (-not (Test-Path $path)) { continue }
+        Select-String -Path $path -Pattern ($kioskPatterns -join '|') -ErrorAction SilentlyContinue |
+            ForEach-Object { & $append ("source=$([IO.Path]::GetFileName($path)) " + $_.Line) }
+    }
+    Get-ChildItem $logDir -Filter ("wpf-stability-" + $GlobalRun + "-*.log") -ErrorAction SilentlyContinue | ForEach-Object {
+        Select-String -Path $_.FullName -Pattern '/api/kiosk|HB_ACK|HTTP' -ErrorAction SilentlyContinue |
+            ForEach-Object { & $append ("source=$($_.Filename) " + $_.Line) }
+    }
+
+    $stationId = $null
+    foreach ($path in @($RunLog, $RunErr, $ServerOutLog)) {
+        if (-not (Test-Path $path)) { continue }
+        $m = Select-String -Path $path -Pattern 'PC-WPF-[0-9a-f]{8}' -AllMatches -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($m -and $m.Matches.Count -gt 0) {
+            $stationId = $m.Matches[0].Value
+            break
+        }
+    }
+
+    & $append "--- postgres sessions for station ---"
+    $psql = 'C:\Program Files\PostgreSQL\16\bin\psql.exe'
+    if ($stationId -and (Test-Path $psql)) {
+        & $append "stationId=$stationId"
+        $conn = $env:GAMECLUB_TEST_DATABASE
+        if ($conn -match 'Password=([^;]+)') { $env:PGPASSWORD = $Matches[1] }
+        $db = if ($conn -match 'Database=([^;]+)') { $Matches[1] } else { 'gameclub_test' }
+        $hostName = if ($conn -match 'Host=([^;]+)') { $Matches[1] } else { '127.0.0.1' }
+        $port = if ($conn -match 'Port=([^;]+)') { $Matches[1] } else { '5432' }
+        $user = if ($conn -match 'Username=([^;]+)') { $Matches[1] } else { 'postgres' }
+        $query = @"
+SELECT "Id", "StationId", "Status", "StartedAtUtc", "EndedAtUtc"
+FROM sessions
+WHERE "StationId" = '$stationId'
+ORDER BY "StartedAtUtc" DESC
+LIMIT 20;
+"@
+        $pgOut = & $psql -h $hostName -p $port -U $user -d $db -c $query 2>&1
+        ($pgOut | Out-String).Trim().Split("`n") | ForEach-Object { if ($_.Length -gt 0) { & $append $_ } }
+    } else {
+        & $append "(station id not found in logs or psql missing)"
+    }
+
+    $lines | Set-Content -Path $evidencePath -Encoding UTF8
+    & $append "--- evidence written to $evidencePath ---"
 }
 
 try {
@@ -75,29 +180,56 @@ try {
 
     $wpfFilter = 'FullyQualifiedName~wpf_remaining_time_matches_funded_session_within_one_tick'
     for ($run = 1; $run -le $runs; $run++) {
-        Write-Host "WPF stability run $run/$runs"
+        $globalRun = $batchOffset + $run
+        $stabMs = [long]([datetimeoffset]::UtcNow.ToUnixTimeMilliseconds())
+        Write-Host "STAB_STEP utc_ms=$stabMs step=run_begin batch=$batchIndex run=$run/$runs global=$globalRun"
+        Write-Host "WPF stability run $run/$runs (global $globalRun)"
         $env:WPF_STABILITY_LOGIN = "fund" + [guid]::NewGuid().ToString("N").Substring(0, 8)
+        $runLog = Join-Path $logDir ("wpf-stability-run-" + $globalRun + ".log")
+        $runErr = Join-Path $logDir ("wpf-stability-run-" + $globalRun + "-err.log")
+        if (Test-Path $runLog) { Remove-Item -Force $runLog }
+        if (Test-Path $runErr) { Remove-Item -Force $runErr }
         $wpfArgs = @(
             'test', 'tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj',
             '-c', 'Release', '-f', 'net48', '--no-build', '--nologo',
             '--filter', $wpfFilter,
             '--blame-hang', '--blame-hang-timeout', '3m'
         )
-        $wpfProc = Start-Process -FilePath 'dotnet' -ArgumentList $wpfArgs -PassThru -NoNewWindow -WorkingDirectory $repoRoot
+        $wpfProc = Start-Process -FilePath 'dotnet' -ArgumentList $wpfArgs -PassThru -NoNewWindow -WorkingDirectory $repoRoot `
+            -RedirectStandardOutput $runLog -RedirectStandardError $runErr
         $wpfDone = $wpfProc.WaitForExit(240000)
         if (-not $wpfDone) {
             Stop-ServerTree -processId $wpfProc.Id
-            throw "WPF stability run $run timed out after 240s"
+            $failureCount++
+            Write-StabilitySummaryLine "WPF_STABILITY_FAIL global=$globalRun reason=timeout"
+            Copy-KioskDiagnosticLogs -RunNumber $globalRun
+            if ($probeV2) { Write-ProbeFailureEvidence -GlobalRun $globalRun -ServerOutLog $serverLog -ServerErrLog $serverErr -RunLog $runLog -RunErr $runErr }
+            if (-not $failLate) { throw "WPF stability run $globalRun timed out after 240s" }
+            continue
         }
+        Copy-KioskDiagnosticLogs -RunNumber $globalRun
         if ($wpfProc.ExitCode -ne 0) {
-            throw "WPF stability run $run failed with exit $($wpfProc.ExitCode); see $serverErr"
+            $failureCount++
+            Write-StabilitySummaryLine "WPF_STABILITY_FAIL global=$globalRun exit=$($wpfProc.ExitCode) log=$runLog"
+            if ($probeV2) { Write-ProbeFailureEvidence -GlobalRun $globalRun -ServerOutLog $serverLog -ServerErrLog $serverErr -RunLog $runLog -RunErr $runErr }
+            if (-not $failLate) {
+                throw "WPF stability run $globalRun failed with exit $($wpfProc.ExitCode); see $serverErr and $runLog"
+            }
+            continue
         }
-        Write-Host "WPF_STABILITY_PROGRESS $run/$runs"
+        $stabEndMs = [long]([datetimeoffset]::UtcNow.ToUnixTimeMilliseconds())
+        Write-Host "STAB_STEP utc_ms=$stabEndMs step=run_end batch=$batchIndex run=$run/$runs global=$globalRun exit=0"
+        Write-StabilitySummaryLine "WPF_STABILITY_PASS global=$globalRun"
+        Write-Host "WPF_STABILITY_PROGRESS $globalRun"
     }
-    Write-Host "WPF_STABILITY_COMPLETED $runs/$runs"
+    Write-Host "WPF_STABILITY_BATCH_COMPLETED batch=$batchIndex runs=$runs failures=$failureCount"
+    if ($failLate -and $failureCount -gt 0) {
+        Write-StabilitySummaryLine "WPF_STABILITY_BATCH_FAIL batch=$batchIndex count=$failureCount"
+        $exitCode = 1
+    }
 } catch {
-  Write-Host "ci-integration-wpf-stability.ps1 error: $($_.Exception.Message)"
-  $exitCode = 1
+    Write-Host "ci-integration-wpf-stability.ps1 error: $($_.Exception.Message)"
+    $exitCode = 1
 } finally {
     if ($null -ne $serverProc -and -not $serverProc.HasExited) {
         Stop-ServerTree -processId $serverProc.Id
@@ -106,5 +238,5 @@ try {
 }
 
 if ($exitCode -ne 0) { exit $exitCode }
-Write-Host "ci-integration-wpf-stability.ps1 completed $runs/$runs runs."
+Write-Host "ci-integration-wpf-stability.ps1 completed batch=$batchIndex $runs/$runs runs."
 exit 0

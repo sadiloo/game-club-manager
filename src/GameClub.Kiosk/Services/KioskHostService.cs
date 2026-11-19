@@ -331,7 +331,7 @@ public sealed class KioskHostService : IAsyncDisposable
     private void OnHeartbeatAcknowledged(KioskHeartbeatAck ack)
     {
         _lastHeartbeatAckUtc = DateTime.UtcNow;
-        var phase = _orchestrator.OnHeartbeatAck(ack, _sessionId, _runtime.ClientMonotonicMs);
+        var phase = _orchestrator.OnHeartbeatAck(ack, _sessionId, _runtime.ClientMonotonicMs, _runtime.BoundSessionId);
         ApplyHeartbeatDisplay(ack.Display);
         _ = DrainOfflineQueueAsync();
         _shell.Dispatcher.Invoke(() =>

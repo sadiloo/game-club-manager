@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using GameClub.Kiosk.Core.Catalog;
 using GameClub.Kiosk.Core.Lease;
+using GameClub.Kiosk.Core.Observability;
 using GameClub.Kiosk.Core.Offline;
 using GameClub.Kiosk.Core.Protocol;
 using GameClub.Kiosk.Core.Security;
@@ -57,14 +58,22 @@ public sealed class KioskShellOrchestrator
     public bool TrySafeTestExit(string? configuredPassword, string attempt)
         => !FinalMode && TryUnlockAdmin(configuredPassword, attempt);
 
-    public KioskShellPhase OnHeartbeatAck(KioskHeartbeatAck ack, Guid sessionId, long clientMonotonicMs)
+    public KioskShellPhase OnHeartbeatAck(
+        KioskHeartbeatAck ack,
+        Guid sessionId,
+        long clientMonotonicMs,
+        Guid runtimeSessionId = default)
     {
+        var runtimeSid = runtimeSessionId == Guid.Empty ? sessionId : runtimeSessionId;
+        KioskShellPhase phase;
         if (ack.ManualSettle
             || string.Equals(ack.SessionStatus, "AwaitingPayment", StringComparison.OrdinalIgnoreCase)
             || string.Equals(ack.SessionStatus, "Ended", StringComparison.OrdinalIgnoreCase))
         {
             Phase = KioskShellPhase.Ended;
-            return Phase;
+            phase = Phase;
+            WriteHbAckLine(ack, sessionId, runtimeSid, phase);
+            return phase;
         }
 
         if (string.Equals(ack.SessionStatus, "Open", StringComparison.OrdinalIgnoreCase) && sessionId != Guid.Empty)
@@ -74,24 +83,65 @@ public sealed class KioskShellOrchestrator
                 && leaseSession != sessionId)
             {
                 Phase = KioskShellPhase.Locked;
-                return Phase;
+                phase = Phase;
+                WriteHbAckLine(ack, sessionId, runtimeSid, phase);
+                return phase;
             }
 
             if (!VerifyLease(ack.Lease))
             {
                 Phase = KioskShellPhase.LeaseExpired;
-                return Phase;
+                phase = Phase;
+                WriteHbAckLine(ack, sessionId, runtimeSid, phase);
+                return phase;
             }
 
             _boundSessionId = sessionId;
             _lastLease = ack.Lease;
             Phase = KioskShellPhase.Playing;
             EnqueuePoweredSegment(sessionId, clientMonotonicMs);
-            return Phase;
+            phase = Phase;
+            WriteHbAckLine(ack, sessionId, runtimeSid, phase);
+            return phase;
         }
 
         Phase = KioskShellPhase.Locked;
-        return Phase;
+        phase = Phase;
+        WriteHbAckLine(ack, sessionId, runtimeSid, phase);
+        return phase;
+    }
+
+    private void WriteHbAckLine(KioskHeartbeatAck ack, Guid hostSessionId, Guid runtimeSessionId, KioskShellPhase phase)
+    {
+        var (leaseOk, leaseDetail) = DescribeLeaseVerify(ack.Lease);
+        var (verifyLabel, lockedReason) = ObservabilityLogFormats.DescribeLeaseAndLock(
+            ack, hostSessionId, phase, leaseOk, leaseDetail);
+        ObservabilityLogFormats.WriteHbAck(ack, hostSessionId, runtimeSessionId, phase, verifyLabel, lockedReason);
+    }
+
+    private (bool Ok, string Detail) DescribeLeaseVerify(SignedSessionLease? lease)
+    {
+        if (_leaseVerifier is null)
+        {
+            return (false, "no_verifier");
+        }
+
+        if (lease is null)
+        {
+            return (false, "null_lease");
+        }
+
+        if (!_leaseVerifier.TryVerify(lease))
+        {
+            return (false, "sig_fail");
+        }
+
+        if (lease.Payload.AuthorizedUntilUtc < DateTime.UtcNow)
+        {
+            return (false, "expired");
+        }
+
+        return (true, "ok");
     }
 
     public KioskShellPhase TickLease(Guid sessionId, long clientMonotonicMs, DateTime nowUtc, bool transportDown = false)
