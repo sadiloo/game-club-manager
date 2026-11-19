@@ -18,6 +18,8 @@ $cancelFile = Join-Path $logDir "deadman.cancel"
 
 $script:GlobalDeadline = (Get-Date).AddMinutes(16)
 $script:FinalExitCode = 0
+$script:NightLineVstestPhases = @{}
+$nightLineToken = "wpf_remaining_time_matches_funded_session_special_band_night_line"
 
 function Write-PhaseLog([string]$message) {
     $line = "{0:u}  {1}" -f (Get-Date), $message
@@ -234,12 +236,62 @@ function Write-VstestPhaseList([string]$phaseName, [string]$framework, [string]$
     $listOut = & dotnet @listArgs 2>&1
     $names = @($listOut | Where-Object { $_ -match '^\s+GameClub\.Kiosk\.Windows\.IntegrationTests\.' })
     Write-PhaseLog "VSTEST_LIST phase=$phaseName framework=$framework count=$($names.Count) filter=$filterExpr"
+  $hasNightLine = $false
     foreach ($name in $names) {
         $trim = $name.Trim()
         Write-PhaseLog "VSTEST_LIST_TEST phase=$phaseName $trim"
         Write-Host "VSTEST_LIST_TEST phase=$phaseName $trim"
+    if ($trim -like "*${nightLineToken}*") {
+            $hasNightLine = $true
+        }
+    }
+  if ($hasNightLine) {
+        $script:NightLineVstestPhases[$phaseName] = $true
     }
     return $names
+}
+
+function Publish-ServerLeaseBuildEvidence([string]$phaseName, [string]$TrxPath) {
+    $logPaths = @(
+        (Join-Path $logDir "server-day-out.log"),
+        (Join-Path $logDir "server-night-out.log"),
+        (Join-Path $logDir "server-day-err.log"),
+        (Join-Path $logDir "server-night-err.log")
+    )
+    foreach ($logPath in $logPaths) {
+        if (-not (Test-Path $logPath)) { continue }
+        $dest = Join-Path $artifactDir ([IO.Path]::GetFileName($logPath))
+        Copy-Item -Path $logPath -Destination $dest -Force
+        $lines = @(Select-String -Path $logPath -Pattern '^LEASE_BUILD\b' -ErrorAction SilentlyContinue)
+        foreach ($line in $lines) {
+            Write-PhaseLog "LEASE_BUILD phase=$phaseName sourceLog=$([IO.Path]::GetFileName($logPath)) $($line.Line)"
+            Write-Host $line.Line
+        }
+    }
+
+    if ($phaseName -ne 'dotnet-test-net10-server') { return }
+    if (-not (Test-Path $TrxPath)) { return }
+    [xml]$trx = Get-Content $TrxPath
+    $ranReconnect = @($trx.TestRun.Results.UnitTestResult | Where-Object { $_.testName -like '*live_server_kiosk_reconnects_when_server_unreachable_at_start*' })
+    if ($ranReconnect.Count -eq 0) { return }
+    $dayLog = Join-Path $logDir "server-day-out.log"
+    if (-not (Test-Path $dayLog)) { throw 'LEASE_BUILD missing (server-day-out.log not found)' }
+    $leaseLines = @(Select-String -Path $dayLog -Pattern '^LEASE_BUILD\b' -ErrorAction SilentlyContinue)
+    if ($leaseLines.Count -eq 0) {
+        throw 'LEASE_BUILD missing'
+    }
+}
+
+function Assert-NightLineOnlyInNightPhase {
+    $allowed = @('dotnet-test-net48-wpf-night')
+    foreach ($phase in $script:NightLineVstestPhases.Keys) {
+        if ($allowed -notcontains $phase) {
+            throw "night_line test must not appear in phase $phase"
+        }
+    }
+    if (-not $script:NightLineVstestPhases.ContainsKey('dotnet-test-net48-wpf-night')) {
+        throw "night_line test missing from dotnet-test-net48-wpf-night phase list"
+    }
 }
 
 function Invoke-DotNetWithWatchdog {
@@ -489,6 +541,7 @@ try {
 )
     $serverDiag = Join-Path $logDir "vstest-diag-dotnet-test-net10-server.log"
     $serverTestExit = Invoke-DotNetWithWatchdog -PhaseName "dotnet-test-net10-server" -ArgumentList $serverTestArgs -PhaseCapMs (10 * 60 * 1000) -DiagLogPath $serverDiag
+    Publish-ServerLeaseBuildEvidence -phaseName "dotnet-test-net10-server" -TrxPath (Join-Path $artifactDir "kiosk-windows-server.trx")
     Write-CiPhaseFirewallProbe -label "after-dotnet-test-net10-server"
     if ($serverTestExit -eq 124) { throw "server test watchdog" }
 
@@ -504,6 +557,7 @@ try {
         "--logger", "console;verbosity=detailed"
     )
     $liveNet48Exit = Invoke-DotNetWithWatchdog -PhaseName "dotnet-test-net48-live-checkpoint" -ArgumentList $liveNet48Args -PhaseCapMs (6 * 60 * 1000)
+    Publish-ServerLeaseBuildEvidence -phaseName "dotnet-test-net48-live-checkpoint" -TrxPath (Join-Path $artifactDir "kiosk-windows-live-checkpoint-net48.trx")
     if ($liveNet48Exit -ne 0 -and $script:FinalExitCode -eq 0) { $script:FinalExitCode = $liveNet48Exit }
     if ($liveNet48Exit -eq 124) { throw "live checkpoint net48 watchdog" }
 
@@ -528,12 +582,13 @@ try {
         "--logger", "console;verbosity=detailed"
     )
     $nightWpfExit = Invoke-DotNetWithWatchdog -PhaseName "dotnet-test-net48-wpf-night" -ArgumentList $nightWpfArgs -PhaseCapMs (5 * 60 * 1000)
+    Publish-ServerLeaseBuildEvidence -phaseName "dotnet-test-net48-wpf-night" -TrxPath ""
     if ($nightWpfExit -ne 0) { $script:FinalExitCode = $nightWpfExit; throw "night WPF test failed" }
     $env:CHECKPOINT_SERVER_PC_BAND = $null
     Set-CiServerPcBandArgs -Mode day
     Start-CiGameClubTestHost -ServerDll $serverDll -BandArgs $script:ServerPcBandArgs -StdoutLog $serverLog -StderrLog $serverErr -ExpectedBand day -PhaseLabel "day-post-night-wpf"
 
-    $guardWpfFilter = "(Category=WindowsWpf)|(Category=WindowsServer&Category!=LiveCheckpointServer&FullyQualifiedName!~wpf_remaining_time_matches_funded_session_special_band_night_line)"
+    $guardWpfFilter = "(Category=WindowsWpf&FullyQualifiedName!~wpf_remaining_time_matches_funded_session_special_band_night_line)|(Category=WindowsServer&Category!=LiveCheckpointServer&FullyQualifiedName!~wpf_remaining_time_matches_funded_session_special_band_night_line)"
     Write-VstestPhaseList -phaseName "dotnet-test-net48-guard-wpf" -framework "net48" -filterExpr $guardWpfFilter | Out-Null
     $guardTestArgs = @(
         "test", "tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj",
@@ -546,6 +601,8 @@ try {
     )
     $guardDiag = Join-Path $logDir "vstest-diag-dotnet-test-net48-guard-wpf.log"
     $guardTestExit = Invoke-DotNetWithWatchdog -PhaseName "dotnet-test-net48-guard-wpf" -ArgumentList $guardTestArgs -PhaseCapMs (8 * 60 * 1000) -DiagLogPath $guardDiag
+    Publish-ServerLeaseBuildEvidence -phaseName "dotnet-test-net48-guard-wpf" -TrxPath (Join-Path $artifactDir "kiosk-windows-guard.trx")
+    Assert-NightLineOnlyInNightPhase
     Write-CiPhaseFirewallProbe -label "after-dotnet-test-net48-guard-wpf"
     if ($guardTestExit -eq 124) { throw "guard test watchdog" }
 
@@ -565,6 +622,7 @@ try {
         "--logger", "console;verbosity=detailed"
     )
     $fwTestExit = Invoke-DotNetWithWatchdog -PhaseName "dotnet-test-pc-internet-firewall" -ArgumentList $fwTestArgs -PhaseCapMs (5 * 60 * 1000)
+    Publish-ServerLeaseBuildEvidence -phaseName "dotnet-test-pc-internet-firewall" -TrxPath (Join-Path $artifactDir "kiosk-windows-pc-internet-firewall.trx")
     Write-CiPhaseFirewallProbe -label "after-dotnet-test-pc-internet-firewall"
     if ($fwTestExit -ne 0 -and $script:FinalExitCode -eq 0) { $script:FinalExitCode = $fwTestExit }
 

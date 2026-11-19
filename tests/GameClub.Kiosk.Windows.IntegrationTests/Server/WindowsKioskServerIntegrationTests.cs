@@ -9,6 +9,7 @@ using GameClub.Kiosk.Core.Offline;
 using GameClub.Kiosk.Core.Protocol;
 using GameClub.Kiosk.Core.Runtime;
 using GameClub.Server.Kiosk;
+using GameClub.Server.Testing;
 using GameClub.Server.Tests;
 
 namespace GameClub.Kiosk.Windows.IntegrationTests.Server;
@@ -549,10 +550,20 @@ public sealed class WindowsKioskServerIntegrationTests
     {
         OutOfProcessLiveServer? ownedServer = null;
         var priorCheckpointUrl = Environment.GetEnvironmentVariable("CHECKPOINT_SERVER_URL");
+        const int g2ExpectedRunMinutes = 25;
+        var g2RunStartUtc = DateTime.UtcNow;
+        var g2HarnessBand = PcSpecialBandHarnessSchedule.BandAwayFromUtcWindow(
+            g2RunStartUtc,
+            g2RunStartUtc.AddMinutes(g2ExpectedRunMinutes),
+            TimeSpan.FromHours(3));
+        var g2HostArgs = PcSpecialBandHarnessEnv.HostArgsFromBand(g2HarnessBand);
         try
         {
-            ownedServer = await OutOfProcessLiveServer.StartNewAsync();
+            ownedServer = await OutOfProcessLiveServer.StartNewAsync(g2HostArgs);
             Environment.SetEnvironmentVariable("CHECKPOINT_SERVER_URL", ownedServer.BaseUrl);
+            Console.WriteLine(
+                $"G2_HARNESS_BAND start={g2HarnessBand.Start.Hour:00}:{g2HarnessBand.Start.Minute:00} "
+                + $"end={g2HarnessBand.End.Hour:00}:{g2HarnessBand.End.Minute:00} hostArgs={g2HostArgs}");
             var backend = KioskIntegrationBackend.CreateForBaseUrl(ownedServer.BaseUrl);
             await backend.ResetAsync();
             await backend.ConfigurePcNormalOfflineRate40KForG2Async();
@@ -601,7 +612,7 @@ public sealed class WindowsKioskServerIntegrationTests
             }, leaseCts.Token);
             await runtime.StartAsync(default);
             await WaitUntilTransportConnectedAsync(runtime, TimeSpan.FromSeconds(60));
-            AssertG2HarnessDayBandPutsSessionInOnlineDay();
+            AssertG2HarnessDayBandPutsSessionInOnlineDay(g2HarnessBand);
             var poweredSpanStartUtc = DateTime.UtcNow;
             await Task.Delay(TimeSpan.FromMinutes(6));
 
@@ -619,7 +630,7 @@ public sealed class WindowsKioskServerIntegrationTests
             Assert.True(afterOutage2 > afterOutage1, "outage 2 must enqueue offline_play_segment evidence");
 
             var poweredSpanEndUtc = DateTime.UtcNow;
-            AssertG2PoweredSpanStaysInOnlineDayBand(poweredSpanStartUtc, poweredSpanEndUtc);
+            AssertG2PoweredSpanStaysInOnlineDayBand(poweredSpanStartUtc, poweredSpanEndUtc, g2HarnessBand);
             var poweredSpanSeconds = (poweredSpanEndUtc - poweredSpanStartUtc).TotalSeconds;
             var secondsPastMinute = poweredSpanSeconds % 60;
             var marginToNearestMinute = Math.Min(secondsPastMinute, secondsPastMinute == 0 ? 60 : 60 - secondsPastMinute);
@@ -685,9 +696,9 @@ public sealed class WindowsKioskServerIntegrationTests
         }
     }
 
-    private static void AssertG2HarnessDayBandPutsSessionInOnlineDay()
+    private static void AssertG2HarnessDayBandPutsSessionInOnlineDay((TimeOfDay Start, TimeOfDay End) harnessBand)
     {
-        var (start, end) = GameClub.Server.Testing.PcSpecialBandHarnessSchedule.DayBandAwayFromNow(TimeSpan.FromHours(3));
+        var (start, end) = harnessBand;
         var now = TehranTime.FromUtc(DateTime.UtcNow);
         if (IsInsideHarnessSpecialBand(now, start, end))
         {
@@ -696,9 +707,12 @@ public sealed class WindowsKioskServerIntegrationTests
         }
     }
 
-    private static void AssertG2PoweredSpanStaysInOnlineDayBand(DateTime spanStartUtc, DateTime spanEndUtc)
+    private static void AssertG2PoweredSpanStaysInOnlineDayBand(
+        DateTime spanStartUtc,
+        DateTime spanEndUtc,
+        (TimeOfDay Start, TimeOfDay End) harnessBand)
     {
-        var (start, end) = GameClub.Server.Testing.PcSpecialBandHarnessSchedule.DayBandAwayFromNow(TimeSpan.FromHours(3));
+        var (start, end) = harnessBand;
         var startTehran = TehranTime.FromUtc(spanStartUtc);
         var endTehran = TehranTime.FromUtc(spanEndUtc);
         if (IsInsideHarnessSpecialBand(startTehran, start, end) || IsInsideHarnessSpecialBand(endTehran, start, end))

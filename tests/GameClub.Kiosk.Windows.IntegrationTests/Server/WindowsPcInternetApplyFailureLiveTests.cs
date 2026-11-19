@@ -2,9 +2,11 @@
 #nullable disable
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
+using System.Net.Sockets;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -32,6 +34,8 @@ public sealed class WindowsPcInternetApplyFailureLiveTests
             IntegrationTestCi.FailIfActive("CHECKPOINT_SERVER_URL must be set in CI for live_server_pc_internet_guard_forced_apply_failure.");
             return;
         }
+
+        LiveDatabaseResetInvoker.ResetViaHarnessTest();
 
         var apiKey = Environment.GetEnvironmentVariable("GAMECLUB_API_KEY") ?? "ci-test-key";
         KioskRuntime runtime = null;
@@ -141,20 +145,22 @@ public sealed class WindowsPcInternetApplyFailureLiveTests
             runtime.Configure(new Uri(serverUrl.TrimEnd('/') + "/hubs/kiosk"), deviceId, deviceKey, stationId, queuePath, legacyWindows: true);
             runtime.BindSession(sessionId);
             await runtime.StartAsync(default);
-            await Task.Delay(2_000);
 
+            var rv = await WaitForStationRowVersionAsync(op, stationId, sessionId, TimeSpan.FromSeconds(60));
             var pressAt = DateTime.UtcNow;
-            var rv = await ReadStationRowVersionAsync(op, stationId);
-            var toggle = await op.PostAsJsonAsync(
-                $"/api/operator/sessions/{sessionId}/internet",
-                new { on = false, expectedVersion = rv, commandId = Guid.NewGuid() });
+            var togglePayload = new { on = false, expectedVersion = rv, commandId = Guid.NewGuid() };
+            Console.WriteLine(
+                $"LIVE_INTERNET_OFF_TOGGLE request stationId={stationId} sessionId={sessionId} body={JsonSerializer.Serialize(togglePayload)}");
+            var toggle = await op.PostAsJsonAsync($"/api/operator/sessions/{sessionId}/internet", togglePayload);
+            var toggleBody = await toggle.Content.ReadAsStringAsync();
+            Console.WriteLine(
+                $"LIVE_INTERNET_OFF_TOGGLE response status={(int)toggle.StatusCode} body={toggleBody}");
             if (toggle.StatusCode == System.Net.HttpStatusCode.Conflict)
             {
-                rv = await ReadStationRowVersionAsync(op, stationId);
-                toggle = await op.PostAsJsonAsync(
-                    $"/api/operator/sessions/{sessionId}/internet",
-                    new { on = false, expectedVersion = rv, commandId = Guid.NewGuid() });
+                Console.WriteLine("LIVE_INTERNET_OFF_TOGGLE finding=409_conflict_after_login_complete rowVersion=" + rv);
             }
+
+            WriteLiveInternetOffSnapshot(1, op, stationId, sessionId, runtime, queuePath);
 
             toggle.EnsureSuccessStatusCode();
 
@@ -189,6 +195,8 @@ public sealed class WindowsPcInternetApplyFailureLiveTests
                 await Task.Delay(1_000);
             }
 
+            WriteLiveInternetOffSnapshot(2, op, stationId, sessionId, runtime, queuePath);
+
             Assert.Contains("apply_failed", internetError ?? string.Empty, StringComparison.OrdinalIgnoreCase);
 
             using var conn = new NpgsqlConnection(
@@ -212,7 +220,7 @@ public sealed class WindowsPcInternetApplyFailureLiveTests
             }
 
             Assert.Equal("Offline", modes[modes.Count - 1]);
-            Assert.True(starts[starts.Count - 1].ToUniversalTime() >= pressAt.AddSeconds(-8), "Offline segment must start at toggle press.");
+            Assert.True(starts[modes.Count - 1].ToUniversalTime() >= pressAt.AddSeconds(-8), "Offline segment must start at toggle press.");
             Console.WriteLine(
                 $"L17_CI internetError={internetError} offlineAtPressUtc={starts[starts.Count - 1].ToUniversalTime():o} pressAtUtc={pressAt:o}");
         }
@@ -227,19 +235,170 @@ public sealed class WindowsPcInternetApplyFailureLiveTests
         }
     }
 
-    private static async Task<uint> ReadStationRowVersionAsync(HttpClient op, string stationId)
+    private static async Task<uint> WaitForStationRowVersionAsync(
+        HttpClient op,
+        string stationId,
+        Guid sessionId,
+        TimeSpan timeout)
     {
-        var gridText = await op.GetStringAsync("/api/operator/grid");
-        using var grid = JsonDocument.Parse(gridText);
-        foreach (var tile in grid.RootElement.EnumerateArray())
+        var deadline = DateTime.UtcNow.Add(timeout);
+        while (DateTime.UtcNow < deadline)
         {
-            if (tile.GetProperty("id").GetString() == stationId)
+            var gridText = await op.GetStringAsync("/api/operator/grid");
+            using var grid = JsonDocument.Parse(gridText);
+            foreach (var tile in grid.RootElement.EnumerateArray())
             {
-                return tile.GetProperty("rowVersion").GetUInt32();
+                if (tile.GetProperty("id").GetString() != stationId)
+                {
+                    continue;
+                }
+
+                if (!tile.TryGetProperty("sessionId", out var sid) || sid.GetGuid() != sessionId)
+                {
+                    continue;
+                }
+
+                if (tile.TryGetProperty("rowVersion", out var rvProp))
+                {
+                    return rvProp.GetUInt32();
+                }
             }
+
+            await Task.Delay(250);
         }
 
-        throw new InvalidOperationException($"station {stationId} missing from operator grid");
+        throw new InvalidOperationException($"station {stationId} with session {sessionId} missing from operator grid");
+    }
+
+    private static void WriteLiveInternetOffSnapshot(
+        int snap,
+        HttpClient op,
+        string stationId,
+        Guid sessionId,
+        KioskRuntime runtime,
+        string queuePath)
+    {
+        try
+        {
+            var segmentLine = "segments=unavailable";
+            var queueLine = "kioskQueuePending=unknown";
+            var serverRow = "internetState=unavailable";
+
+            using (var conn = new NpgsqlConnection(
+                       Environment.GetEnvironmentVariable("GAMECLUB_TEST_DATABASE")
+                       ?? Environment.GetEnvironmentVariable("GAMECLUB_DATABASE")))
+            {
+                conn.Open();
+                using (var seg = new NpgsqlCommand(
+                           """SELECT "Mode", "StartUtc" FROM play_segments WHERE "SessionId" = @id ORDER BY "StartUtc" """,
+                           conn))
+                {
+                    seg.Parameters.AddWithValue("id", sessionId);
+                    var parts = new List<string>();
+                    using var reader = seg.ExecuteReader();
+                    while (reader.Read())
+                    {
+                        parts.Add($"{reader.GetString(0)}@{reader.GetDateTime(1):o}");
+                    }
+
+                    segmentLine = "segments=" + string.Join("|", parts);
+                }
+
+                using (var inet = new NpgsqlCommand(
+                           """
+                           SELECT "DesiredOn", "DesiredVersion", "AppliedOn", "AppliedVersion", "LastError"
+                           FROM station_internet_state WHERE "StationId" = @id
+                           """,
+                           conn))
+                {
+                    inet.Parameters.AddWithValue("id", stationId);
+                    using var reader = inet.ExecuteReader();
+                    if (reader.Read())
+                    {
+                        serverRow =
+                            $"internetState desiredOn={reader.GetBoolean(0)} desiredVer={reader.GetInt64(1)} "
+                            + $"appliedOn={(reader.IsDBNull(2) ? "null" : reader.GetBoolean(2).ToString())} "
+                            + $"appliedVer={(reader.IsDBNull(3) ? "null" : reader.GetInt64(3).ToString())} "
+                            + $"lastError={(reader.IsDBNull(4) ? "" : reader.GetString(4))}";
+                    }
+                }
+            }
+
+            if (runtime is not null)
+            {
+                var pending = runtime.GetQueue().PendingAsync().GetAwaiter().GetResult().Count;
+                queueLine = $"kioskQueuePending={pending}";
+            }
+
+            var guardProcs = Process.GetProcessesByName("GameClub.Kiosk.Guard");
+            var guardSvc = Process.GetProcessesByName("CheckpointGuard");
+            var guardRunning = guardProcs.Length + guardSvc.Length;
+            var pipeAlive = Process.GetProcessesByName("testhost").Length;
+
+            var statePresent = File.Exists(InternetGuardPaths.StatePath);
+            var statePayload = statePresent ? File.ReadAllText(InternetGuardPaths.StatePath) : "";
+            var guardLogTail = ReadTail(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "Checkpoint", "guard", "watchdog.log"), 8);
+            var ruleCount = ReadGuardRuleCount();
+            var egress = ProbeEgress("1.1.1.1", 443);
+
+            Console.WriteLine(
+                $"LIVE_INTERNET_OFF_SNAPSHOT snap={snap} stationId={stationId} sessionId={sessionId} "
+                + $"{segmentLine} {serverRow} {queueLine} harnessPipeRunning={pipeAlive > 0} "
+                + $"guardProcesses={guardRunning} guardRuleCount={ruleCount} internetStatePath={InternetGuardPaths.StatePath} "
+                + $"internetStatePresent={statePresent} internetStatePayload={statePayload} guardLogTail={guardLogTail} "
+                + $"egressProbe_1.1.1.1_443_blocked={egress}");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"LIVE_INTERNET_OFF_SNAPSHOT snap={snap} stationId={stationId} error={ex.Message}");
+        }
+    }
+
+    private static string ReadTail(string path, int maxLines)
+    {
+        if (!File.Exists(path))
+        {
+            return "";
+        }
+
+        var lines = File.ReadAllLines(path);
+        return string.Join(" | ", lines.Skip(Math.Max(0, lines.Length - maxLines)));
+    }
+
+    private static int ReadGuardRuleCount()
+    {
+        try
+        {
+            var script =
+                "(Get-NetFirewallRule -PolicyStore localhost -Group 'Checkpoint Internet Off' -ErrorAction SilentlyContinue | Measure-Object).Count";
+            var psi = new ProcessStartInfo("powershell", "-NoProfile -Command " + script)
+            {
+                RedirectStandardOutput = true,
+                UseShellExecute = false,
+            };
+            using var p = Process.Start(psi);
+            var text = p.StandardOutput.ReadToEnd().Trim();
+            p.WaitForExit(10_000);
+            return int.TryParse(text, out var count) ? count : -1;
+        }
+        catch
+        {
+            return -1;
+        }
+    }
+
+    private static bool ProbeEgress(string host, int port)
+    {
+        try
+        {
+            using var tcp = new TcpClient();
+            var task = tcp.ConnectAsync(host, port);
+            return !(task.Wait(2_000) && tcp.Connected);
+        }
+        catch
+        {
+            return true;
+        }
     }
 }
 #endif

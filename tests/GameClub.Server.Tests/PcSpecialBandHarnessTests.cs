@@ -45,6 +45,25 @@ public sealed class PcSpecialBandHarnessTests(GameClubWebApplicationFactory fact
     }
 
     [Fact]
+    public void g2_harness_band_stays_at_least_three_hours_from_declared_run_window()
+    {
+        var startUtc = DateTime.UtcNow;
+        var endUtc = startUtc.AddMinutes(25);
+        var band = PcSpecialBandHarnessSchedule.BandAwayFromUtcWindow(startUtc, endUtc, TimeSpan.FromHours(3));
+        for (var probe = startUtc; probe <= endUtc; probe = probe.AddMinutes(10))
+        {
+            var local = TehranTime.FromUtc(probe);
+            var minute = (local.Hour * 60) + local.Minute;
+            var startMinute = (band.Start.Hour * 60) + band.Start.Minute;
+            var endMinute = (band.End.Hour * 60) + band.End.Minute;
+            var inside = startMinute <= endMinute
+                ? minute >= startMinute && minute < endMinute
+                : minute >= startMinute || minute < endMinute;
+            Assert.False(inside, $"Harness special band must not overlap G2 run window at {local:HH:mm} Tehran.");
+        }
+    }
+
+    [Fact]
     public async Task harness_pc_band_override_applies_when_enabled_in_test_host()
     {
         var local = new GameClubWebApplicationFactory

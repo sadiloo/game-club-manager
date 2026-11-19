@@ -7,14 +7,43 @@ public static class PcSpecialBandHarnessSchedule
 {
     public static (TimeOfDay Start, TimeOfDay End) DayBandAwayFromNow(TimeSpan minimumMargin)
     {
-        _ = minimumMargin;
-        var now = TehranTime.FromUtc(DateTime.UtcNow);
-        var minuteOfDay = (now.Hour * 60) + now.Minute;
-        var center = (minuteOfDay + (12 * 60)) % (24 * 60);
-        var startMin = (center - 15 + (24 * 60)) % (24 * 60);
-        var endMin = (center + 15) % (24 * 60);
-        return (MinuteOfDayToTime(startMin), MinuteOfDayToTime(endMin));
+        var startUtc = DateTime.UtcNow;
+        var endUtc = startUtc + minimumMargin;
+        return BandAwayFromUtcWindow(startUtc, endUtc, minimumMargin);
     }
+
+    /// <summary>Place a 30-minute special band at least <paramref name="margin"/> away from the whole UTC window (G2 oracle).</summary>
+    public static (TimeOfDay Start, TimeOfDay End) BandAwayFromUtcWindow(DateTime windowStartUtc, DateTime windowEndUtc, TimeSpan margin)
+    {
+        if (windowEndUtc < windowStartUtc)
+        {
+            (windowStartUtc, windowEndUtc) = (windowEndUtc, windowStartUtc);
+        }
+
+        var expandedStart = windowStartUtc - margin;
+        var expandedEnd = windowEndUtc + margin;
+        var centerTehran = TehranTime.FromUtc(windowStartUtc + TimeSpan.FromTicks((windowEndUtc - windowStartUtc).Ticks / 2));
+        var centerMin = (centerTehran.Hour * 60) + centerTehran.Minute;
+
+        for (var attempt = 0; attempt < 8; attempt++)
+        {
+            var offset = attempt * (3 * 60);
+            var bandCenter = (centerMin + (12 * 60) + offset) % (24 * 60);
+            var bandStart = (bandCenter - 15 + (24 * 60)) % (24 * 60);
+            var bandEnd = (bandCenter + 15) % (24 * 60);
+            var band = (MinuteOfDayToTime(bandStart), MinuteOfDayToTime(bandEnd));
+            if (!HarnessSpecialBandIntersectsUtcWindow(band.Item1, band.Item2, expandedStart, expandedEnd))
+            {
+                return band;
+            }
+        }
+
+        throw new InvalidOperationException(
+            $"Could not place harness special band {margin.TotalHours:F0}h away from window {windowStartUtc:o}–{windowEndUtc:o}.");
+    }
+
+    public static PcSpecialBandHarnessOptions OptionsForG2Oracle(TimeSpan expectedRunDuration)
+        => ToOptions(BandAwayFromUtcWindow(DateTime.UtcNow, DateTime.UtcNow + expectedRunDuration, TimeSpan.FromHours(3)));
 
     public static (TimeOfDay Start, TimeOfDay End) NightBandCoveringNow()
     {
@@ -50,5 +79,33 @@ public static class PcSpecialBandHarnessSchedule
         var h = minuteOfDay / 60;
         var m = minuteOfDay % 60;
         return new TimeOfDay(h, m);
+    }
+
+    private static bool HarnessSpecialBandIntersectsUtcWindow(
+        TimeOfDay bandStart,
+        TimeOfDay bandEnd,
+        DateTime expandedStartUtc,
+        DateTime expandedEndUtc)
+    {
+        for (var utc = expandedStartUtc; utc <= expandedEndUtc; utc = utc.AddMinutes(15))
+        {
+            var local = TehranTime.FromUtc(utc);
+            if (IsInsideHarnessSpecialBand(local, bandStart, bandEnd))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsInsideHarnessSpecialBand(DateTimeOffset tehranLocal, TimeOfDay bandStart, TimeOfDay bandEnd)
+    {
+        var minuteOfDay = (tehranLocal.Hour * 60) + tehranLocal.Minute;
+        var startMinute = (bandStart.Hour * 60) + bandStart.Minute;
+        var endMinute = (bandEnd.Hour * 60) + bandEnd.Minute;
+        return startMinute <= endMinute
+            ? minuteOfDay >= startMinute && minuteOfDay < endMinute
+            : minuteOfDay >= startMinute || minuteOfDay < endMinute;
     }
 }

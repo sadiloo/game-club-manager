@@ -269,9 +269,10 @@ public sealed class KioskLeaseService(
             }
 
             var bandLabel = snapshot.Card.BandAt(groupId, TehranTime.TimeOfDay(at))?.Id;
+            var pocket = settled.Account.Pc;
             Console.WriteLine(
-                $"LEASE_BUILD sessionId={session.Id} walletToman={settled.Account.Pc.TotalToman} "
-                + $"mode={session.Mode} playerCount={session.PlayerCount} groupId={groupId} "
+                $"LEASE_BUILD sessionId={session.Id} paidToman={pocket.RealToman} giftToman={pocket.GiftToman} "
+                + $"walletTotalToman={pocket.TotalToman} mode={session.Mode} playerCount={session.PlayerCount} groupId={groupId} "
                 + $"hourlyRateToman={estimate.HourlyRateToman} rateSource={estimate.Source} band={bandLabel ?? "none"} "
                 + $"moneyMinutes={moneyMinutes} authorizedUntilUtc={authorizedUntil:O}");
         }
