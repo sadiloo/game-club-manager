@@ -29,12 +29,21 @@ CI order unchanged from v2 (integration → mutations → orphan → host_logout
 
 Fix commit `fix: probe v3 net48 Clear() and ps1 Label interpolation` on both heads (above). **Re-run CI in progress** (no stability data from attempt 1).
 
-## CI attempt 2 (in progress)
+## CI attempt 2 (aborted — probe harness)
 
-| Phase | Workflow run | Kiosk job |
-|-------|----------------|-----------|
-| A | _(pending push run for `a4d8d70`)_ | |
-| B | _(pending push run for `dbf113e`)_ | |
+| Phase | Run | Stability batches (fail/total) | Cause (**test-harness**) |
+|-------|-----|-------------------------------|--------------------------|
+| B | [44635656555](https://github.com/sadiloo/game-club-manager/actions/runs/44635656555) | **20/20 each batch, 100/100 total** (instant exit=1) | net48 build failed: `ProbeHttpCallTrace.cs` used C# range/index `..` (needs `Substring` on net48); no `IntegrationTests.dll` → all vstest runs missing assembly |
+| A | [44635658738](https://github.com/sadiloo/game-club-manager/actions/runs/44635658738) | _(same pattern expected)_ | same Range/`Index` issue |
+
+Fix: `3218131` / `a6347a0` — net48-safe truncation. **Attempt 3 CI running** on both branches.
+
+## CI attempt 3 (in progress)
+
+| Phase | Head | Run |
+|-------|------|-----|
+| B | `3218131` | _(pending)_ |
+| A | `a6347a0` | _(pending)_ |
 
 ### Pass/fail counts (5 batches × 20)
 
