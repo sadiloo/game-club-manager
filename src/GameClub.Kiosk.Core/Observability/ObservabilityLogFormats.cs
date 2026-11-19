@@ -1,6 +1,7 @@
 using System;
 using System.Security.Cryptography;
 using System.Text;
+using System.Threading;
 using GameClub.Kiosk.Core.Protocol;
 using GameClub.Kiosk.Core.Runtime;
 
@@ -49,6 +50,14 @@ internal static class ObservabilityLogFormats
             line += $" error_code={errorCode}";
         }
 
+        Console.WriteLine(line);
+        Console.Out.Flush();
+    }
+
+    internal static void WriteGuardPipeSubStep(string verb, string evt)
+    {
+        var line =
+            $"GUARD_PIPE utc_ms={UtcMs()} verb={verb} event={evt} thread={Thread.CurrentThread.ManagedThreadId}";
         Console.WriteLine(line);
         Console.Out.Flush();
     }

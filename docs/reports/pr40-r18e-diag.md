@@ -10,8 +10,10 @@ Red CI: run `44583927556` (ubuntu job `135771642703`, windows kiosk `13577164313
 | Evidence | Run `44583927556` ubuntu: `Expected: 20000` / `Actual: 35000` on `bill.collectibleToman` after DELETE (چیپس 20_000 + نوشابه 15_000 = 35_000; remove last line → 20_000). |
 | Main | Run `44276759016` @ `5574ce0` ubuntu job `134706749003` — no failure for this test (full green). |
 | Diff vs main | `OperatorBuffetSaleService` / `RemoveLineFromOpenSaleAsync` / `RefreshOpenSalePendingBillIfAnyAsync` **unchanged**. `OperatorBillService` PC-internet bill segments (e.g. ~140+) do not apply to buffet-only `ComputeBuffetOnlyAsync`. |
-| Cause | Stale `PendingBill.CollectibleToman` (35_000) on GET `/api/operator/buffet-only/{id}` after line remove — not an extra 15_000 “internet” line in the composed bill. PR-only under heavier ubuntu suite; mechanism unproven until diag CI repeats. |
-| Class | **harness** (suspected Playwright `WaitForResponseAsync` on GET vs DELETE ordering / stale response); **src** ruled out by zero buffet-server diff. |
+| Isolated repro | Runs `44597546143` (pr40 diag) / `44597562592` (main diag): **0/5 failed**; each iteration `DIAG_BUFFET_*` shows `afterCollectible=20000`, `collectibleToman=20000` at remove time. |
+| Stale GET on diag runs | **Not demonstrated** — all green; passing `:474` ⇒ `billRefresh` JSON had `collectibleToman=20000`. |
+| Red `44583927556` | Still `Actual: 35000` at `:474`; server refresh mechanism not reproduced in isolation → suite-order / Playwright GET race **unproven** there, **src refresh ruled out** on diag evidence. |
+| Class | **harness** (test response race under full suite) unless red re-fails with DIAG; **not src** buffet remove. |
 | STOP (if src were implicated) | `OperatorBuffetServices.cs:670-686` — ensure refresh persists before DELETE returns (not applied). |
 | Proposed diff (harness, do not apply) | `OperatorPanelE2eTests.cs:463-474` — assert on DELETE response + await explicit `GetBuffetOnlyBillAsync` after `deleteDone` with line-count in URL predicate. |
 
@@ -25,24 +27,25 @@ Red CI: run `44583927556` (ubuntu job `135771642703`, windows kiosk `13577164313
 | Guard running? | **No** dedicated Guard for net10 server-integration harness: `CI_FIREWALL guard_rule_count=0` at `18:33:47` after net10-server phase; no `L17_PROBE_GUARD_STARTED` / Guard pid in job log for that window. Kiosk runtime applies without Guard listener → expected `pipe_connect_timeout`. |
 | Class | **harness** (live server tests without Guard process). Not R18 pipe-thread product cause for this window. |
 
-### (b2) Start without end `utc_ms=1795113463245` (18:37:43Z)
+### (b2) Start without `end` (L17 + WPF)
 
 | Field | Detail |
 |--------|--------|
-| File:line | `src/GameClub.Kiosk.Core/Guard/GuardInternetClient.cs:129-137` (`ReadWithTimeoutAsync`) |
-| Evidence | `GUARD_PIPE utc_ms=1795113463245 verb=apply event=start` with **no** matching `event=end` before `wpf_remaining_time…` failed at `18:39:10` (96s). Test uses **net48** client `#else` path. |
-| Cause | `ReadAsync` uses only caller `CancellationToken`, not `timeoutCts.Token`; orphan read can outlive `WhenAny` timeout and prevent normal `event=end` logging / stall WPF session apply path. |
-| Class | **src** (product timeout defect on net48 read path). |
-| STOP — proposed minimal diff (do not apply) | At `GuardInternetClient.cs:129`, pass linked timeout token into `ReadAsync`; cancel read task on timeout branch. |
+| `CHECKPOINT_INTERNET_PIPE_IO_MS` | Not set in `.github/workflows/ci.yml` or `scripts/windows/ci-integration.ps1`; client defaults `connect_ms=5000`, `io_ms=30000` (`GuardInternetClient.DefaultIoTimeoutMs`). |
+| Red L17 | Artifact `14561774950`: `GUARD_PIPE utc_ms=1795113238960 verb=status event=start` only; xUnit **180000 ms** timeout; no `L17_GUARD_OFF_PROBE`. |
+| Red WPF | Job `135771643130`: `GUARD_PIPE utc_ms=1795113463245 verb=apply event=start` (no `end`) ~18:37:43–18:39:10. |
+| Sub-step diag | Log-only `GUARD_PIPE … event=connect_begin/connect_ok/write_ok/flush_ok/read_ok/read_timeout/dispose_* thread=N` on `cursor/pr40-r18e-diag` (pending windows kiosk run). |
+| Prior read-timeout theory | **Refuted** for 85s+ hang: `ReadWithTimeoutAsync` uses `WhenAny` + throws; catch logs `end`. Missing `end` ⇒ blocking call without return (connect/write/flush/dispose) or process kill. |
 
-## (c) L17_STEP = 0
+## (c) L17 net48 live-checkpoint
 
 | Field | Detail |
 |--------|--------|
-| Evidence | Job `135771643130`: zero `L17_STEP` in Actions log; `dotnet-test-net48-live-checkpoint` `START 18:33:49Z` → `END 18:36:58Z exit=1`; test listed: `live_server_pc_internet_guard_forced_apply_failure…`. |
-| Cause | L17 ran under net48 `Category=LiveCheckpointServer` but **console step lines are not surfaced** in the published GHA step log (only phase markers + `LEASE_BUILD` scrape). Phase **failed** (`exit=1`) — gate violation: L17 probe did not complete successfully. |
-| Class | **CI** (log capture) + **harness** (failed L17 phase; probe details in artifact `live-checkpoint-net48-console.log`, artifact `14561774950`). |
-| `L17_GUARD_OFF_PROBE` | Not observed in GHA stdout; probe never reached success string in captured log. |
+| Test | `WindowsPcInternetApplyFailureLiveTests.live_server_pc_internet_guard_forced_apply_failure_shows_error_and_offline_at_press` |
+| Failure | **Test execution timed out after 180000 ms** (not a failing assert). TRX: `kiosk-windows-live-checkpoint-net48.trx`. |
+| L17_STEP (artifact console) | `test_begin` → `orphan_cleanup` → `guard_start_begin/end pid=7244` → `L17_PROBE_GUARD_STARTED` → `pipe_wait_begin` → `pipe_wait_attempt attempt=1` → then pipe hang. |
+| `L17_GUARD_OFF_PROBE` | **Did not run** (test never left `pipe_wait`). |
+| Job summary gate | `ci-integration.ps1:605-606` records `liveNet48Exit` in `FinalExitCode` but does **not** throw; script continues to night WPF; `:632` `throw "night WPF test failed"` ⇒ GHA step fails on **WPF**, masking L17 in summary. `ci-phase.log`: `END dotnet-test-net48-live-checkpoint exit=1`. |
 
 ## (d) WPF night line `WindowsKioskWpfSmokeTests.cs:290`
 
