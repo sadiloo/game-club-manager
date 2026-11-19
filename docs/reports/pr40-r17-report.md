@@ -6,7 +6,7 @@
 
 ## Staging head
 
-- `61f29c54a03ebef16e74d6ebe5a7a6590c38af67` (`cursor/pr40-r17-staging`)
+- `a70013752675ac5456ba591d1408605710f91aab` (`cursor/pr40-r17-staging`; includes docs-only follow-up on `61f29c5`)
 
 ## Files changed
 
