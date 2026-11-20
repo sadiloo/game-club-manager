@@ -90,16 +90,15 @@ public sealed class KioskRuntimeInternetApplyTests
         await transport.StartAsync(default);
 
         await applyEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
-        var slowApplyMs = (int)(interval.TotalMilliseconds * 4);
         var hbBeforeRelease = transport.HeartbeatCallCount;
-        var deadline = DateTime.UtcNow.AddMilliseconds(slowApplyMs);
-        while (DateTime.UtcNow < deadline && !applyBlock.Task.IsCompleted)
-        {
-            await Task.Yield();
-        }
+        await WaitUntilAsync(
+            () => transport.HeartbeatCallCount >= hbBeforeRelease + 3 && !applyBlock.Task.IsCompleted,
+            5_000);
 
-        Assert.True(transport.HeartbeatCallCount >= hbBeforeRelease + 3,
-            $"expected >=3 heartbeats during slow apply; had {transport.HeartbeatCallCount}");
+        var hbAfterGate = transport.HeartbeatCallCount;
+        Assert.False(applyBlock.Task.IsCompleted);
+        Assert.True(hbAfterGate >= hbBeforeRelease + 3,
+            $"expected >=3 heartbeats during slow apply; before={hbBeforeRelease} after={hbAfterGate} delta={hbAfterGate - hbBeforeRelease}");
         Assert.NotNull(runtime.LastSuccessfulHeartbeatAckUtc);
         Assert.Null(runtime.LastInternetReportForTests);
 
