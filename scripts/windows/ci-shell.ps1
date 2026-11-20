@@ -107,7 +107,8 @@ $testExitCode = 0
 try {
     dotnet test tests/GameClub.Shell.Windows.IntegrationTests/GameClub.Shell.Windows.IntegrationTests.csproj `
       -c Release -f net48 --no-build --nologo `
-      --filter "Category=WindowsShell" `
+      $filter = if ($env:GAMECLUB_SHELL_BISECT_FILTER) { $env:GAMECLUB_SHELL_BISECT_FILTER } else { "Category=WindowsShell" }
+      --filter $filter `
       --logger "console;verbosity=normal" `
       --results-directory $artifactDir `
       --logger "trx;LogFileName=shell-windows.trx"
