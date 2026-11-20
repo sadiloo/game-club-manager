@@ -80,15 +80,16 @@ public sealed class GuardInternetPipeFramingTests
         try
         {
             using var cts = new CancellationTokenSource();
-            var ready = new ManualResetEventSlim(false);
+            var listeningReady = new ManualResetEventSlim(false);
             var sawTimeout = new ManualResetEventSlim(false);
             var serverLog = new System.Collections.Concurrent.ConcurrentQueue<string>();
-            var pipeThread = new Thread(() => LineFramingPipeStub.RunNoNewlineServer(ready, sawTimeout, cts.Token, serverLog))
+            var pipeThread = new Thread(() => LineFramingPipeStub.RunNoNewlineServer(listeningReady, sawTimeout, cts.Token, serverLog))
             {
                 IsBackground = true,
             };
             pipeThread.Start();
-            Assert.True(ready.Wait(TimeSpan.FromSeconds(5)), "pipe server must signal listening before client connect");
+            Assert.True(listeningReady.Wait(TimeSpan.FromSeconds(5)), "pipe server must enter WaitForConnection before client connect");
+            Assert.Contains(serverLog, l => l == "pipe_wait_for_connection");
 
             using var client = new NamedPipeClientStream(".", GuardInternetClient.PipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
             await client.ConnectAsync(GuardInternetClient.DefaultConnectTimeoutMs);
@@ -157,15 +158,16 @@ public sealed class GuardInternetPipeFramingTests
 
         using var pipeDiag = InternetPipeOwnerDiagnostics.BeginTestScope();
         using var cts = new CancellationTokenSource();
-        var ready = new ManualResetEventSlim(false);
+        var listeningReady = new ManualResetEventSlim(false);
         var sawOversize = new ManualResetEventSlim(false);
         var serverLog = new System.Collections.Concurrent.ConcurrentQueue<string>();
-        var pipeThread = new Thread(() => LineFramingPipeStub.RunOversizeServer(ready, sawOversize, cts.Token, serverLog))
+        var pipeThread = new Thread(() => LineFramingPipeStub.RunOversizeServer(listeningReady, sawOversize, cts.Token, serverLog))
         {
             IsBackground = true,
         };
         pipeThread.Start();
-        Assert.True(ready.Wait(TimeSpan.FromSeconds(5)));
+        Assert.True(listeningReady.Wait(TimeSpan.FromSeconds(5)), "pipe server must enter WaitForConnection before client connect");
+        Assert.Contains(serverLog, l => l == "pipe_wait_for_connection");
 
         using var client = new NamedPipeClientStream(".", GuardInternetClient.PipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
         await client.ConnectAsync(3000);
@@ -391,7 +393,7 @@ internal static class LineFramingPipeStub
         }
     }
 
-    internal static void RunNoNewlineServer(ManualResetEventSlim ready, ManualResetEventSlim sawTimeout, CancellationToken ct, System.Collections.Concurrent.ConcurrentQueue<string> log)
+    internal static void RunNoNewlineServer(ManualResetEventSlim listeningReady, ManualResetEventSlim sawTimeout, CancellationToken ct, System.Collections.Concurrent.ConcurrentQueue<string> log)
     {
         try
         {
@@ -402,8 +404,10 @@ internal static class LineFramingPipeStub
                 PipeTransmissionMode.Byte,
                 PipeOptions.Asynchronous);
             log.Enqueue("pipe_listening");
-            ready.Set();
-            server.WaitForConnection();
+            var waitTask = server.WaitForConnectionAsync(ct);
+            log.Enqueue("pipe_wait_for_connection");
+            listeningReady.Set();
+            waitTask.GetAwaiter().GetResult();
             var line = ReadLine(server, 1_500, log.Enqueue);
             if (line is null)
             {
@@ -416,7 +420,7 @@ internal static class LineFramingPipeStub
         }
     }
 
-    internal static void RunOversizeServer(ManualResetEventSlim ready, ManualResetEventSlim sawOversize, CancellationToken ct, System.Collections.Concurrent.ConcurrentQueue<string> log)
+    internal static void RunOversizeServer(ManualResetEventSlim listeningReady, ManualResetEventSlim sawOversize, CancellationToken ct, System.Collections.Concurrent.ConcurrentQueue<string> log)
     {
         try
         {
@@ -427,8 +431,10 @@ internal static class LineFramingPipeStub
                 PipeTransmissionMode.Byte,
                 PipeOptions.Asynchronous);
             log.Enqueue("pipe_listening");
-            ready.Set();
-            server.WaitForConnection();
+            var waitTask = server.WaitForConnectionAsync(ct);
+            log.Enqueue("pipe_wait_for_connection");
+            listeningReady.Set();
+            waitTask.GetAwaiter().GetResult();
             var line = ReadLine(server, 5_000, log.Enqueue);
             if (line is null)
             {
