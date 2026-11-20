@@ -127,7 +127,7 @@ public sealed class WindowsPcInternetApplyFailureLiveTests
             {
                 L17StepLog.Write("guard_start_begin");
                 L17GuardProbeSupport.LogPreflight();
-                probeGuard = GuardProcessStart.StartGuard();
+                probeGuard = GuardProcessStart.StartGuard(startedByStep: "L17_live_probe");
                 L17StepLog.Write("guard_start_end", $"pid={probeGuard.Id} pipe={GuardInternetClient.PipeName}");
                 Console.WriteLine(
                     $"L17_PROBE_GUARD_STARTED pid={probeGuard.Id} pipe_name={GuardInternetClient.PipeName}");
@@ -146,8 +146,18 @@ public sealed class WindowsPcInternetApplyFailureLiveTests
                 if (probeGuard is not null)
                 {
                     L17StepLog.Write("guard_kill_begin", $"pid={probeGuard.Id}");
-                    GuardProcessLifecycle.StopGuardProcessTree(probeGuard, TimeSpan.FromSeconds(15));
+                    InternetPipeOwnerDiagnostics.WritePipeOwner("l17_guard_kill_begin", "L17_live_probe");
+                    GuardProcessLifecycle.StopGuardProcessTree(probeGuard, TimeSpan.FromSeconds(20));
+                    if (!probeGuard.WaitForExit(15_000))
+                    {
+                        GuardProcessLifecycle.StopGuardProcessTree(probeGuard, TimeSpan.FromSeconds(20));
+                        probeGuard.WaitForExit(10_000);
+                    }
+
+                    InternetPipeOwnerDiagnostics.LogGuardTeardown(probeGuard, "after_stop_tree");
                     L17StepLog.Write("guard_kill_end", $"pid={probeGuard.Id} exited={probeGuard.HasExited}");
+                    InternetPipeOwnerDiagnostics.WriteGuardProcs("l17_guard_kill_end", "L17_live_probe");
+                    InternetPipeOwnerDiagnostics.WritePipeOwner("l17_guard_kill_end", "L17_live_probe");
                     probeGuard.Dispose();
                 }
 

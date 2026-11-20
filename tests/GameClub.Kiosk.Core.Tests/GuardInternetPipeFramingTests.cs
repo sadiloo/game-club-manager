@@ -19,6 +19,7 @@ public sealed class GuardInternetPipeFramingTests
             return;
         }
 
+        using var pipeDiag = InternetPipeOwnerDiagnostics.BeginTestScope();
         using var acceptLoop = LineFramingPipeStub.StartAcceptLoop(LineFramingPipeStub.HandleStatusOrApplyStub);
 
         var sw = Stopwatch.StartNew();
@@ -37,6 +38,7 @@ public sealed class GuardInternetPipeFramingTests
             return;
         }
 
+        using var pipeDiag = InternetPipeOwnerDiagnostics.BeginTestScope();
         using var acceptLoop = LineFramingPipeStub.StartAcceptLoop(LineFramingPipeStub.HandleStatusOrApplyStub);
 
         var statusJson = await new GuardInternetClient().GetStatusAsync(default);
@@ -74,6 +76,7 @@ public sealed class GuardInternetPipeFramingTests
         Environment.SetEnvironmentVariable("CHECKPOINT_INTERNET_PIPE_READ_MS", "400");
         var priorIo = Environment.GetEnvironmentVariable("CHECKPOINT_INTERNET_PIPE_IO_MS");
         Environment.SetEnvironmentVariable("CHECKPOINT_INTERNET_PIPE_IO_MS", "5000");
+        using var pipeDiag = InternetPipeOwnerDiagnostics.BeginTestScope();
         try
         {
             using var cts = new CancellationTokenSource();
@@ -118,6 +121,7 @@ public sealed class GuardInternetPipeFramingTests
             return;
         }
 
+        using var pipeDiag = InternetPipeOwnerDiagnostics.BeginTestScope();
         using var acceptLoop = LineFramingPipeStub.StartAcceptLoop(LineFramingPipeStub.HandleStatusOrApplyStub);
 
         await GuardInternetPipeOrderingTest.AssertGuardWritesOnlyAfterFullRequestLineAsync(
@@ -134,6 +138,7 @@ public sealed class GuardInternetPipeFramingTests
         }
 
         const string persian = "چیپس و نوشابه";
+        using var pipeDiag = InternetPipeOwnerDiagnostics.BeginTestScope();
         using var acceptLoop = LineFramingPipeStub.StartAcceptLoop(LineFramingPipeStub.HandleEchoNoteStub);
 
         var requestJson = JsonSerializer.Serialize(new { verb = "status", note = persian });
@@ -150,6 +155,7 @@ public sealed class GuardInternetPipeFramingTests
             return;
         }
 
+        using var pipeDiag = InternetPipeOwnerDiagnostics.BeginTestScope();
         using var cts = new CancellationTokenSource();
         var ready = new ManualResetEventSlim(false);
         var sawOversize = new ManualResetEventSlim(false);
@@ -325,6 +331,7 @@ internal static class LineFramingPipeStub
 
         internal AcceptLoopHandle(Func<string, string> handle)
         {
+            InternetPipeOwnerDiagnostics.WriteFixturePhase("stub_fixture_begin", "LineFramingPipeStub.AcceptLoop");
             var ready = new ManualResetEventSlim(false);
             _thread = new Thread(() => RunAcceptLoop(ready, _cts.Token, handle)) { IsBackground = true };
             _thread.Start();
@@ -333,6 +340,7 @@ internal static class LineFramingPipeStub
 
         public void Dispose()
         {
+            InternetPipeOwnerDiagnostics.WriteFixturePhase("stub_fixture_end", "LineFramingPipeStub.AcceptLoop");
             _cts.Cancel();
             try
             {

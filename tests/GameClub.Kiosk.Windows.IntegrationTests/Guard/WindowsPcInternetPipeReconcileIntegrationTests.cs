@@ -11,6 +11,7 @@ using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Security.Principal;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
@@ -30,6 +31,9 @@ namespace GameClub.Kiosk.Windows.IntegrationTests.Guard;
 [Trait("Category", "PcInternetFirewall")]
 public sealed class WindowsPcInternetPipeReconcileIntegrationTests
 {
+    private static InternetPipeOwnerDiagnostics.TestScope BeginPipeDiag([CallerMemberName] string test = "")
+        => InternetPipeOwnerDiagnostics.BeginTestScope(test);
+
     private static void RequireWindowsAdmin()
     {
         if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
@@ -66,6 +70,7 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
     public async Task internet_pipe_status_ready_within_2s_while_reconcile_slow()
     {
         RequireWindowsAdmin();
+        using var pipeDiag = BeginPipeDiag();
         using var rsa = RSA.Create(2048);
         var pub = ExportPublicKeyPem(rsa);
         var config = BuildConfig(pub);
@@ -116,6 +121,7 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
     public async Task internet_pipe_apply_during_reconcile_returns_retryable_reconcile_busy_or_applies_after_wait()
     {
         RequireWindowsAdmin();
+        using var pipeDiag = BeginPipeDiag();
         using var rsa = RSA.Create(2048);
         var pub = ExportPublicKeyPem(rsa);
         var config = BuildConfig(pub);
@@ -166,6 +172,7 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
     public async Task internet_guard_client_connect_timeout_surfaces_as_timeout_exception()
     {
         RequireWindowsAdmin();
+        using var pipeDiag = BeginPipeDiag();
         var priorConnect = Environment.GetEnvironmentVariable("CHECKPOINT_INTERNET_PIPE_CONNECT_MS");
         Environment.SetEnvironmentVariable("CHECKPOINT_INTERNET_PIPE_CONNECT_MS", "300");
         try
@@ -186,6 +193,7 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
     public async Task internet_guard_client_write_timeout_when_server_accepts_but_never_reads()
     {
         RequireWindowsAdmin();
+        using var pipeDiag = BeginPipeDiag();
         var priorIo = Environment.GetEnvironmentVariable("CHECKPOINT_INTERNET_PIPE_IO_MS");
         Environment.SetEnvironmentVariable("CHECKPOINT_INTERNET_PIPE_IO_MS", "800");
         NamedPipeServerStream acceptPipe = null;
@@ -239,6 +247,7 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
     public async Task internet_pipe_apply_succeeds_after_reconcile_timeout_while_reset_work_thread_hung()
     {
         RequireWindowsAdmin();
+        using var pipeDiag = BeginPipeDiag();
         using var rsa = RSA.Create(2048);
         var config = BuildConfig(ExportPublicKeyPem(rsa));
         var hung = new HungReconcileInternetFirewallApplier();
@@ -298,6 +307,7 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
     public async Task internet_reconcile_abandoned_work_thread_makes_no_further_powershell_calls_after_apply()
     {
         RequireWindowsAdmin();
+        using var pipeDiag = BeginPipeDiag();
         using var rsa = RSA.Create(2048);
         var config = BuildConfig(ExportPublicKeyPem(rsa));
         var priorBudget = Environment.GetEnvironmentVariable("CHECKPOINT_INTERNET_RECONCILE_TIMEOUT_MS");
@@ -355,6 +365,7 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
     public async Task internet_pipe_apply_after_hung_reconcile_timeout_removes_off_rules_when_server_sends_on()
     {
         RequireWindowsAdmin();
+        using var pipeDiag = BeginPipeDiag();
         using var rsa = RSA.Create(2048);
         var config = BuildConfig(ExportPublicKeyPem(rsa));
         var hung = new HungReconcileInternetFirewallApplier();
@@ -424,6 +435,7 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
     public async Task internet_drift_watchdog_starts_after_reconcile_timeout()
     {
         RequireWindowsAdmin();
+        using var pipeDiag = BeginPipeDiag();
         using var rsa = RSA.Create(2048);
         var config = BuildConfig(ExportPublicKeyPem(rsa));
         var hung = new HungReconcileInternetFirewallApplier();
@@ -483,6 +495,7 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
     public async Task internet_pipe_status_answers_within_2s_while_apply_holds_firewall_gate()
     {
         RequireWindowsAdmin();
+        using var pipeDiag = BeginPipeDiag();
         using var rsa = RSA.Create(2048);
         var pub = ExportPublicKeyPem(rsa);
         var config = BuildConfig(pub);
@@ -535,6 +548,7 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
     public async Task internet_pipe_guard_writes_nothing_until_full_request_line()
     {
         RequireWindowsAdmin();
+        using var pipeDiag = BeginPipeDiag();
         using var rsa = RSA.Create(2048);
         var config = BuildConfig(ExportPublicKeyPem(rsa));
         CancellationTokenSource cts = null;
@@ -651,6 +665,7 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
     public async Task internet_pipe_off_apply_failure_restores_on_and_replies_on_true_with_original_error()
     {
         RequireWindowsAdmin();
+        using var pipeDiag = BeginPipeDiag();
         using var rsa = RSA.Create(2048);
         var config = BuildConfig(ExportPublicKeyPem(rsa));
         var applier = new OffFailOpenRollbackInternetFirewallApplier();
@@ -752,6 +767,7 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
     public async Task internet_pipe_utf8_persian_field_round_trips_on_real_pipe()
     {
         RequireWindowsAdmin();
+        using var pipeDiag = BeginPipeDiag();
         const string persian = "چیپس و نوشابه";
         var logPath = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
@@ -809,6 +825,7 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
     public async Task internet_pipe_line_framing_status_within_2s_while_client_pipe_stays_open()
     {
         RequireWindowsAdmin();
+        using var pipeDiag = BeginPipeDiag();
         using var rsa = RSA.Create(2048);
         var config = BuildConfig(ExportPublicKeyPem(rsa));
         CancellationTokenSource cts = null;
@@ -836,6 +853,7 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
     public async Task internet_pipe_line_framing_apply_within_2s_while_client_pipe_stays_open()
     {
         RequireWindowsAdmin();
+        using var pipeDiag = BeginPipeDiag();
         using var rsa = RSA.Create(2048);
         var config = BuildConfig(ExportPublicKeyPem(rsa));
         CancellationTokenSource cts = null;
@@ -875,6 +893,7 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
     public async Task internet_pipe_closes_connection_when_client_never_sends_newline_before_read_timeout()
     {
         RequireWindowsAdmin();
+        using var pipeDiag = BeginPipeDiag();
         var priorRead = Environment.GetEnvironmentVariable("CHECKPOINT_INTERNET_PIPE_READ_MS");
         Environment.SetEnvironmentVariable("CHECKPOINT_INTERNET_PIPE_READ_MS", "500");
         var logPath = Path.Combine(
@@ -913,6 +932,7 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
     public async Task internet_pipe_rejects_oversize_request_line()
     {
         RequireWindowsAdmin();
+        using var pipeDiag = BeginPipeDiag();
         var logPath = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
             "Checkpoint",

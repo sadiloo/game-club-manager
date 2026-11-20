@@ -22,6 +22,7 @@ public sealed class WindowsPcInternetPowerShellRunnerIntegrationTests
             Assert.Fail("Windows-only Guard internet integration.");
         }
 
+        using var pipeDiag = InternetPipeOwnerDiagnostics.BeginTestScope(nameof(internet_powershell_runner_times_out_hung_child_and_kills_process_tree));
         var pidFile = Path.Combine(Path.GetTempPath(), $"gcm-ps-hang-{Guid.NewGuid():N}.txt");
         try
         {
@@ -33,15 +34,33 @@ Start-Sleep -Seconds 600
 ";
                 var budgetMs = 4_000;
                 var sw = Stopwatch.StartNew();
-                var result = InternetPowerShellRunner.Run(script, budgetMs, stepName: "integration_hang_stub");
+                int childPid = 0;
+                var runTask = Task.Run(() => InternetPowerShellRunner.Run(script, budgetMs, stepName: "integration_hang_stub"));
+                var pidDeadline = DateTime.UtcNow.AddSeconds(8);
+                while (DateTime.UtcNow < pidDeadline && childPid == 0)
+                {
+                    if (File.Exists(pidFile)
+                        && int.TryParse(File.ReadAllText(pidFile).Trim(), out childPid))
+                    {
+                        break;
+                    }
+
+                    System.Threading.Thread.Sleep(50);
+                }
+
+                Assert.True(childPid > 0, "hung child should have written pid before timeout");
+                ProcessTreeDiagnostics.LogProcessForest($"before_kill_child_root pid={childPid}");
+                ProcessTreeDiagnostics.LogPidExitState("before_kill_target", childPid, waitMs: 1);
+
+                var result = runTask.GetAwaiter().GetResult();
                 sw.Stop();
 
                 Assert.Equal("apply_failed:powershell_timeout", result);
                 Assert.True(sw.ElapsedMilliseconds < budgetMs + 6_000, $"elapsed={sw.ElapsedMilliseconds}");
 
-                Assert.True(File.Exists(pidFile), "hung child should have written pid before timeout");
-                var pidText = File.ReadAllText(pidFile).Trim();
-                Assert.True(int.TryParse(pidText, out var childPid), $"pid file: {pidText}");
+                ProcessTreeDiagnostics.LogProcessForest($"after_kill_child_root pid={childPid}");
+                var exitWaitMs = InternetPowerShellRunnerIntegrationTestSupport.KillExitWaitMs;
+                ProcessTreeDiagnostics.LogPidExitState("after_kill_target", childPid, waitMs: exitWaitMs);
 
                 try
                 {
@@ -68,5 +87,10 @@ Start-Sleep -Seconds 600
             }
         }
     }
+}
+
+internal static class InternetPowerShellRunnerIntegrationTestSupport
+{
+    internal static int KillExitWaitMs => 8_000;
 }
 #endif

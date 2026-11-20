@@ -10,8 +10,9 @@ namespace GameClub.Kiosk.Windows.IntegrationTests.Guard;
 
 internal static class GuardProcessStart
 {
-    internal static Process StartGuard(string kioskExe = null, string guardExe = null)
+    internal static Process StartGuard(string kioskExe = null, string guardExe = null, string startedByStep = null)
     {
+        InternetPipeOwnerDiagnostics.WriteGuardProcs("guard_start_begin", startedByStep ?? "GuardProcessStart", startedByStep);
         guardExe ??= Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "GameClub.Kiosk.Guard.exe");
         Assert.True(File.Exists(guardExe), "GameClub.Kiosk.Guard.exe not found beside test output.");
         kioskExe ??= Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "GameClub.Kiosk.exe");
@@ -35,6 +36,11 @@ internal static class GuardProcessStart
         psi.EnvironmentVariables["CHECKPOINT_KIOSK_EXE"] = kioskExe;
         var guard = Process.Start(psi);
         Assert.NotNull(guard);
+        Console.WriteLine(
+            $"GUARD_PROC phase=guard_start_end image=GameClub.Kiosk.Guard pid={guard.Id} "
+            + $"startUtc={InternetPipeOwnerDiagnostics.SafeStartTimeUtc(guard)} startedBy={startedByStep ?? "GuardProcessStart"} "
+            + $"cmd={InternetPipeOwnerDiagnostics.TryReadCommandLine(guard.Id)}");
+        InternetPipeOwnerDiagnostics.WritePipeOwner("guard_start_end", startedByStep ?? "GuardProcessStart");
         return guard;
     }
 
