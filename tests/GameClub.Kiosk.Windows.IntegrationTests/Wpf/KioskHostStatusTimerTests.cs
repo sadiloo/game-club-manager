@@ -120,6 +120,10 @@ public sealed class KioskHostStatusTimerTests
     public void host_logout_http_503_re_adopts_open_session_on_next_ack()
         => RunLogoutHttp503ReAdoptScenario();
 
+    [Fact]
+    public void host_login_timeout_shows_lock_line_timeout_error_through_ui_tick()
+        => RunLoginTimeoutLockLineScenario();
+
     private void RunScenario(bool lateConnect, bool operatorStopLock)
     {
         Exception error = null;
@@ -1503,6 +1507,58 @@ public sealed class KioskHostStatusTimerTests
         if (error is not null)
         {
             Assert.Fail(error.ToString());
+        }
+    }
+
+    private void RunLoginTimeoutLockLineScenario()
+    {
+        Exception error = null;
+        _wpf.RunAsync(async () =>
+        {
+            try
+            {
+                await RunLoginTimeoutLockLineOnDispatcherAsync();
+            }
+            catch (Exception ex)
+            {
+                error = ex;
+            }
+        }, TimeSpan.FromMinutes(1));
+
+        if (error is not null)
+        {
+            Assert.Fail(error.ToString());
+        }
+    }
+
+    private static async Task RunLoginTimeoutLockLineOnDispatcherAsync()
+    {
+        WritePairedDeviceState("PC-HOST-TIMEOUT");
+        var host = CreateHost(
+            out var status,
+            out _,
+            out _,
+            new KioskHostTestSeam { LoginHttpSimulateTimeout = true });
+        try
+        {
+            SetField(host, "_stationId", "PC-HOST-TIMEOUT");
+            SetField(host, "_deviceId", Guid.NewGuid());
+            typeof(KioskHostService).GetMethod("ShowLockLayout", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .Invoke(host, null);
+            await host.LoginAsync("timeout-user", "s3cret-pass");
+            var text = status.Text ?? "";
+            Assert.Contains(KioskLoginUserMessages.Timeout, text, StringComparison.Ordinal);
+            Assert.Contains(" · ", text, StringComparison.Ordinal);
+            Assert.DoesNotContain("s3cret-pass", text, StringComparison.Ordinal);
+
+            typeof(KioskHostService).GetMethod("RefreshStationStatusText", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .Invoke(host, null);
+            var refreshed = status.Text ?? "";
+            Assert.Contains(KioskLoginUserMessages.Timeout, refreshed, StringComparison.Ordinal);
+        }
+        finally
+        {
+            await host.DisposeAsync();
         }
     }
 

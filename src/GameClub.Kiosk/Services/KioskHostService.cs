@@ -175,7 +175,7 @@ public sealed class KioskHostService : IAsyncDisposable
     {
         if (_deviceId == Guid.Empty)
         {
-            _status.Text = "Pair before login";
+            _status.Text = KioskLoginUserMessages.PairBeforeLogin;
             return;
         }
 
@@ -183,6 +183,16 @@ public sealed class KioskHostService : IAsyncDisposable
         HttpResponseMessage response;
         try
         {
+            if (_testSeam?.LoginHttpSimulateTimeout == true)
+            {
+                throw new TaskCanceledException("Simulated login timeout");
+            }
+
+            if (_testSeam?.LoginHttpDelay is { } loginDelay)
+            {
+                await Task.Delay(loginDelay);
+            }
+
             response = await _http.PostAsync(
                 $"{_serverBase}/api/kiosk/auth/login",
                 new StringContent(JsonSerializer.Serialize(new { loginName, password, stationId = _stationId }), Encoding.UTF8, "application/json"));
@@ -190,8 +200,16 @@ public sealed class KioskHostService : IAsyncDisposable
         catch (HttpRequestException ex)
         {
             LastLoginHttpStatus = null;
-            _loginError = "Login failed (server unreachable)";
+            _loginError = KioskLoginUserMessages.Unreachable;
             Trace.TraceWarning($"Kiosk login failed (unreachable): {ex.Message}");
+            RefreshStationStatusText();
+            return;
+        }
+        catch (TaskCanceledException ex)
+        {
+            LastLoginHttpStatus = null;
+            _loginError = KioskLoginUserMessages.Timeout;
+            Trace.TraceWarning($"Kiosk login failed (timeout): {ex.Message}");
             RefreshStationStatusText();
             return;
         }
@@ -199,7 +217,7 @@ public sealed class KioskHostService : IAsyncDisposable
         if (!response.IsSuccessStatusCode)
         {
             LastLoginHttpStatus = (int)response.StatusCode;
-            _loginError = $"Login failed (HTTP {(int)response.StatusCode})";
+            _loginError = KioskLoginUserMessages.HttpStatus((int)response.StatusCode);
             Trace.TraceWarning($"Kiosk login failed: HTTP {(int)response.StatusCode}");
             RefreshStationStatusText();
             return;
@@ -556,9 +574,9 @@ public sealed class KioskHostService : IAsyncDisposable
                 _lastHeartbeatAckUtc,
                 DateTime.UtcNow,
                 _runtime.LastTransportErrorDetail);
-            if (_sessionId == Guid.Empty && !string.IsNullOrEmpty(_loginError))
+            if (_sessionId == Guid.Empty && _loginError is { Length: > 0 } loginError)
             {
-                _status.Text += $" · {_loginError}";
+                _status.Text = KioskLoginUserMessages.AppendToLockLine(_status.Text, loginError);
             }
 
             return;

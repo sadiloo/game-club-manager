@@ -636,7 +636,7 @@ public sealed class SessionService(
             {
                 await audit.AppendAsync("session.start", new { sessionId = session.Id, stationId = station.Id, playerCount, mode = mode.ToString() }, ct);
             }
-            catch (DbUpdateException ex) when (PostgresErrors.IsActiveSessionUniqueViolation(ex))
+            catch (DbUpdateException ex) when (PostgresErrors.IsActiveSessionStationBusyConflict(ex))
             {
                 throw new ApiException(StatusCodes.Status409Conflict, "station_busy", "Station already has an open session.");
             }

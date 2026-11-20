@@ -97,4 +97,20 @@ public static class PostgresErrors
 
         return false;
     }
+
+    public static bool IsSerializationFailure(Exception ex)
+    {
+        for (Exception? current = ex; current is not null; current = current.InnerException)
+        {
+            if (current is PostgresException pg && pg.SqlState == PostgresErrorCodes.SerializationFailure)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    public static bool IsActiveSessionStationBusyConflict(DbUpdateException ex)
+        => IsActiveSessionUniqueViolation(ex) || IsSerializationFailure(ex) || IsDeadlock(ex);
 }
