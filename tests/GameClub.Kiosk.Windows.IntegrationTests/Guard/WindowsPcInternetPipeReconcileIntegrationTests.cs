@@ -110,8 +110,7 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
         }
         finally
         {
-            cts?.Cancel();
-            pipeThread?.Join(TimeSpan.FromSeconds(5));
+            StopInternetPipeServer(cts, pipeThread, TimeSpan.FromSeconds(5));
             new InternetFirewallApplier().RunResetScript();
             TryDeleteState();
         }
@@ -161,8 +160,7 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
         }
         finally
         {
-            cts?.Cancel();
-            pipeThread?.Join(TimeSpan.FromSeconds(5));
+            StopInternetPipeServer(cts, pipeThread, TimeSpan.FromSeconds(5));
             new InternetFirewallApplier().RunResetScript();
             TryDeleteState();
         }
@@ -194,6 +192,13 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
     {
         RequireWindowsAdmin();
         using var pipeDiag = BeginPipeDiag();
+        var preflight = InternetPipeOwnerDiagnostics.WritePipeOwner(
+            "test_preflight",
+            nameof(internet_guard_client_write_timeout_when_server_accepts_but_never_reads));
+        Assert.False(
+            preflight.PipeReachable,
+            $"pipe {GuardInternetClient.PipeName} must be free before stub bind; "
+            + $"serverPid={preflight.ServerPid} detail={preflight.Detail}");
         var priorIo = Environment.GetEnvironmentVariable("CHECKPOINT_INTERNET_PIPE_IO_MS");
         Environment.SetEnvironmentVariable("CHECKPOINT_INTERNET_PIPE_IO_MS", "800");
         NamedPipeServerStream acceptPipe = null;
@@ -295,8 +300,7 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
         finally
         {
             hung.Release();
-            cts?.Cancel();
-            pipeThread?.Join(TimeSpan.FromSeconds(10));
+            StopInternetPipeServer(cts, pipeThread, TimeSpan.FromSeconds(10));
             Environment.SetEnvironmentVariable("CHECKPOINT_INTERNET_RECONCILE_TIMEOUT_MS", priorBudget);
             new InternetFirewallApplier().RunResetScript();
             TryDeleteState();
@@ -353,8 +357,7 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
         {
             InternetGuardReconcileTestSeams.HangBeforeLocalhostCleanup = null;
             hangRelease.Dispose();
-            cts?.Cancel();
-            pipeThread?.Join(TimeSpan.FromSeconds(5));
+            StopInternetPipeServer(cts, pipeThread, TimeSpan.FromSeconds(5));
             Environment.SetEnvironmentVariable("CHECKPOINT_INTERNET_RECONCILE_TIMEOUT_MS", priorBudget);
             new InternetFirewallApplier().RunResetScript();
             TryDeleteState();
@@ -423,8 +426,7 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
         finally
         {
             hung.Release();
-            cts?.Cancel();
-            pipeThread?.Join(TimeSpan.FromSeconds(10));
+            StopInternetPipeServer(cts, pipeThread, TimeSpan.FromSeconds(10));
             Environment.SetEnvironmentVariable("CHECKPOINT_INTERNET_RECONCILE_TIMEOUT_MS", priorBudget);
             new InternetFirewallApplier().RunResetScript();
             TryDeleteState();
@@ -482,8 +484,7 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
         finally
         {
             hung.Release();
-            cts?.Cancel();
-            pipeThread?.Join(TimeSpan.FromSeconds(10));
+            StopInternetPipeServer(cts, pipeThread, TimeSpan.FromSeconds(10));
             Environment.SetEnvironmentVariable("CHECKPOINT_INTERNET_RECONCILE_TIMEOUT_MS", priorBudget);
             Environment.SetEnvironmentVariable("CHECKPOINT_INTERNET_DRIFT_INTERVAL_MS", priorDrift);
             new InternetFirewallApplier().RunResetScript();
@@ -538,8 +539,7 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
         }
         finally
         {
-            cts?.Cancel();
-            pipeThread?.Join(TimeSpan.FromSeconds(5));
+            StopInternetPipeServer(cts, pipeThread, TimeSpan.FromSeconds(5));
             new InternetFirewallApplier().RunResetScript();
         }
     }
@@ -591,8 +591,7 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
         }
         finally
         {
-            cts?.Cancel();
-            pipeThread?.Join(TimeSpan.FromSeconds(5));
+            StopInternetPipeServer(cts, pipeThread, TimeSpan.FromSeconds(5));
         }
     }
 
@@ -712,11 +711,7 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
         }
         finally
         {
-            cts?.Cancel();
-            TryUnblockInternetPipeServer();
-            Assert.True(
-                pipeThread is null || pipeThread.Join(TimeSpan.FromSeconds(10)),
-                "OffFailOpenPipe thread did not stop");
+            StopInternetPipeServer(cts, pipeThread, TimeSpan.FromSeconds(10));
             new InternetFirewallApplier().RunResetScript();
             TryDeleteState();
         }
@@ -751,6 +746,16 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
         catch (Exception)
         {
             /* listener already stopped or between accept iterations */
+        }
+    }
+
+    private static void StopInternetPipeServer(CancellationTokenSource cts, Thread pipeThread, TimeSpan joinBudget)
+    {
+        cts?.Cancel();
+        TryUnblockInternetPipeServer();
+        if (pipeThread is not null)
+        {
+            Assert.True(pipeThread.Join(joinBudget), "InternetPipeServer thread did not stop");
         }
     }
 
@@ -816,8 +821,7 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
         }
         finally
         {
-            cts?.Cancel();
-            pipeThread?.Join(TimeSpan.FromSeconds(5));
+            StopInternetPipeServer(cts, pipeThread, TimeSpan.FromSeconds(5));
         }
     }
 
@@ -844,8 +848,7 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
         }
         finally
         {
-            cts?.Cancel();
-            pipeThread?.Join(TimeSpan.FromSeconds(5));
+            StopInternetPipeServer(cts, pipeThread, TimeSpan.FromSeconds(5));
         }
     }
 
@@ -860,13 +863,14 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
         Thread pipeThread = null;
         try
         {
+            TryDeleteState();
             cts = new CancellationTokenSource();
             pipeThread = new Thread(() => new InternetPipeServer(config, new FastApplyInternetFirewallApplier()).Run(cts.Token))
             {
                 IsBackground = true,
             };
             pipeThread.Start();
-            await Task.Delay(500);
+            await WaitForPipeStatusReconcileFinishedAsync(TimeSpan.FromSeconds(60));
             var cmd = Sign(rsa, new InternetCommandPayload
             {
                 StationId = config.StationId,
@@ -883,8 +887,7 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
         }
         finally
         {
-            cts?.Cancel();
-            pipeThread?.Join(TimeSpan.FromSeconds(5));
+            StopInternetPipeServer(cts, pipeThread, TimeSpan.FromSeconds(5));
             new InternetFirewallApplier().RunResetScript();
         }
     }
@@ -923,8 +926,7 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
         finally
         {
             Environment.SetEnvironmentVariable("CHECKPOINT_INTERNET_PIPE_READ_MS", priorRead);
-            cts?.Cancel();
-            pipeThread?.Join(TimeSpan.FromSeconds(5));
+            StopInternetPipeServer(cts, pipeThread, TimeSpan.FromSeconds(5));
         }
     }
 
@@ -991,8 +993,7 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
         }
         finally
         {
-            cts?.Cancel();
-            pipeThread?.Join(TimeSpan.FromSeconds(5));
+            StopInternetPipeServer(cts, pipeThread, TimeSpan.FromSeconds(5));
         }
     }
 

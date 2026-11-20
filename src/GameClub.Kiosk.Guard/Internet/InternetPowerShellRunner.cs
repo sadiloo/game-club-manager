@@ -67,9 +67,6 @@ internal static class InternetPowerShellRunner
                 GuardWatchdogLog.Append(
                     $"powershell_timeout step={step} pid={pid} budget_ms={timeoutMs}");
                 InternetPowerShellProcessTree.KillTree(pid);
-                InternetPowerShellProcessTree.WaitForProcessExit(
-                    pid,
-                    InternetPowerShellProcessTree.KillAfterExitWaitMsBudget);
                 return "apply_failed:powershell_timeout";
             }
 

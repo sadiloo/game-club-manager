@@ -3,6 +3,7 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using GameClub.Kiosk.Guard.Internet;
@@ -59,17 +60,20 @@ Start-Sleep -Seconds 600
                 Assert.True(sw.ElapsedMilliseconds < budgetMs + 6_000, $"elapsed={sw.ElapsedMilliseconds}");
 
                 ProcessTreeDiagnostics.LogProcessForest($"after_kill_child_root pid={childPid}");
-                var exitWaitMs = InternetPowerShellRunnerIntegrationTestSupport.KillExitWaitMs;
-                ProcessTreeDiagnostics.LogPidExitState("after_kill_target", childPid, waitMs: exitWaitMs);
-
-                try
+                var killTargets = InternetPowerShellProcessTree.LastKillTreeTargets;
+                Assert.NotEmpty(killTargets);
+                Assert.Contains(childPid, killTargets);
+                foreach (var pid in killTargets)
                 {
-                    using var stillAlive = Process.GetProcessById(childPid);
-                    Assert.Fail($"child pid {childPid} should be gone after timeout kill");
-                }
-                catch (ArgumentException)
-                {
-                    /* expected */
+                    try
+                    {
+                        using var stillAlive = Process.GetProcessById(pid);
+                        Assert.Fail($"pid {pid} should be gone when Run returns after timeout kill");
+                    }
+                    catch (ArgumentException)
+                    {
+                        /* expected */
+                    }
                 }
             });
         }
@@ -87,10 +91,5 @@ Start-Sleep -Seconds 600
             }
         }
     }
-}
-
-internal static class InternetPowerShellRunnerIntegrationTestSupport
-{
-    internal static int KillExitWaitMs => 8_000;
 }
 #endif

@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Runtime.InteropServices;
+using GameClub.Kiosk.Guard;
 
 namespace GameClub.Kiosk.Guard.Internet;
 
@@ -10,7 +12,56 @@ internal static class InternetPowerShellProcessTree
 {
     private const int KillAfterExitWaitMs = 3_000;
 
+    internal static IReadOnlyList<int> LastKillTreeTargets { get; private set; } = Array.Empty<int>();
+
     internal static void KillTree(int rootPid)
+    {
+        var captured = CaptureTreePids(rootPid).ToList();
+        LastKillTreeTargets = captured;
+
+        foreach (var pid in captured)
+        {
+            try
+            {
+                using var proc = Process.GetProcessById(pid);
+                if (!proc.HasExited)
+                {
+                    proc.Kill();
+                }
+            }
+            catch
+            {
+                /* already gone */
+            }
+        }
+
+        var survivors = WaitForAllProcessExit(captured, KillAfterExitWaitMs);
+        if (survivors.Count > 0)
+        {
+            GuardWatchdogLog.Append(
+                $"PROCESS_TREE label=powershell_kill_survivors pids={string.Join(",", survivors)} waitMs={KillAfterExitWaitMs}");
+        }
+    }
+
+    internal static bool WaitForProcessExit(int pid, int waitMs)
+    {
+        var deadline = DateTime.UtcNow.AddMilliseconds(waitMs);
+        while (DateTime.UtcNow < deadline)
+        {
+            if (ProcessHasExited(pid))
+            {
+                return true;
+            }
+
+            ThreadingSleep(50);
+        }
+
+        return ProcessHasExited(pid);
+    }
+
+    internal static int KillAfterExitWaitMsBudget => KillAfterExitWaitMs;
+
+    private static IEnumerable<int> CaptureTreePids(int rootPid)
     {
         var targets = new HashSet<int> { rootPid };
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
@@ -33,44 +84,43 @@ internal static class InternetPowerShellProcessTree
             }
         }
 
-        foreach (var pid in targets)
-        {
-            try
-            {
-                using var proc = Process.GetProcessById(pid);
-                if (!proc.HasExited)
-                {
-                    proc.Kill();
-                }
-            }
-            catch
-            {
-                /* already gone */
-            }
-        }
+        return targets;
     }
 
-    internal static bool WaitForProcessExit(int pid, int waitMs)
+    private static List<int> WaitForAllProcessExit(IReadOnlyList<int> pids, int totalWaitMs)
     {
-        var deadline = DateTime.UtcNow.AddMilliseconds(waitMs);
-        while (DateTime.UtcNow < deadline)
+        if (pids.Count == 0)
         {
-            try
+            return new List<int>();
+        }
+
+        var pending = new HashSet<int>(pids);
+        var deadline = DateTime.UtcNow.AddMilliseconds(totalWaitMs);
+        while (pending.Count > 0 && DateTime.UtcNow < deadline)
+        {
+            pending.RemoveWhere(ProcessHasExited);
+            if (pending.Count == 0)
             {
-                using var proc = Process.GetProcessById(pid);
-                if (proc.HasExited)
-                {
-                    return true;
-                }
-            }
-            catch
-            {
-                return true;
+                break;
             }
 
             ThreadingSleep(50);
         }
 
+        var survivors = new List<int>();
+        foreach (var pid in pids)
+        {
+            if (!ProcessHasExited(pid))
+            {
+                survivors.Add(pid);
+            }
+        }
+
+        return survivors;
+    }
+
+    private static bool ProcessHasExited(int pid)
+    {
         try
         {
             using var proc = Process.GetProcessById(pid);
@@ -81,8 +131,6 @@ internal static class InternetPowerShellProcessTree
             return true;
         }
     }
-
-    internal static int KillAfterExitWaitMsBudget => KillAfterExitWaitMs;
 
     private static void ThreadingSleep(int ms) => System.Threading.Thread.Sleep(ms);
 
