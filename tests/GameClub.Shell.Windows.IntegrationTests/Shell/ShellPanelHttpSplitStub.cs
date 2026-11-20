@@ -1,5 +1,6 @@
 #if NET48
 using System;
+using System.Collections.Generic;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -12,8 +13,20 @@ internal sealed class ShellPanelHttpSplitStub : IDisposable
 {
     private readonly HttpListener _listener = new();
     private readonly CancellationTokenSource _cts = new();
+    private readonly List<Task> _inflightHandlers = new();
+    private readonly object _handlerLock = new();
+    private readonly object _telemetryLock = new();
+    private readonly List<DateTime> _probeSuccessUtcTimestamps = new();
+    private readonly List<OperatorDelayWindow> _operatorDelayWindows = new();
     private Task? _listenTask;
     private readonly ManualResetEventSlim _started = new(false);
+
+    private sealed class OperatorDelayWindow
+    {
+        public DateTime StartUtc { get; init; }
+        public DateTime? EndUtc { get; set; }
+        public int DelayMilliseconds { get; init; }
+    }
 
     public ShellPanelHttpSplitStub(int port)
     {
@@ -30,6 +43,48 @@ internal sealed class ShellPanelHttpSplitStub : IDisposable
     private int _operatorResponseCount;
 
     public int OperatorResponseCount => _operatorResponseCount;
+
+    public int ProbeSuccessCount
+    {
+        get
+        {
+            lock (_telemetryLock)
+            {
+                return _probeSuccessUtcTimestamps.Count;
+            }
+        }
+    }
+
+  /// <summary>
+    /// True when at least one /shell-probe/ 200 was completed while an /operator/ handler was still awaiting its delay.
+    /// </summary>
+    public bool WasProbeOkServedDuringOperatorDelay
+    {
+        get
+        {
+            lock (_telemetryLock)
+            {
+                foreach (var probeAt in _probeSuccessUtcTimestamps)
+                {
+                    foreach (var window in _operatorDelayWindows)
+                    {
+                        if (window.DelayMilliseconds <= 0)
+                        {
+                            continue;
+                        }
+
+                        var windowEnd = window.EndUtc ?? DateTime.UtcNow;
+                        if (probeAt >= window.StartUtc && probeAt < windowEnd)
+                        {
+                            return true;
+                        }
+                    }
+                }
+
+                return false;
+            }
+        }
+    }
 
     public static int AllocateLoopbackPort()
     {
@@ -58,6 +113,20 @@ internal sealed class ShellPanelHttpSplitStub : IDisposable
         try
         {
             _listener.Stop();
+        }
+        catch
+        {
+        }
+
+        Task[] pending;
+        lock (_handlerLock)
+        {
+            pending = _inflightHandlers.ToArray();
+        }
+
+        try
+        {
+            Task.WaitAll(pending, TimeSpan.FromSeconds(30));
         }
         catch
         {
@@ -99,43 +168,115 @@ internal sealed class ShellPanelHttpSplitStub : IDisposable
             {
                 break;
             }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
 
             if (ctx is null)
             {
                 continue;
             }
 
+            var handlerTask = Task.Run(() => HandleRequestAsync(ctx, _cts.Token), _cts.Token);
+            lock (_handlerLock)
+            {
+                _inflightHandlers.Add(handlerTask);
+            }
+
+            _ = handlerTask.ContinueWith(
+                t =>
+                {
+                    lock (_handlerLock)
+                    {
+                        _inflightHandlers.Remove(t);
+                    }
+                },
+                TaskScheduler.Default);
+        }
+    }
+
+    private async Task HandleRequestAsync(HttpListenerContext ctx, CancellationToken ct)
+    {
+        OperatorDelayWindow? delayWindow = null;
+        try
+        {
             var path = ctx.Request.Url?.AbsolutePath ?? "";
             if (path.StartsWith("/shell-probe", StringComparison.OrdinalIgnoreCase))
             {
-                WriteHtmlResponse(ctx.Response, 200, "<html><body>probe ok</body></html>", 0);
-                continue;
+                await WriteHtmlResponseAsync(
+                    ctx.Response,
+                    200,
+                    "<html><body>probe ok</body></html>",
+                    0,
+                    ct);
+                lock (_telemetryLock)
+                {
+                    _probeSuccessUtcTimestamps.Add(DateTime.UtcNow);
+                }
+
+                return;
             }
 
             if (path.StartsWith("/operator", StringComparison.OrdinalIgnoreCase))
             {
                 Interlocked.Increment(ref _operatorResponseCount);
                 var delayMs = OperatorDelayMilliseconds;
-                WriteHtmlResponse(
+                if (delayMs > 0)
+                {
+                    delayWindow = new OperatorDelayWindow
+                    {
+                        StartUtc = DateTime.UtcNow,
+                        DelayMilliseconds = delayMs,
+                    };
+                    lock (_telemetryLock)
+                    {
+                        _operatorDelayWindows.Add(delayWindow);
+                    }
+                }
+
+                await WriteHtmlResponseAsync(
                     ctx.Response,
                     OperatorStatusCode,
                     OperatorStatusCode == 200
                         ? "<html><body>/operator/ ok</body></html>"
                         : "<html><body>service unavailable</body></html>",
-                    delayMs);
+                    delayMs,
+                    ct);
+                return;
             }
-            else
+
+            await WriteHtmlResponseAsync(ctx.Response, 404, "not found", 0, ct);
+        }
+        catch (OperationCanceledException)
+        {
+            try
             {
-                WriteHtmlResponse(ctx.Response, 404, "not found", 0);
+                ctx.Response.Abort();
+            }
+            catch
+            {
+            }
+        }
+        finally
+        {
+            if (delayWindow is not null)
+            {
+                delayWindow.EndUtc = DateTime.UtcNow;
             }
         }
     }
 
-    private static void WriteHtmlResponse(HttpListenerResponse response, int statusCode, string body, int delayMilliseconds)
+    private static async Task WriteHtmlResponseAsync(
+        HttpListenerResponse response,
+        int statusCode,
+        string body,
+        int delayMilliseconds,
+        CancellationToken ct)
     {
         if (delayMilliseconds > 0)
         {
-            Thread.Sleep(delayMilliseconds);
+            await Task.Delay(delayMilliseconds, ct);
         }
 
         var bytes = Encoding.UTF8.GetBytes(body);

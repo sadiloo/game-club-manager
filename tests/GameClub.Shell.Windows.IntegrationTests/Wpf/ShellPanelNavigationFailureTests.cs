@@ -215,6 +215,16 @@ public sealed class ShellPanelNavigationFailureTests
 
             Assert.Equal(navCount, window.NavigationStartingCount);
             Assert.Equal(0, window.PanelNavigationPendingCountForTests);
+            if (expectSlowTimeout)
+            {
+                Assert.True(
+                    stub.ProbeSuccessCount >= 1,
+                    "Expected at least one /shell-probe/ 200 while /operator/ was slow");
+                Assert.True(
+                    stub.WasProbeOkServedDuringOperatorDelay,
+                    "Expected /shell-probe/ 200 during an in-flight /operator/ delay window");
+            }
+
             var log = Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log").Select(File.ReadAllText).Aggregate("", string.Concat);
             var presentOfflineCount = log.Split('\n')
                 .Count(l => l.Contains("panel-navigate caller=PresentOffline", StringComparison.Ordinal));
