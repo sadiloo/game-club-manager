@@ -18,6 +18,18 @@ let walletCorrectDraftKey = null;
 let lastCollectibleToman = 0;
 let cpBgPollFailures = 0;
 
+const CP_TEXT = {
+  f12: {
+    title: "جدول سطح‌ها",
+    levelName: "نام سطح",
+    minHours: "حداقل ساعت بازی",
+    discountPercent: "درصد تخفیف",
+    addLevel: "افزودن سطح",
+    remove: "حذف",
+    save: "ذخیره جدول",
+  },
+};
+
 const PENDING_ACTION_TIMEOUT_MS = 15000;
 const pendingRowInFlight = new Set();
 
@@ -214,12 +226,12 @@ function renderLevelLadderEditor(host, session, rows) {
       const card = document.createElement("div");
       card.className = "cp-ladder-card";
       card.innerHTML =
-        `<label>نام سطح<input data-ladder="name" data-idx="${idx}" value="${row.name || ""}"/></label>` +
-        `<label>حداقل ساعت بازی<input data-ladder="hours" data-idx="${idx}" inputmode="numeric" dir="ltr" value="${row.minimumLifetimeHours ?? ""}"/></label>` +
-        `<label>درصد تخفیف<input data-ladder="pct" data-idx="${idx}" inputmode="numeric" dir="ltr" value="${row.discountPercent ?? ""}"/></label>`;
+        `<label>${CP_TEXT.f12.levelName}<input data-ladder="name" data-idx="${idx}" value="${row.name || ""}"/></label>` +
+        `<label>${CP_TEXT.f12.minHours}<input data-ladder="hours" data-idx="${idx}" inputmode="numeric" dir="ltr" value="${row.minimumLifetimeHours ?? ""}"/></label>` +
+        `<label>${CP_TEXT.f12.discountPercent}<input data-ladder="pct" data-idx="${idx}" inputmode="numeric" dir="ltr" value="${row.discountPercent ?? ""}"/></label>`;
       const rm = document.createElement("button");
       rm.type = "button";
-      rm.textContent = "حذف";
+      rm.textContent = CP_TEXT.f12.remove;
       rm.className = "cp-secondary cp-btn";
       rm.onclick = () => {
         state.rows.splice(idx, 1);
@@ -231,7 +243,7 @@ function renderLevelLadderEditor(host, session, rows) {
     const add = document.createElement("button");
     add.type = "button";
     add.className = "cp-btn cp-secondary";
-    add.textContent = "افزودن سطح";
+    add.textContent = CP_TEXT.f12.addLevel;
     add.onclick = () => {
       const lastH = state.rows.length ? Number(state.rows[state.rows.length - 1].minimumLifetimeHours) || 0 : -1;
       state.rows.push({ name: "", minimumLifetimeHours: lastH + 1, discountPercent: 0 });
@@ -2024,8 +2036,8 @@ bindClick("mgrCustBirthdayBtn", async () => {
 bindClick("mgrLadderBtn", async () => {
   const cur = await api("/api/operator/members/settings/level-ladder");
   const values = await cpForm({
-    title: "جدول سطح‌ها",
-    confirmLabel: "ذخیره جدول",
+    title: CP_TEXT.f12.title,
+    confirmLabel: CP_TEXT.f12.save,
     wide: true,
     fields: [
       {

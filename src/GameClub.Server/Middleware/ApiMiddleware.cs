@@ -68,7 +68,8 @@ public sealed class ApiExceptionMiddleware(RequestDelegate next)
         }
         catch (BillingException ex)
         {
-            await WriteJsonErrorAsync(context, StatusCodes.Status400BadRequest, ex.Code, ex.Message, null);
+            var userMessage = BillingExceptionUserMessages.ForCode(ex.Code);
+            await WriteJsonErrorAsync(context, StatusCodes.Status400BadRequest, ex.Code, userMessage, null);
         }
         catch (DbUpdateException ex) when (PostgresErrors.IsActiveSessionUniqueViolation(ex))
         {
@@ -81,6 +82,13 @@ public sealed class ApiExceptionMiddleware(RequestDelegate next)
         catch (DbUpdateException ex) when (PostgresErrors.IsInvoiceSessionUniqueViolation(ex))
         {
             await WriteConflictAsync(context, "closed", "Session is closed.");
+        }
+        catch (Exception)
+        {
+            if (context.Response.HasStarted) throw;
+            context.Response.StatusCode = StatusCodes.Status500InternalServerError;
+            context.Response.ContentType = "text/plain; charset=utf-8";
+            await context.Response.WriteAsync("Internal Server Error");
         }
     }
 
