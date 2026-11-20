@@ -184,18 +184,29 @@ $localRules = @(Get-NetFirewallRule -PolicyStore localhost -Group $group -ErrorA
 
         foreach (var ip in config.ServerIps)
         {
+            var sw = Stopwatch.StartNew();
+            var connected = false;
             try
             {
                 using var tcp = new TcpClient();
                 var task = tcp.ConnectAsync(ip, config.ServerPort);
                 if (task.Wait(2_000) && tcp.Connected)
                 {
-                    return true;
+                    connected = true;
                 }
             }
             catch
             {
                 /* try next */
+            }
+
+            GuardWatchdogLog.Append(
+                "GUARD_OFF_PROBE "
+                + $"host={config.ServerHost} ip={ip} port={config.ServerPort} "
+                + $"connected={connected.ToString().ToLowerInvariant()} elapsed_ms={sw.ElapsedMilliseconds}");
+            if (connected)
+            {
+                return true;
             }
         }
 

@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading;
+using System.Threading.Tasks;
 using Xunit;
 
 namespace GameClub.Kiosk.Windows.IntegrationTests.Guard;
@@ -92,6 +93,56 @@ internal static class GuardWatchdogTimelineReader
             .Count(l => l.Contains("guard.restart", StringComparison.Ordinal)
                 && l.Contains("launched_pid_", StringComparison.Ordinal));
         Assert.Equal(1, launched);
+    }
+
+    internal static async Task WaitForTimelineMarkerAsync(
+        long logStartOffset,
+        string marker,
+        TimeSpan budget,
+        int pollMs = 100)
+    {
+        var deadline = DateTime.UtcNow.Add(budget);
+        while (DateTime.UtcNow < deadline)
+        {
+            if (ReadLinesSince(logStartOffset).Any(l => l.Contains(marker, StringComparison.Ordinal)))
+            {
+                return;
+            }
+
+            await Task.Delay(pollMs);
+        }
+
+        Assert.Fail(
+            $"Timed out after {(int)budget.TotalSeconds}s waiting for watchdog marker containing: {marker}");
+    }
+
+    internal static void AssertPipeRestartHandlingOrder(long logStartOffset, Action<string> trace)
+    {
+        var lines = ReadLinesSince(logStartOffset).ToArray();
+        var timeline = lines
+            .Where(l => l.Contains("GUARD_TIMELINE", StringComparison.Ordinal)
+                || l.Contains("PIPE_TIMELINE", StringComparison.Ordinal))
+            .ToList();
+        foreach (var line in timeline)
+        {
+            trace(line);
+        }
+
+        int IndexOf(string fragment) =>
+            Array.FindIndex(lines, l => l.Contains(fragment, StringComparison.Ordinal));
+
+        var listeningIdx = IndexOf("GUARD_TIMELINE event=pipe_listening");
+        var lockExitIdx = IndexOf("early_reassert_off_lock_exit");
+        var handledIdx = IndexOf("GUARD_TIMELINE event=pipe_request_handled");
+        var pipeReadyIdx = IndexOf("GUARD_TIMELINE event=pipe_ready");
+
+        Assert.True(listeningIdx >= 0, "watchdog must log GUARD_TIMELINE event=pipe_listening");
+        Assert.True(lockExitIdx >= 0, "watchdog must log PIPE_TIMELINE early_reassert_off_lock_exit");
+        Assert.True(handledIdx >= 0, "watchdog must log GUARD_TIMELINE event=pipe_request_handled after client request");
+        Assert.True(pipeReadyIdx >= 0, "watchdog must log GUARD_TIMELINE event=pipe_ready for guard2 run");
+        Assert.True(listeningIdx < lockExitIdx, "pipe_listening must precede early_reassert_off_lock_exit");
+        Assert.True(lockExitIdx < handledIdx, "early_reassert_off_lock_exit must precede pipe_request_handled");
+        Assert.True(handledIdx < pipeReadyIdx, "pipe_request_handled must precede pipe_ready");
     }
 
     internal static void AssertEarlyOffReassertBeforePipeReady(long logStartOffset, Action<string> trace)

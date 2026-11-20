@@ -481,7 +481,19 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
 
             var result = applier.ApplyWithStoreEcho(config, on: false);
             Assert.Equal("applied", result);
-            Assert.True(TryTcp("api.github.com", 443, 5_000), "re-apply must recreate allow rules before verification.");
+            if (!TryTcp("api.github.com", 443, 5_000))
+            {
+                var resolved = Dns.GetHostAddresses("api.github.com")
+                    .Where(a => a.AddressFamily == AddressFamily.InterNetwork)
+                    .Select(a => a.ToString());
+                Console.WriteLine(
+                    "REAPPLY_TCP_FAIL resolved_ipv4="
+                    + string.Join(",", resolved)
+                    + " config_ips="
+                    + string.Join(",", config.ServerIps));
+                FirewallStoreEcho.EchoAllStores("reapply_tcp_fail");
+                Assert.True(false, "re-apply must recreate allow rules before verification.");
+            }
         }
         finally
         {

@@ -181,15 +181,26 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
             var guard2LogOffset = GuardWatchdogTimelineReader.CurrentLogLength();
             guard2 = GuardProcessStart.StartGuard();
             GuardTimeline($"guard2_start pid={guard2.Id}");
+            await GuardWatchdogTimelineReader.WaitForTimelineMarkerAsync(
+                guard2LogOffset,
+                "GUARD_TIMELINE event=pipe_listening",
+                TimeSpan.FromSeconds(20));
+            GuardTimeline("pipe_listening_seen");
+
+            var pipeClient = new GuardInternetClient();
+            await pipeClient.GetStatusAsync();
+            GuardTimeline("guard2_status_ok");
+
             var restored = DateTime.UtcNow.AddSeconds(15);
             while (DateTime.UtcNow < restored)
             {
-                var guard2Lines = GuardWatchdogTimelineReader.ReadLinesSince(guard2LogOffset);
-                if (guard2Lines.Any(l => l.Contains("GUARD_TIMELINE event=early_reassert_off", StringComparison.Ordinal))
-                    && !TryTcp("1.1.1.1", 443, 500))
+                if (!TryTcp("1.1.1.1", 443, 500))
                 {
                     GuardTimeline($"first_egress_blocked ms={timeline.ElapsedMilliseconds}");
                     GuardWatchdogTimelineReader.AssertExactlyOneGuardRestart(guard2LogOffset);
+                    GuardWatchdogTimelineReader.AssertPipeRestartHandlingOrder(
+                        guard2LogOffset,
+                        line => GuardTimeline($"watchdog {line}"));
                     GuardWatchdogTimelineReader.AssertEarlyOffReassertBeforePipeReady(
                         guard2LogOffset,
                         line => GuardTimeline($"watchdog {line}"));
@@ -367,6 +378,78 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
         }
     }
 
+    [Fact(Timeout = 120_000)]
+    public async Task internet_pipe_on_apply_during_early_off_reassert_waits_for_lock_exit()
+    {
+        RequireWindowsAdmin();
+        using var rsa = RSA.Create(2048);
+        var pub = ExportPublicKeyPem(rsa);
+        var config = BuildConfig(pub);
+        var applier = new DelayedEarlyReassertInternetFirewallApplier(offApplyDelayMs: 4_000);
+        CancellationTokenSource cts = null;
+        Thread pipeThread = null;
+        try
+        {
+            var epoch = Guid.NewGuid();
+            var off = Sign(rsa, new InternetCommandPayload
+            {
+                StationId = config.StationId,
+                Epoch = epoch,
+                Version = 1,
+                On = false,
+                IssuedAtUtc = DateTime.UtcNow,
+            });
+            Assert.Equal("applied", applier.ApplyWithStoreEcho(config, on: false));
+            InternetVerifiedStateFile.Save(InternetGuardPaths.StatePath, off.Payload);
+            WriteInternetConfig(config);
+
+            var logOffset = GuardWatchdogTimelineReader.CurrentLogLength();
+            cts = new CancellationTokenSource();
+            var server = new InternetPipeServer(config, applier);
+            pipeThread = new Thread(() => server.Run(cts.Token)) { IsBackground = true };
+            pipeThread.Start();
+            await GuardWatchdogTimelineReader.WaitForTimelineMarkerAsync(
+                logOffset,
+                "early_reassert_off_lock_enter",
+                TimeSpan.FromSeconds(20));
+
+            var onCommand = Sign(rsa, new InternetCommandPayload
+            {
+                StationId = config.StationId,
+                Epoch = epoch,
+                Version = 2,
+                On = true,
+                IssuedAtUtc = DateTime.UtcNow,
+            });
+            var client = new GuardInternetClient();
+            var applyTask = client.ApplyAsync(onCommand);
+
+            await GuardWatchdogTimelineReader.WaitForTimelineMarkerAsync(
+                logOffset,
+                "early_reassert_off_lock_exit",
+                TimeSpan.FromSeconds(25));
+            var response = await applyTask;
+            Assert.Contains("\"on\":true", response, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("applied", response, StringComparison.OrdinalIgnoreCase);
+
+            var lockExitIdx = GuardWatchdogTimelineReader.ReadLinesSince(logOffset)
+                .Select((line, idx) => (line, idx))
+                .First(p => p.line.Contains("early_reassert_off_lock_exit", StringComparison.Ordinal)).idx;
+            var handledIdx = GuardWatchdogTimelineReader.ReadLinesSince(logOffset)
+                .Select((line, idx) => (line, idx))
+                .First(p => p.line.Contains("GUARD_TIMELINE event=pipe_request_handled", StringComparison.Ordinal)).idx;
+            Assert.True(lockExitIdx < handledIdx, "ON apply must not be handled before early_reassert_off_lock_exit");
+            Assert.True(TryTcp("1.1.1.1", 443, 2_000), "ON apply during early reassert must open egress after hold release.");
+        }
+        finally
+        {
+            InternetPipeServerTestTeardown.Stop(cts, pipeThread);
+            new InternetFirewallApplier().RunResetScript();
+            TryDelete(InternetGuardPaths.ConfigPath);
+            TryDelete(InternetGuardPaths.StatePath);
+        }
+    }
+
     [Fact(Timeout = 60_000)]
     public async Task internet_pipe_rejects_older_signed_on_while_still_off()
     {
@@ -393,10 +476,14 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
             WriteInternetConfig(config);
 
             cts = new CancellationTokenSource();
+            var logOffset = GuardWatchdogTimelineReader.CurrentLogLength();
             var server = new InternetPipeServer(config);
             pipeThread = new Thread(() => server.Run(cts.Token)) { IsBackground = true };
             pipeThread.Start();
-            await Task.Delay(1_000);
+            await GuardWatchdogTimelineReader.WaitForTimelineMarkerAsync(
+                logOffset,
+                "GUARD_TIMELINE event=pipe_listening",
+                TimeSpan.FromSeconds(20));
 
             var staleOn = Sign(rsa, new InternetCommandPayload
             {

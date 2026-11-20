@@ -34,6 +34,14 @@ internal sealed class InternetPipeServer
     private CancellationToken _shutdownCt;
     private long _runTimelineOriginTicks;
     private long _pipeTimelineSeq;
+    private readonly ManualResetEventSlim _earlyReassertFinished = new(true);
+    private volatile bool _earlyReassertApplyBlocked;
+    private volatile bool _loggedPipeListening;
+    private volatile int _loggedPipeReady;
+    private readonly object _heldRequestFifoLock = new();
+    private int _heldRequestNextTicket;
+    private int _heldRequestServingTicket;
+    private Thread? _earlyReassertThread;
 
     public InternetPipeServer(InternetGuardConfig config, IInternetFirewallApplier? firewall = null)
     {
@@ -91,44 +99,125 @@ internal sealed class InternetPipeServer
         GuardWatchdogLog.Append($"PIPE_TIMELINE seq={seq} ms={elapsedMs} event={eventName}");
     }
 
+    private void RunEarlyReassertOffOnBackgroundThread()
+    {
+        var earlyReassert = Stopwatch.StartNew();
+        try
+        {
+            AppendPipeTimeline("early_reassert_off_lock_wait");
+            RunWithFirewallGate("early_reassert", () =>
+            {
+                AppendPipeTimeline("early_reassert_off_lock_enter");
+                ReassertPersistedLocked();
+                AppendPipeTimeline($"early_reassert_off_lock_exit elapsed_ms={earlyReassert.ElapsedMilliseconds}");
+            });
+
+            GuardWatchdogLog.Append(
+                $"GUARD_TIMELINE event=early_reassert_off elapsed_ms={earlyReassert.ElapsedMilliseconds}");
+        }
+        catch (Exception ex)
+        {
+            _earlyReassertApplyBlocked = true;
+            GuardWatchdogLog.Append(
+                $"GUARD_TIMELINE event=early_reassert_off_failed error={ex.Message}");
+            AppendPipeTimeline($"early_reassert_off_failed error={ex.Message}");
+        }
+        finally
+        {
+            InternetGuardShellLaunchGate.MarkReady();
+            _earlyReassertFinished.Set();
+            PulseHeldRequestFifo();
+        }
+    }
+
+    private int AcquireHeldRequestTicket()
+    {
+        lock (_heldRequestFifoLock)
+        {
+            return _heldRequestNextTicket++;
+        }
+    }
+
+    private void WaitForHeldRequestTurn(int ticket)
+    {
+        _earlyReassertFinished.Wait(_shutdownCt);
+        lock (_heldRequestFifoLock)
+        {
+            while (_heldRequestServingTicket != ticket)
+            {
+                if (_shutdownCt.IsCancellationRequested)
+                {
+                    return;
+                }
+
+                Monitor.Wait(_heldRequestFifoLock, 50);
+            }
+        }
+    }
+
+    private void ReleaseHeldRequestTurn(int ticket)
+    {
+        lock (_heldRequestFifoLock)
+        {
+            if (_heldRequestServingTicket == ticket)
+            {
+                _heldRequestServingTicket++;
+            }
+
+            Monitor.PulseAll(_heldRequestFifoLock);
+        }
+    }
+
+    private void PulseHeldRequestFifo()
+    {
+        lock (_heldRequestFifoLock)
+        {
+            Monitor.PulseAll(_heldRequestFifoLock);
+        }
+    }
+
+    private static void LogPipeListeningOnce(InternetPipeServer server)
+    {
+        if (server._loggedPipeListening)
+        {
+            return;
+        }
+
+        server._loggedPipeListening = true;
+        GuardWatchdogLog.Append("GUARD_TIMELINE event=pipe_listening");
+        server.AppendPipeTimeline("pipe_listening");
+    }
+
+    private void MaybeLogPipeReadyAfterRequest(int handlerThread)
+    {
+        if (Interlocked.CompareExchange(ref _loggedPipeReady, 1, 0) != 0)
+        {
+            return;
+        }
+
+        GuardWatchdogLog.Append(
+            $"GUARD_TIMELINE event=pipe_ready thread={handlerThread}");
+    }
+
     public void Run(CancellationToken ct)
     {
         _shutdownCt = ct;
         _runTimelineOriginTicks = Stopwatch.GetTimestamp();
         InternetGuardShellLaunchGate.ResetReady();
-        try
+        _heldRequestNextTicket = 0;
+        _heldRequestServingTicket = 0;
+        _earlyReassertApplyBlocked = false;
+        _loggedPipeListening = false;
+        _loggedPipeReady = 0;
+        AppendPipeTimeline("run_begin");
+        if (!_on)
         {
-            AppendPipeTimeline("run_begin");
-            if (!_on)
-            {
-                try
-                {
-                    var earlyReassert = Stopwatch.StartNew();
-                    AppendPipeTimeline("early_reassert_off_lock_wait");
-                    RunWithFirewallGate("early_reassert", () =>
-                    {
-                        AppendPipeTimeline("early_reassert_off_lock_enter");
-                        ReassertPersistedLocked();
-                        AppendPipeTimeline($"early_reassert_off_lock_exit elapsed_ms={earlyReassert.ElapsedMilliseconds}");
-                    });
-
-                    GuardWatchdogLog.Append(
-                        $"GUARD_TIMELINE event=early_reassert_off elapsed_ms={earlyReassert.ElapsedMilliseconds}");
-                }
-                finally
-                {
-                    InternetGuardShellLaunchGate.MarkReady();
-                }
-            }
-            else
-            {
-                InternetGuardShellLaunchGate.MarkReady();
-            }
+            _earlyReassertFinished.Reset();
         }
-        catch
+        else
         {
+            _earlyReassertFinished.Set();
             InternetGuardShellLaunchGate.MarkReady();
-            throw;
         }
 
         var reconcileThread = new Thread(() => RunReconcileBackground(ct))
@@ -157,11 +246,20 @@ internal sealed class InternetPipeServer
                         NamedPipeServerStream.MaxAllowedServerInstances,
                         PipeTransmissionMode.Byte,
                         PipeOptions.Asynchronous);
+                    LogPipeListeningOnce(this);
+                    if (!_on && _earlyReassertThread is null)
+                    {
+                        _earlyReassertThread = new Thread(RunEarlyReassertOffOnBackgroundThread)
+                        {
+                            IsBackground = true,
+                            Name = "CheckpointInternetEarlyReassertOff",
+                        };
+                        _earlyReassertThread.Start();
+                    }
+
                     server.WaitForConnection();
                     GuardWatchdogLog.Append(
                         $"pipe_accept thread={Thread.CurrentThread.ManagedThreadId}");
-                    GuardWatchdogLog.Append(
-                        $"GUARD_TIMELINE event=pipe_ready thread={Thread.CurrentThread.ManagedThreadId}");
                     var pipe = server;
                     var handler = new Thread(() => HandleConnectedClient(pipe))
                     {
@@ -217,6 +315,7 @@ internal sealed class InternetPipeServer
             }
 
             JoinPipeClientHandlerThreads(InternetPipeServerShutdownBudgets.HandlerJoinBudget);
+            JoinPipeBackgroundThread(_earlyReassertThread, "early_reassert_off", 30_000);
             AppendPipeTimeline("stop_join_end");
         }
     }
@@ -270,6 +369,7 @@ internal sealed class InternetPipeServer
     private void HandleConnectedClient(NamedPipeServerStream server)
     {
         var handlerThread = Thread.CurrentThread.ManagedThreadId;
+        var holdTicket = AcquireHeldRequestTicket();
         try
         {
             using (server)
@@ -291,13 +391,33 @@ internal sealed class InternetPipeServer
 
                 GuardWatchdogLog.Append(
                     $"pipe_read_ok thread={handlerThread} bytes={Encoding.UTF8.GetByteCount(body)}");
-                var response = HandleRequest(body);
+                WaitForHeldRequestTurn(holdTicket);
+                if (_shutdownCt.IsCancellationRequested)
+                {
+                    return;
+                }
+
+                AppendPipeTimeline($"pipe_request_hold_release ticket={holdTicket}");
+                string response;
+                if (_earlyReassertApplyBlocked && IsApplyVerb(body))
+                {
+                    response = JsonSerializer.Serialize(new { error = "apply_failed:early_reassert_off" });
+                }
+                else
+                {
+                    response = HandleRequest(body);
+                }
+
+                GuardWatchdogLog.Append(
+                    $"GUARD_TIMELINE event=pipe_request_handled thread={handlerThread} ticket={holdTicket}");
+                AppendPipeTimeline($"pipe_request_handled ticket={holdTicket}");
                 var responseLine = GuardInternetPipeProtocol.FrameRequest(response);
                 var outBytes = Encoding.UTF8.GetBytes(responseLine);
                 server.Write(outBytes, 0, outBytes.Length);
                 server.Flush();
                 GuardWatchdogLog.Append(
                     $"pipe_write_ok thread={handlerThread} bytes={outBytes.Length}");
+                MaybeLogPipeReadyAfterRequest(handlerThread);
             }
         }
         catch
@@ -310,6 +430,24 @@ internal sealed class InternetPipeServer
             {
                 /* listener continues */
             }
+        }
+        finally
+        {
+            ReleaseHeldRequestTurn(holdTicket);
+        }
+    }
+
+    private static bool IsApplyVerb(string body)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            var verb = doc.RootElement.GetProperty("verb").GetString();
+            return string.Equals(verb, "apply", StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
         }
     }
 
