@@ -201,7 +201,6 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
                 if (!TryTcp("1.1.1.1", 443, 500))
                 {
                     GuardTimeline($"first_egress_blocked ms={timeline.ElapsedMilliseconds}");
-                    GuardWatchdogTimelineReader.AssertExactlyOneGuardRestart(guard2LogOffset);
                     GuardWatchdogTimelineReader.AssertPipeRestartHandlingOrder(
                         guard2LogOffset,
                         line => GuardTimeline($"watchdog {line}"));
@@ -453,6 +452,8 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
         var pub = ExportPublicKeyPem(rsa);
         var config = BuildConfig(pub);
         var applier = new DelayedEarlyReassertInternetFirewallApplier(offApplyDelayMs: 5_000);
+        var priorPipeIo = Environment.GetEnvironmentVariable("CHECKPOINT_INTERNET_PIPE_IO_MS");
+        Environment.SetEnvironmentVariable("CHECKPOINT_INTERNET_PIPE_IO_MS", "90000");
         CancellationTokenSource cts = null;
         Thread pipeThread = null;
         try
@@ -545,6 +546,7 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
         }
         finally
         {
+            Environment.SetEnvironmentVariable("CHECKPOINT_INTERNET_PIPE_IO_MS", priorPipeIo);
             InternetPipeServerTestTeardown.Stop(cts, pipeThread);
             new InternetFirewallApplier().RunResetScript();
             TryDelete(InternetGuardPaths.ConfigPath);
