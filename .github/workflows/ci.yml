@@ -98,7 +98,10 @@ jobs:
 
   windows-kiosk-integration:
     name: windows-2022 kiosk integration
-    timeout-minutes: 40
+    # Job budget: run 44707738775 measured setup 36s + postgres 591s + main kiosk (pre-firewall) 723s
+    # + firewall step 368s (38/38 extrapolated) + reconnect 164s + wpf stability 360s + post 150s = 2392s;
+    # +20% headroom => 2870s (~48 min). Previous 40m job cap cancelled kiosk step at ~990s.
+    timeout-minutes: 48
     runs-on: windows-2022
     env:
       GAMECLUB_DATABASE: Host=localhost;Port=5432;Database=gameclub_test;Username=postgres;Password=postgres;SSL Mode=Disable
@@ -137,7 +140,8 @@ jobs:
         shell: pwsh
         run: ./scripts/windows/ci-integration.ps1
       - name: pc internet firewall integration
-        timeout-minutes: 13
+        if: ${{ success() || failure() }}
+        timeout-minutes: 15
         shell: pwsh
         run: ./scripts/windows/ci-integration.ps1 -PcInternetFirewallOnly
       - name: kiosk host reconnect mutations (net48 D7 and status tick)

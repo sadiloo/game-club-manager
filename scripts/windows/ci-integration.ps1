@@ -21,8 +21,23 @@ $heartbeatLog = Join-Path $logDir "ci-heartbeat.log"
 $firewallLog = Join-Path $logDir "ci-firewall.log"
 $cancelFile = Join-Path $logDir "deadman.cancel"
 
-$script:GlobalDeadline = (Get-Date).AddMinutes(19)
+if ($PcInternetFirewallOnly) {
+    $script:GlobalDeadline = (Get-Date).AddHours(2)
+    $script:CiIntegrationStepLabel = "firewall"
+} else {
+    $script:GlobalDeadline = (Get-Date).AddMinutes(19)
+    $script:CiIntegrationStepLabel = "main"
+}
 $script:FinalExitCode = 0
+$script:PhaseLogStartOffset = 0
+$script:WatchdogLogStartOffset = 0
+if (Test-Path $phaseLog) {
+    $script:PhaseLogStartOffset = (Get-Item -LiteralPath $phaseLog).Length
+}
+$watchdogAtStart = Join-Path $env:ProgramData "Checkpoint\guard\watchdog.log"
+if (Test-Path $watchdogAtStart) {
+    $script:WatchdogLogStartOffset = (Get-Item -LiteralPath $watchdogAtStart).Length
+}
 $script:NightLineVstestPhases = @{}
 $nightLineToken = "wpf_remaining_time_matches_funded_session_special_band_night_line"
 
@@ -82,11 +97,41 @@ function Write-TimeoutLine([string]$message) {
 }
 
 function Get-EffectiveTimeoutMs([int]$phaseCapMs) {
+    if ($PcInternetFirewallOnly) {
+        Write-Host "EFFECTIVE_PHASE_CAP_MS requested=$phaseCapMs effective=$phaseCapMs reason=firewall_only_no_global_clamp"
+        Write-PhaseLog "EFFECTIVE_PHASE_CAP_MS requested=$phaseCapMs effective=$phaseCapMs reason=firewall_only_no_global_clamp"
+        return [int]$phaseCapMs
+    }
+
     $remaining = ($script:GlobalDeadline - (Get-Date)).TotalMilliseconds - 30000
     if ($remaining -lt 0) { $remaining = 0 }
     $cap = [long]$phaseCapMs
-    if ($remaining -lt $cap) { return [int][Math]::Max(0, [int]$remaining) }
-    return [int]$cap
+    $effective = if ($remaining -lt $cap) { [int][Math]::Max(0, [int]$remaining) } else { [int]$cap }
+    Write-Host "EFFECTIVE_PHASE_CAP_MS requested=$phaseCapMs effective=$effective"
+    Write-PhaseLog "EFFECTIVE_PHASE_CAP_MS requested=$phaseCapMs effective=$effective"
+    return $effective
+}
+
+function Get-NewLogSubstring([string]$path, [long]$startOffset) {
+    if (-not (Test-Path $path)) {
+        return ""
+    }
+
+    $len = (Get-Item -LiteralPath $path).Length
+    if ($len -le $startOffset) {
+        return ""
+    }
+
+    $fs = [System.IO.File]::OpenRead($path)
+    try {
+        $null = $fs.Seek($startOffset, [System.IO.SeekOrigin]::Begin)
+        $toRead = [int]($len - $startOffset)
+        $buf = New-Object byte[] $toRead
+        $read = $fs.Read($buf, 0, $toRead)
+        return [System.Text.Encoding]::UTF8.GetString($buf, 0, $read)
+    } finally {
+        $fs.Dispose()
+    }
 }
 
 function Get-ProcessTreeLines([int]$rootProcId) {
@@ -286,25 +331,74 @@ function Write-CiPhaseFirewallProbe([string]$label) {
 }
 
 function Assert-CiPipeAndProcessLeakFromLogs {
-    $patterns = @(
-        @{ Token = "pipe_background_join_timeout"; Path = $phaseLog },
-        @{ Token = "pipe_background_join_timeout"; Path = (Join-Path $env:ProgramData "Checkpoint\guard\watchdog.log") }
-    )
+    $step = $script:CiIntegrationStepLabel
+    $watchdogPath = Join-Path $env:ProgramData "Checkpoint\guard\watchdog.log"
+    $token = "pipe_background_join_timeout"
     $joinCount = 0
-    foreach ($entry in $patterns) {
-        if (-not (Test-Path $entry.Path)) { continue }
-        $joinCount += @(Select-String -Path $entry.Path -Pattern $entry.Token -SimpleMatch -ErrorAction SilentlyContinue).Count
+    $phaseTail = Get-NewLogSubstring -path $phaseLog -startOffset $script:PhaseLogStartOffset
+    if (-not [string]::IsNullOrEmpty($phaseTail)) {
+        $joinCount += @([regex]::Matches($phaseTail, [regex]::Escape($token))).Count
     }
-    Write-Host "CI_PIPE_BACKGROUND_JOIN_TIMEOUT count=$joinCount"
-    Write-PhaseLog "CI_PIPE_BACKGROUND_JOIN_TIMEOUT count=$joinCount"
+
+    $watchdogTail = Get-NewLogSubstring -path $watchdogPath -startOffset $script:WatchdogLogStartOffset
+    if (-not [string]::IsNullOrEmpty($watchdogTail)) {
+        $joinCount += @([regex]::Matches($watchdogTail, [regex]::Escape($token))).Count
+    }
+
+    Write-Host "CI_PIPE_BACKGROUND_JOIN_TIMEOUT count=$joinCount step=$step"
+    Write-PhaseLog "CI_PIPE_BACKGROUND_JOIN_TIMEOUT count=$joinCount step=$step"
     if ($joinCount -gt 0 -and $script:FinalExitCode -eq 0) {
         $script:FinalExitCode = 1
     }
 
     $leakKiosk = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -eq "GameClub.Kiosk" })
-    Write-Host "CI_PROCESS_LEAK_KIOSK count=$($leakKiosk.Count)"
+    Write-Host "CI_PROCESS_LEAK_KIOSK count=$($leakKiosk.Count) step=$step"
     if ($leakKiosk.Count -gt 0 -and $script:FinalExitCode -eq 0) {
         $script:FinalExitCode = 1
+    }
+}
+
+function Ensure-PcInternetFirewallBuildOutputs {
+    $missing = New-Object System.Collections.Generic.List[string]
+    $pairs = @(
+        @{
+            Path = Join-Path $repoRoot "tests/GameClub.Kiosk.Core.Tests/bin/Release/net10.0/GameClub.Kiosk.Core.Tests.dll"
+            Args = @(
+                "build", "tests/GameClub.Kiosk.Core.Tests/GameClub.Kiosk.Core.Tests.csproj",
+                "-c", "Release", "-f", "net10.0", "--nologo")
+        },
+        @{
+            Path = Join-Path $repoRoot "tests/GameClub.Kiosk.Windows.IntegrationTests/bin/Release/net48/GameClub.Kiosk.Windows.IntegrationTests.dll"
+            Args = @(
+                "build", "tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj",
+                "-c", "Release", "-f", "net48", "--nologo")
+        },
+        @{
+            Path = Join-Path $repoRoot "tests/GameClub.Kiosk.Windows.IntegrationTests/bin/Release/net10.0/GameClub.Kiosk.Windows.IntegrationTests.dll"
+            Args = @(
+                "build", "tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj",
+                "-c", "Release", "-f", "net10.0", "--nologo")
+        },
+        @{
+            Path = Join-Path $repoRoot "src/GameClub.Kiosk.Guard/bin/Release/net48/GameClub.Kiosk.Guard.exe"
+            Args = @("build", "src/GameClub.Kiosk.Guard/GameClub.Kiosk.Guard.csproj", "-c", "Release", "-f", "net48", "--nologo")
+        }
+    )
+    foreach ($pair in $pairs) {
+        if (Test-Path $pair.Path) { continue }
+        $rel = $pair.Path.Substring($repoRoot.Length).TrimStart('\', '/')
+        $missing.Add($rel)
+        Write-Host "FW_ONLY_BUILD reason=missing_output path=$rel"
+        Write-PhaseLog "FW_ONLY_BUILD reason=missing_output path=$rel"
+        & dotnet @($pair.Args)
+        if ($LASTEXITCODE -ne 0) {
+            throw "FW_ONLY_BUILD failed path=$rel"
+        }
+    }
+
+    if ($missing.Count -eq 0) {
+        Write-Host "FW_ONLY_BUILD reason=skip_existing_outputs"
+        Write-PhaseLog "FW_ONLY_BUILD reason=skip_existing_outputs"
     }
 }
 
@@ -577,9 +671,10 @@ function Invoke-PcInternetFirewallIntegrationPhase {
     )
     $fwTrxPath = Join-Path $artifactDir "kiosk-windows-pc-internet-firewall.trx"
     $fwPhaseCapMs = 13 * 60 * 1000
-    Write-Host "FW_PHASE_BUDGET cap_ms=$fwPhaseCapMs basis_measured_ms=368000 sizing=2x_measured"
-    Write-PhaseLog "FW_PHASE_BUDGET cap_ms=$fwPhaseCapMs basis_measured_ms=368000 sizing=2x_measured"
-    $fwTestExit = Invoke-DotNetWithWatchdog -PhaseName "dotnet-test-pc-internet-firewall" -ArgumentList $fwTestArgs -PhaseCapMs $fwPhaseCapMs
+    $fwEffectiveCapMs = Get-EffectiveTimeoutMs -phaseCapMs $fwPhaseCapMs
+    Write-Host "FW_PHASE_BUDGET cap_ms=$fwPhaseCapMs effective_ms=$fwEffectiveCapMs basis_measured_ms=368000 step_timeout_min=15"
+    Write-PhaseLog "FW_PHASE_BUDGET cap_ms=$fwPhaseCapMs effective_ms=$fwEffectiveCapMs basis_measured_ms=368000 step_timeout_min=15"
+    $fwTestExit = Invoke-DotNetWithWatchdog -PhaseName "dotnet-test-pc-internet-firewall" -ArgumentList $fwTestArgs -PhaseCapMs $fwEffectiveCapMs
     Publish-ServerLeaseBuildEvidence -phaseName "dotnet-test-pc-internet-firewall" -TrxPath $fwTrxPath
     Write-CiPhaseFirewallProbe -label "after-dotnet-test-pc-internet-firewall"
     Assert-TestPhaseExit -PhaseName "dotnet-test-pc-internet-firewall" -Exit $fwTestExit
@@ -622,18 +717,15 @@ try {
 
     if ($PcInternetFirewallOnly) {
         Write-PhaseLog "START mode=pc-internet-firewall-only"
-        $fwOnlyBuilds = @(
-            @("build", "GameClub.slnx", "-c", "Release", "-warnaserror", "--nologo"),
-            @("build", "src/GameClub.Kiosk/GameClub.Kiosk.csproj", "-c", "Release", "-f", "net48", "--nologo"),
-            @("build", "src/GameClub.Kiosk.Guard/GameClub.Kiosk.Guard.csproj", "-c", "Release", "-f", "net48", "--nologo"),
-            @("build", "tests/GameClub.Kiosk.Core.Tests/GameClub.Kiosk.Core.Tests.csproj", "-c", "Release", "-f", "net10.0", "--nologo"),
-            @("build", "tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj", "-c", "Release", "-f", "net48", "--nologo"),
-            @("build", "tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj", "-c", "Release", "-f", "net10.0", "--nologo")
-        )
-        foreach ($buildArgs in $fwOnlyBuilds) {
-            & dotnet @buildArgs
-            if ($LASTEXITCODE -ne 0) { throw "pc-internet-firewall-only build failed" }
+        if ($env:RUNNER_ROOT) {
+            $listener = Join-Path $env:RUNNER_ROOT "bin\Runner.Listener.exe"
+            $worker = Join-Path $env:RUNNER_ROOT "bin\Runner.Worker.exe"
+            if ((Test-Path $listener) -and (Test-Path $worker)) {
+                $env:CHECKPOINT_INTERNET_EXTRA_ALLOW = "$listener;$worker"
+            }
         }
+
+        Ensure-PcInternetFirewallBuildOutputs
         Invoke-PcInternetFirewallIntegrationPhase
     } else {
 
