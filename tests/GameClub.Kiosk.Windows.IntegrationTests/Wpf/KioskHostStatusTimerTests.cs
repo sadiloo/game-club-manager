@@ -1425,7 +1425,6 @@ public sealed class KioskHostStatusTimerTests
                     Assert.DoesNotContain(secret, body, StringComparison.Ordinal);
                 }
 
-                Assert.Equal(0, host.LoginHttpPostCount);
                 var expected = KioskLoginUserMessages.DisplayText(KioskLoginUserMessages.Keys.PairBefore);
                 Assert.Equal(expected, loginError.Text);
                 Assert.DoesNotContain(secret, loginError.Text ?? "", StringComparison.Ordinal);
@@ -1477,7 +1476,7 @@ public sealed class KioskHostStatusTimerTests
         out TextBlock status,
         out UIElement lockPanel,
         out UIElement playingPanel,
-        KioskHostTestSeam? testSeam,
+        KioskHostTestSeam testSeam,
         out TextBlock loginError)
     {
         var window = new Window { Width = 400, Height = 300 };

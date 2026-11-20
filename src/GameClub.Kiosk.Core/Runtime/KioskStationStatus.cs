@@ -29,7 +29,7 @@ public static class KioskStationStatus
         var pc = IsolateStationId(stationId);
         if (pairingJustFailed)
         {
-            return $"Station {pc} — not connected";
+            return KioskStatusMessages.FormatStationLine(KioskStatusMessages.Keys.StationLineNotConnected, pc);
         }
 
         var offline = !hubTransportConnected
@@ -48,15 +48,19 @@ public static class KioskStationStatus
             {
                 if (hubTransportConnected && noResponse)
                 {
-                    return $"Station {pc} — no server response";
+                    return KioskStatusMessages.FormatStationLine(
+                        KioskStatusMessages.Keys.StationLineNoServerResponse,
+                        pc);
                 }
 
-                return $"Station {pc} — ~{TimeSpan.FromSeconds(seconds):hh\\:mm\\:ss} left";
+                return KioskStatusMessages.FormatTimeRemaining(pc, TimeSpan.FromSeconds(seconds));
             }
 
             if (hubTransportConnected && noResponse)
             {
-                return $"Station {pc} — no server response";
+                return KioskStatusMessages.FormatStationLine(
+                    KioskStatusMessages.Keys.StationLineNoServerResponse,
+                    pc);
             }
         }
 
@@ -64,10 +68,10 @@ public static class KioskStationStatus
         {
             if (transportPhase == KioskTransportPhase.LastError && !string.IsNullOrWhiteSpace(lastErrorDetail))
             {
-                return $"Station {pc} — {lastErrorDetail}";
+                return KioskStatusMessages.FormatStationTransportError(pc, lastErrorDetail!);
             }
 
-            return $"Station {pc} — reconnecting…";
+            return KioskStatusMessages.FormatStationLine(KioskStatusMessages.Keys.StationLineReconnecting, pc);
         }
 
         if (!hasOpenSession && hubTransportConnected && transportPhase == KioskTransportPhase.Connected)
@@ -77,17 +81,15 @@ public static class KioskStationStatus
                     && utcNow - lastHeartbeatAckUtc.Value > TimeSpan.FromSeconds(NoServerResponseAfterSeconds));
             if (noResponse)
             {
-                return $"Station {pc} — no server response";
+                return KioskStatusMessages.FormatStationLine(
+                    KioskStatusMessages.Keys.StationLineNoServerResponse,
+                    pc);
             }
 
-            return $"Station {pc} — connected";
+            return KioskStatusMessages.FormatStationLine(KioskStatusMessages.Keys.StationLineConnected, pc);
         }
 
-        return transportPhase switch
-        {
-            KioskTransportPhase.Connecting => $"Station {pc} — connecting…",
-            _ => $"Station {pc} — connecting…",
-        };
+        return KioskStatusMessages.FormatStationLine(KioskStatusMessages.Keys.StationLineConnecting, pc);
     }
 
     public static bool ContainsConnectedWording(string statusText)
@@ -121,13 +123,13 @@ public static class KioskStationStatus
             estimatedRemainingSeconds: null,
             lastErrorDetail);
         var pc = IsolateStationId(stationId);
-        var prefix = $"Station {pc} — ";
+        var prefix = KioskStatusMessages.StationLinePrefixFor(pc);
         var suffix = connection.StartsWith(prefix, StringComparison.Ordinal)
             ? connection.Substring(prefix.Length)
             : connection;
-        var locked = leaseExpired
-            ? $"Locked — lease expired ({pc})"
-            : $"Locked — {pc}";
-        return $"{locked} · {suffix}";
+        var lockKey = leaseExpired
+            ? KioskStatusMessages.Keys.LockedLeaseExpired
+            : KioskStatusMessages.Keys.LockedActive;
+        return KioskStatusMessages.FormatLockedLine(lockKey, pc, suffix);
     }
 }

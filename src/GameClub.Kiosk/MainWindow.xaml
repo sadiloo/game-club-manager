@@ -17,7 +17,7 @@
 
   <StackPanel x:Name="LockPanel" Grid.Row="1" VerticalAlignment="Center" HorizontalAlignment="Center" Width="420">
     <TextBlock Text="Checkpoint PC Kiosk" Foreground="{DynamicResource Kiosk.TextBrush}" FontSize="28" HorizontalAlignment="Center" />
-    <TextBlock x:Name="StatusText" FlowDirection="RightToLeft" Text="Unpaired — enter operator pairing code" Foreground="{DynamicResource Kiosk.MutedBrush}" FontSize="16" Margin="0,12,0,16" TextWrapping="Wrap" TextAlignment="Center" />
+    <TextBlock x:Name="StatusText" FlowDirection="RightToLeft" Foreground="{DynamicResource Kiosk.MutedBrush}" FontSize="16" Margin="0,12,0,16" TextWrapping="Wrap" TextAlignment="Center" />
     <PasswordBox x:Name="AdminUrlPasswordBox" Height="32" Margin="0,8" ToolTip="Admin password to unlock server URL"/>
     <TextBox x:Name="PairingCodeBox" Height="40" Margin="0,4" FontSize="18" VerticalContentAlignment="Center" />
     <Button Content="Pair station" Height="40" Margin="0,8" Click="OnPairClick"/>

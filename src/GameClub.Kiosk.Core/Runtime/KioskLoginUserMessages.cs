@@ -207,7 +207,7 @@ public static class KioskLoginUserMessages
     }
 
     public static string AppendToLockLine(string lockLineText, string loginError)
-        => string.Concat(lockLineText, " · ", loginError);
+        => string.Concat(lockLineText, KioskStatusMessages.DisplayText(KioskStatusMessages.Keys.StatusLineSeparator), loginError);
 
     public static bool ExposesCredential(string composedLockLine, string? password, string? deviceKey)
     {

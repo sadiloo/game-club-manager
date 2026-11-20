@@ -190,7 +190,7 @@ public sealed class KioskHostService : IAsyncDisposable
         await EnsureRuntimeAsync();
         await ApplyStationProfileAsync();
         await RefreshCatalogAsync();
-        _status.Text = $"Paired to {_stationId}";
+        _status.Text = KioskStatusMessages.FormatTemplate(KioskStatusMessages.Keys.PairedTo, _stationId);
         EnsureStatusUiTickRunning();
     }
 
@@ -309,7 +309,7 @@ public sealed class KioskHostService : IAsyncDisposable
         ShowPlayingLayout();
         _uiTick.Start();
         _replayTick.Start();
-        _status.Text = $"Playing on {_stationId}";
+        _status.Text = KioskStatusMessages.FormatTemplate(KioskStatusMessages.Keys.PlayingOn, _stationId);
         await RefreshCatalogAsync();
     }
 
@@ -349,7 +349,7 @@ public sealed class KioskHostService : IAsyncDisposable
         }
         catch (Exception ex)
         {
-            _status.Text = $"Launch failed: {ex.Message}";
+            _status.Text = KioskStatusMessages.FormatTemplate(KioskStatusMessages.Keys.LaunchFailed, ex.Message);
         }
     }
 
@@ -734,7 +734,10 @@ public sealed class KioskHostService : IAsyncDisposable
         catch (Exception ex)
         {
             _shell.Dispatcher.Invoke(() =>
-                _status.Text = $"Station {_stationId} — catalog refresh failed: {ex.Message}");
+                _status.Text = KioskStatusMessages.FormatTemplate(
+                    KioskStatusMessages.Keys.CatalogRefreshFailed,
+                    _stationId,
+                    ex.Message));
         }
     }
 
@@ -1127,7 +1130,7 @@ public sealed class KioskHostService : IAsyncDisposable
     {
         if (string.IsNullOrEmpty(_stationId))
         {
-            _status.Text = "Unpaired — use operator pairing code";
+            _status.Text = KioskStatusMessages.DisplayText(KioskStatusMessages.Keys.UnpairedUseOperatorPairing);
             return;
         }
 
@@ -1151,7 +1154,7 @@ public sealed class KioskHostService : IAsyncDisposable
         }
         catch (Exception ex)
         {
-            _status.Text = $"Station {_stationId} — {ex.Message}";
+            _status.Text = KioskStatusMessages.FormatStationWithDetail(_stationId, ex.Message);
         }
     }
 

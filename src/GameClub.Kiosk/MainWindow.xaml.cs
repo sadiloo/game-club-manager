@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Input;
+using GameClub.Kiosk.Core.Runtime;
 using GameClub.Kiosk.Core.Setup;
 using GameClub.Kiosk.Services;
 
@@ -12,6 +13,7 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        StatusText.Text = KioskStatusMessages.DisplayText(KioskStatusMessages.Keys.UnpairedEnterPairingCode);
         _host = new KioskHostService(
             this,
             StatusText,
