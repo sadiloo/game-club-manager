@@ -8,7 +8,7 @@ public sealed class KioskLoginLockLineFormatterTests
     private const string LockBase = "Locked — PC-1 · no server response";
 
     [Fact]
-    public void lock_line_appends_http_generic_login_error_placeholder()
+    public void lock_line_appends_http_generic_login_error_text()
     {
         var error = KioskLoginUserMessages.DisplayText(KioskLoginUserMessages.Keys.HttpGeneric);
         var line = KioskLoginUserMessages.AppendToLockLine(LockBase, error);
@@ -17,7 +17,7 @@ public sealed class KioskLoginLockLineFormatterTests
     }
 
     [Fact]
-    public void lock_line_appends_unreachable_login_error_placeholder()
+    public void lock_line_appends_unreachable_login_error_text()
     {
         var error = KioskLoginUserMessages.DisplayText(KioskLoginUserMessages.Keys.Unreachable);
         var line = KioskLoginUserMessages.AppendToLockLine(LockBase, error);
@@ -25,7 +25,7 @@ public sealed class KioskLoginLockLineFormatterTests
     }
 
     [Fact]
-    public void lock_line_appends_timeout_login_error_placeholder()
+    public void lock_line_appends_timeout_login_error_text()
     {
         var error = KioskLoginUserMessages.DisplayText(KioskLoginUserMessages.Keys.Timeout);
         var line = KioskLoginUserMessages.AppendToLockLine(LockBase, error);

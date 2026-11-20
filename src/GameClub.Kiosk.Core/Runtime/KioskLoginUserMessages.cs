@@ -2,11 +2,9 @@ using System.Text.Json;
 
 namespace GameClub.Kiosk.Core.Runtime;
 
-/// <summary>Customer kiosk login error keys and placeholder display text (single swap file for Persian).</summary>
+/// <summary>Customer kiosk login error keys and Persian display text (spec §6.5, kiosk.login.err.*).</summary>
 public static class KioskLoginUserMessages
 {
-    public const string PlaceholderPrefix = "PLACEHOLDER:";
-
     public static class Keys
     {
         public const string PairBefore = "pair_before";
@@ -59,31 +57,31 @@ public static class KioskLoginUserMessages
         Keys.StationBusy,
     };
 
-    private static readonly Dictionary<string, string> PlaceholderByKey = new(StringComparer.Ordinal)
+    private static readonly Dictionary<string, string> TextByKey = new(StringComparer.Ordinal)
     {
-        [Keys.PairBefore] = PlaceholderPrefix + Keys.PairBefore,
-        [Keys.Unreachable] = PlaceholderPrefix + Keys.Unreachable,
-        [Keys.Timeout] = PlaceholderPrefix + Keys.Timeout,
-        [Keys.HttpGeneric] = PlaceholderPrefix + Keys.HttpGeneric,
-        [Keys.Unknown] = PlaceholderPrefix + Keys.Unknown,
-        [Keys.EmptyFields] = PlaceholderPrefix + Keys.EmptyFields,
-        [Keys.InvalidLogin] = PlaceholderPrefix + Keys.InvalidLogin,
-        [Keys.DeviceAuth] = PlaceholderPrefix + Keys.DeviceAuth,
-        [Keys.AccountLocked] = PlaceholderPrefix + Keys.AccountLocked,
-        [Keys.NoCredit] = PlaceholderPrefix + Keys.NoCredit,
-        [Keys.DebtBlocked] = PlaceholderPrefix + Keys.DebtBlocked,
-        [Keys.StaleStation] = PlaceholderPrefix + Keys.StaleStation,
-        [Keys.SessionElsewhere] = PlaceholderPrefix + Keys.SessionElsewhere,
-        [Keys.TestMode] = PlaceholderPrefix + Keys.TestMode,
-        [Keys.StationBusy] = PlaceholderPrefix + Keys.StationBusy,
+        [Keys.EmptyFields] = "نام کاربری و رمز را وارد کنید.",
+        [Keys.PairBefore] = "این سیستم هنوز آماده نیست. لطفاً به پیشخوان خبر بدهید.",
+        [Keys.Unreachable] = "به سرور وصل نشد. چند لحظه بعد دوباره امتحان کنید؛ اگر درست نشد، به پیشخوان خبر بدهید.",
+        [Keys.Timeout] = "سرور دیر جواب داد. لطفاً دوباره امتحان کنید.",
+        [Keys.HttpGeneric] = "ورود انجام نشد. دوباره امتحان کنید؛ اگر تکرار شد، به پیشخوان خبر بدهید.",
+        [Keys.Unknown] = "مشکلی پیش آمد. لطفاً به پیشخوان خبر بدهید.",
+        [Keys.InvalidLogin] = "نام کاربری یا رمز اشتباه است.",
+        [Keys.DeviceAuth] = "این سیستم به سرور شناسانده نشده است. لطفاً به پیشخوان خبر بدهید.",
+        [Keys.AccountLocked] = "به‌خاطر چند رمز اشتباه، حساب شما قفل شد. برای باز شدنش به پیشخوان بروید.",
+        [Keys.NoCredit] = "اعتبار شما برای بازی کافی نیست. برای شارژ به پیشخوان بروید.",
+        [Keys.DebtBlocked] = "حساب شما بدهی دارد. لطفاً اول در پیشخوان تسویه کنید.",
+        [Keys.StaleStation] = "این سیستم درست تنظیم نشده است. لطفاً به پیشخوان خبر بدهید.",
+        [Keys.SessionElsewhere] = "شما روی سیستم دیگری بازی باز دارید. برای جابه‌جایی به پیشخوان بروید.",
+        [Keys.TestMode] = "این سیستم الان در حالت آزمایش است. لطفاً به پیشخوان خبر بدهید.",
+        [Keys.StationBusy] = "این سیستم دست مشتری دیگری است. لطفاً به پیشخوان خبر بدهید.",
     };
 
     public static IReadOnlyCollection<string> MappedKeys => AllMappedKeys;
 
     public static string DisplayText(string key)
-        => PlaceholderByKey.TryGetValue(key, out var text)
+        => TextByKey.TryGetValue(key, out var text)
             ? text
-            : PlaceholderByKey[Keys.Unknown];
+            : TextByKey[Keys.Unknown];
 
     public static bool IsKnownKey(string key) => AllMappedKeys.Contains(key);
 
