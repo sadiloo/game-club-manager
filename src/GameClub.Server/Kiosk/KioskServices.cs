@@ -791,9 +791,8 @@ public sealed class KioskSessionService(
                     PlaySessionEntity session;
                     try
                     {
-                        if (KioskAttachPathTestSeam.InjectBeforeMemberStartAsync is { } inject)
+                        if (KioskAttachPathTestSeam.TryTakeInjectForCurrentFlow(out var inject))
                         {
-                            KioskAttachPathTestSeam.InjectBeforeMemberStartAsync = null;
                             throw await inject(ct);
                         }
 
