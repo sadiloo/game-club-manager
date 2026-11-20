@@ -34,6 +34,12 @@ public static class GuardInternetBudgetDefaults
     /// <summary>Pipe apply uses one merged PowerShell process.</summary>
     public const int ApplyPathPowerShellCallCountWorstCase = 1;
 
+    /// <summary>Early-reassert hold may queue this many mutating apply pipe requests (FIFO integration contract).</summary>
+    public const int MutatingApplyFifoQueueDepthWorstCase = 2;
+
+    /// <summary>Margin between client IO timeout and a single apply path worst-case budget.</summary>
+    public const int ClientIoTimeoutMarginMs = 5_000;
+
     public static int ReconcilePowerShellBudgetSumMs()
         => ReconcileLocalhostCleanupMs
            + ReconcileReadbackCaptureMs
@@ -51,11 +57,17 @@ public static class GuardInternetBudgetDefaults
         => ApplyPathPowerShellBudgetSumMs()
            + (ApplyPathPowerShellCallCountWorstCase * PowerShellKillAfterExitWaitMs);
 
+    public static int MutatingApplyFifoClientIoBudgetMs()
+        => (MutatingApplyFifoQueueDepthWorstCase * ApplyPathWorstCaseWithKillWaitsMs()) + ClientIoTimeoutMarginMs;
+
     public static bool ApplyGateWaitFitsClientIo()
         => GuardInternetClient.DefaultServerApplyWaitMs < GuardInternetClient.DefaultIoTimeoutMs;
 
     public static bool ApplyPathWorstCaseFitsClientIo()
         => ApplyPathWorstCaseWithKillWaitsMs() < GuardInternetClient.DefaultIoTimeoutMs;
+
+    public static bool MutatingApplyFifoFitsClientIo()
+        => MutatingApplyFifoClientIoBudgetMs() <= GuardInternetClient.DefaultIoTimeoutMs;
 
     public static bool ReconcileWorstCaseFitsWallWithMargin()
         => ReconcileWorstCaseWithKillWaitsMs() + ReconcilePlanMarginMs <= ReconcileWallTimeoutMs;

@@ -166,15 +166,17 @@ public sealed class PcInternetKioskCoreTests
     [Fact]
     public void PcInternet_server_apply_wait_default_is_below_client_io_timeout()
     {
-        Assert.Equal(30_000, GuardInternetClient.DefaultIoTimeoutMs);
+        Assert.Equal(55_000, GuardInternetClient.DefaultIoTimeoutMs);
         Assert.True(GuardInternetBudgetDefaults.ApplyGateWaitFitsClientIo());
         Assert.True(GuardInternetClient.DefaultIoTimeoutMs - GuardInternetClient.DefaultServerApplyWaitMs >= 5_000);
+        Assert.True(GuardInternetBudgetDefaults.MutatingApplyFifoFitsClientIo());
+        Assert.Equal(55_000, GuardInternetBudgetDefaults.MutatingApplyFifoClientIoBudgetMs());
     }
 
     [Fact]
     public void PcInternet_apply_powershell_worst_case_with_kill_waits_fits_client_io()
     {
-        Assert.Equal(30_000, GuardInternetClient.DefaultIoTimeoutMs);
+        Assert.Equal(55_000, GuardInternetClient.DefaultIoTimeoutMs);
         Assert.True(GuardInternetBudgetDefaults.ApplyPathWorstCaseFitsClientIo());
         Assert.Equal(
             GuardInternetBudgetDefaults.ApplyPathPowerShellBudgetSumMs()
@@ -253,7 +255,10 @@ public sealed class PcInternetKioskCoreTests
         }
 
         using var pipeDiag = InternetPipeOwnerDiagnostics.BeginTestScope();
+        var uniquePipe = $"CheckpointGuardInternet-io-timeout-{Guid.NewGuid():N}";
+        var priorPipe = Environment.GetEnvironmentVariable(GuardInternetClient.PipeNameEnvironmentVariable);
         var priorIo = Environment.GetEnvironmentVariable("CHECKPOINT_INTERNET_PIPE_IO_MS");
+        Environment.SetEnvironmentVariable(GuardInternetClient.PipeNameEnvironmentVariable, uniquePipe);
         Environment.SetEnvironmentVariable("CHECKPOINT_INTERNET_PIPE_IO_MS", "800");
         var stopStub = new ManualResetEventSlim(false);
         var ready = new ManualResetEventSlim(false);
@@ -265,7 +270,7 @@ public sealed class PcInternetKioskCoreTests
                 try
                 {
                     using var server = new System.IO.Pipes.NamedPipeServerStream(
-                        GuardInternetClient.ResolvePipeName(),
+                        uniquePipe,
                         System.IO.Pipes.PipeDirection.InOut,
                         1,
                         System.IO.Pipes.PipeTransmissionMode.Byte,
@@ -292,6 +297,7 @@ public sealed class PcInternetKioskCoreTests
         finally
         {
             Environment.SetEnvironmentVariable("CHECKPOINT_INTERNET_PIPE_IO_MS", priorIo);
+            Environment.SetEnvironmentVariable(GuardInternetClient.PipeNameEnvironmentVariable, priorPipe);
             stopStub.Set();
             acceptThread?.Join(TimeSpan.FromSeconds(5));
         }

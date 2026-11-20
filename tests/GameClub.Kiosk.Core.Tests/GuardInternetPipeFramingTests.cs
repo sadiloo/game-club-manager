@@ -418,7 +418,6 @@ internal static class LineFramingPipeStub
 
     internal static void RunOversizeServer(ManualResetEventSlim ready, ManualResetEventSlim sawOversize, CancellationToken ct, System.Collections.Concurrent.ConcurrentQueue<string> log)
     {
-        ready.Set();
         try
         {
             using var server = new NamedPipeServerStream(
@@ -427,6 +426,8 @@ internal static class LineFramingPipeStub
                 1,
                 PipeTransmissionMode.Byte,
                 PipeOptions.Asynchronous);
+            log.Enqueue("pipe_listening");
+            ready.Set();
             server.WaitForConnection();
             var line = ReadLine(server, 5_000, log.Enqueue);
             if (line is null)

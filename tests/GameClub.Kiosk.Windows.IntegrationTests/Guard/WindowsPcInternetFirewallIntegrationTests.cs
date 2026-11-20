@@ -427,6 +427,16 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
             ExtraAllowPrograms = CiExtraPrograms(),
         };
 
+    private void AssertFirewallEgressOpenAfterReset(string label)
+    {
+        var applier = new InternetFirewallApplier();
+        applier.RunResetScript();
+        Thread.Sleep(500);
+        Assert.True(
+            TryTcp("api.github.com", 443, 5_000),
+            $"isolation {label}: api.github.com must be reachable after reset before next seam step.");
+    }
+
     private void RunInternetOffFirstApplySucceedsWhenCheckpointRuleGroupIsEmpty()
     {
         var ips = ResolveServerIps();
@@ -571,9 +581,13 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
     public void internet_off_seam_injection_isolated_between_rollback_and_first_apply_in_both_orders()
     {
         RequireWindowsAdmin();
+        CiGuardKioskProcessCleanup.KillOrphanedGuardAndKiosk(nameof(internet_off_seam_injection_isolated_between_rollback_and_first_apply_in_both_orders));
         RunInternetOffFirstApplySucceedsWhenCheckpointRuleGroupIsEmpty();
+        AssertFirewallEgressOpenAfterReset(nameof(internet_off_seam_injection_isolated_between_rollback_and_first_apply_in_both_orders) + "_after_first_apply");
         RunInternetOffApplyFailureAfterProfilesSetRollsBackLocalhostProfiles();
+        AssertFirewallEgressOpenAfterReset(nameof(internet_off_seam_injection_isolated_between_rollback_and_first_apply_in_both_orders) + "_after_rollback_a");
         RunInternetOffApplyFailureAfterProfilesSetRollsBackLocalhostProfiles();
+        AssertFirewallEgressOpenAfterReset(nameof(internet_off_seam_injection_isolated_between_rollback_and_first_apply_in_both_orders) + "_after_rollback_b");
         RunInternetOffFirstApplySucceedsWhenCheckpointRuleGroupIsEmpty();
     }
 

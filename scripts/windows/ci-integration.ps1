@@ -56,6 +56,22 @@ function Assert-TestPhaseExit([string]$PhaseName, [int]$Exit) {
     }
 }
 
+function Write-FirewallPhaseExecutedSummary {
+    param(
+        [string]$TrxPath,
+        [int]$DiscoveredCount
+    )
+
+    $count = 0
+    if ($TrxPath -and (Test-Path -LiteralPath $TrxPath)) {
+        $results = @(Select-Xml -Path $TrxPath -XPath "//*[local-name()='UnitTestResult']" -ErrorAction SilentlyContinue)
+        $count = @($results | Where-Object { -not [string]::IsNullOrWhiteSpace($_.Node.testName) }).Count
+    }
+
+    Write-Host "FW_EXECUTED count=$count discovered=$DiscoveredCount"
+    Write-PhaseLog "FW_EXECUTED count=$count discovered=$DiscoveredCount"
+}
+
 function Assert-FirewallPhaseTestsExecuted {
     param(
         [string]$TrxPath,
@@ -84,8 +100,7 @@ function Assert-FirewallPhaseTestsExecuted {
     $count = $names.Count
     Write-Host "FW_PHASE_TESTS count=$count discovered=$DiscoveredCount minimum=$MinimumCount"
     Write-PhaseLog "FW_PHASE_TESTS count=$count discovered=$DiscoveredCount minimum=$MinimumCount"
-    Write-Host "FW_EXECUTED count=$count discovered=$DiscoveredCount"
-    Write-PhaseLog "FW_EXECUTED count=$count discovered=$DiscoveredCount"
+    Write-FirewallPhaseExecutedSummary -TrxPath $TrxPath -DiscoveredCount $DiscoveredCount
     if ($count -lt $DiscoveredCount) {
         throw "FW_PHASE_TESTS executed=$count discovered=$DiscoveredCount reason=phase_aborted_before_full_inventory"
     }
@@ -717,11 +732,16 @@ function Invoke-PcInternetFirewallIntegrationPhase {
     $fwEffectiveCapMs = Get-EffectiveTimeoutMs -phaseCapMs $fwPhaseCapMs
     Write-Host "FW_PHASE_BUDGET cap_ms=$fwPhaseCapMs effective_ms=$fwEffectiveCapMs basis_measured_ms=368000 step_timeout_min=15"
     Write-PhaseLog "FW_PHASE_BUDGET cap_ms=$fwPhaseCapMs effective_ms=$fwEffectiveCapMs basis_measured_ms=368000 step_timeout_min=15"
-    $fwTestExit = Invoke-DotNetWithWatchdog -PhaseName "dotnet-test-pc-internet-firewall" -ArgumentList $fwTestArgs -PhaseCapMs $fwEffectiveCapMs
-    Publish-ServerLeaseBuildEvidence -phaseName "dotnet-test-pc-internet-firewall" -TrxPath $fwTrxPath
-    Write-CiPhaseFirewallProbe -label "after-dotnet-test-pc-internet-firewall"
-    Assert-TestPhaseExit -PhaseName "dotnet-test-pc-internet-firewall" -Exit $fwTestExit
-    Assert-FirewallPhaseTestsExecuted -TrxPath $fwTrxPath -DiscoveredCount $fwDiscoveredNames.Count
+    try {
+        $fwTestExit = Invoke-DotNetWithWatchdog -PhaseName "dotnet-test-pc-internet-firewall" -ArgumentList $fwTestArgs -PhaseCapMs $fwEffectiveCapMs
+        Publish-ServerLeaseBuildEvidence -phaseName "dotnet-test-pc-internet-firewall" -TrxPath $fwTrxPath
+        Write-CiPhaseFirewallProbe -label "after-dotnet-test-pc-internet-firewall"
+        Assert-TestPhaseExit -PhaseName "dotnet-test-pc-internet-firewall" -Exit $fwTestExit
+        Assert-FirewallPhaseTestsExecuted -TrxPath $fwTrxPath -DiscoveredCount $fwDiscoveredNames.Count
+    }
+    finally {
+        Write-FirewallPhaseExecutedSummary -TrxPath $fwTrxPath -DiscoveredCount $fwDiscoveredNames.Count
+    }
 }
 
 try {

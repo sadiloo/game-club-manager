@@ -229,6 +229,11 @@ internal sealed class InternetPipeServer
 
     private void MaybeLogPipeReadyAfterRequest(int handlerThread)
     {
+        if (!_earlyReassertFinished.IsSet)
+        {
+            return;
+        }
+
         if (Interlocked.CompareExchange(ref _loggedPipeReady, 1, 0) != 0)
         {
             return;

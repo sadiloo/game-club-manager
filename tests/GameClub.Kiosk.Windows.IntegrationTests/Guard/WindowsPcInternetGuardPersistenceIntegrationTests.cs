@@ -182,6 +182,8 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
             Assert.True(TryTcp("1.1.1.1", 443, 3_000), "Sanity: profile tamper must temporarily open egress.");
             GuardTimeline("tamper_egress_open");
 
+            CiGuardKioskProcessCleanup.KillOrphanedGuardAndKiosk(nameof(internet_off_guard_process_restart_reasserts_before_pipe_ready) + "_pre_guard2");
+            AssertNoKioskShellRunning();
             var guard2LogOffset = GuardWatchdogTimelineReader.CurrentLogLength();
             guard2 = GuardProcessStart.StartGuard();
             GuardTimeline($"guard2_start pid={guard2.Id}");
@@ -201,6 +203,10 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
                 if (!TryTcp("1.1.1.1", 443, 500))
                 {
                     GuardTimeline($"first_egress_blocked ms={timeline.ElapsedMilliseconds}");
+                    await GuardWatchdogTimelineReader.WaitForTimelineMarkerAsync(
+                        guard2LogOffset,
+                        "guard.restart launched_pid_",
+                        TimeSpan.FromSeconds(15));
                     GuardWatchdogTimelineReader.AssertExactlyOneGuardRestart(guard2LogOffset);
                     GuardWatchdogTimelineReader.AssertPipeRestartHandlingOrder(
                         guard2LogOffset,
