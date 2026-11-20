@@ -8,12 +8,6 @@ namespace GameClub.Kiosk.Guard;
 /// <summary>Session-targeted shell recovery — not a global process-name poll.</summary>
 internal sealed class KioskShellSupervisor
 {
-    private static readonly string LogPath = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-        "Checkpoint",
-        "guard",
-        "watchdog.log");
-
     private readonly KioskGuardIdentity _identity;
     private DateTime _lastRelaunchUtc = DateTime.MinValue;
     private Process? _supervised;
@@ -26,30 +20,29 @@ internal sealed class KioskShellSupervisor
 
     internal void Run(CancellationToken ct)
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(LogPath)!);
         if (!_identity.IsResolved)
         {
-            File.AppendAllText(LogPath, $"{DateTime.UtcNow:O} guard.identity_failed{Environment.NewLine}");
+            GuardWatchdogLog.Append("guard.identity_failed");
             return;
         }
 
         Environment.SetEnvironmentVariable("CHECKPOINT_KIOSK_SID", _identity.Sid);
         RegistryPolicyStore.EnsureDefaults();
         var protector = new GuardProcessProtection();
-        var protection = new KioskShellProtectionLifecycle(protector, fault => File.AppendAllText(LogPath, $"{DateTime.UtcNow:O} {fault}{Environment.NewLine}"));
+        var protection = new KioskShellProtectionLifecycle(protector, fault => GuardWatchdogLog.Append(fault));
         GuardProcessProtection.ApplyStartupProtection(protection);
         while (!ct.IsCancellationRequested)
         {
             if (RegistryPolicyStore.Tampered())
             {
                 RegistryPolicyStore.Repair();
-                File.AppendAllText(LogPath, $"{DateTime.UtcNow:O} guard.policy_tamper{Environment.NewLine}");
+                GuardWatchdogLog.Append("guard.policy_tamper");
             }
 
             var sessionId = ConsoleSessionLaunch.FindActiveUserSessionId(_identity.UserName);
             if (sessionId is null)
             {
-                File.AppendAllText(LogPath, $"{DateTime.UtcNow:O} guard.kiosk_user_session_not_found{Environment.NewLine}");
+                GuardWatchdogLog.Append("guard.kiosk_user_session_not_found");
                 Wait(ct, TimeSpan.FromSeconds(5));
                 continue;
             }
@@ -70,9 +63,8 @@ internal sealed class KioskShellSupervisor
                     continue;
                 }
 
-                File.AppendAllText(
-                    LogPath,
-                    $"{DateTime.UtcNow:O} guard.shell_gate_timeout elapsed_ms={(int)gateWait.TotalMilliseconds}{Environment.NewLine}");
+                GuardWatchdogLog.Append(
+                    $"guard.shell_gate_timeout elapsed_ms={(int)gateWait.TotalMilliseconds}");
                 _shellGateWaitBeginUtc = null;
             }
             else
@@ -101,9 +93,28 @@ internal sealed class KioskShellSupervisor
         }
 
         RegistryPolicyStore.EnsureDefaults();
+        var existing = FindLiveKioskShell();
+        if (existing is not null && _supervised is null)
+        {
+            _lastRelaunchUtc = DateTime.UtcNow;
+            _supervised = existing;
+            _supervisedSessionId = sessionId;
+            try
+            {
+                protection.ProtectShellAfterLaunch(existing.Id);
+            }
+            catch
+            {
+                /* already protected or unreachable */
+            }
+
+            GuardWatchdogLog.Append($"guard.restart launched_pid_{existing.Id}");
+            return true;
+        }
+
         if (!ConsoleSessionLaunch.TryLaunch(path, out var detail))
         {
-            File.AppendAllText(LogPath, $"{DateTime.UtcNow:O} guard.launch_failed {detail}{Environment.NewLine}");
+            GuardWatchdogLog.Append($"guard.launch_failed {detail}");
             return false;
         }
 
@@ -124,8 +135,30 @@ internal sealed class KioskShellSupervisor
             }
         }
 
-        File.AppendAllText(LogPath, $"{DateTime.UtcNow:O} guard.restart {detail}{Environment.NewLine}");
+        GuardWatchdogLog.Append($"guard.restart {detail}");
         return true;
+    }
+
+    private static Process? FindLiveKioskShell()
+    {
+        foreach (var proc in Process.GetProcessesByName("GameClub.Kiosk"))
+        {
+            try
+            {
+                if (!proc.HasExited)
+                {
+                    return proc;
+                }
+            }
+            catch
+            {
+                /* exited between enumerate and query */
+            }
+
+            proc.Dispose();
+        }
+
+        return null;
     }
 
     private static void Wait(CancellationToken ct, TimeSpan delay)

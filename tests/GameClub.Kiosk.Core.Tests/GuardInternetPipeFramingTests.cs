@@ -88,10 +88,10 @@ public sealed class GuardInternetPipeFramingTests
                 IsBackground = true,
             };
             pipeThread.Start();
-            Assert.True(ready.Wait(TimeSpan.FromSeconds(5)));
+            Assert.True(ready.Wait(TimeSpan.FromSeconds(5)), "pipe server must signal listening before client connect");
 
             using var client = new NamedPipeClientStream(".", GuardInternetClient.PipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
-            await client.ConnectAsync(3000);
+            await client.ConnectAsync(GuardInternetClient.DefaultConnectTimeoutMs);
             var partial = Encoding.UTF8.GetBytes("{\"verb\":\"status\"}");
             try
             {
@@ -393,7 +393,6 @@ internal static class LineFramingPipeStub
 
     internal static void RunNoNewlineServer(ManualResetEventSlim ready, ManualResetEventSlim sawTimeout, CancellationToken ct, System.Collections.Concurrent.ConcurrentQueue<string> log)
     {
-        ready.Set();
         try
         {
             using var server = new NamedPipeServerStream(
@@ -402,6 +401,8 @@ internal static class LineFramingPipeStub
                 1,
                 PipeTransmissionMode.Byte,
                 PipeOptions.Asynchronous);
+            log.Enqueue("pipe_listening");
+            ready.Set();
             server.WaitForConnection();
             var line = ReadLine(server, 1_500, log.Enqueue);
             if (line is null)

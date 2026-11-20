@@ -70,6 +70,11 @@ internal static class InternetPowerShellRunner
     internal static bool IsReconcileAbandoned()
         => Volatile.Read(ref ReconcileRunCallCountAtAbandon) >= 0;
 
+    internal static string WrapScript(string script) =>
+        "$ProgressPreference = 'SilentlyContinue'\n"
+        + "$InformationPreference = 'SilentlyContinue'\n"
+        + script;
+
     public static string Run(string script, int timeoutMs = 120_000, string? stepName = null)
         => RunWithTelemetry(script, timeoutMs, stepName).Output;
 
@@ -88,7 +93,7 @@ internal static class InternetPowerShellRunner
         var stderr = "";
         try
         {
-            var encoded = Convert.ToBase64String(Encoding.Unicode.GetBytes(script));
+            var encoded = Convert.ToBase64String(Encoding.Unicode.GetBytes(WrapScript(script)));
             var psi = new ProcessStartInfo
             {
                 FileName = "powershell.exe",
@@ -143,7 +148,7 @@ internal static class InternetPowerShellRunner
             stderr = stderrTask.GetAwaiter().GetResult() ?? "";
             if (proc.ExitCode != 0)
             {
-                var detail = string.IsNullOrWhiteSpace(stderr) ? stdout.Trim() : stderr.Trim();
+                var detail = InternetPowerShellStderr.FormatFailureDetail(stderr, stdout);
                 if (string.IsNullOrWhiteSpace(detail))
                 {
                     detail = $"exit_{proc.ExitCode}";

@@ -378,6 +378,69 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
         }
     }
 
+    [Fact(Timeout = 90_000)]
+    public async Task internet_pipe_status_answers_within_2s_while_early_reassert_holds()
+    {
+        RequireWindowsAdmin();
+        using var rsa = RSA.Create(2048);
+        var pub = ExportPublicKeyPem(rsa);
+        var config = BuildConfig(pub);
+        var applier = new DelayedEarlyReassertInternetFirewallApplier(offApplyDelayMs: 5_000);
+        CancellationTokenSource cts = null;
+        Thread pipeThread = null;
+        try
+        {
+            var epoch = Guid.NewGuid();
+            var off = Sign(rsa, new InternetCommandPayload
+            {
+                StationId = config.StationId,
+                Epoch = epoch,
+                Version = 1,
+                On = false,
+                IssuedAtUtc = DateTime.UtcNow,
+            });
+            Assert.Equal("applied", applier.ApplyWithStoreEcho(config, on: false));
+            InternetVerifiedStateFile.Save(InternetGuardPaths.StatePath, off.Payload);
+            WriteInternetConfig(config);
+
+            var logOffset = GuardWatchdogTimelineReader.CurrentLogLength();
+            cts = new CancellationTokenSource();
+            pipeThread = new Thread(() => new InternetPipeServer(config, applier).Run(cts.Token)) { IsBackground = true };
+            pipeThread.Start();
+            await GuardWatchdogTimelineReader.WaitForTimelineMarkerAsync(
+                logOffset,
+                "early_reassert_off_lock_enter",
+                TimeSpan.FromSeconds(20));
+
+            var sw = Stopwatch.StartNew();
+            var status = await new GuardInternetClient().GetStatusAsync(default);
+            sw.Stop();
+            Assert.True(sw.ElapsedMilliseconds < 2_500, $"status blocked {sw.ElapsedMilliseconds}ms during early reassert");
+            using var doc = JsonDocument.Parse(status);
+            Assert.True(doc.RootElement.TryGetProperty("pending", out var pending) && pending.GetBoolean());
+            Assert.Equal("early_reassert", doc.RootElement.GetProperty("phase").GetString());
+
+            var onCommand = Sign(rsa, new InternetCommandPayload
+            {
+                StationId = config.StationId,
+                Epoch = epoch,
+                Version = 2,
+                On = true,
+                IssuedAtUtc = DateTime.UtcNow,
+            });
+            var applyTask = new GuardInternetClient().ApplyAsync(onCommand);
+            var applyResponse = await applyTask;
+            Assert.Contains("applied", applyResponse, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            InternetPipeServerTestTeardown.Stop(cts, pipeThread);
+            new InternetFirewallApplier().RunResetScript();
+            TryDelete(InternetGuardPaths.ConfigPath);
+            TryDelete(InternetGuardPaths.StatePath);
+        }
+    }
+
     [Fact(Timeout = 120_000)]
     public async Task internet_pipe_on_apply_during_early_off_reassert_waits_for_lock_exit()
     {

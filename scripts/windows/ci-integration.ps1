@@ -60,7 +60,7 @@ function Assert-FirewallPhaseTestsExecuted {
     param(
         [string]$TrxPath,
         [int]$DiscoveredCount,
-        [int]$MinimumCount = 38
+        [int]$MinimumCount = 40
     )
 
     if (-not (Test-Path $TrxPath)) {
@@ -84,6 +84,8 @@ function Assert-FirewallPhaseTestsExecuted {
     $count = $names.Count
     Write-Host "FW_PHASE_TESTS count=$count discovered=$DiscoveredCount minimum=$MinimumCount"
     Write-PhaseLog "FW_PHASE_TESTS count=$count discovered=$DiscoveredCount minimum=$MinimumCount"
+    Write-Host "FW_EXECUTED count=$count discovered=$DiscoveredCount"
+    Write-PhaseLog "FW_EXECUTED count=$count discovered=$DiscoveredCount"
     if ($count -lt $DiscoveredCount) {
         throw "FW_PHASE_TESTS executed=$count discovered=$DiscoveredCount reason=phase_aborted_before_full_inventory"
     }
@@ -699,8 +701,8 @@ function Invoke-PcInternetFirewallIntegrationPhase {
     }
     Write-Host "FW_PHASE_DISCOVERED count=$($fwDiscoveredNames.Count)"
     Write-PhaseLog "FW_PHASE_DISCOVERED count=$($fwDiscoveredNames.Count)"
-    if ($fwDiscoveredNames.Count -lt 38) {
-        throw "FW_PHASE_DISCOVERED count=$($fwDiscoveredNames.Count) below_minimum=38"
+    if ($fwDiscoveredNames.Count -lt 40) {
+        throw "FW_PHASE_DISCOVERED count=$($fwDiscoveredNames.Count) below_minimum=40"
     }
     $fwTestArgs = @(
         "test", "tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj",

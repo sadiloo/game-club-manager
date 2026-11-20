@@ -45,6 +45,10 @@ public sealed class PcInternetKioskCoreTests
         var offWire = JsonSerializer.Serialize(new { verb = "apply", command = offCommand });
         Assert.True(GuardInternetPipeApplyJson.IsOnApplyRequest(onWire));
         Assert.False(GuardInternetPipeApplyJson.IsOnApplyRequest(offWire));
+        var statusWire = JsonSerializer.Serialize(new { verb = "status" });
+        Assert.True(GuardInternetPipeApplyJson.IsStatusRequest(statusWire));
+        Assert.False(GuardInternetPipeApplyJson.RequiresMutatingApplyFifo(statusWire));
+        Assert.True(GuardInternetPipeApplyJson.RequiresMutatingApplyFifo(onWire));
     }
 
     [Fact]
@@ -196,6 +200,22 @@ public sealed class PcInternetKioskCoreTests
         if (!OperatingSystem.IsWindows())
         {
             return;
+        }
+
+        using var pipeDiag = InternetPipeOwnerDiagnostics.BeginTestScope();
+        try
+        {
+            using var probe = new System.IO.Pipes.NamedPipeClientStream(
+                ".",
+                GuardInternetClient.PipeName,
+                System.IO.Pipes.PipeDirection.InOut,
+                System.IO.Pipes.PipeOptions.Asynchronous);
+            probe.Connect(300);
+            Assert.Fail($"{GuardInternetClient.PipeName} must have no listener for connect-timeout test.");
+        }
+        catch (TimeoutException)
+        {
+            /* expected: no guard pipe server */
         }
 
         var prior = Environment.GetEnvironmentVariable("CHECKPOINT_INTERNET_PIPE_CONNECT_MS");

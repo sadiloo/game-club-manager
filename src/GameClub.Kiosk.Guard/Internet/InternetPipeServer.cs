@@ -43,6 +43,7 @@ internal sealed class InternetPipeServer
     private int _heldRequestServingTicket;
     private Thread? _earlyReassertThread;
     private bool _firstPipeListenerAttemptDone;
+    private int _applyHandlersInFlight;
 
     public InternetPipeServer(InternetGuardConfig config, IInternetFirewallApplier? firewall = null)
     {
@@ -435,14 +436,22 @@ internal sealed class InternetPipeServer
 
                 GuardWatchdogLog.Append(
                     $"pipe_read_ok thread={handlerThread} bytes={Encoding.UTF8.GetByteCount(body)}");
-                holdTicket = AcquireHeldRequestTicket();
-                WaitForHeldRequestTurn(holdTicket);
-                if (_shutdownCt.IsCancellationRequested)
+                var mutating = GuardInternetPipeApplyJson.RequiresMutatingApplyFifo(body);
+                if (mutating)
                 {
-                    return;
-                }
+                    holdTicket = AcquireHeldRequestTicket();
+                    WaitForHeldRequestTurn(holdTicket);
+                    if (_shutdownCt.IsCancellationRequested)
+                    {
+                        return;
+                    }
 
-                AppendPipeTimeline($"pipe_request_hold_release ticket={holdTicket}");
+                    AppendPipeTimeline($"pipe_request_hold_release ticket={holdTicket}");
+                }
+                else
+                {
+                    AppendPipeTimeline("pipe_request_status_immediate");
+                }
                 string response;
                 if (_earlyReassertApplyBlocked && GuardInternetPipeApplyJson.IsOnApplyRequest(body))
                 {
@@ -664,6 +673,72 @@ internal sealed class InternetPipeServer
         return null;
     }
 
+    private (bool pending, string? phase) ResolveStatusPending()
+    {
+        if (!_earlyReassertFinished.IsSet)
+        {
+            return (true, "early_reassert");
+        }
+
+        if (Volatile.Read(ref _applyHandlersInFlight) > 0)
+        {
+            return (true, "applying");
+        }
+
+        return (false, null);
+    }
+
+    private string SerializeStatusResponse(string? state)
+    {
+        var (pending, phase) = ResolveStatusPending();
+        if (state is not null)
+        {
+            if (pending)
+            {
+                return JsonSerializer.Serialize(new
+                {
+                    state,
+                    pending = true,
+                    phase,
+                    epoch = _epoch,
+                    version = _appliedVersion,
+                    on = _on,
+                    appliedAtUtc = _applied?.IssuedAtUtc,
+                });
+            }
+
+            return JsonSerializer.Serialize(new
+            {
+                state,
+                epoch = _epoch,
+                version = _appliedVersion,
+                on = _on,
+                appliedAtUtc = _applied?.IssuedAtUtc,
+            });
+        }
+
+        if (pending)
+        {
+            return JsonSerializer.Serialize(new
+            {
+                pending = true,
+                phase,
+                epoch = _epoch,
+                version = _appliedVersion,
+                on = _on,
+                appliedAtUtc = _applied?.IssuedAtUtc,
+            });
+        }
+
+        return JsonSerializer.Serialize(new
+        {
+            epoch = _epoch,
+            version = _appliedVersion,
+            on = _on,
+            appliedAtUtc = _applied?.IssuedAtUtc,
+        });
+    }
+
     private bool ReconcileWorkStillAliveAfterTimeout()
         => _reconcileTimedOutWithWorkAlive && _reconcileWorkThread is { IsAlive: true };
 
@@ -680,26 +755,7 @@ internal sealed class InternetPipeServer
             var verb = doc.RootElement.GetProperty("verb").GetString();
             if (string.Equals(verb, "status", StringComparison.OrdinalIgnoreCase))
             {
-                var state = ResolveStatusState();
-                if (state is not null)
-                {
-                    return JsonSerializer.Serialize(new
-                    {
-                        state,
-                        epoch = _epoch,
-                        version = _appliedVersion,
-                        on = _on,
-                        appliedAtUtc = _applied?.IssuedAtUtc,
-                    });
-                }
-
-                return JsonSerializer.Serialize(new
-                {
-                    epoch = _epoch,
-                    version = _appliedVersion,
-                    on = _on,
-                    appliedAtUtc = _applied?.IssuedAtUtc,
-                });
+                return SerializeStatusResponse(ResolveStatusState());
             }
 
             if (!string.Equals(verb, "apply", StringComparison.OrdinalIgnoreCase))
@@ -712,6 +768,7 @@ internal sealed class InternetPipeServer
                 return JsonSerializer.Serialize(new { error = busyError });
             }
 
+            Interlocked.Increment(ref _applyHandlersInFlight);
             try
             {
                 AppendPipeTimeline("apply_begin");
@@ -721,6 +778,7 @@ internal sealed class InternetPipeServer
             }
             finally
             {
+                Interlocked.Decrement(ref _applyHandlersInFlight);
                 var threadLabel = Thread.CurrentThread.Name ?? $"tid_{Thread.CurrentThread.ManagedThreadId}";
                 Monitor.Exit(_firewallGate);
                 GuardWatchdogLog.Append("pipe_gate_exit");
