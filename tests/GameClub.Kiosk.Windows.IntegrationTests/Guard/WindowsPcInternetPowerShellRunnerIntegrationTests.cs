@@ -11,7 +11,7 @@ using Xunit;
 
 namespace GameClub.Kiosk.Windows.IntegrationTests.Guard;
 
-[Collection(WindowsGuardIntegrationCollection.Name)]
+[Collection(PcInternetFirewallWindowsIntegrationCollection.Name)]
 [Trait("Category", "PcInternetFirewall")]
 public sealed class WindowsPcInternetPowerShellRunnerIntegrationTests
 {

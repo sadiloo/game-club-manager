@@ -16,7 +16,7 @@ using Xunit.Abstractions;
 namespace GameClub.Kiosk.Windows.IntegrationTests.Guard;
 
 /// <summary>Brief §10.4 — real localhost-store firewall on windows-2022.</summary>
-[Collection(WindowsGuardIntegrationCollection.Name)]
+[Collection(PcInternetFirewallWindowsIntegrationCollection.Name)]
 [Trait("Category", "PcInternetFirewall")]
 public sealed class WindowsPcInternetFirewallIntegrationTests
 {
@@ -417,22 +417,23 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
         Assert.Equal(60_000, InternetDriftWatchdog.ProductionDriftIntervalMs);
     }
 
-    [Fact]
-    public void internet_off_first_apply_succeeds_when_checkpoint_rule_group_is_empty()
-    {
-        RequireWindowsAdmin();
-        var ips = ResolveServerIps();
-        Assert.True(ips.Length > 0, "Could not resolve api.github.com for server allow-list.");
-
-        var applier = new InternetFirewallApplier();
-        var config = new InternetGuardConfig
+    private static InternetGuardConfig CiGithubFirewallConfig(string stationId, string[] ips) =>
+        new()
         {
-            StationId = "CI-EMPTY-GROUP",
+            StationId = stationId,
             ServerHost = "api.github.com",
             ServerPort = 443,
             ServerIps = ips,
             ExtraAllowPrograms = CiExtraPrograms(),
         };
+
+    private void RunInternetOffFirstApplySucceedsWhenCheckpointRuleGroupIsEmpty()
+    {
+        var ips = ResolveServerIps();
+        Assert.True(ips.Length > 0, "Could not resolve api.github.com for server allow-list.");
+
+        var applier = new InternetFirewallApplier();
+        var config = CiGithubFirewallConfig("CI-EMPTY-GROUP", ips);
         try
         {
             applier.RunResetScript();
@@ -450,6 +451,37 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
         {
             applier.RunResetScript();
         }
+    }
+
+    private void RunInternetOffApplyFailureAfterProfilesSetRollsBackLocalhostProfiles()
+    {
+        var ips = ResolveServerIps();
+        Assert.True(ips.Length > 0, "Could not resolve api.github.com for server allow-list.");
+
+        var applier = new InternetFirewallApplier(new InternetFirewallApplierTestInjections(throwAfterProfilesBeforeVerify: true));
+        var config = CiGithubFirewallConfig("CI-ROLLBACK", ips);
+        try
+        {
+            applier.RunResetScript();
+            Thread.Sleep(500);
+            var result = applier.ApplyWithStoreEcho(config, on: false);
+            Assert.StartsWith("apply_failed", result, StringComparison.Ordinal);
+            AssertLocalhostProfilesNotBlock();
+            Assert.True(
+                TryTcp(config.ServerHost, 443, 5_000),
+                "server host must stay reachable when OFF apply fails after profiles.");
+        }
+        finally
+        {
+            applier.RunResetScript();
+        }
+    }
+
+    [Fact]
+    public void internet_off_first_apply_succeeds_when_checkpoint_rule_group_is_empty()
+    {
+        RequireWindowsAdmin();
+        RunInternetOffFirstApplySucceedsWhenCheckpointRuleGroupIsEmpty();
     }
 
     [Fact]
@@ -532,34 +564,17 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
     public void internet_off_apply_failure_after_profiles_set_rolls_back_localhost_profiles()
     {
         RequireWindowsAdmin();
-        var ips = ResolveServerIps();
-        Assert.True(ips.Length > 0, "Could not resolve api.github.com for server allow-list.");
+        RunInternetOffApplyFailureAfterProfilesSetRollsBackLocalhostProfiles();
+    }
 
-        var applier = new InternetFirewallApplier();
-        var config = new InternetGuardConfig
-        {
-            StationId = "CI-ROLLBACK",
-            ServerHost = "api.github.com",
-            ServerPort = 443,
-            ServerIps = ips,
-            ExtraAllowPrograms = CiExtraPrograms(),
-        };
-        var priorSeam = InternetFirewallApplierTestSeams.ThrowAfterProfilesBeforeVerify;
-        try
-        {
-            applier.RunResetScript();
-            Thread.Sleep(500);
-            InternetFirewallApplierTestSeams.ThrowAfterProfilesBeforeVerify = true;
-            var result = applier.ApplyWithStoreEcho(config, on: false);
-            Assert.StartsWith("apply_failed", result, StringComparison.Ordinal);
-            AssertLocalhostProfilesNotBlock();
-            Assert.True(TryTcp(config.ServerHost, 443, 5_000), "server host must stay reachable when OFF apply fails after profiles.");
-        }
-        finally
-        {
-            InternetFirewallApplierTestSeams.ThrowAfterProfilesBeforeVerify = priorSeam;
-            applier.RunResetScript();
-        }
+    [Fact]
+    public void internet_off_seam_injection_isolated_between_rollback_and_first_apply_in_both_orders()
+    {
+        RequireWindowsAdmin();
+        RunInternetOffFirstApplySucceedsWhenCheckpointRuleGroupIsEmpty();
+        RunInternetOffApplyFailureAfterProfilesSetRollsBackLocalhostProfiles();
+        RunInternetOffApplyFailureAfterProfilesSetRollsBackLocalhostProfiles();
+        RunInternetOffFirstApplySucceedsWhenCheckpointRuleGroupIsEmpty();
     }
 
     [Fact]

@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Threading;
 
 namespace GameClub.Kiosk.Guard.Internet;
 
@@ -10,7 +11,8 @@ internal static class InternetGuardStartupFirewall
     public static void ReconcileOnPipeStart(
         InternetGuardConfig config,
         IInternetFirewallApplier firewall,
-        Func<bool>? shouldContinue = null)
+        Func<bool>? shouldContinue = null,
+        ManualResetEventSlim? hangBeforeLocalhostCleanup = null)
     {
         shouldContinue ??= () => true;
         var total = Stopwatch.StartNew();
@@ -20,7 +22,7 @@ internal static class InternetGuardStartupFirewall
             return;
         }
 
-        InternetGuardReconcileTestSeams.WaitHangBeforeLocalhostCleanupIfConfigured(shouldContinue);
+        WaitHangBeforeLocalhostCleanupIfConfigured(hangBeforeLocalhostCleanup, shouldContinue);
         if (!shouldContinue())
         {
             GuardWatchdogLog.Append("reconcile_step_skipped_abandoned step=localhost_cleanup");
@@ -86,5 +88,23 @@ internal static class InternetGuardStartupFirewall
         }
 
         GuardWatchdogLog.Append($"reconcile_steps_total elapsed_ms={total.ElapsedMilliseconds}");
+    }
+
+    private static void WaitHangBeforeLocalhostCleanupIfConfigured(
+        ManualResetEventSlim? hang,
+        Func<bool> shouldContinue)
+    {
+        if (hang is null)
+        {
+            return;
+        }
+
+        while (!hang.Wait(50))
+        {
+            if (!shouldContinue())
+            {
+                return;
+            }
+        }
     }
 }

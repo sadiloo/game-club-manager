@@ -20,7 +20,7 @@ internal static class InternetFirewallMergedApplyRunner
         return ClassifyMergedResult(raw, config, requireVerifiedStateFile: false, expectOn: true);
     }
 
-    internal static string ApplyOff(InternetGuardConfig config, int budgetMs)
+    internal static string ApplyOff(InternetGuardConfig config, int budgetMs, bool throwAfterProfilesBeforeVerify = false)
     {
         var totalSw = Stopwatch.StartNew();
         if (config.ServerIps.Length == 0 || config.ServerPort <= 0)
@@ -30,7 +30,7 @@ internal static class InternetFirewallMergedApplyRunner
 
         var extra = string.Join(";", config.ExtraAllowPrograms.Select(p => p.Replace("'", "''")));
         var ips = string.Join(",", config.ServerIps.Select(ip => $"'{ip.Replace("'", "''")}'"));
-        var seamThrow = InternetFirewallApplierTestSeams.ThrowAfterProfilesBeforeVerify
+        var seamThrow = throwAfterProfilesBeforeVerify
             ? "throw \"apply_failed:verification:test_seam_after_profiles\""
             : "";
         const string phaseSwInit = @"

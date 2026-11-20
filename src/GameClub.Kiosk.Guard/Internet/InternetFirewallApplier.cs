@@ -5,13 +5,25 @@ namespace GameClub.Kiosk.Guard.Internet;
 
 internal sealed class InternetFirewallApplier : IInternetFirewallApplier
 {
+    private readonly bool _throwAfterProfilesBeforeVerify;
+
+    public InternetFirewallApplier()
+        : this(InternetFirewallApplierTestInjections.None)
+    {
+    }
+
+    internal InternetFirewallApplier(InternetFirewallApplierTestInjections testInjections)
+    {
+        _throwAfterProfilesBeforeVerify = testInjections.ThrowAfterProfilesBeforeVerify;
+    }
+
     public string Apply(InternetGuardConfig config, bool on)
     {
         var budget = InternetGuardReconcilePolicy.ResolveApplyMergedBudgetMs();
         GuardWatchdogLog.Append($"apply_merged begin on={on} budget_ms={budget}");
         var result = on
             ? InternetFirewallMergedApplyRunner.ApplyOn(config, budget)
-            : InternetFirewallMergedApplyRunner.ApplyOff(config, budget);
+            : InternetFirewallMergedApplyRunner.ApplyOff(config, budget, _throwAfterProfilesBeforeVerify);
         GuardWatchdogLog.Append($"apply_merged end on={on} result={result}");
         return result;
     }

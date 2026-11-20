@@ -25,7 +25,7 @@ using Xunit;
 namespace GameClub.Kiosk.Windows.IntegrationTests.Guard;
 
 /// <summary>Brief §10.4.5–10.4.6 — Guard persistence, drift, and pipe replay on windows-2022.</summary>
-[Collection(WindowsGuardIntegrationCollection.Name)]
+[Collection(PcInternetFirewallWindowsIntegrationCollection.Name)]
 [Trait("Category", "PcInternetFirewall")]
 public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
 {

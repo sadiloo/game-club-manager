@@ -44,11 +44,21 @@ internal sealed class InternetPipeServer
     private Thread? _earlyReassertThread;
     private bool _firstPipeListenerAttemptDone;
     private int _applyHandlersInFlight;
+    private readonly ManualResetEventSlim? _hangBeforeLocalhostCleanup;
 
     public InternetPipeServer(InternetGuardConfig config, IInternetFirewallApplier? firewall = null)
+        : this(config, firewall, InternetPipeServerReconcileTestInjections.None)
+    {
+    }
+
+    internal InternetPipeServer(
+        InternetGuardConfig config,
+        IInternetFirewallApplier? firewall,
+        InternetPipeServerReconcileTestInjections testInjections)
     {
         _config = config;
         _firewall = firewall ?? new InternetFirewallApplier();
+        _hangBeforeLocalhostCleanup = testInjections.HangBeforeLocalhostCleanup;
         _verifier = new InternetCommandVerifier(config.ServerPublicKeyPem);
         var persisted = _state.Load();
         if (persisted is not null)
@@ -518,7 +528,8 @@ internal sealed class InternetPipeServer
                 InternetGuardStartupFirewall.ReconcileOnPipeStart(
                     _config,
                     _firewall,
-                    shouldContinue);
+                    shouldContinue,
+                    _hangBeforeLocalhostCleanup);
                 if (!_reconcileAbandoned && !ct.IsCancellationRequested)
                 {
                     var reassert = Stopwatch.StartNew();

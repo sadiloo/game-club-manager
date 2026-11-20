@@ -27,7 +27,7 @@ using Xunit;
 
 namespace GameClub.Kiosk.Windows.IntegrationTests.Guard;
 
-[Collection(WindowsGuardIntegrationCollection.Name)]
+[Collection(PcInternetFirewallWindowsIntegrationCollection.Name)]
 [Trait("Category", "PcInternetFirewall")]
 public sealed class WindowsPcInternetPipeReconcileIntegrationTests
 {
@@ -344,7 +344,6 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
         var config = BuildConfig(ExportPublicKeyPem(rsa));
         var priorBudget = Environment.GetEnvironmentVariable("CHECKPOINT_INTERNET_RECONCILE_TIMEOUT_MS");
         var hangRelease = new ManualResetEventSlim(false);
-        InternetGuardReconcileTestSeams.HangBeforeLocalhostCleanup = hangRelease;
         Environment.SetEnvironmentVariable("CHECKPOINT_INTERNET_RECONCILE_TIMEOUT_MS", "2000");
         CancellationTokenSource cts = null;
         Thread pipeThread = null;
@@ -353,7 +352,10 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
             Assert.Equal("applied", new InternetFirewallApplier().ApplyWithStoreEcho(config, on: false));
             TryDeleteState();
             cts = new CancellationTokenSource();
-            pipeThread = new Thread(() => new InternetPipeServer(config).Run(cts.Token)) { IsBackground = true };
+            pipeThread = new Thread(() => new InternetPipeServer(
+                config,
+                firewall: null,
+                new InternetPipeServerReconcileTestInjections(hangRelease)).Run(cts.Token)) { IsBackground = true };
             pipeThread.Start();
 
             var reconcileDeadline = DateTime.UtcNow.AddSeconds(5);
@@ -406,7 +408,6 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
         finally
         {
             hangRelease.Set();
-            InternetGuardReconcileTestSeams.HangBeforeLocalhostCleanup = null;
             StopInternetPipeServer(cts, pipeThread);
             hangRelease.Dispose();
             Environment.SetEnvironmentVariable("CHECKPOINT_INTERNET_RECONCILE_TIMEOUT_MS", priorBudget);

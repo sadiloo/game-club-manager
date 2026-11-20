@@ -136,16 +136,19 @@ jobs:
           $exists = & $psql -h 127.0.0.1 -U postgres -c "SELECT 1 FROM pg_database WHERE datname='gameclub_test'" -tA 2>$null
           if (-not $exists) { & $psql -h 127.0.0.1 -U postgres -c "CREATE DATABASE gameclub_test;" }
       - name: windows kiosk integration
-        timeout-minutes: 22
+        # Run 44740272933: main kiosk phase ~12 min; 2× headroom so a hang fails visibly.
+        timeout-minutes: 25
         shell: pwsh
         run: ./scripts/windows/ci-integration.ps1
       - name: pc internet firewall integration
         if: ${{ success() || failure() }}
-        timeout-minutes: 15
+        # Run 44740272933: firewall phase ~10 min; 44740266172 hung ~37 min until job cancel.
+        timeout-minutes: 20
         shell: pwsh
         run: ./scripts/windows/ci-integration.ps1 -PcInternetFirewallOnly
       - name: kiosk host reconnect mutations (net48 D7 and status tick)
         if: always()
+        timeout-minutes: 15
         shell: pwsh
         env:
           MUTOUT_DIR: artifacts/kiosk-reconnect-mut
