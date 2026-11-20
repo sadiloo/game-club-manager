@@ -611,25 +611,50 @@ public sealed class ShellPlanAIntegrationTests
                 await Task.Delay(4000);
                 var wv = window.FindName("PanelWebView") as Microsoft.Web.WebView2.Wpf.WebView2;
                 Assert.NotNull(wv?.CoreWebView2);
-                var before = Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log").Select(File.ReadAllText).Aggregate("", string.Concat);
-                var spoofed = new[]
+                var logCursor = Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log").Select(File.ReadAllText).Aggregate("", string.Concat);
+                var spoofed = new (string Uri, string ExpectedHost)[]
                 {
-                    "http://127.0.0.1:50001/operator/",
-                    "http://127.0.0.1:5000.evil.com/operator/",
-                    "http://127.0.0.1:5000@evil.com/operator/",
-                    "https://127.0.0.1:5000/operator/",
+                    ("http://127.0.0.1:50001/operator/", "127.0.0.1"),
+                    ("http://127.0.0.1:5000.evil.com/operator/", "127.0.0.1"),
+                    ("http://127.0.0.1:5000@evil.com/operator/", "evil.com"),
+                    ("https://127.0.0.1:5000/operator/", "127.0.0.1"),
                 };
-                foreach (var uri in spoofed)
+                foreach (var (uri, expectedHost) in spoofed)
                 {
+                    var beforeAttempt = logCursor;
                     wv.CoreWebView2.Navigate(uri);
-                    await Task.Delay(400);
+                    var blockedLineDeadline = DateTime.UtcNow.AddSeconds(5);
+                    var hash8 = MainWindow.HostHash8ForTests(expectedHost);
+                    var blockedLine = "";
+                    while (DateTime.UtcNow < blockedLineDeadline)
+                    {
+                        await Task.Delay(50);
+                        logCursor = Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log").Select(File.ReadAllText).Aggregate("", string.Concat);
+                        var attemptDelta = logCursor.Replace(beforeAttempt, "");
+                        blockedLine = attemptDelta
+                            .Split('\n')
+                            .LastOrDefault(l => l.Contains("navigation-blocked", StringComparison.Ordinal) && l.Contains($"host_hash8={hash8}", StringComparison.Ordinal))
+                            ?? "";
+                        if (!string.IsNullOrEmpty(blockedLine))
+                        {
+                            break;
+                        }
+                    }
+
+                    Assert.False(
+                        string.IsNullOrEmpty(blockedLine),
+                        $"Expected navigation-blocked log with host_hash8={hash8} for {uri}");
+                    await Task.Delay(300);
+                    var href = UnquoteWebViewScriptString(await wv.CoreWebView2.ExecuteScriptAsync("location.href"));
+                    Assert.DoesNotContain("evil.com", href, StringComparison.OrdinalIgnoreCase);
+                    Assert.DoesNotContain(":50001", href, StringComparison.Ordinal);
+                    Assert.False(
+                        href.StartsWith("https://", StringComparison.OrdinalIgnoreCase),
+                        $"WebView committed blocked URI {uri}");
                 }
 
                 await window.NavigatePanelAsync();
                 await Task.Delay(1000);
-                var after = Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log").Select(File.ReadAllText).Aggregate("", string.Concat);
-                var delta = after.Replace(before, "");
-                Assert.Contains("navigation-blocked", delta);
                 Assert.Contains("/operator/", wv.Source?.ToString() ?? "", StringComparison.OrdinalIgnoreCase);
                 window.Close();
             }, TimeSpan.FromSeconds(45));
@@ -645,7 +670,7 @@ public sealed class ShellPlanAIntegrationTests
     {
         FakeShellSeams.RestoreProduction();
         if (!WebView2RuntimePresent()) throw new InvalidOperationException("WebView2 runtime required");
-        StopServiceIfRunning();
+        EnsureServiceRunning();
         var root = AllocateShellDataRoot();
         try
         {
@@ -669,16 +694,32 @@ public sealed class ShellPlanAIntegrationTests
                     }
 
                     Assert.NotNull(wv?.CoreWebView2);
-                    for (var i = 0; i < 30; i++)
+                    var offlineNavStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                    void OnNavStarting(object? _, CoreWebView2NavigationStartingEventArgs args)
                     {
-                        await Task.Delay(20);
+                        if (!args.Uri.StartsWith("data:text/html", StringComparison.OrdinalIgnoreCase))
+                        {
+                            return;
+                        }
+
+                        offlineNavStarted.TrySetResult(true);
                         wv!.CoreWebView2.Stop();
                     }
 
-                    await Task.Delay(1500);
+                    wv.CoreWebView2.NavigationStarting += OnNavStarting;
+                    window.NavigateToStringWithOfflineDataPermissionForTests(
+                        "<html><body>ARMED-OFFLINE-INTERRUPT</body></html>");
+                    var sawOfflineNav = await Task.WhenAny(offlineNavStarted.Task, Task.Delay(5000)) == offlineNavStarted.Task;
+                    Assert.True(sawOfflineNav, "Expected data: NavigationStarting for armed offline navigation");
+                    await Task.Delay(500);
+                    wv.CoreWebView2.NavigationStarting -= OnNavStarting;
+                    Assert.False(
+                        window.OfflineDataNavigationPermissionArmedForTests,
+                        "Permission must clear after interrupted offline load (2ce2e74b left ApplicationIdle armed permission that could allow a second data: nav)");
+
                     var before = Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log").Select(File.ReadAllText).Aggregate("", string.Concat);
                     wv.CoreWebView2.NavigateToString("<html><body>INJECTED-OFFLINE-DATA</body></html>");
-                    await Task.Delay(1000);
+                    await Task.Delay(800);
                     var html = await wv.CoreWebView2.ExecuteScriptAsync("document.body?.innerText ?? ''");
                     var text = UnquoteWebViewScriptString(html);
                     Assert.DoesNotContain("INJECTED-OFFLINE-DATA", text, StringComparison.Ordinal);
@@ -694,7 +735,93 @@ public sealed class ShellPlanAIntegrationTests
         finally
         {
             CleanupShellDataRoot(root);
-            EnsureServiceRunning();
+        }
+    }
+
+    [Fact]
+    public void shell_browser_process_exit_recreates_operator_panel()
+    {
+        FakeShellSeams.RestoreProduction();
+        if (!WebView2RuntimePresent()) throw new InvalidOperationException("WebView2 runtime required");
+        EnsureServiceRunning();
+        var root = AllocateShellDataRoot();
+        try
+        {
+            _fixture.RunAsync(async () =>
+            {
+                MainWindow? window = null;
+                try
+                {
+                    window = new MainWindow();
+                    window.Show();
+                    Microsoft.Web.WebView2.Wpf.WebView2? wv = null;
+                    var deadline = DateTime.UtcNow.AddSeconds(30);
+                    while (DateTime.UtcNow < deadline)
+                    {
+                        await Task.Delay(300);
+                        wv = window.FindName("PanelWebView") as Microsoft.Web.WebView2.Wpf.WebView2;
+                        if (wv?.CoreWebView2 is not null
+                            && (wv.Source?.ToString() ?? "").Contains("/operator/", StringComparison.OrdinalIgnoreCase))
+                        {
+                            break;
+                        }
+                    }
+
+                    Assert.NotNull(wv?.CoreWebView2);
+                    var webViewBeforeKill = wv;
+                    var before = Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log").Select(File.ReadAllText).Aggregate("", string.Concat);
+                    var browserPid = (int)wv.CoreWebView2.BrowserProcessId;
+                    using (var browserProc = Process.GetProcessById(browserPid))
+                    {
+                        browserProc.Kill();
+                        browserProc.WaitForExit(15_000);
+                    }
+
+                    var recoverDeadline = DateTime.UtcNow.AddSeconds(60);
+                    var recovered = false;
+                    Microsoft.Web.WebView2.Wpf.WebView2? webViewAfter = null;
+                    while (DateTime.UtcNow < recoverDeadline)
+                    {
+                        await Task.Delay(500);
+                        webViewAfter = window.FindName("PanelWebView") as Microsoft.Web.WebView2.Wpf.WebView2;
+                        if (webViewAfter?.CoreWebView2 is null)
+                        {
+                            continue;
+                        }
+
+                        if (ReferenceEquals(webViewBeforeKill, webViewAfter))
+                        {
+                            continue;
+                        }
+
+                        var loc = UnquoteWebViewScriptString(
+                            await webViewAfter.CoreWebView2.ExecuteScriptAsync(
+                                "location.pathname + '|' + document.readyState"));
+                        if (loc.StartsWith("/operator/", StringComparison.OrdinalIgnoreCase)
+                            && loc.EndsWith("|complete", StringComparison.Ordinal))
+                        {
+                            recovered = true;
+                            break;
+                        }
+                    }
+
+                    var after = Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log").Select(File.ReadAllText).Aggregate("", string.Concat);
+                    var delta = after.Replace(before, "");
+                    Assert.Contains("kind=BrowserProcessExited", delta, StringComparison.Ordinal);
+                    Assert.Contains("outcome=recreate-browser", delta, StringComparison.Ordinal);
+                    Assert.NotNull(webViewAfter);
+                    Assert.NotSame(webViewBeforeKill, webViewAfter);
+                    Assert.True(recovered, "Operator panel did not load in recreated WebView2 control");
+                }
+                finally
+                {
+                    window?.Close();
+                }
+            }, TimeSpan.FromSeconds(120));
+        }
+        finally
+        {
+            CleanupShellDataRoot(root);
         }
     }
 

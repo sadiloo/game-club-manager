@@ -23,7 +23,7 @@
                  TextWrapping="Wrap"
                  Foreground="#C41B40" />
     </Border>
-    <Grid Grid.Row="1">
+    <Grid x:Name="PanelHost" Grid.Row="1">
       <Grid x:Name="NativeHost" Visibility="Collapsed" Background="#E8EEF8">
         <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Width="320">
           <TextBlock x:Name="NativeTitle"

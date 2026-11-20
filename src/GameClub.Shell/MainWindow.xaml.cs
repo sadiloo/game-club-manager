@@ -2,6 +2,8 @@ using System;
 using System.IO;
 using System.Threading;
 using System.Reflection;
+using Microsoft.Web.WebView2.Wpf;
+using System.Windows.Controls;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading.Tasks;
@@ -34,6 +36,7 @@ public partial class MainWindow : Window
     private CoreWebView2Environment? _webViewEnvironment;
     private readonly WebViewProcessRecoveryPolicy _processRecoveryPolicy = new();
     private int _processRecoveryInFlight;
+    private int _pendingBrowserRecreate;
 
     public int NavigationStartingCount => _navigationStartingCount;
     public double CurrentZoomFactor => PanelWebView?.ZoomFactor ?? 1.0;
@@ -159,6 +162,36 @@ public partial class MainWindow : Window
         }
     }
 
+    internal static string HostHash8ForTests(string host) => Sha256Hex8(host.ToLowerInvariant());
+
+    internal bool OfflineDataNavigationPermissionArmedForTests => _allowOfflineDataNav;
+
+    internal void ArmOfflineDataNavigationPermissionForTests()
+    {
+        _allowOfflineDataNav = true;
+    }
+
+    internal void NavigateToStringWithOfflineDataPermissionForTests(string html)
+    {
+        _allowOfflineDataNav = true;
+        try
+        {
+            PanelWebView.NavigateToString(html);
+        }
+        catch
+        {
+            _allowOfflineDataNav = false;
+            throw;
+        }
+        finally
+        {
+            if (_closed)
+            {
+                _allowOfflineDataNav = false;
+            }
+        }
+    }
+
     private void WirePanelWebView(CoreWebView2 core)
     {
         var settings = core.Settings;
@@ -259,63 +292,42 @@ public partial class MainWindow : Window
             return;
         }
 
+        var core = sender as CoreWebView2 ?? PanelWebView.CoreWebView2;
+        if (!ShouldRecoverFromProcessFailure(e, core))
+        {
+            ShellFileLog.Write($"webview-process-failed kind={e.ProcessFailedKind} outcome=log-only");
+            return;
+        }
+
+        if (e.ProcessFailedKind == CoreWebView2ProcessFailedKind.BrowserProcessExited
+            && Volatile.Read(ref _processRecoveryInFlight) == 1)
+        {
+            Volatile.Write(ref _pendingBrowserRecreate, 1);
+            ShellFileLog.Write(
+                $"webview-process-failed kind={e.ProcessFailedKind} outcome=escalate-recreate reason=recovery-in-flight");
+            return;
+        }
+
         if (Interlocked.CompareExchange(ref _processRecoveryInFlight, 1, 0) != 0)
         {
-            ShellFileLog.Write(
-                $"webview-process-failed kind={e.ProcessFailedKind} attempt=skipped reason=recovery-in-flight");
+            if (e.ProcessFailedKind == CoreWebView2ProcessFailedKind.BrowserProcessExited)
+            {
+                Volatile.Write(ref _pendingBrowserRecreate, 1);
+                ShellFileLog.Write(
+                    $"webview-process-failed kind={e.ProcessFailedKind} outcome=escalate-recreate reason=recovery-in-flight");
+            }
+            else
+            {
+                ShellFileLog.Write(
+                    $"webview-process-failed kind={e.ProcessFailedKind} outcome=deferred reason=recovery-in-flight");
+            }
+
             return;
         }
 
         try
         {
-            var utcNow = DateTime.UtcNow;
-            if (!_processRecoveryPolicy.CanRetry(utcNow))
-            {
-                ShellFileLog.Write(
-                    $"webview-process-failed kind={e.ProcessFailedKind} attempt=exhausted outcome=offline-page");
-                await Dispatcher.InvokeAsync(new Action(ShowOfflineAfterProcessRecoveryExhausted));
-                return;
-            }
-
-            var attempt = _processRecoveryPolicy.RecordAttemptAndGetIndex(utcNow);
-            var delay = _processRecoveryPolicy.GetBackoffForAttempt(attempt);
-            if (delay is null)
-            {
-                ShellFileLog.Write(
-                    $"webview-process-failed kind={e.ProcessFailedKind} attempt={attempt} outcome=offline-page reason=no-backoff");
-                await Dispatcher.InvokeAsync(new Action(ShowOfflineAfterProcessRecoveryExhausted));
-                return;
-            }
-
-            ShellFileLog.Write(
-                $"webview-process-failed kind={e.ProcessFailedKind} attempt={attempt} delaySec={delay.Value.TotalSeconds:F0} outcome=pending");
-
-            await Task.Delay(delay.Value);
-            if (_closed)
-            {
-                ShellFileLog.Write(
-                    $"webview-process-failed kind={e.ProcessFailedKind} attempt={attempt} outcome=cancelled reason=window-closed");
-                return;
-            }
-
-            if (e.ProcessFailedKind == CoreWebView2ProcessFailedKind.BrowserProcessExited)
-            {
-                ShellFileLog.Write(
-                    $"webview-process-failed kind={e.ProcessFailedKind} attempt={attempt} outcome=recreate-browser");
-                await RecreatePanelWebViewAsync();
-            }
-            else
-            {
-                ShellFileLog.Write(
-                    $"webview-process-failed kind={e.ProcessFailedKind} attempt={attempt} outcome=reload");
-                await Dispatcher.InvokeAsync(() =>
-                {
-                    if (!_closed && PanelWebView.CoreWebView2 is not null)
-                    {
-                        PanelWebView.CoreWebView2.Reload();
-                    }
-                });
-            }
+            await RunProcessFailureRecoveryAsync(e.ProcessFailedKind);
         }
         catch (Exception ex)
         {
@@ -324,7 +336,105 @@ public partial class MainWindow : Window
         finally
         {
             Interlocked.Exchange(ref _processRecoveryInFlight, 0);
+            if (Volatile.Read(ref _pendingBrowserRecreate) == 1)
+            {
+                Volatile.Write(ref _pendingBrowserRecreate, 0);
+                if (Interlocked.CompareExchange(ref _processRecoveryInFlight, 1, 0) == 0)
+                {
+                    try
+                    {
+                        await RunProcessFailureRecoveryAsync(CoreWebView2ProcessFailedKind.BrowserProcessExited);
+                    }
+                    finally
+                    {
+                        Interlocked.Exchange(ref _processRecoveryInFlight, 0);
+                    }
+                }
+            }
         }
+    }
+
+    private async Task RunProcessFailureRecoveryAsync(CoreWebView2ProcessFailedKind kind)
+    {
+        var utcNow = DateTime.UtcNow;
+        if (!_processRecoveryPolicy.CanRetry(utcNow))
+        {
+            ShellFileLog.Write(
+                $"webview-process-failed kind={kind} attempt=exhausted outcome=offline-page");
+            await Dispatcher.InvokeAsync(new Action(ShowOfflineAfterProcessRecoveryExhausted));
+            return;
+        }
+
+        var attempt = _processRecoveryPolicy.RecordAttemptAndGetIndex(utcNow);
+        var delay = _processRecoveryPolicy.GetBackoffForAttempt(attempt);
+        if (delay is null)
+        {
+            ShellFileLog.Write(
+                $"webview-process-failed kind={kind} attempt={attempt} outcome=offline-page reason=no-backoff");
+            await Dispatcher.InvokeAsync(new Action(ShowOfflineAfterProcessRecoveryExhausted));
+            return;
+        }
+
+        ShellFileLog.Write(
+            $"webview-process-failed kind={kind} attempt={attempt} delaySec={delay.Value.TotalSeconds:F0} outcome=pending");
+
+        await Task.Delay(delay.Value);
+        if (_closed)
+        {
+            ShellFileLog.Write(
+                $"webview-process-failed kind={kind} attempt={attempt} outcome=cancelled reason=window-closed");
+            return;
+        }
+
+        if (kind == CoreWebView2ProcessFailedKind.BrowserProcessExited)
+        {
+            ShellFileLog.Write(
+                $"webview-process-failed kind={kind} attempt={attempt} outcome=recreate-browser");
+            await Dispatcher.InvokeAsync(async () => await RecreatePanelWebViewAsync());
+        }
+        else
+        {
+            ShellFileLog.Write(
+                $"webview-process-failed kind={kind} attempt={attempt} outcome=reload");
+            await Dispatcher.InvokeAsync(() =>
+            {
+                if (!_closed && PanelWebView.CoreWebView2 is not null)
+                {
+                    PanelWebView.CoreWebView2.Reload();
+                }
+            });
+        }
+    }
+
+    private static bool ShouldRecoverFromProcessFailure(CoreWebView2ProcessFailedEventArgs e, CoreWebView2? core)
+    {
+        return e.ProcessFailedKind switch
+        {
+            CoreWebView2ProcessFailedKind.RenderProcessExited => true,
+            CoreWebView2ProcessFailedKind.RenderProcessUnresponsive => true,
+            CoreWebView2ProcessFailedKind.BrowserProcessExited => true,
+            CoreWebView2ProcessFailedKind.FrameRenderProcessExited => IsMainFrameRenderProcessFailure(e, core),
+            _ => false,
+        };
+    }
+
+    private static bool IsMainFrameRenderProcessFailure(CoreWebView2ProcessFailedEventArgs e, CoreWebView2? core)
+    {
+        if (core is null)
+        {
+            return false;
+        }
+
+        var mainSource = core.Source ?? "";
+        foreach (var frame in e.FrameInfosForFailedProcess)
+        {
+            if (string.Equals(frame.Source, mainSource, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private void ShowOfflineAfterProcessRecoveryExhausted()
@@ -339,6 +449,19 @@ public partial class MainWindow : Window
         _ = PresentOfflinePageAsync(state);
     }
 
+    private void UnwirePanelWebView(CoreWebView2? core)
+    {
+        if (core is null)
+        {
+            return;
+        }
+
+        core.ProcessFailed -= OnWebViewProcessFailed;
+        core.NavigationStarting -= OnPanelNavigationStarting;
+        core.NewWindowRequested -= OnPanelNewWindowRequested;
+        core.NavigationCompleted -= OnNavigationCompleted;
+    }
+
     private async Task RecreatePanelWebViewAsync()
     {
         if (_closed)
@@ -348,13 +471,31 @@ public partial class MainWindow : Window
 
         _webViewReady = false;
         _ensureWebViewTask = null;
-        if (PanelWebView.CoreWebView2 is not null)
+
+        var oldWebView = PanelWebView;
+        var zoom = oldWebView.ZoomFactor;
+        var visibility = oldWebView.Visibility;
+        UnwirePanelWebView(oldWebView.CoreWebView2);
+
+        try
         {
-            PanelWebView.CoreWebView2.ProcessFailed -= OnWebViewProcessFailed;
-            PanelWebView.CoreWebView2.NavigationStarting -= OnPanelNavigationStarting;
-            PanelWebView.CoreWebView2.NewWindowRequested -= OnPanelNewWindowRequested;
-            PanelWebView.CoreWebView2.NavigationCompleted -= OnNavigationCompleted;
+            UnregisterName("PanelWebView");
         }
+        catch
+        {
+        }
+
+        PanelHost.Children.Remove(oldWebView);
+        oldWebView.Dispose();
+
+        var replacement = new WebView2
+        {
+            Visibility = visibility,
+            ZoomFactor = zoom,
+        };
+        PanelWebView = replacement;
+        RegisterName("PanelWebView", replacement);
+        PanelHost.Children.Add(replacement);
 
         _webViewEnvironment ??= await CoreWebView2Environment.CreateAsync(userDataFolder: ShellPaths.WebView2UserData);
         await PanelWebView.EnsureCoreWebView2Async(_webViewEnvironment);
@@ -367,6 +508,8 @@ public partial class MainWindow : Window
         WirePanelWebView(PanelWebView.CoreWebView2);
         _webViewReady = true;
         _panelNavigated = false;
+        PanelWebView.Visibility = Visibility.Visible;
+        NativeHost.Visibility = Visibility.Collapsed;
 
         if (_offlineShown)
         {
@@ -620,21 +763,14 @@ public partial class MainWindow : Window
         }
         finally
         {
-            _ = Dispatcher.BeginInvoke(
-                new Action(ClearArmedOfflineDataNavPermissionIfStillSet),
-                System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+            if (_closed)
+            {
+                _allowOfflineDataNav = false;
+            }
         }
 
         LogOfflineTrace("present-offline-navigated", $"offlineState={state}");
         return Task.CompletedTask;
-    }
-
-    private void ClearArmedOfflineDataNavPermissionIfStillSet()
-    {
-        if (_allowOfflineDataNav)
-        {
-            _allowOfflineDataNav = false;
-        }
     }
 
     private bool ShouldPresentPendingOffline()
@@ -687,6 +823,7 @@ public partial class MainWindow : Window
     protected override void OnClosed(EventArgs e)
     {
         _closed = true;
+        _allowOfflineDataNav = false;
         if (_poller is not null && _onPollerChanged is not null)
         {
             _poller.Changed -= _onPollerChanged;
