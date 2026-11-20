@@ -300,7 +300,7 @@ public partial class MainWindow : Window
 
         if (loopbackPanel && PanelNavigationOrigin.IsAllowedPanelNavigationUri(lastUri))
         {
-            if (IsSuccessfulPanelHttpNavigation(e))
+            if (ShouldRecoverFromPanelNavigation(e))
             {
                 _panelNavRetryPolicy.Reset();
                 _runningPanelLoadFailing = false;
@@ -874,21 +874,12 @@ public partial class MainWindow : Window
         }
     }
 
-    private static bool IsSuccessfulPanelHttpNavigation(CoreWebView2NavigationCompletedEventArgs e)
-    {
-        if (!e.IsSuccess)
-        {
-            return false;
-        }
-
-        if (e.WebErrorStatus != CoreWebView2WebErrorStatus.Unknown)
-        {
-            return false;
-        }
-
-        var http = e.HttpStatusCode;
-        return http == 0 || (http >= 200 && http < 300);
-    }
+    private bool ShouldRecoverFromPanelNavigation(CoreWebView2NavigationCompletedEventArgs e) =>
+        PanelNavigationHttpOutcome.ShouldRecoverFromPanelNavigation(
+            _runningPanelLoadFailing,
+            e.IsSuccess,
+            e.WebErrorStatus == CoreWebView2WebErrorStatus.Unknown,
+            e.HttpStatusCode);
 
     private static bool IsLoopbackPanelTarget(string uriString)
     {

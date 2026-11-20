@@ -14,6 +14,7 @@
     <Compile Include="..\..\src\GameClub.Shell\Shell\PanelNavigationOrigin.cs" Link="Shell\PanelNavigationOrigin.cs" />
     <Compile Include="..\..\src\GameClub.Shell\Shell\WebViewProcessRecoveryPolicy.cs" Link="Shell\WebViewProcessRecoveryPolicy.cs" />
     <Compile Include="..\..\src\GameClub.Shell\Shell\PanelNavigationRetryPolicy.cs" Link="Shell\PanelNavigationRetryPolicy.cs" />
+    <Compile Include="..\..\src\GameClub.Shell\Shell\PanelNavigationHttpOutcome.cs" Link="Shell\PanelNavigationHttpOutcome.cs" />
     <Compile Include="..\..\src\GameClub.Shell\Shell\ShellPaths.cs" Link="Shell\ShellPaths.cs" />
   </ItemGroup>
 
