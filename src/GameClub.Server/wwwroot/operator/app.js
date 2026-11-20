@@ -38,6 +38,7 @@ const CP_TEXT = {
       around: "دور روز تولد (نیمی پیش، نیمی پس)",
     },
     errDays: "دست‌کم ۱ روز.",
+    errPercent: "درصد تولد باید بین ۰ و ۱۰۰ باشد.",
   },
   f14: {
     title: "جدول سطح‌ها",
@@ -2293,16 +2294,33 @@ bindClick("mgrBirthdayBtn", async () => {
     validate: (v) => {
       const errs = {};
       const pct = cpParseInteger(String(v.percent));
-      if (pct == null || pct < 0 || pct > 100) errs.percent = "درصد را وارد کنید.";
+      if (pct == null || pct < 0 || pct > 100) errs.percent = CP_TEXT.f12.errPercent;
       if (v.windowKind === "day_window") {
         const days = cpParseInteger(String(v.windowDays));
         if (days == null || days < 1) errs.windowDays = CP_TEXT.f12.errDays;
       }
       return Object.keys(errs).length ? errs : null;
     },
+    mapApiError: (e) => {
+      const msg = e?.message || "";
+      if (e?.code === "invalid_policy" && msg.includes("درصد تولد")) {
+        return { percent: msg };
+      }
+      if (e?.code === "invalid_window_days") {
+        return { windowDays: msg || CP_TEXT.f12.errDays };
+      }
+      if (e?.code === "invalid_policy" && msg.includes("بازه")) {
+        return { windowKind: msg };
+      }
+      if (e?.code === "invalid_policy" && msg.includes("حساب روز")) {
+        return { anchor: msg };
+      }
+      return null;
+    },
     onSubmit: async (v) => {
       await api("/api/operator/members/settings/birthday", {
         method: "PUT",
+        background: true,
         body: JSON.stringify({
           percent: cpParseInteger(String(v.percent)),
           windowKind: v.windowKind,

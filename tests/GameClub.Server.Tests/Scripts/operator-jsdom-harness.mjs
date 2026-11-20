@@ -165,6 +165,14 @@ export function installFetchCapture(window, ctx) {
         json: async () => value ?? {},
       });
     },
+    stubJsonError(pathOrKey, method, status, body) {
+      responses.set(`${method} ${pathOrKey}`, {
+        ok: false,
+        status,
+        text: async () => JSON.stringify(body),
+        json: async () => body,
+      });
+    },
     hangingPost(pathPart) {
       responses.set(`POST ${pathPart}`, {
         ok: true,

@@ -283,6 +283,9 @@
     if (code === "gift_not_allowed_with_debt" && message && /[\u0600-\u06FF]/.test(message)) {
       return message;
     }
+    if (message && /[\u0600-\u06FF]/.test(message)) {
+      return message;
+    }
     if (code === "invalid_opening" && message) {
       const m = String(message);
       if (m.includes("Enter play hours or level, not both")) return "ساعت بازی یا سطح، نه هر دو.";
@@ -294,7 +297,6 @@
       return "مانده افتتاحیه درست نیست.";
     }
     if (code && ERROR_MAP[code]) return ERROR_MAP[code];
-    if (message && /[\u0600-\u06FF]/.test(message)) return message;
     return CP_ERR.generic;
   }
 
@@ -390,6 +392,13 @@
             await spec.onSubmit(values);
             this._finish(values);
           } catch (e) {
+            if (typeof spec.mapApiError === "function") {
+              const fieldErrs = spec.mapApiError(e, values);
+              if (fieldErrs && typeof fieldErrs === "object") {
+                this._applyFieldErrors(fieldErrs);
+                return;
+              }
+            }
             const msg = e && e.message ? cpTranslateApiError(e.code, e.message) : TIMEOUT_MSG;
             this.setServerError(msg);
           } finally {
