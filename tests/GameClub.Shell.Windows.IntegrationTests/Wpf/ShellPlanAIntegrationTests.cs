@@ -1,8 +1,11 @@
 #if NET48
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
+using System.Text;
 using System.ServiceProcess;
 using System.Text.Json;
 using System.Security;
@@ -10,6 +13,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Forms;
+using System.Windows.Interop;
 using GameClub.Shell;
 using GameClub.Shell.ServerControl;
 using GameClub.Shell.Shell;
@@ -726,7 +730,6 @@ public sealed class ShellPlanAIntegrationTests
         {
             _fixture.RunAsync(async () =>
             {
-                var tcs = new TaskCompletionSource<bool>();
                 MainWindow? window = null;
                 try
                 {
@@ -735,6 +738,9 @@ public sealed class ShellPlanAIntegrationTests
                     await Task.Delay(4000);
                     var wv = window.FindName("PanelWebView") as Microsoft.Web.WebView2.Wpf.WebView2;
                     Assert.NotNull(wv?.CoreWebView2);
+                    Assert.True(
+                        wv.CoreWebView2.Settings.AreDefaultScriptDialogsEnabled,
+                        "default script dialogs must stay enabled so WebView2 shows its modal alert");
                     var operatorNav = new TaskCompletionSource<bool>();
                     void OnNavDone(object? _, CoreWebView2NavigationCompletedEventArgs args)
                     {
@@ -762,14 +768,19 @@ public sealed class ShellPlanAIntegrationTests
                     }
 
                     Assert.True(operatorNav.Task.IsCompleted, "operator page did not finish navigation");
-                    wv.CoreWebView2.ScriptDialogOpening += (_, args) =>
-                    {
-                        tcs.TrySetResult(true);
-                        args.Accept();
-                    };
-                    await wv.CoreWebView2.ExecuteScriptAsync("alert('سلام');");
-                    var seen = await Task.WhenAny(tcs.Task, Task.Delay(5000)) == tcs.Task;
-                    Assert.True(seen);
+                    var mainHwnd = new WindowInteropHelper(window).Handle;
+                    var browserPid = (int)wv.CoreWebView2.BrowserProcessId;
+                    var testPid = Process.GetCurrentProcess().Id;
+                    var scriptTask = wv.CoreWebView2.ExecuteScriptAsync("alert('سلام');");
+                    var dialogHwnd = await PollWebViewDefaultScriptDialogAsync(
+                        mainHwnd,
+                        browserPid,
+                        testPid,
+                        TimeSpan.FromSeconds(5));
+                    DismissWin32DialogOk(dialogHwnd);
+                    var scriptDone = await Task.WhenAny(scriptTask, Task.Delay(5000)) == scriptTask;
+                    Assert.True(scriptDone, "ExecuteScriptAsync did not complete within 5s after dismissing the alert");
+                    await scriptTask;
                 }
                 finally
                 {
@@ -970,6 +981,153 @@ public sealed class ShellPlanAIntegrationTests
         {
             return "error:" + ex.GetType().Name;
         }
+    }
+
+    private const uint GwOwner = 4;
+    private const uint WmCommand = 0x0111;
+    private const int IdOk = 1;
+
+    private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    private static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetClassName(IntPtr hWnd, StringBuilder lpClassName, int nMaxCount);
+
+    [DllImport("user32.dll")]
+    private static extern bool IsWindowVisible(IntPtr hWnd);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetWindow(IntPtr hWnd, uint uCmd);
+
+    [DllImport("user32.dll")]
+    private static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+
+    private static HashSet<int> CollectWebViewRelatedProcessIds(int browserProcessId, int testProcessId)
+    {
+        var ids = new HashSet<int> { browserProcessId, testProcessId };
+        foreach (var proc in Process.GetProcessesByName("msedgewebview2"))
+        {
+            try
+            {
+                ids.Add(proc.Id);
+            }
+            catch
+            {
+                // process may exit between enum and Id read
+            }
+            finally
+            {
+                proc.Dispose();
+            }
+        }
+
+        return ids;
+    }
+
+    private static string SafeProcessName(int processId)
+    {
+        try
+        {
+            using var proc = Process.GetProcessById(processId);
+            return proc.ProcessName;
+        }
+        catch
+        {
+            return "?";
+        }
+    }
+
+    private static void LogShellAlertLine(string kind, IntPtr hwnd, string className, int ownerPid, bool visible, string title, int browserPid, long elapsedMs)
+    {
+        var ownerProc = SafeProcessName(ownerPid);
+        var line =
+            $"SHELL-ALERT-{kind} hwnd=0x{hwnd.ToInt64():X} class={className} owner_pid={ownerPid} owner_proc={ownerProc} "
+            + $"visible={visible} title={title} browser_pid={browserPid} elapsed_ms={elapsedMs}";
+        Console.WriteLine(line);
+    }
+
+    private static async Task<IntPtr> PollWebViewDefaultScriptDialogAsync(
+        IntPtr mainWindowHwnd,
+        int browserProcessId,
+        int testProcessId,
+        TimeSpan timeout)
+    {
+        var allowedOwnerPids = CollectWebViewRelatedProcessIds(browserProcessId, testProcessId);
+        var started = DateTime.UtcNow;
+        var deadline = started + timeout;
+        var candidates = new List<string>();
+
+        while (DateTime.UtcNow < deadline)
+        {
+            var elapsedMs = (long)(DateTime.UtcNow - started).TotalMilliseconds;
+            IntPtr match = IntPtr.Zero;
+            EnumWindows((hWnd, _) =>
+            {
+                if (!IsWindowVisible(hWnd))
+                {
+                    return true;
+                }
+
+                var classSb = new StringBuilder(256);
+                GetClassName(hWnd, classSb, classSb.Capacity);
+                var className = classSb.ToString();
+                GetWindowThreadProcessId(hWnd, out var ownerPidU);
+                var ownerPid = (int)ownerPidU;
+                var titleSb = new StringBuilder(512);
+                GetWindowText(hWnd, titleSb, titleSb.Capacity);
+                var title = titleSb.ToString().Replace('\r', ' ').Replace('\n', ' ');
+                var ownerHwnd = GetWindow(hWnd, GwOwner);
+                var ownerProc = SafeProcessName(ownerPid);
+                var candidateLine =
+                    $"hwnd=0x{hWnd.ToInt64():X} class={className} owner_pid={ownerPid} owner_proc={ownerProc} "
+                    + $"visible=True title={title} owner_hwnd=0x{ownerHwnd.ToInt64():X}";
+                candidates.Add(candidateLine);
+                LogShellAlertLine("CANDIDATE", hWnd, className, ownerPid, true, title, browserProcessId, elapsedMs);
+
+                if (!string.Equals(className, "#32770", StringComparison.Ordinal))
+                {
+                    return true;
+                }
+
+                var pidOk = allowedOwnerPids.Contains(ownerPid);
+                var ownerOk = mainWindowHwnd != IntPtr.Zero && ownerHwnd == mainWindowHwnd;
+                if (pidOk || ownerOk)
+                {
+                    match = hWnd;
+                    LogShellAlertLine("PROBE", hWnd, className, ownerPid, true, title, browserProcessId, elapsedMs);
+                    return false;
+                }
+
+                return true;
+            }, IntPtr.Zero);
+
+            if (match != IntPtr.Zero)
+            {
+                return match;
+            }
+
+            await Task.Delay(50);
+        }
+
+        Assert.Fail(
+            "No visible WebView2 default script dialog within 5s. Candidates: "
+            + (candidates.Count == 0 ? "(none)" : string.Join(" | ", candidates)));
+        return IntPtr.Zero;
+    }
+
+    private static void DismissWin32DialogOk(IntPtr dialogHwnd)
+    {
+        Assert.NotEqual(IntPtr.Zero, dialogHwnd);
+        var dismissed = PostMessage(dialogHwnd, WmCommand, (IntPtr)IdOk, IntPtr.Zero);
+        Assert.True(dismissed, "PostMessage WM_COMMAND IDOK failed for script dialog");
     }
 
     private static string UnquoteWebViewScriptString(string json)
