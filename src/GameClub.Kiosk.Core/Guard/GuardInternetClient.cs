@@ -106,7 +106,7 @@ public sealed class GuardInternetClient
     public static string ResolvePipeName()
     {
         var raw = Environment.GetEnvironmentVariable(PipeNameEnvironmentVariable)?.Trim();
-        return string.IsNullOrWhiteSpace(raw) ? PipeName : raw;
+        return string.IsNullOrWhiteSpace(raw) ? PipeName : raw!;
     }
 
     private static async Task WriteWithTimeoutAsync(

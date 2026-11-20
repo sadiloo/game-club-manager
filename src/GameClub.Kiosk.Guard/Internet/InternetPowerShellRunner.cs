@@ -147,13 +147,15 @@ internal static class InternetPowerShellRunner
 
             var stdout = stdoutTask.GetAwaiter().GetResult();
             stderr = stderrTask.GetAwaiter().GetResult() ?? "";
+            var stepLabel = string.IsNullOrWhiteSpace(stepName) ? "powershell" : stepName;
             var output = InternetPowerShellCompletedOutcome.ResolveOutput(proc.ExitCode, stdout, stderr);
             if (proc.ExitCode != 0)
             {
+                var decoded = InternetPowerShellCompletedOutcome.FormatFailureDetail(stderr, stdout);
+                GuardWatchdogLog.Append(
+                    $"powershell_step step={stepLabel} outcome=failed exit_code={proc.ExitCode} decoded_stderr={decoded}");
                 return new RunTelemetry(output, psStartMs, stepSw.ElapsedMilliseconds, stderr);
             }
-
-            var stepLabel = string.IsNullOrWhiteSpace(stepName) ? "powershell" : stepName;
             GuardWatchdogLog.Append(
                 $"powershell_step step={stepLabel} outcome=ok elapsed_ms={stepSw.ElapsedMilliseconds} budget_ms={timeoutMs}");
             return new RunTelemetry(output, psStartMs, stepSw.ElapsedMilliseconds, stderr);
