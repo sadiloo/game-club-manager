@@ -41,6 +41,9 @@ public sealed class KioskRuntime : IAsyncDisposable
     private (Guid Epoch, long Version)? _internetApplyInFlightKey;
     private CancellationTokenSource? _internetApplyCts;
     private Task? _internetApplyWorker;
+    private int _internetApplyGeneration;
+    private int _internetApplyActiveWorkerGeneration;
+    private int _internetApplyLastPublishedGeneration;
     private int _internetApplyInvocationCount;
     private KioskInternetAppliedReport? _lastInternetReport;
     private bool _internetOffApplied;
@@ -95,6 +98,11 @@ public sealed class KioskRuntime : IAsyncDisposable
     internal KioskInternetAppliedReport? LastInternetReportForTests => Volatile.Read(ref _lastInternetReport);
 
     internal int InternetApplyInvocationCountForTests => Volatile.Read(ref _internetApplyInvocationCount);
+
+    /// <summary>Runs after the worker drains the queue under lock (before re-check or exit).</summary>
+    internal Func<Task>? TestInternetApplyWorkerOnQueueDrainedAsync { get; set; }
+
+    internal void TestOfferInternetCommandForTests(SignedInternetCommand command) => OfferInternetCommand(command);
 
     public KioskRuntime(Func<HttpClient> httpFactory) => _httpFactory = httpFactory;
 
@@ -225,6 +233,8 @@ public sealed class KioskRuntime : IAsyncDisposable
         _internetApplyCts = null;
         lock (_internetApplyGate)
         {
+            Interlocked.Increment(ref _internetApplyGeneration);
+            _internetApplyActiveWorkerGeneration = 0;
             _internetApplyQueue.Clear();
             _internetApplyInFlightKey = null;
             _internetApplyWorker = null;
@@ -426,37 +436,70 @@ public sealed class KioskRuntime : IAsyncDisposable
 
         _internetApplyCts?.Cancel();
         _internetApplyCts?.Dispose();
+        var generation = Interlocked.Increment(ref _internetApplyGeneration);
+        _internetApplyActiveWorkerGeneration = generation;
         _internetApplyCts = CancellationTokenSource.CreateLinkedTokenSource(heartbeatCt);
-        _internetApplyWorker = RunInternetApplyWorkerAsync(_internetApplyCts.Token);
+        _internetApplyWorker = RunInternetApplyWorkerAsync(generation, _internetApplyCts.Token);
     }
 
-    private async Task RunInternetApplyWorkerAsync(CancellationToken ct)
+    private async Task RunInternetApplyWorkerAsync(int workerGeneration, CancellationToken ct)
     {
         try
         {
             while (!ct.IsCancellationRequested)
             {
-                SignedInternetCommand? command;
+                SignedInternetCommand? command = null;
+                var queueDrained = false;
                 lock (_internetApplyGate)
                 {
                     if (_internetApplyQueue.Count == 0)
                     {
-                        break;
+                        queueDrained = true;
+                        if (_internetApplyActiveWorkerGeneration == workerGeneration)
+                        {
+                            _internetApplyWorker = null;
+                        }
+                    }
+                    else
+                    {
+                        command = _internetApplyQueue.Dequeue();
+                        if (_internetApplyActiveWorkerGeneration == workerGeneration)
+                        {
+                            _internetApplyInFlightKey = (command.Payload.Epoch, command.Payload.Version);
+                        }
+                    }
+                }
+
+                if (queueDrained)
+                {
+                    if (TestInternetApplyWorkerOnQueueDrainedAsync is not null)
+                    {
+                        await TestInternetApplyWorkerOnQueueDrainedAsync().ConfigureAwait(false);
                     }
 
-                    command = _internetApplyQueue.Dequeue();
-                    _internetApplyInFlightKey = (command.Payload.Epoch, command.Payload.Version);
+                    lock (_internetApplyGate)
+                    {
+                        if (_internetApplyQueue.Count > 0)
+                        {
+                            continue;
+                        }
+                    }
+
+                    break;
                 }
 
                 try
                 {
-                    await ApplyInternetCommandAsync(command, ct).ConfigureAwait(false);
+                    await ApplyInternetCommandAsync(command!, workerGeneration, ct).ConfigureAwait(false);
                 }
                 finally
                 {
                     lock (_internetApplyGate)
                     {
-                        _internetApplyInFlightKey = null;
+                        if (_internetApplyActiveWorkerGeneration == workerGeneration)
+                        {
+                            _internetApplyInFlightKey = null;
+                        }
                     }
                 }
             }
@@ -468,12 +511,19 @@ public sealed class KioskRuntime : IAsyncDisposable
         {
             lock (_internetApplyGate)
             {
-                _internetApplyWorker = null;
+                if (_internetApplyQueue.Count > 0 && _heartbeatCts is not null)
+                {
+                    EnsureInternetApplyWorkerLocked(_heartbeatCts.Token);
+                }
+                else if (_internetApplyActiveWorkerGeneration == workerGeneration)
+                {
+                    _internetApplyWorker = null;
+                }
             }
         }
     }
 
-    private async Task ApplyInternetCommandAsync(SignedInternetCommand command, CancellationToken ct)
+    private async Task ApplyInternetCommandAsync(SignedInternetCommand command, int workerGeneration, CancellationToken ct)
     {
         Interlocked.Increment(ref _internetApplyInvocationCount);
         try
@@ -485,7 +535,7 @@ public sealed class KioskRuntime : IAsyncDisposable
             var root = doc.RootElement;
             if (root.TryGetProperty("error", out var err))
             {
-                PublishInternetReport(new KioskInternetAppliedReport
+                PublishInternetReport(workerGeneration, new KioskInternetAppliedReport
                 {
                     Epoch = command.Payload.Epoch,
                     Version = command.Payload.Version,
@@ -498,7 +548,7 @@ public sealed class KioskRuntime : IAsyncDisposable
 
             var on = root.TryGetProperty("on", out var onEl) && onEl.GetBoolean();
             _internetOffApplied = !on;
-            PublishInternetReport(new KioskInternetAppliedReport
+            PublishInternetReport(workerGeneration, new KioskInternetAppliedReport
             {
                 Epoch = command.Payload.Epoch,
                 Version = command.Payload.Version,
@@ -511,7 +561,7 @@ public sealed class KioskRuntime : IAsyncDisposable
         catch (Exception ex)
         {
             var code = GuardInternetClientErrorCodes.MapException(ex);
-            PublishInternetReport(new KioskInternetAppliedReport
+            PublishInternetReport(workerGeneration, new KioskInternetAppliedReport
             {
                 Epoch = command.Payload.Epoch,
                 Version = command.Payload.Version,
@@ -522,8 +572,23 @@ public sealed class KioskRuntime : IAsyncDisposable
         }
     }
 
-    private void PublishInternetReport(KioskInternetAppliedReport report)
-        => Volatile.Write(ref _lastInternetReport, report);
+    /// <summary>
+    /// Cancelled/stale worker generations may still publish <c>pipe_error</c> so the server can retry the command on a later beat.
+    /// A superseded generation cannot overwrite a newer published report.
+    /// </summary>
+    private void PublishInternetReport(int workerGeneration, KioskInternetAppliedReport report)
+    {
+        lock (_internetApplyGate)
+        {
+            if (workerGeneration < _internetApplyLastPublishedGeneration)
+            {
+                return;
+            }
+
+            _internetApplyLastPublishedGeneration = workerGeneration;
+            Volatile.Write(ref _lastInternetReport, report);
+        }
+    }
 
     private void ApplyAcknowledgement(KioskHeartbeatAck ack)
     {

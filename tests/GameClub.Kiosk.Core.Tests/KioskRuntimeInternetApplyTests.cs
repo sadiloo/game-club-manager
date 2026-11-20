@@ -251,4 +251,116 @@ public sealed class KioskRuntimeInternetApplyTests
 
         await runtime2.DisposeAsync();
     }
+
+    [Fact]
+    public async Task PcInternet_command_offered_while_worker_drains_queue_is_still_applied()
+    {
+        var drainContinue = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var reachedDrain = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var transport = new FakeKioskHubTransport();
+        var runtime = new KioskRuntime(() => new HttpClient())
+        {
+            TestHeartbeatInterval = TimeSpan.FromMilliseconds(20),
+        };
+        var epoch = Guid.NewGuid();
+        var first = Command(epoch, 1);
+        var second = Command(epoch, 2);
+        transport.HeartbeatHandler = _ => Task.FromResult(new KioskHeartbeatAck
+        {
+            SessionStatus = "Open",
+            Internet = first,
+        });
+        runtime.TestInternetApplyWorkerOnQueueDrainedAsync = async () =>
+        {
+            reachedDrain.TrySetResult();
+            await drainContinue.Task;
+        };
+        runtime.TestGuardInternetApplyAsync = (_, _) =>
+            Task.FromResult("""{"on":false,"appliedAtUtc":"2026-01-01T00:00:00.0000000Z"}""");
+        runtime.ConfigureForTests(transport, new NoOpQueue(), "http://127.0.0.1:5000", Guid.NewGuid(), "key", "PC-1");
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await runtime.StartAsync(cts.Token);
+        await transport.StartAsync(default);
+
+        await reachedDrain.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        runtime.TestOfferInternetCommandForTests(second);
+        drainContinue.TrySetResult();
+
+        await WaitUntilAsync(() => runtime.LastInternetReportForTests is { Version: 2, Error: null }, 2_000);
+        Assert.Equal(2, runtime.InternetApplyInvocationCountForTests);
+
+        await runtime.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task PcInternet_heartbeat_restart_during_apply_preserves_single_flight_and_newer_report()
+    {
+        var apply1Entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var apply1Release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var concurrent = 0;
+        var peakConcurrent = 0;
+        var transport = new FakeKioskHubTransport();
+        var runtime = new KioskRuntime(() => new HttpClient())
+        {
+            TestHeartbeatInterval = TimeSpan.FromMilliseconds(20),
+        };
+        var epoch = Guid.NewGuid();
+        var first = Command(epoch, 1);
+        var second = Command(epoch, 2);
+        transport.HeartbeatHandler = _ => Task.FromResult(new KioskHeartbeatAck
+        {
+            SessionStatus = "Open",
+            Internet = first,
+        });
+        runtime.TestGuardInternetApplyAsync = async (cmd, ct) =>
+        {
+            var depth = Interlocked.Increment(ref concurrent);
+            try
+            {
+                var peak = Volatile.Read(ref peakConcurrent);
+                while (depth > peak
+                       && Interlocked.CompareExchange(ref peakConcurrent, depth, peak) != peak)
+                {
+                    peak = Volatile.Read(ref peakConcurrent);
+                }
+
+                if (cmd.Payload.Version == 1)
+                {
+                    apply1Entered.TrySetResult();
+                    await apply1Release.Task.WaitAsync(ct);
+                }
+
+                return $$"""{"on":{{cmd.Payload.On.ToString().ToLowerInvariant()}},"appliedAtUtc":"2026-01-01T00:00:00.0000000Z"}""";
+            }
+            finally
+            {
+                Interlocked.Decrement(ref concurrent);
+            }
+        };
+        runtime.ConfigureForTests(transport, new NoOpQueue(), "http://127.0.0.1:5000", Guid.NewGuid(), "key", "PC-1");
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await runtime.StartAsync(cts.Token);
+        await transport.StartAsync(default);
+        await apply1Entered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        transport.HeartbeatHandler = _ => Task.FromResult(new KioskHeartbeatAck
+        {
+            SessionStatus = "Open",
+            Internet = second,
+        });
+        await runtime.StartAsync(cts.Token);
+        await transport.StartAsync(default);
+
+        await WaitUntilAsync(() => runtime.LastInternetReportForTests is { Version: 2, Error: null }, 2_000);
+        Assert.True(peakConcurrent <= 1, $"peakConcurrent={peakConcurrent}");
+
+        apply1Release.TrySetResult();
+        await Task.Yield();
+        await Task.Yield();
+
+        Assert.Equal(2, runtime.LastInternetReportForTests!.Version);
+        Assert.Null(runtime.LastInternetReportForTests.Error);
+
+        await runtime.DisposeAsync();
+    }
 }

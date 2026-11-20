@@ -232,7 +232,7 @@ public sealed class PcInternetKioskCoreTests
             var runtime = new KioskRuntime(() => new HttpClient());
             var method = typeof(KioskRuntime).GetMethod("ApplyInternetCommandAsync", BindingFlags.Instance | BindingFlags.NonPublic);
             Assert.NotNull(method);
-            var task = (Task)method!.Invoke(runtime, new object[] { command, CancellationToken.None })!;
+            var task = (Task)method!.Invoke(runtime, new object[] { command, 1, CancellationToken.None })!;
             await task;
             var field = typeof(KioskRuntime).GetField("_lastInternetReport", BindingFlags.Instance | BindingFlags.NonPublic);
             var report = field!.GetValue(runtime) as KioskInternetAppliedReport;
