@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using GameClub.Billing;
@@ -11,73 +12,142 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace GameClub.Server.Tests;
 
-/// <summary>DEF-3 server: client login timeout while server completes, retry attaches once.</summary>
+/// <summary>DEF-3: attach after session-insert race; same-member retry after kiosk HTTP timeout window.</summary>
 [Collection("server")]
 public sealed class KioskLoginRetryAfterStallTests(GameClubWebApplicationFactory factory)
 {
-    private static readonly TimeSpan KioskLoginHttpTimeout = TimeSpan.FromSeconds(2);
+    /// <summary>WPF kiosk <see cref="KioskHostService"/> uses default <see cref="HttpClient.Timeout"/> (not set explicitly).</summary>
+    private static readonly TimeSpan KioskLoginHttpTimeout = new HttpClient().Timeout;
 
-    private static readonly TimeSpan ServerLoginStall = TimeSpan.FromSeconds(5);
+    private const string RaceStationId = "PC-STALL";
+    private const string RetryStationId = "PC-STALL-T";
 
-    [Fact]
+    [Fact(Timeout = 240_000)]
     public async Task retry_login_after_first_attach_reuses_single_open_session()
     {
         await S3TestHelpers.ResetAsync(factory);
-        const string stationId = "PC-STALL";
-        await S3TestHelpers.RegisterPc(factory.CreateClientWithKey(), stationId, PilotSeed.PcNormalGroupId);
-        var (deviceId, deviceKey, _) = await PairDeviceAsync(stationId);
+        await S3TestHelpers.RegisterPc(factory.CreateClientWithKey(), RaceStationId, PilotSeed.PcNormalGroupId);
+        await S3TestHelpers.RegisterPc(factory.CreateClientWithKey(), RetryStationId, PilotSeed.PcNormalGroupId);
 
         using var scope = factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         var auth = scope.ServiceProvider.GetRequiredService<KioskCustomerAuthService>();
+        const int raceParallel = 10;
+        for (var i = 0; i < raceParallel; i++)
+        {
+            await SeedMemberAsync(db, auth, $"race{i}", $"091210000{i:00}");
+        }
+
+        await SeedMemberAsync(db, auth, "timeouter", "09121113344");
+
+        var (raceDeviceId, raceDeviceKey, _) = await PairDeviceAsync(RaceStationId);
+        InstallSlowSessionInsert(db);
+        try
+        {
+            var raceTasks = Enumerable.Range(0, raceParallel).Select(i =>
+            {
+                var kiosk = CreateKioskClient(raceDeviceId, raceDeviceKey);
+                return kiosk.PostAsJsonAsync(
+                    "/api/kiosk/auth/login",
+                    new { loginName = $"race{i}", password = "pass", stationId = RaceStationId });
+            }).ToArray();
+
+            var raceResponses = await Task.WhenAll(raceTasks);
+            Assert.DoesNotContain(raceResponses, r => (int)r.StatusCode >= 500);
+            Assert.Equal(1, raceResponses.Count(r => r.StatusCode == HttpStatusCode.OK));
+            foreach (var response in raceResponses.Where(r => r.StatusCode == HttpStatusCode.Conflict))
+            {
+                var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync()).RootElement;
+                Assert.Equal("station_busy", body.GetProperty("error").GetString());
+            }
+
+            Assert.Equal(1, await db.Sessions.CountAsync(
+                s => s.StationId == RaceStationId && s.Status == SessionStatus.Open));
+        }
+        finally
+        {
+            RemoveSlowSessionInsert(db);
+        }
+
+        var (retryDeviceId, retryDeviceKey, _) = await PairDeviceAsync(RetryStationId);
+        using var responseHold = KioskLoginStallGate.ActivateResponseHold(factory);
+        var kiosk = CreateKioskClient(retryDeviceId, retryDeviceKey);
+        kiosk.Timeout = Timeout.InfiniteTimeSpan;
+
+        var slowLogin = kiosk.PostAsJsonAsync(
+            "/api/kiosk/auth/login",
+            new { loginName = "timeouter", password = "pass", stationId = RetryStationId });
+
+        await responseHold.HandlerCommitted.Task.WaitAsync(TimeSpan.FromSeconds(30));
+
+        await Task.Delay(KioskLoginHttpTimeout);
+
+        var retryLogin = CreateKioskClient(retryDeviceId, retryDeviceKey).PostAsJsonAsync(
+            "/api/kiosk/auth/login",
+            new { loginName = "timeouter", password = "pass", stationId = RetryStationId });
+
+        var retryResponse = await retryLogin;
+        responseHold.ReleaseResponse();
+
+        var slowResponse = await slowLogin;
+        Assert.DoesNotContain(new[] { slowResponse, retryResponse }, r => (int)r.StatusCode >= 500);
+        slowResponse.EnsureSuccessStatusCode();
+        retryResponse.EnsureSuccessStatusCode();
+
+        var slowSessionId = JsonDocument.Parse(await slowResponse.Content.ReadAsStringAsync())
+            .RootElement.GetProperty("sessionId").GetGuid();
+        var retrySessionId = JsonDocument.Parse(await retryResponse.Content.ReadAsStringAsync())
+            .RootElement.GetProperty("sessionId").GetGuid();
+
+        Assert.Equal(slowSessionId, retrySessionId);
+        Assert.Equal(1, await db.Sessions.CountAsync(
+            s => s.StationId == RetryStationId && s.Status == SessionStatus.Open));
+    }
+
+    private static async Task SeedMemberAsync(
+        AppDbContext db,
+        KioskCustomerAuthService auth,
+        string login,
+        string mobile)
+    {
         var customer = new CustomerEntity
         {
             Id = Guid.NewGuid(),
-            Name = "Stall",
-            Mobile = "09121112222",
+            Name = login,
+            Mobile = mobile,
             CreatedAtUtc = DateTime.UtcNow,
         };
         db.Customers.Add(customer);
         db.CustomerMembers.Add(new CustomerMemberEntity { CustomerId = customer.Id, RealToman = 500_000 });
         await db.SaveChangesAsync();
-        await auth.SetCredentialAsync(customer.Id, "staller", "pass", default);
-
-        using var stall = KioskLoginStallGate.Activate(factory, ServerLoginStall);
-        var kiosk = CreateKioskClient(deviceId, deviceKey);
-        using var clientTimeout = new CancellationTokenSource(KioskLoginHttpTimeout);
-        await Assert.ThrowsAnyAsync<TaskCanceledException>(async () =>
-            await kiosk.PostAsJsonAsync(
-                "/api/kiosk/auth/login",
-                new { loginName = "staller", password = "pass", stationId },
-                clientTimeout.Token));
-
-        var openSessions = await db.Sessions
-            .Where(s => s.StationId == stationId && s.Status == SessionStatus.Open)
-            .Select(s => s.Id)
-            .ToListAsync();
-        var firstSessionId = Assert.Single(openSessions);
-
-        var retryClient = CreateKioskClient(deviceId, deviceKey);
-        var retry = await retryClient.PostAsJsonAsync(
-            "/api/kiosk/auth/login",
-            new { loginName = "staller", password = "pass", stationId });
-        retry.EnsureSuccessStatusCode();
-        var retrySessionId = JsonDocument.Parse(await retry.Content.ReadAsStringAsync())
-            .RootElement.GetProperty("sessionId").GetGuid();
-
-        Assert.Equal(firstSessionId, retrySessionId);
-        Assert.Equal(1, await db.Sessions.CountAsync(
-            s => s.StationId == stationId && s.Status == SessionStatus.Open));
+        await auth.SetCredentialAsync(customer.Id, login, "pass", default);
     }
 
-    private HttpClient CreateKioskClient(Guid deviceId, string deviceKey, TimeSpan? timeout = null)
+    private static void InstallSlowSessionInsert(AppDbContext db)
+    {
+        db.Database.ExecuteSqlRaw("""
+            create or replace function kiosk_stall_sessions_insert() returns trigger language plpgsql as $$
+            begin
+                perform pg_sleep(4);
+                return NEW;
+            end $$;
+            drop trigger if exists kiosk_stall_sessions_insert on sessions;
+            create trigger kiosk_stall_sessions_insert before insert on sessions
+              for each row execute function kiosk_stall_sessions_insert();
+            """);
+    }
+
+    private static void RemoveSlowSessionInsert(AppDbContext db)
+    {
+        db.Database.ExecuteSqlRaw("""
+            drop trigger if exists kiosk_stall_sessions_insert on sessions;
+            drop function if exists kiosk_stall_sessions_insert();
+            """);
+    }
+
+    private HttpClient CreateKioskClient(Guid deviceId, string deviceKey)
     {
         var client = factory.CreateClient();
-        if (timeout is not null)
-        {
-            client.Timeout = timeout.Value;
-        }
-
         client.DefaultRequestHeaders.Add(KioskDeviceAuthMiddleware.DeviceIdHeader, deviceId.ToString());
         client.DefaultRequestHeaders.Add(KioskDeviceAuthMiddleware.DeviceKeyHeader, deviceKey);
         return client;
@@ -106,18 +176,25 @@ internal sealed class KioskLoginStallStartupFilter(GameClubWebApplicationFactory
     {
         application.Use(async (context, nextMiddleware) =>
         {
-            if (!context.Request.Path.StartsWithSegments("/api/kiosk/auth/login") || hostFactory.LoginStallGate is null)
+            if (!context.Request.Path.StartsWithSegments("/api/kiosk/auth/login"))
             {
                 await nextMiddleware(context);
                 return;
             }
 
             var gate = hostFactory.LoginStallGate;
+            if (gate?.HoldResponseUntilReleased != true || !gate.TryEnterResponseHold())
+            {
+                await nextMiddleware(context);
+                return;
+            }
+
             var originalBody = context.Response.Body;
             await using var buffer = new MemoryStream();
             context.Response.Body = buffer;
             await nextMiddleware(context);
-            await Task.Delay(gate.ResponseDelayAfterLogin);
+            gate.HandlerCommitted.TrySetResult();
+            await gate.WaitForReleaseAsync(context.RequestAborted);
             buffer.Position = 0;
             context.Response.Body = originalBody;
             await buffer.CopyToAsync(originalBody);
@@ -126,22 +203,42 @@ internal sealed class KioskLoginStallStartupFilter(GameClubWebApplicationFactory
     };
 }
 
-public sealed class KioskLoginStallGate(GameClubWebApplicationFactory factory, TimeSpan responseDelayAfterLogin) : IDisposable
+public sealed class KioskLoginStallGate : IDisposable
 {
-    public TimeSpan ResponseDelayAfterLogin { get; } = responseDelayAfterLogin;
+    private readonly GameClubWebApplicationFactory _factory;
+    private readonly TaskCompletionSource _releaseResponse = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private int _holdClaimed;
 
-    public static KioskLoginStallGate Activate(GameClubWebApplicationFactory factory, TimeSpan responseDelayAfterLogin)
+    private KioskLoginStallGate(GameClubWebApplicationFactory factory, bool holdResponseUntilReleased)
     {
-        var gate = new KioskLoginStallGate(factory, responseDelayAfterLogin);
+        _factory = factory;
+        HoldResponseUntilReleased = holdResponseUntilReleased;
+    }
+
+    public bool HoldResponseUntilReleased { get; }
+
+    public TaskCompletionSource HandlerCommitted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public bool TryEnterResponseHold() => Interlocked.CompareExchange(ref _holdClaimed, 1, 0) == 0;
+
+    public static KioskLoginStallGate ActivateResponseHold(GameClubWebApplicationFactory factory)
+    {
+        var gate = new KioskLoginStallGate(factory, holdResponseUntilReleased: true);
         factory.LoginStallGate = gate;
         return gate;
     }
 
+    public Task WaitForReleaseAsync(CancellationToken ct) => _releaseResponse.Task.WaitAsync(ct);
+
+    public void ReleaseResponse() => _releaseResponse.TrySetResult();
+
     public void Dispose()
     {
-        if (ReferenceEquals(factory.LoginStallGate, this))
+        if (ReferenceEquals(_factory.LoginStallGate, this))
         {
-            factory.LoginStallGate = null;
+            _factory.LoginStallGate = null;
         }
+
+        _releaseResponse.TrySetResult();
     }
 }
