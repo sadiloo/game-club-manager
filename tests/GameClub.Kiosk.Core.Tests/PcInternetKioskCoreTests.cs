@@ -9,6 +9,7 @@ using GameClub.Kiosk.Core.Runtime;
 
 namespace GameClub.Kiosk.Core.Tests;
 
+[Collection(CheckpointGuardInternetPipeCollection.Name)]
 public sealed class PcInternetKioskCoreTests
 {
     [Fact]

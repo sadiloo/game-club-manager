@@ -8,6 +8,7 @@ using GameClub.Kiosk.Core.Guard;
 
 namespace GameClub.Kiosk.Core.Tests;
 
+[Collection(CheckpointGuardInternetPipeCollection.Name)]
 [Trait("Category", "PcInternetFirewall")]
 public sealed class GuardInternetPipeFramingTests
 {
@@ -146,6 +147,57 @@ public sealed class GuardInternetPipeFramingTests
         var response = await InvokeGuardClientSendAsync(requestJson);
         using var doc = JsonDocument.Parse(response);
         Assert.Equal(persian, doc.RootElement.GetProperty("note").GetString());
+    }
+
+    [Fact]
+    public async Task internet_pipe_owner_diagnostics_does_not_steal_stub_server_instance_while_server_waits()
+    {
+        if (!OperatingSystem.IsWindows() && !OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        using var cts = new CancellationTokenSource();
+        var listeningReady = new ManualResetEventSlim(false);
+        var sawConnection = new ManualResetEventSlim(false);
+        var connectionLogged = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        var pipeThread = new Thread(() =>
+        {
+            try
+            {
+                using var server = new NamedPipeServerStream(
+                    GuardInternetClient.PipeName,
+                    PipeDirection.InOut,
+                    1,
+                    PipeTransmissionMode.Byte,
+                    PipeOptions.Asynchronous);
+                var waitTask = server.WaitForConnectionAsync(cts.Token);
+                listeningReady.Set();
+                waitTask.GetAwaiter().GetResult();
+                connectionLogged.Enqueue("server_connected");
+                sawConnection.Set();
+            }
+            catch
+            {
+                /* teardown */
+            }
+        })
+        {
+            IsBackground = true,
+        };
+        pipeThread.Start();
+        Assert.True(listeningReady.Wait(TimeSpan.FromSeconds(5)), "stub server must enter WaitForConnection before probe");
+        Assert.False(sawConnection.IsSet, "no connection before diagnostics probe");
+
+        InternetPipeOwnerDiagnostics.WritePipeOwner(
+            "regression_probe",
+            nameof(internet_pipe_owner_diagnostics_does_not_steal_stub_server_instance_while_server_waits));
+        Assert.False(sawConnection.IsSet, "diagnostics probe must not connect and steal the single pipe instance");
+
+        using var client = new NamedPipeClientStream(".", GuardInternetClient.PipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+        await client.ConnectAsync(3_000);
+        Assert.True(sawConnection.Wait(TimeSpan.FromSeconds(3)), "stub must accept the test client after probe");
+        Assert.Contains(connectionLogged, l => l == "server_connected");
     }
 
     [Fact]

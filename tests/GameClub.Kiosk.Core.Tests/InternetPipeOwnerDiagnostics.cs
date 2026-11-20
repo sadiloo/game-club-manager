@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.IO.Pipes;
 using System.Runtime.CompilerServices;
 using GameClub.Kiosk.Core.Guard;
@@ -45,18 +44,13 @@ internal static class InternetPipeOwnerDiagnostics
         {
             try
             {
-                using var client = new NamedPipeClientStream(
-                    ".",
-                    GuardInternetClient.PipeName,
-                    PipeDirection.InOut,
-                    PipeOptions.Asynchronous);
-                client.Connect(400);
-                reachable = true;
-                detail = "probe_connected_server_pid=windows_only_in_net48_tests";
-            }
-            catch (TimeoutException)
-            {
-                detail = "connect_timeout";
+                const string pipeRoot = @"\\.\pipe";
+                reachable = Directory.EnumerateFiles(pipeRoot).Any(path =>
+                    string.Equals(
+                        Path.GetFileName(path),
+                        GuardInternetClient.PipeName,
+                        StringComparison.OrdinalIgnoreCase));
+                detail = reachable ? "named_pipe_present" : "named_pipe_missing";
             }
             catch (Exception ex)
             {
