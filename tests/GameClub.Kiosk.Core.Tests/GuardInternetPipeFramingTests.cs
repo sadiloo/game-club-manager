@@ -77,6 +77,9 @@ public sealed class GuardInternetPipeFramingTests
         var priorIo = Environment.GetEnvironmentVariable("CHECKPOINT_INTERNET_PIPE_IO_MS");
         Environment.SetEnvironmentVariable("CHECKPOINT_INTERNET_PIPE_IO_MS", "5000");
         using var pipeDiag = InternetPipeOwnerDiagnostics.BeginTestScope();
+        var uniquePipe = $"CheckpointGuardInternet-no-newline-{Guid.NewGuid():N}";
+        var priorPipe = Environment.GetEnvironmentVariable(GuardInternetClient.PipeNameEnvironmentVariable);
+        Environment.SetEnvironmentVariable(GuardInternetClient.PipeNameEnvironmentVariable, uniquePipe);
         try
         {
             using var cts = new CancellationTokenSource();
@@ -90,7 +93,7 @@ public sealed class GuardInternetPipeFramingTests
             pipeThread.Start();
             Assert.True(ready.Wait(TimeSpan.FromSeconds(5)), "pipe server must signal listening before client connect");
 
-            using var client = new NamedPipeClientStream(".", GuardInternetClient.PipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+            using var client = new NamedPipeClientStream(".", GuardInternetClient.ResolvePipeName(), PipeDirection.InOut, PipeOptions.Asynchronous);
             await client.ConnectAsync(GuardInternetClient.DefaultConnectTimeoutMs);
             var partial = Encoding.UTF8.GetBytes("{\"verb\":\"status\"}");
             try
@@ -110,6 +113,7 @@ public sealed class GuardInternetPipeFramingTests
         {
             Environment.SetEnvironmentVariable("CHECKPOINT_INTERNET_PIPE_READ_MS", priorRead);
             Environment.SetEnvironmentVariable("CHECKPOINT_INTERNET_PIPE_IO_MS", priorIo);
+            Environment.SetEnvironmentVariable(GuardInternetClient.PipeNameEnvironmentVariable, priorPipe);
         }
     }
 
@@ -167,7 +171,7 @@ public sealed class GuardInternetPipeFramingTests
         pipeThread.Start();
         Assert.True(ready.Wait(TimeSpan.FromSeconds(5)));
 
-        using var client = new NamedPipeClientStream(".", GuardInternetClient.PipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+        using var client = new NamedPipeClientStream(".", GuardInternetClient.ResolvePipeName(), PipeDirection.InOut, PipeOptions.Asynchronous);
         await client.ConnectAsync(3000);
         var oversize = new string('a', GuardInternetPipeProtocol.MaxLineBytes + 1);
         var line = Encoding.UTF8.GetBytes(oversize + "\n");
@@ -231,7 +235,7 @@ internal static class GuardInternetPipeOrderingTest
 
         using var client = new NamedPipeClientStream(
             ".",
-            GuardInternetClient.PipeName,
+            GuardInternetClient.ResolvePipeName(),
             PipeDirection.InOut,
             PipeOptions.Asynchronous);
         await connect(client);
@@ -344,7 +348,7 @@ internal static class LineFramingPipeStub
             _cts.Cancel();
             try
             {
-                using var unblock = new NamedPipeClientStream(".", GuardInternetClient.PipeName, PipeDirection.InOut);
+                using var unblock = new NamedPipeClientStream(".", GuardInternetClient.ResolvePipeName(), PipeDirection.InOut);
                 unblock.Connect(1_000);
             }
             catch (Exception)
@@ -367,7 +371,7 @@ internal static class LineFramingPipeStub
             try
             {
                 using var server = new NamedPipeServerStream(
-                    GuardInternetClient.PipeName,
+                    GuardInternetClient.ResolvePipeName(),
                     PipeDirection.InOut,
                     NamedPipeServerStream.MaxAllowedServerInstances,
                     PipeTransmissionMode.Byte,
@@ -396,7 +400,7 @@ internal static class LineFramingPipeStub
         try
         {
             using var server = new NamedPipeServerStream(
-                GuardInternetClient.PipeName,
+                GuardInternetClient.ResolvePipeName(),
                 PipeDirection.InOut,
                 1,
                 PipeTransmissionMode.Byte,
@@ -422,7 +426,7 @@ internal static class LineFramingPipeStub
         try
         {
             using var server = new NamedPipeServerStream(
-                GuardInternetClient.PipeName,
+                GuardInternetClient.ResolvePipeName(),
                 PipeDirection.InOut,
                 1,
                 PipeTransmissionMode.Byte,
