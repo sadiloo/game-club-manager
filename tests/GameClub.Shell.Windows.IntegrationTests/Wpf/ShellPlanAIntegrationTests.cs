@@ -789,12 +789,7 @@ public sealed class ShellPlanAIntegrationTests
                     Assert.NotNull(wv?.CoreWebView2);
                     var webViewBeforeKill = wv;
                     var before = Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log").Select(File.ReadAllText).Aggregate("", string.Concat);
-                    var browserPid = (int)wv.CoreWebView2.BrowserProcessId;
-                    using (var browserProc = Process.GetProcessById(browserPid))
-                    {
-                        browserProc.Kill();
-                        browserProc.WaitForExit(15_000);
-                    }
+                    await ShellBrowserProcessExitHarness.TriggerAsync(wv.CoreWebView2);
 
                     var recoverDeadline = DateTime.UtcNow.AddSeconds(60);
                     var recovered = false;
@@ -1042,6 +1037,7 @@ public sealed class ShellPlanAIntegrationTests
                     Assert.Contains("webview-process-failed", delta);
                     Assert.Contains("kind=RenderProcessExited", delta, StringComparison.Ordinal);
                     Assert.Contains("outcome=reload", delta, StringComparison.Ordinal);
+                    Assert.Contains("SHELL-CRASH-TRIGGER", delta, StringComparison.Ordinal);
                     Assert.True(recovered, "Operator panel did not reload after renderer crash");
                 }
                 finally
@@ -1343,7 +1339,9 @@ public sealed class ShellPlanAIntegrationTests
                     {
                         if (line.Contains("SHELL-OFFLINE-TRACE", StringComparison.Ordinal)
                             || line.Contains("SHELL-RACE-NAV", StringComparison.Ordinal)
-                            || line.Contains("panel-navigate", StringComparison.Ordinal))
+                            || line.Contains("panel-navigate", StringComparison.Ordinal)
+                            || line.Contains("SHELL-CRASH-TRIGGER", StringComparison.Ordinal)
+                            || line.Contains("webview-process-failed", StringComparison.Ordinal))
                         {
                             Console.WriteLine($"SHELL-TRACE-DUMP root={Path.GetFileName(root)} {line}");
                         }

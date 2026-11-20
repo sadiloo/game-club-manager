@@ -40,7 +40,7 @@ internal static class ShellRendererCrashHarness
                     if (!await AwaitRendererFailureAsync(rendererFailed, TimeSpan.FromSeconds(3)))
                     {
                         await KillRendererForCoreAsync(core);
-                        ShellFileLog.Write("SHELL-CRASH-TRIGGER path=kill-renderer");
+                        WriteCrashTrigger("kill-renderer");
                         await AwaitRendererFailureOrThrowAsync(
                             rendererFailed,
                             TimeSpan.FromSeconds(5),
@@ -52,7 +52,7 @@ internal static class ShellRendererCrashHarness
                 if (!await AwaitRendererFailureAsync(rendererFailed, TimeSpan.FromSeconds(3)))
                 {
                     await KillRendererForCoreAsync(core);
-                    ShellFileLog.Write("SHELL-CRASH-TRIGGER path=kill-renderer");
+                    WriteCrashTrigger("kill-renderer");
                     await AwaitRendererFailureOrThrowAsync(
                         rendererFailed,
                         TimeSpan.FromSeconds(5),
@@ -60,7 +60,7 @@ internal static class ShellRendererCrashHarness
                     return;
                 }
 
-                ShellFileLog.Write("SHELL-CRASH-TRIGGER path=cdp");
+                WriteCrashTrigger("cdp");
             }
             finally
             {
@@ -71,6 +71,13 @@ internal static class ShellRendererCrashHarness
         {
             core.ProcessFailed -= OnProcessFailed;
         }
+    }
+
+    private static void WriteCrashTrigger(string path)
+    {
+        var line = $"SHELL-CRASH-TRIGGER path={path}";
+        ShellFileLog.Write(line);
+        Console.WriteLine(line);
     }
 
     private static bool IsRendererProcessFailure(CoreWebView2ProcessFailedKind kind) =>
