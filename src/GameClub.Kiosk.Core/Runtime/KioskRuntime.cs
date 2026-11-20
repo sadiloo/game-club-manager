@@ -99,8 +99,14 @@ public sealed class KioskRuntime : IAsyncDisposable
 
     internal int InternetApplyInvocationCountForTests => Volatile.Read(ref _internetApplyInvocationCount);
 
-    /// <summary>Runs after the worker drains the queue under lock (before re-check or exit).</summary>
+    /// <summary>Runs after the worker atomically decides to exit on an empty queue (worker ref cleared under lock).</summary>
     internal Func<Task>? TestInternetApplyWorkerOnQueueDrainedAsync { get; set; }
+
+    internal int InternetApplyActiveWorkerGenerationForTests => Volatile.Read(ref _internetApplyActiveWorkerGeneration);
+
+    internal int TestInternetApplyWorkerExitingGenerationForTests { get; private set; }
+
+    internal Action<int, long>? TestInternetApplyCommandStartedForTests { get; set; }
 
     internal void TestOfferInternetCommandForTests(SignedInternetCommand command) => OfferInternetCommand(command);
 
@@ -459,6 +465,8 @@ public sealed class KioskRuntime : IAsyncDisposable
                         {
                             _internetApplyWorker = null;
                         }
+
+                        TestInternetApplyWorkerExitingGenerationForTests = workerGeneration;
                     }
                     else
                     {
@@ -475,14 +483,6 @@ public sealed class KioskRuntime : IAsyncDisposable
                     if (TestInternetApplyWorkerOnQueueDrainedAsync is not null)
                     {
                         await TestInternetApplyWorkerOnQueueDrainedAsync().ConfigureAwait(false);
-                    }
-
-                    lock (_internetApplyGate)
-                    {
-                        if (_internetApplyQueue.Count > 0)
-                        {
-                            continue;
-                        }
                     }
 
                     break;
@@ -511,11 +511,7 @@ public sealed class KioskRuntime : IAsyncDisposable
         {
             lock (_internetApplyGate)
             {
-                if (_internetApplyQueue.Count > 0 && _heartbeatCts is not null)
-                {
-                    EnsureInternetApplyWorkerLocked(_heartbeatCts.Token);
-                }
-                else if (_internetApplyActiveWorkerGeneration == workerGeneration)
+                if (_internetApplyActiveWorkerGeneration == workerGeneration)
                 {
                     _internetApplyWorker = null;
                 }
@@ -526,6 +522,7 @@ public sealed class KioskRuntime : IAsyncDisposable
     private async Task ApplyInternetCommandAsync(SignedInternetCommand command, int workerGeneration, CancellationToken ct)
     {
         Interlocked.Increment(ref _internetApplyInvocationCount);
+        TestInternetApplyCommandStartedForTests?.Invoke(workerGeneration, command.Payload.Version);
         try
         {
             var raw = TestGuardInternetApplyAsync is not null

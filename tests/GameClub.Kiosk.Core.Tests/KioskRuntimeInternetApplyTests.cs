@@ -253,10 +253,14 @@ public sealed class KioskRuntimeInternetApplyTests
     }
 
     [Fact]
-    public async Task PcInternet_command_offered_while_worker_drains_queue_is_still_applied()
+    public async Task PcInternet_command_offered_after_worker_exit_decision_applied_by_new_worker_without_overlap()
     {
         var drainContinue = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var reachedDrain = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var concurrent = 0;
+        var peakConcurrent = 0;
+        var appliesByGeneration = new Dictionary<int, List<long>>();
+        var exitingGenerationCaptured = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
         var transport = new FakeKioskHubTransport();
         var runtime = new KioskRuntime(() => new HttpClient())
         {
@@ -272,22 +276,66 @@ public sealed class KioskRuntimeInternetApplyTests
         });
         runtime.TestInternetApplyWorkerOnQueueDrainedAsync = async () =>
         {
+            exitingGenerationCaptured.TrySetResult(runtime.TestInternetApplyWorkerExitingGenerationForTests);
             reachedDrain.TrySetResult();
+            runtime.TestOfferInternetCommandForTests(second);
             await drainContinue.Task;
         };
-        runtime.TestGuardInternetApplyAsync = (_, _) =>
-            Task.FromResult("""{"on":false,"appliedAtUtc":"2026-01-01T00:00:00.0000000Z"}""");
+        runtime.TestInternetApplyCommandStartedForTests = (gen, version) =>
+        {
+            lock (appliesByGeneration)
+            {
+                if (!appliesByGeneration.TryGetValue(gen, out var list))
+                {
+                    list = new List<long>();
+                    appliesByGeneration[gen] = list;
+                }
+
+                list.Add(version);
+            }
+        };
+        runtime.TestGuardInternetApplyAsync = async (_, ct) =>
+        {
+            var depth = Interlocked.Increment(ref concurrent);
+            try
+            {
+                var peak = Volatile.Read(ref peakConcurrent);
+                while (depth > peak
+                       && Interlocked.CompareExchange(ref peakConcurrent, depth, peak) != peak)
+                {
+                    peak = Volatile.Read(ref peakConcurrent);
+                }
+
+                await Task.Yield();
+                ct.ThrowIfCancellationRequested();
+                return """{"on":false,"appliedAtUtc":"2026-01-01T00:00:00.0000000Z"}""";
+            }
+            finally
+            {
+                Interlocked.Decrement(ref concurrent);
+            }
+        };
         runtime.ConfigureForTests(transport, new NoOpQueue(), "http://127.0.0.1:5000", Guid.NewGuid(), "key", "PC-1");
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         await runtime.StartAsync(cts.Token);
         await transport.StartAsync(default);
 
         await reachedDrain.Task.WaitAsync(TimeSpan.FromSeconds(2));
-        runtime.TestOfferInternetCommandForTests(second);
         drainContinue.TrySetResult();
 
         await WaitUntilAsync(() => runtime.LastInternetReportForTests is { Version: 2, Error: null }, 2_000);
+        var exitingGeneration = await exitingGenerationCaptured.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.True(peakConcurrent <= 1, $"peakConcurrent={peakConcurrent}");
         Assert.Equal(2, runtime.InternetApplyInvocationCountForTests);
+
+        lock (appliesByGeneration)
+        {
+            Assert.True(appliesByGeneration.TryGetValue(exitingGeneration, out var exitingApplies));
+            Assert.Equal(new long[] { 1 }, exitingApplies);
+            var successorGens = appliesByGeneration.Keys.Where(g => g != exitingGeneration).ToList();
+            Assert.Single(successorGens);
+            Assert.Equal(new long[] { 2 }, appliesByGeneration[successorGens[0]]);
+        }
 
         await runtime.DisposeAsync();
     }
