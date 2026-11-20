@@ -300,7 +300,7 @@ public partial class MainWindow : Window
 
         if (loopbackPanel && PanelNavigationOrigin.IsAllowedPanelNavigationUri(lastUri))
         {
-            if (IsSuccessfulPanelHttpNavigation(e) && !_runningPanelLoadFailing)
+            if (IsSuccessfulPanelHttpNavigation(e))
             {
                 _panelNavRetryPolicy.Reset();
                 _runningPanelLoadFailing = false;
