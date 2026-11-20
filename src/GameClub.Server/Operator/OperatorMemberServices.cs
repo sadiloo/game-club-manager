@@ -127,10 +127,8 @@ public sealed partial class OperatorMemberWalletService(
         WalletCommandSupport.EnsureCommandIdPresent(commandId);
         var cmdId = commandId!.Value;
 
-        if (amountToman <= 0)
-        {
-            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_amount", "Amount must be positive.");
-        }
+        OperatorMoneyValidation.EnsurePositiveBounded(amountToman);
+        OperatorMoneyValidation.EnsureNonNegativeBounded(giftToman, "invalid_gift");
 
         var memberSettings = await members.LoadSettingsAsync(ct);
 
@@ -421,10 +419,7 @@ public sealed partial class OperatorMemberWalletService(
     public async Task IssueGiftAsync(Guid customerId, long giftToman, CancellationToken ct)
     {
         EnsureManager();
-        if (giftToman < 0)
-        {
-            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_amount", "Gift amount cannot be negative.");
-        }
+        OperatorMoneyValidation.EnsurePositiveBounded(giftToman, "invalid_amount");
 
         _ = await members.EnsureMemberAsync(customerId, ct);
         var (shiftId, workingDayYear, workingDayMonth, workingDayDay) =
@@ -675,24 +670,24 @@ public sealed partial class OperatorMemberWalletService(
         EnsureManager();
         if (percent is < 0 or > 100)
         {
-            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_policy", "Birthday percent must be between 0 and 100.");
+            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_policy", "درصد تولد باید بین ۰ و ۱۰۰ باشد.");
         }
 
         if (!IsAllowedBirthdayWindowKind(windowKind))
         {
-            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_policy", "Invalid birthday window kind.");
+            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_policy", "نوع بازهٔ تولد نامعتبر است.");
         }
 
         if (string.Equals(windowKind, "day_window", StringComparison.Ordinal))
         {
             if (windowDays < 1)
             {
-                throw new ApiException(StatusCodes.Status400BadRequest, "invalid_window_days", "Birthday window days must be at least 1.");
+                throw new ApiException(StatusCodes.Status400BadRequest, "invalid_window_days", "تعداد روزهای بازه باید دست‌کم ۱ باشد.");
             }
 
             if (!IsAllowedBirthdayAnchor(anchor))
             {
-                throw new ApiException(StatusCodes.Status400BadRequest, "invalid_policy", "Invalid birthday window anchor.");
+                throw new ApiException(StatusCodes.Status400BadRequest, "invalid_policy", "نوع حساب روزهای بازه نامعتبر است.");
             }
         }
 

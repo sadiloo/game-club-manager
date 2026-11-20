@@ -92,10 +92,7 @@ public sealed class OperatorShiftCloseService(
             throw new ApiException(StatusCodes.Status409Conflict, "shifts_disabled", "Shifts are disabled.");
         }
 
-        if (openingFloatToman < 0)
-        {
-            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_float", "Opening float must be non-negative.");
-        }
+        OperatorMoneyValidation.EnsureNonNegativeBounded(openingFloatToman, "invalid_float");
 
         await using var tx = await db.Database.BeginTransactionAsync(ct);
         await db.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock({0})", OpenShiftAdvisoryLock);

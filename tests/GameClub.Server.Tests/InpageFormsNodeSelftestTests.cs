@@ -26,6 +26,11 @@ public sealed class InpageFormsNodeSelftestTests
         "cp-prompt-submit-bodies-selftest.mjs",
         "cp-layer-keydown-selftest.mjs",
         "cp-jalali-leap-selftest.mjs",
+        "cp-money-forms-qa19-selftest.mjs",
+        "cp-d2-wallet-keydown-regression-selftest.mjs",
+        "cp-d3-confirm-alert-selftest.mjs",
+        "cp-d4-popstate-back-selftest.mjs",
+        "cp-d5-xss-render-selftest.mjs",
     ];
 
     [Fact]

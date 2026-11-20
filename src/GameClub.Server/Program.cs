@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using GameClub.Server.Data;
 using GameClub.Server.Hubs;
 using GameClub.Server.Kiosk;
@@ -39,7 +40,19 @@ public partial class Program
 
                     return defaultFactory(context);
                 };
+            })
+            .AddJsonOptions(o =>
+            {
+                o.JsonSerializerOptions.Converters.Add(new StrictInt64JsonConverter());
+                o.JsonSerializerOptions.Converters.Add(new StrictNullableInt64JsonConverter());
+                o.JsonSerializerOptions.Converters.Add(new StrictInt32JsonConverter());
             });
+        builder.Services.ConfigureHttpJsonOptions(o =>
+        {
+            o.SerializerOptions.Converters.Add(new StrictInt64JsonConverter());
+            o.SerializerOptions.Converters.Add(new StrictNullableInt64JsonConverter());
+            o.SerializerOptions.Converters.Add(new StrictInt32JsonConverter());
+        });
         builder.Services.AddSignalR();
         builder.Services.AddEndpointsApiExplorer();
         builder.Services.AddSwaggerGen();
