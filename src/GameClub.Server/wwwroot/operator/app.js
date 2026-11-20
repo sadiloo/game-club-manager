@@ -2438,8 +2438,8 @@ bindClick("openShiftBtn", async () => {
       positive: false,
       help: "خالی یعنی ۰ تومان.",
     },
-    onSubmit: async (values) => {
-      const openingFloatToman = values?.value ?? 0;
+    onSubmit: async (n) => {
+      const openingFloatToman = n == null ? 0 : n;
       await api("/api/operator/shift/open", { method: "POST", body: JSON.stringify({ openingFloatToman }) });
       await refreshShiftState();
     },

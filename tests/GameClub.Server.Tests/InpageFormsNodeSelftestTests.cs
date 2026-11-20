@@ -23,6 +23,7 @@ public sealed class InpageFormsNodeSelftestTests
         "cp-f17-empty-zero-selftest.mjs",
         "cp-shift-close-money-selftest.mjs",
         "cp-money-junk-selftest.mjs",
+        "cp-prompt-submit-bodies-selftest.mjs",
     ];
 
     [Fact]

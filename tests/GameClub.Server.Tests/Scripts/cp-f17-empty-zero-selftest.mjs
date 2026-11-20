@@ -35,8 +35,8 @@ const p = window.cpPrompt({
     positive: false,
     help: "خالی یعنی ۰ تومان.",
   },
-  onSubmit: async (values) => {
-    submitted = values?.value ?? 0;
+  onSubmit: async (n) => {
+    submitted = n == null ? 0 : n;
   },
 });
 await sleep(30);

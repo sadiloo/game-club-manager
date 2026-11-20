@@ -783,10 +783,15 @@
 
   async function cpPrompt(opts) {
     const field = { ...(opts.field || {}), name: "value" };
+    const { onSubmit, ...rest } = opts;
     return cpForm({
-      ...opts,
+      ...rest,
       fields: [field],
-    }).then((v) => (v ? v.value : null));
+      onSubmit:
+        typeof onSubmit === "function"
+          ? async (values) => onSubmit(values.value)
+          : undefined,
+    }).then((v) => (v == null ? null : v.value));
   }
 
   async function cpConfirm(opts) {
