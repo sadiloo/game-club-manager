@@ -8,6 +8,13 @@ using GameClub.Kiosk.Core.Guard;
 
 namespace GameClub.Kiosk.Core.Tests;
 
+[CollectionDefinition(GuardInternetPipeFramingSerialCollection.Name, DisableParallelization = true)]
+public sealed class GuardInternetPipeFramingSerialCollection
+{
+    public const string Name = "guard-internet-pipe-framing-serial";
+}
+
+[Collection(GuardInternetPipeFramingSerialCollection.Name)]
 [Trait("Category", "PcInternetFirewall")]
 public sealed class GuardInternetPipeFramingTests
 {
@@ -160,55 +167,65 @@ public sealed class GuardInternetPipeFramingTests
         }
 
         using var pipeDiag = InternetPipeOwnerDiagnostics.BeginTestScope();
-        using var cts = new CancellationTokenSource();
-        var ready = new ManualResetEventSlim(false);
-        var sawOversize = new ManualResetEventSlim(false);
-        var serverLog = new System.Collections.Concurrent.ConcurrentQueue<string>();
-        var pipeThread = new Thread(() => LineFramingPipeStub.RunOversizeServer(ready, sawOversize, cts.Token, serverLog))
-        {
-            IsBackground = true,
-        };
-        pipeThread.Start();
-        Assert.True(ready.Wait(TimeSpan.FromSeconds(5)));
-
-        using var client = new NamedPipeClientStream(".", GuardInternetClient.ResolvePipeName(), PipeDirection.InOut, PipeOptions.Asynchronous);
-        await client.ConnectAsync(3000);
-        var oversize = new string('a', GuardInternetPipeProtocol.MaxLineBytes + 1);
-        var line = Encoding.UTF8.GetBytes(oversize + "\n");
-        var wroteIOException = false;
+        var uniquePipe = $"CheckpointGuardInternet-oversize-{Guid.NewGuid():N}";
+        var priorPipe = Environment.GetEnvironmentVariable(GuardInternetClient.PipeNameEnvironmentVariable);
+        Environment.SetEnvironmentVariable(GuardInternetClient.PipeNameEnvironmentVariable, uniquePipe);
         try
         {
-            await client.WriteAsync(line, 0, line.Length);
-            await client.FlushAsync();
-        }
-        catch (IOException)
-        {
-            wroteIOException = true;
-        }
+            using var cts = new CancellationTokenSource();
+            var ready = new ManualResetEventSlim(false);
+            var sawOversize = new ManualResetEventSlim(false);
+            var serverLog = new System.Collections.Concurrent.ConcurrentQueue<string>();
+            var pipeThread = new Thread(() => LineFramingPipeStub.RunOversizeServer(ready, sawOversize, cts.Token, serverLog))
+            {
+                IsBackground = true,
+            };
+            pipeThread.Start();
+            Assert.True(ready.Wait(TimeSpan.FromSeconds(5)), "oversize stub must signal listening before client connect");
 
-        Assert.True(sawOversize.Wait(TimeSpan.FromSeconds(3)));
-        var oversizeLogged = serverLog.Any(l => l.StartsWith("pipe_line_oversize", StringComparison.Ordinal));
-        Assert.True(oversizeLogged);
+            using var client = new NamedPipeClientStream(".", GuardInternetClient.ResolvePipeName(), PipeDirection.InOut, PipeOptions.Asynchronous);
+            await client.ConnectAsync(3000);
+            var oversize = new string('a', GuardInternetPipeProtocol.MaxLineBytes + 1);
+            var line = Encoding.UTF8.GetBytes(oversize + "\n");
+            var wroteIOException = false;
+            try
+            {
+                await client.WriteAsync(line, 0, line.Length);
+                await client.FlushAsync();
+            }
+            catch (IOException)
+            {
+                wroteIOException = true;
+            }
 
-        var reply = new byte[256];
-        var read = 0;
-        try
-        {
-            using var readCts = new CancellationTokenSource(TimeSpan.FromSeconds(1));
-            read = await client.ReadAsync(reply, 0, reply.Length, readCts.Token);
-        }
-        catch (Exception)
-        {
-            read = 0;
-        }
+            Assert.True(sawOversize.Wait(TimeSpan.FromSeconds(3)));
+            var oversizeLogged = serverLog.Any(l => l.StartsWith("pipe_line_oversize", StringComparison.Ordinal));
+            Assert.True(oversizeLogged);
 
-        if (wroteIOException)
-        {
-            Assert.True(oversizeLogged && read == 0, "IOException on write allowed only after pipe_line_oversize with no reply");
+            var reply = new byte[256];
+            var read = 0;
+            try
+            {
+                using var readCts = new CancellationTokenSource(TimeSpan.FromSeconds(1));
+                read = await client.ReadAsync(reply, 0, reply.Length, readCts.Token);
+            }
+            catch (Exception)
+            {
+                read = 0;
+            }
+
+            if (wroteIOException)
+            {
+                Assert.True(oversizeLogged && read == 0, "IOException on write allowed only after pipe_line_oversize with no reply");
+            }
+            else
+            {
+                Assert.True(read == 0, "expected no successful reply after oversize request");
+            }
         }
-        else
+        finally
         {
-            Assert.True(read == 0, "expected no successful reply after oversize request");
+            Environment.SetEnvironmentVariable(GuardInternetClient.PipeNameEnvironmentVariable, priorPipe);
         }
     }
 
@@ -422,7 +439,6 @@ internal static class LineFramingPipeStub
 
     internal static void RunOversizeServer(ManualResetEventSlim ready, ManualResetEventSlim sawOversize, CancellationToken ct, System.Collections.Concurrent.ConcurrentQueue<string> log)
     {
-        ready.Set();
         try
         {
             using var server = new NamedPipeServerStream(
@@ -431,6 +447,7 @@ internal static class LineFramingPipeStub
                 1,
                 PipeTransmissionMode.Byte,
                 PipeOptions.Asynchronous);
+            ready.Set();
             server.WaitForConnection();
             var line = ReadLine(server, 5_000, log.Enqueue);
             if (line is null)

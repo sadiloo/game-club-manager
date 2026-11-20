@@ -253,7 +253,10 @@ public sealed class PcInternetKioskCoreTests
         }
 
         using var pipeDiag = InternetPipeOwnerDiagnostics.BeginTestScope();
+        var uniquePipe = $"CheckpointGuardInternet-io-timeout-{Guid.NewGuid():N}";
+        var priorPipe = Environment.GetEnvironmentVariable(GuardInternetClient.PipeNameEnvironmentVariable);
         var priorIo = Environment.GetEnvironmentVariable("CHECKPOINT_INTERNET_PIPE_IO_MS");
+        Environment.SetEnvironmentVariable(GuardInternetClient.PipeNameEnvironmentVariable, uniquePipe);
         Environment.SetEnvironmentVariable("CHECKPOINT_INTERNET_PIPE_IO_MS", "800");
         var stopStub = new ManualResetEventSlim(false);
         var ready = new ManualResetEventSlim(false);
@@ -292,6 +295,7 @@ public sealed class PcInternetKioskCoreTests
         finally
         {
             Environment.SetEnvironmentVariable("CHECKPOINT_INTERNET_PIPE_IO_MS", priorIo);
+            Environment.SetEnvironmentVariable(GuardInternetClient.PipeNameEnvironmentVariable, priorPipe);
             stopStub.Set();
             acceptThread?.Join(TimeSpan.FromSeconds(5));
         }
