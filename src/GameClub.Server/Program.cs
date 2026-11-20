@@ -29,7 +29,6 @@ public partial class Program
                     {
                         return new JsonResult(new
                         {
-                            error = "invalid_body",
                             code = "invalid_body",
                             message = "درخواست نامعتبر است.",
                         })

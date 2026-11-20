@@ -1,9 +1,11 @@
 using System.Net;
+using System.Net.Http.Json;
 using System.Text.Json;
 using GameClub.Server.Data;
 using GameClub.Server.Data.Entities;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Xunit.Abstractions;
 
 namespace GameClub.Server.Tests;
 
@@ -11,7 +13,7 @@ namespace GameClub.Server.Tests;
 /// Documents server behaviour when invalid birthday policy is already stored (no mapper clamp).
 /// </summary>
 [Collection("server")]
-public sealed class InpageFormsStoredBirthdayBillTests(GameClubWebApplicationFactory factory)
+public sealed class InpageFormsStoredBirthdayBillTests(GameClubWebApplicationFactory factory, ITestOutputHelper output)
 {
     private static async Task SeedBadPolicyAsync(GameClubWebApplicationFactory factory, int percent)
     {
@@ -74,6 +76,7 @@ public sealed class InpageFormsStoredBirthdayBillTests(GameClubWebApplicationFac
         var op = await factory.CreateOperatorClientAsync();
         var res = await op.PostAsync($"/api/operator/sessions/{sessionId}/bill/open", null);
         var diag = FormatBillDiag(res);
+        output.WriteLine($"D6-report percent=150 invalid windowKind/anchor: {diag}");
         Assert.True(
             res.StatusCode is HttpStatusCode.OK or HttpStatusCode.BadRequest,
             $"D6-report percent=150: {diag}");
@@ -93,6 +96,7 @@ public sealed class InpageFormsStoredBirthdayBillTests(GameClubWebApplicationFac
         var op = await factory.CreateOperatorClientAsync();
         var res = await op.PostAsync($"/api/operator/sessions/{sessionId}/bill/open", null);
         var diag = FormatBillDiag(res);
+        output.WriteLine($"D6-report percent=-5 invalid windowKind/anchor: {diag}");
         Assert.True(
             res.StatusCode is HttpStatusCode.OK or HttpStatusCode.BadRequest,
             $"D6-report percent=-5: {diag}");

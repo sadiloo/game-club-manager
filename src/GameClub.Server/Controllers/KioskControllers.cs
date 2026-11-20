@@ -238,7 +238,7 @@ public sealed class KioskOperatorController(
     {
         if (!op.IsAuthenticated)
         {
-            throw new ApiException(StatusCodes.Status401Unauthorized, "auth", "Operator login required.");
+            throw new ApiException(StatusCodes.Status401Unauthorized, "auth", "ورود اپراتور لازم است.");
         }
     }
 
@@ -246,7 +246,7 @@ public sealed class KioskOperatorController(
     {
         if (!op.IsAuthenticated)
         {
-            throw new ApiException(StatusCodes.Status401Unauthorized, "auth", "Operator login required.");
+            throw new ApiException(StatusCodes.Status401Unauthorized, "auth", "ورود اپراتور لازم است.");
         }
 
         if (op.Role is not UserRole.Manager and not UserRole.Owner)

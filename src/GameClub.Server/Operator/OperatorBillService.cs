@@ -196,6 +196,11 @@ public sealed class OperatorBillService(
         MemberBillResult? detail = null,
         Guid? customerId = null)
     {
+        foreach (var payment in payments)
+        {
+            OperatorMoneyValidation.EnsureNonNegativeBounded(payment.AmountToman, "payment_invalid");
+        }
+
         if (collectibleToman == 0)
         {
             if (payments.Count > 0 && payments.Any(p => p.AmountToman > 0))
@@ -206,10 +211,10 @@ public sealed class OperatorBillService(
                 var positiveSplit = PaymentSplitter.Split(0, positiveTenders);
                 if (!positiveSplit.IsValid)
                 {
-                    throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", positiveSplit.Errors.FirstOrDefault()?.Message ?? "Invalid payment.");
+                    throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", OperatorPaymentErrors.Localize(positiveSplit.Errors.FirstOrDefault()));
                 }
 
-                throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", "At least one positive payment line is required.");
+                throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", "دست‌کم یک خط پرداخت مثبت لازم است.");
             }
 
             return;
@@ -217,7 +222,7 @@ public sealed class OperatorBillService(
 
         if (payments.Count == 0 || payments.All(p => p.AmountToman <= 0))
         {
-            throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", "At least one positive payment line is required.");
+            throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", "دست‌کم یک خط پرداخت مثبت لازم است.");
         }
 
         var tenders = ToTenders(payments, customerId);
@@ -226,19 +231,19 @@ public sealed class OperatorBillService(
             throw new ApiException(
                 StatusCodes.Status400BadRequest,
                 "payment_invalid",
-                allocation.Errors.FirstOrDefault()?.Message ?? "Invalid payment.");
+                OperatorPaymentErrors.Localize(allocation.Errors.FirstOrDefault()));
         }
 
         if (payments.Any(p => OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet))
         {
             if (customerId is null)
             {
-                throw new ApiException(StatusCodes.Status400BadRequest, "wallet_requires_member", "Wallet payment requires a linked member.");
+                throw new ApiException(StatusCodes.Status400BadRequest, "wallet_requires_member", "پرداخت کیف پول به عضو پیوسته نیاز دارد.");
             }
 
             if (detail?.Allocation is not { IsValid: true } alloc)
             {
-                throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", "Wallet allocation failed.");
+                throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", "تخصیص کیف پول انجام نشد.");
             }
 
             var surchargeAlreadyInCollect = detail is { SurchargeToman: > 0 }
@@ -249,13 +254,13 @@ public sealed class OperatorBillService(
                 surchargeAlreadyInCollect ? 0 : detail?.SurchargeToman ?? 0);
             if (allocPayable != collectibleToman)
             {
-                throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", "Payable total does not match allocation.");
+                throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", "جمع قابل پرداخت با تخصیص هم‌خوان نیست.");
             }
 
             var tendered = payments.Sum(p => p.AmountToman);
             if (tendered != allocPayable)
             {
-                throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", "Tender total does not match payable.");
+                throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", "جمع پرداختی با مبلغ قابل پرداخت برابر نیست.");
             }
 
             return;
@@ -266,14 +271,14 @@ public sealed class OperatorBillService(
             var method = OperatorPaymentMethods.Parse(payment.Method);
             if (method is PaymentMethod.Wallet or PaymentMethod.PcBalance)
             {
-                throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", $"Unsupported method '{payment.Method}'.");
+                throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", "روش پرداخت پشتیبانی نمی‌شود.");
             }
         }
 
         var split = PaymentSplitter.Split(collectibleToman, tenders);
         if (!split.IsValid)
         {
-            throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", split.Errors.FirstOrDefault()?.Message ?? "Invalid payment.");
+            throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", OperatorPaymentErrors.Localize(split.Errors.FirstOrDefault()));
         }
     }
 
@@ -305,17 +310,17 @@ public sealed class OperatorBillService(
         {
             if (session.Station!.Group!.Kind != StationKind.Console)
             {
-                throw new ApiException(StatusCodes.Status400BadRequest, "not_console", "Bill open applies to consoles.");
+                throw new ApiException(StatusCodes.Status400BadRequest, "not_console", "صدور صورتحساب فقط برای کنسول است.");
             }
 
             if (session.Status is not SessionStatus.Open and not SessionStatus.Paused)
             {
-                throw new ApiException(StatusCodes.Status409Conflict, "invalid_state", "Session cannot open a bill.");
+                throw new ApiException(StatusCodes.Status409Conflict, "invalid_state", "این جلسه نمی‌تواند صورتحساب باز کند.");
             }
 
             if (session.PendingBill is not null)
             {
-                throw new ApiException(StatusCodes.Status409Conflict, "bill_open", "Bill is already open.");
+                throw new ApiException(StatusCodes.Status409Conflict, "bill_open", "صورتحساب از قبل باز است.");
             }
 
             var frozenAt = clock.UtcNow.UtcDateTime;
@@ -360,7 +365,7 @@ public sealed class OperatorBillService(
 
             if (session.Status != SessionStatus.BillOpen || session.PendingBill is null)
             {
-                throw new ApiException(StatusCodes.Status409Conflict, "no_bill", "No open bill to cancel.");
+                throw new ApiException(StatusCodes.Status409Conflict, "no_bill", "صورتحساب بازی برای لغو نیست.");
             }
 
             var bill = session.PendingBill;
@@ -376,7 +381,7 @@ public sealed class OperatorBillService(
         await WithSessionBillLockAsync(sessionId, async (session, innerCt) =>
         {
             var bill = session.PendingBill
-                ?? throw new ApiException(StatusCodes.Status409Conflict, "no_bill", "No open bill.");
+                ?? throw new ApiException(StatusCodes.Status409Conflict, "no_bill", "صورتحساب بازی برای لغو نیست.");
             bill.SurchargeToman = MoneyMath.CheckedAdd(bill.SurchargeToman, 5_000);
             await ApplyAmountsToBillAsync(session, bill, innerCt);
             await audit.AppendAsync("bill.surcharge", new { sessionId, reason, bill.SurchargeToman }, innerCt);
@@ -394,17 +399,17 @@ public sealed class OperatorBillService(
             .Include(s => s.Pauses)
             .Include(s => s.PendingBill)
             .FirstOrDefaultAsync(s => s.Id == sessionId, ct)
-            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Session not found.");
+            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "جلسه یافت نشد.");
         if (session.Status is SessionStatus.Open or SessionStatus.Paused)
         {
             await OpenBillForCloseSettleAsync(session, ct);
         }
 
         var bill = session.PendingBill
-            ?? throw new ApiException(StatusCodes.Status409Conflict, "no_bill", "No bill for this session.");
+            ?? throw new ApiException(StatusCodes.Status409Conflict, "no_bill", "برای این جلسه صورتحسابی نیست.");
         if (session.Status is not SessionStatus.BillOpen and not SessionStatus.AwaitingPayment)
         {
-            throw new ApiException(StatusCodes.Status409Conflict, "invalid_state", "Session is not awaiting settlement.");
+            throw new ApiException(StatusCodes.Status409Conflict, "invalid_state", "جلسه در انتظار تسویه نیست.");
         }
 
         var saleLines = await LoadSaleLinesAsync(session.Id, ct);
@@ -423,10 +428,10 @@ public sealed class OperatorBillService(
             .Include(s => s.Pauses)
             .Include(s => s.PendingBill)
             .FirstOrDefaultAsync(s => s.Id == sessionId, ct)
-            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Session not found.");
+            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "جلسه یافت نشد.");
         if (session.Status == SessionStatus.Closed)
         {
-            throw new ApiException(StatusCodes.Status409Conflict, "invalid_state", "Session is already closed.");
+            throw new ApiException(StatusCodes.Status409Conflict, "invalid_state", "جلسه قبلاً بسته شده است.");
         }
 
         if (session.PendingBill is PendingBillEntity existing)
@@ -436,7 +441,7 @@ public sealed class OperatorBillService(
 
         if (session.Status is not SessionStatus.Open and not SessionStatus.Paused)
         {
-            throw new ApiException(StatusCodes.Status409Conflict, "no_bill", "No bill for this session.");
+            throw new ApiException(StatusCodes.Status409Conflict, "no_bill", "برای این جلسه صورتحسابی نیست.");
         }
 
         var endUtc = session.EndedAtUtc ?? clock.UtcNow.UtcDateTime;
@@ -517,10 +522,10 @@ public sealed class OperatorBillService(
         return await WithSessionBillLockAsync(sessionId, async (session, innerCt) =>
         {
             var bill = session.PendingBill
-                ?? throw new ApiException(StatusCodes.Status409Conflict, "no_bill", "No bill awaiting confirmation.");
+                ?? throw new ApiException(StatusCodes.Status409Conflict, "no_bill", "صورتحسابی در انتظار تأیید نیست.");
             if (session.Status is not SessionStatus.BillOpen and not SessionStatus.AwaitingPayment)
             {
-                throw new ApiException(StatusCodes.Status409Conflict, "invalid_state", "Session is not awaiting payment.");
+                throw new ApiException(StatusCodes.Status409Conflict, "invalid_state", "جلسه در انتظار پرداخت نیست.");
             }
 
             var saleLines = await LoadSaleLinesAsync(session.Id, innerCt);
@@ -626,9 +631,9 @@ public sealed class OperatorBillService(
             .Include(s => s.PendingBill)
             .Include(s => s.Station)!.ThenInclude(st => st!.Group)
             .FirstOrDefaultAsync(s => s.Id == sessionId, ct)
-            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Session not found.");
+            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "جلسه یافت نشد.");
         var bill = session.PendingBill
-            ?? throw new ApiException(StatusCodes.Status409Conflict, "no_bill", "No bill for this session.");
+            ?? throw new ApiException(StatusCodes.Status409Conflict, "no_bill", "برای این جلسه صورتحسابی نیست.");
         var saleLines = await db.OpenSales.AsNoTracking()
             .Include(o => o.Lines).ThenInclude(l => l.CatalogItem)
             .Where(o => o.SessionId == sessionId)
@@ -707,9 +712,9 @@ public sealed class OperatorBillService(
             .Include(s => s.PendingBill)
             .Include(s => s.Station)!.ThenInclude(st => st!.Group)
             .FirstOrDefaultAsync(s => s.Id == sessionId, ct)
-            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Session not found.");
+            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "جلسه یافت نشد.");
         var bill = session.PendingBill
-            ?? throw new ApiException(StatusCodes.Status409Conflict, "no_bill", "No bill for this session.");
+            ?? throw new ApiException(StatusCodes.Status409Conflict, "no_bill", "برای این جلسه صورتحسابی نیست.");
         var charge = await billing.BuildChargeAsync(session, bill.FrozenAtUtc, ct);
         var snapshot = session.RateCardSnapshotId != 0
             ? await rates.LoadSnapshotAsync(session.RateCardSnapshotId, ct)
@@ -807,7 +812,7 @@ public sealed class OperatorBillService(
         }
 
         var revert = JsonSerializer.Deserialize<RevertSnapshot>(bill.RevertStateJson)
-            ?? throw new ApiException(StatusCodes.Status500InternalServerError, "revert_missing", "Bill revert state is missing.");
+            ?? throw new ApiException(StatusCodes.Status500InternalServerError, "revert_missing", "وضعیت بازگشت صورتحساب موجود نیست.");
         session.Status = Enum.Parse<SessionStatus>(revert.Status);
         session.EndedAtUtc = null;
         foreach (var seg in revert.Segments)
@@ -839,7 +844,7 @@ public sealed class OperatorBillService(
             }
             catch (Exception ex) when (PostgresErrors.IsLockNotAvailable(ex) || PostgresErrors.IsDeadlock(ex))
             {
-                throw new ApiException(StatusCodes.Status409Conflict, "session_busy", "Session is being updated.");
+                throw new ApiException(StatusCodes.Status409Conflict, "session_busy", "جلسه در حال به‌روزرسانی است.");
             }
 
             var session = await db.Sessions
@@ -848,7 +853,7 @@ public sealed class OperatorBillService(
                 .Include(s => s.Pauses)
                 .Include(s => s.PendingBill)
                 .FirstOrDefaultAsync(s => s.Id == sessionId, ct)
-                ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Session not found.");
+                ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "جلسه یافت نشد.");
             try
             {
                 var result = await action(session, ct);
@@ -858,11 +863,11 @@ public sealed class OperatorBillService(
             }
             catch (DbUpdateConcurrencyException) when (policies.ConcurrentBillActionReturns409)
             {
-                throw new ApiException(StatusCodes.Status409Conflict, "stale_bill", "Bill was updated elsewhere; refresh and retry.");
+                throw new ApiException(StatusCodes.Status409Conflict, "stale_bill", "صورتحساب جای دیگر به‌روز شده؛ تازه‌سازی کنید و دوباره بزنید.");
             }
             catch (Exception ex) when (PostgresErrors.IsDeadlock(ex))
             {
-                throw new ApiException(StatusCodes.Status409Conflict, "session_busy", "Session is being updated.");
+                throw new ApiException(StatusCodes.Status409Conflict, "session_busy", "جلسه در حال به‌روزرسانی است.");
             }
         });
     }
@@ -1093,7 +1098,7 @@ public sealed class OperatorInvoiceService(
             .Include(i => i.Customer)
             .Include(i => i.Session)!.ThenInclude(s => s!.Station)
             .FirstOrDefaultAsync(i => i.Number == number, ct)
-            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Invoice not found.");
+            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "فاکتور یافت نشد.");
         return invoice;
     }
 
@@ -1102,30 +1107,30 @@ public sealed class OperatorInvoiceService(
         if (context.Role == UserRole.Operator || context.Role is UserRole.Manager or UserRole.Owner)
         {
             var invoice = await db.Invoices.FirstOrDefaultAsync(i => i.Number == number, ct)
-                ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Invoice not found.");
+                ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "فاکتور یافت نشد.");
             invoice.OperatorNote = string.IsNullOrWhiteSpace(note) ? null : note.Trim();
             await audit.AppendAsync("invoice.operator_note", new { number, note = invoice.OperatorNote }, ct);
             await db.SaveChangesAsync(ct);
             return;
         }
 
-        throw new ApiException(StatusCodes.Status403Forbidden, "forbidden", "Not allowed.");
+        throw new ApiException(StatusCodes.Status403Forbidden, "forbidden", "مجاز نیست.");
     }
 
     public async Task VoidAsync(long number, string? reason, CancellationToken ct)
     {
         if (context.Role is not UserRole.Manager and not UserRole.Owner)
         {
-            throw new ApiException(StatusCodes.Status403Forbidden, "forbidden", "Only a manager may void an invoice.");
+            throw new ApiException(StatusCodes.Status403Forbidden, "forbidden", "ابطال فاکتور فقط برای مدیر است.");
         }
 
         if (string.IsNullOrWhiteSpace(reason))
         {
-            throw new ApiException(StatusCodes.Status400BadRequest, "reason_required", "Void reason is required.");
+            throw new ApiException(StatusCodes.Status400BadRequest, "reason_required", "دلیل ابطال الزامی است.");
         }
 
         var invoice = await db.Invoices.FirstOrDefaultAsync(i => i.Number == number, ct)
-            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Invoice not found.");
+            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "فاکتور یافت نشد.");
         if (invoice.Status == "void")
         {
             return;
@@ -1168,7 +1173,7 @@ public sealed class OperatorInvoiceService(
     {
         if (!policies.OperatorMayConfirmCardToCard)
         {
-            throw new ApiException(StatusCodes.Status403Forbidden, "forbidden", "Card-to-card confirmation is disabled.");
+            throw new ApiException(StatusCodes.Status403Forbidden, "forbidden", "تأیید کارت‌به‌کارت غیرفعال است.");
         }
 
         await using var tx = await db.Database.BeginTransactionAsync(ct);
@@ -1182,10 +1187,10 @@ public sealed class OperatorInvoiceService(
             var exists = await db.PaymentLines.AsNoTracking().AnyAsync(p => p.Id == paymentLineId, ct);
             if (!exists)
             {
-                throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Payment line not found.");
+                throw new ApiException(StatusCodes.Status404NotFound, "not_found", "خط پرداخت یافت نشد.");
             }
 
-            throw new ApiException(StatusCodes.Status409Conflict, "not_pending", "Payment is not pending.");
+            throw new ApiException(StatusCodes.Status409Conflict, "not_pending", "این پرداخت در انتظار نیست.");
         }
 
         await audit.AppendAsync("payment.card_to_card_confirmed", new { paymentLineId }, ct);
@@ -1196,7 +1201,7 @@ public sealed class OperatorInvoiceService(
     {
         if (!policies.OperatorMayConfirmCardToCard)
         {
-            throw new ApiException(StatusCodes.Status403Forbidden, "forbidden", "Card-to-card confirmation is disabled.");
+            throw new ApiException(StatusCodes.Status403Forbidden, "forbidden", "تأیید کارت‌به‌کارت غیرفعال است.");
         }
 
         await using var tx = await db.Database.BeginTransactionAsync(ct);
@@ -1210,10 +1215,10 @@ public sealed class OperatorInvoiceService(
             var exists = await db.PaymentLines.AsNoTracking().AnyAsync(p => p.Id == paymentLineId, ct);
             if (!exists)
             {
-                throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Payment line not found.");
+                throw new ApiException(StatusCodes.Status404NotFound, "not_found", "خط پرداخت یافت نشد.");
             }
 
-            throw new ApiException(StatusCodes.Status409Conflict, "not_pending", "Payment is not pending.");
+            throw new ApiException(StatusCodes.Status409Conflict, "not_pending", "این پرداخت در انتظار نیست.");
         }
 
         var line = await db.PaymentLines.AsNoTracking().FirstAsync(p => p.Id == paymentLineId, ct);
@@ -1257,7 +1262,7 @@ public sealed class ManualSettleQueueService(AppDbContext db, OperatorPolicies p
     {
         if (!policies.OperatorMayResolveManualSettle && context.Role == UserRole.Operator)
         {
-            throw new ApiException(StatusCodes.Status403Forbidden, "forbidden", "Manual settle resolution is manager-only.");
+            throw new ApiException(StatusCodes.Status403Forbidden, "forbidden", "تسویهٔ دستی فقط برای مدیر است.");
         }
     }
 }

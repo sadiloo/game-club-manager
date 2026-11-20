@@ -29,7 +29,7 @@ public static class WalletGiftCapMath
     {
         if (giftToman < 0)
         {
-            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_gift", "Gift cannot be negative.");
+            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_gift", "هدیه نمی‌تواند منفی باشد.");
         }
 
         if (giftToman == 0 || role is UserRole.Manager or UserRole.Owner)
@@ -82,14 +82,10 @@ public sealed partial class OperatorMemberWalletService
     public async Task SetOperatorGiftCapAsync(long maxToman, int maxPercent, CancellationToken ct)
     {
         EnsureManager();
-        if (maxToman < 0)
-        {
-            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_cap", "Max gift toman must be non-negative.");
-        }
-
+        OperatorMoneyValidation.EnsureNonNegativeBounded(maxToman, "invalid_cap");
         if (maxPercent is < 0 or > 100)
         {
-            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_cap", "Max gift percent must be between 0 and 100.");
+            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_cap", "سقف درصد هدیه باید بین ۰ و ۱۰۰ باشد.");
         }
 
         var settings = await db.BranchMemberSettings.FirstAsync(ct);
@@ -109,10 +105,10 @@ public sealed partial class OperatorMemberWalletService
         }
 
         var shift = await shiftGate.GetOpenShiftForUpdateAsync(ct)
-            ?? throw new ApiException(StatusCodes.Status409Conflict, "no_open_shift", "No shift is open.");
+            ?? throw new ApiException(StatusCodes.Status409Conflict, "no_open_shift", "شیفت بازی باز نیست.");
         if (shift.Status != ShiftStatus.Open)
         {
-            throw new ApiException(StatusCodes.Status409Conflict, "shift_closed", "Shift is already closed.");
+            throw new ApiException(StatusCodes.Status409Conflict, "shift_closed", "شیفت قبلاً بسته شده است.");
         }
 
         return shift.Id;
@@ -206,18 +202,18 @@ public sealed partial class OperatorMemberWalletService
     {
         if (string.IsNullOrWhiteSpace(body.Description))
         {
-            throw new ApiException(StatusCodes.Status400BadRequest, "description_required", "Description is required.");
+            throw new ApiException(StatusCodes.Status400BadRequest, "description_required", "توضیح الزامی است.");
         }
 
         if (body.NewAmountToman < 0 || body.NewGiftToman < 0)
         {
-            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_amount", "Amounts must be non-negative.");
+            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_amount", "مبالغ نمی‌توانند منفی باشند.");
         }
 
         var original = await db.WalletLedger.AsNoTracking()
             .Where(w => w.TopUpGroupId == topUpGroupId && w.Kind == WalletLedgerKind.TopUpReal)
             .FirstOrDefaultAsync(ct)
-            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Top-up group not found.");
+            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "گروه شارژ یافت نشد.");
 
         var customerId = original.CustomerId;
         string? fingerprint = null;
@@ -271,7 +267,7 @@ public sealed partial class OperatorMemberWalletService
             var currentGift = rows.Where(r => r.Kind is WalletLedgerKind.TopUpGift or WalletLedgerKind.Correction).Sum(r => r.GiftDeltaToman);
             if (currentAmount == body.NewAmountToman && currentGift == body.NewGiftToman)
             {
-                throw new ApiException(StatusCodes.Status400BadRequest, "no_change", "No change from current amounts.");
+                throw new ApiException(StatusCodes.Status400BadRequest, "no_change", "نسبت به مبالغ فعلی تغییری نیست.");
             }
 
             var realDelta = body.NewAmountToman - currentAmount;
@@ -307,7 +303,7 @@ public sealed partial class OperatorMemberWalletService
             {
                 if (MoneyMath.CheckedAdd(member.GiftToman, giftDelta) < 0)
                 {
-                    throw new ApiException(StatusCodes.Status409Conflict, "gift_already_spent", "Gift already spent.");
+                    throw new ApiException(StatusCodes.Status409Conflict, "gift_already_spent", "هدیه قبلاً خرج شده است.");
                 }
 
                 pocket = WalletPocketMath.Add(pocket, 0, giftDelta);

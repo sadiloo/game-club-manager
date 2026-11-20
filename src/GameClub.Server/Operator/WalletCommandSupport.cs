@@ -23,7 +23,7 @@ public static class WalletCommandSupport
     {
         if (commandId is not Guid id || id == Guid.Empty)
         {
-            throw new ApiException(StatusCodes.Status400BadRequest, "command_id_required", "commandId is required.");
+            throw new ApiException(StatusCodes.Status400BadRequest, "command_id_required", "شناسهٔ دستور (commandId) الزامی است.");
         }
     }
 

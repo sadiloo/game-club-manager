@@ -129,6 +129,31 @@ public sealed class ApiExceptionMiddleware(RequestDelegate next, ILogger<ApiExce
     {
         context.Response.StatusCode = status;
         context.Response.ContentType = "application/json";
+        var path = context.Request.Path;
+        var operatorClientShape = path.StartsWithSegments("/api/operator", StringComparison.OrdinalIgnoreCase)
+                                  && !path.StartsWithSegments("/api/operator/auth", StringComparison.OrdinalIgnoreCase);
+        if (operatorClientShape)
+        {
+            if (extras is null || extras.Count == 0)
+            {
+                await context.Response.WriteAsync(JsonSerializer.Serialize(new { code, message }));
+                return;
+            }
+
+            var operatorPayload = new Dictionary<string, object?>(extras.Count + 2)
+            {
+                ["code"] = code,
+                ["message"] = message,
+            };
+            foreach (var (key, value) in extras)
+            {
+                operatorPayload[key] = value;
+            }
+
+            await context.Response.WriteAsync(JsonSerializer.Serialize(operatorPayload));
+            return;
+        }
+
         var payload = new Dictionary<string, object?>
         {
             ["error"] = code,

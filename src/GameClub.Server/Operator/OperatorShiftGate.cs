@@ -27,7 +27,7 @@ public sealed class OperatorShiftGate(AppDbContext db)
             throw new ApiException(
                 StatusCodes.Status409Conflict,
                 "no_open_shift",
-                "No shift is open. Open a shift before recording money.");
+                "شیفت باز نیست. قبل از ثبت پول شیفت را باز کنید.");
         }
     }
 
@@ -48,7 +48,7 @@ public sealed class OperatorShiftGate(AppDbContext db)
             throw new ApiException(
                 StatusCodes.Status409Conflict,
                 "no_open_shift",
-                "No shift is open.");
+                "شیفت بازی باز نیست.");
         }
 
         return id;
@@ -75,7 +75,7 @@ public sealed class OperatorShiftGate(AppDbContext db)
             throw new ApiException(
                 StatusCodes.Status409Conflict,
                 "shift_busy",
-                "Shift is being updated.");
+                "شیفت در حال به‌روزرسانی است.");
         }
 
         return await db.Shifts.FirstOrDefaultAsync(s => s.Status == ShiftStatus.Open, ct);
@@ -95,7 +95,7 @@ public sealed class OperatorShiftGate(AppDbContext db)
             throw new ApiException(
                 StatusCodes.Status409Conflict,
                 "no_open_shift",
-                "No shift is open.");
+                "شیفت بازی باز نیست.");
         }
 
         if (shift.Status != ShiftStatus.Open)
@@ -103,7 +103,7 @@ public sealed class OperatorShiftGate(AppDbContext db)
             throw new ApiException(
                 StatusCodes.Status409Conflict,
                 "shift_closed",
-                "Shift is already closed.");
+                "شیفت قبلاً بسته شده است.");
         }
     }
 }

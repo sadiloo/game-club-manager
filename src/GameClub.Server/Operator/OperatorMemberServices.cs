@@ -135,7 +135,7 @@ public sealed partial class OperatorMemberWalletService(
         var method = OperatorPaymentMethods.Parse(methodRaw);
         if (method == PaymentMethod.Wallet)
         {
-            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_method", "Invalid top-up method.");
+            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_method", "روش شارژ نامعتبر است.");
         }
 
         var methodName = method.ToString();
@@ -229,13 +229,13 @@ public sealed partial class OperatorMemberWalletService(
                 ?? throw new ApiException(
                     StatusCodes.Status409Conflict,
                     "no_open_shift",
-                    "No shift is open.");
+                    "شیفت بازی باز نیست.");
             if (shift.Status != ShiftStatus.Open)
             {
                 throw new ApiException(
                     StatusCodes.Status409Conflict,
                     "shift_closed",
-                    "Shift is already closed.");
+                    "شیفت قبلاً بسته شده است.");
             }
 
             shiftId = shift.Id;
@@ -311,7 +311,7 @@ public sealed partial class OperatorMemberWalletService(
             var shift = await db.Shifts.AsNoTracking().FirstOrDefaultAsync(s => s.Id == sid, ct);
             if (shift is null || shift.Status != ShiftStatus.Open)
             {
-                throw new ApiException(StatusCodes.Status409Conflict, "shift_closed", "Shift is already closed.");
+                throw new ApiException(StatusCodes.Status409Conflict, "shift_closed", "شیفت قبلاً بسته شده است.");
             }
         }
 
@@ -337,7 +337,7 @@ public sealed partial class OperatorMemberWalletService(
     public async Task ConfirmPendingTopUpAsync(long pendingId, CancellationToken ct)
     {
         _ = await db.PendingWalletTopUps.AsNoTracking().FirstOrDefaultAsync(p => p.Id == pendingId, ct)
-            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Pending top-up not found.");
+            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "شارژ در انتظار یافت نشد.");
         await using var tx = await db.Database.BeginTransactionAsync(ct);
         await db.Database.ExecuteSqlRawAsync(
             """SELECT "Id" FROM pending_wallet_topups WHERE "Id" = {0} FOR UPDATE""",
@@ -345,7 +345,7 @@ public sealed partial class OperatorMemberWalletService(
         var locked = await db.PendingWalletTopUps.FirstAsync(p => p.Id == pendingId, ct);
         if (locked.Status != PendingWalletTopUpStatus.Pending)
         {
-            throw new ApiException(StatusCodes.Status409Conflict, "not_pending", "Top-up is not pending.");
+            throw new ApiException(StatusCodes.Status409Conflict, "not_pending", "این شارژ در انتظار تأیید نیست.");
         }
 
         locked.Status = PendingWalletTopUpStatus.Confirmed;
@@ -387,7 +387,7 @@ public sealed partial class OperatorMemberWalletService(
     public async Task RejectPendingTopUpAsync(long pendingId, CancellationToken ct)
     {
         _ = await db.PendingWalletTopUps.AsNoTracking().FirstOrDefaultAsync(p => p.Id == pendingId, ct)
-            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Pending top-up not found.");
+            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "شارژ در انتظار یافت نشد.");
         await using var tx = await db.Database.BeginTransactionAsync(ct);
         var updated = await db.PendingWalletTopUps
             .Where(p => p.Id == pendingId && p.Status == PendingWalletTopUpStatus.Pending)
@@ -396,7 +396,7 @@ public sealed partial class OperatorMemberWalletService(
                 ct);
         if (updated == 0)
         {
-            throw new ApiException(StatusCodes.Status409Conflict, "not_pending", "Top-up is not pending.");
+            throw new ApiException(StatusCodes.Status409Conflict, "not_pending", "این شارژ در انتظار تأیید نیست.");
         }
 
         var pending = await db.PendingWalletTopUps.AsNoTracking().FirstAsync(p => p.Id == pendingId, ct);
@@ -468,7 +468,7 @@ public sealed partial class OperatorMemberWalletService(
             .FirstOrDefaultAsync(ct);
         if (lastClose is null)
         {
-            throw new ApiException(StatusCodes.Status409Conflict, "no_open_shift", "No shift is open.");
+            throw new ApiException(StatusCodes.Status409Conflict, "no_open_shift", "شیفت بازی باز نیست.");
         }
 
         return (null, lastClose.WorkingDayYear, lastClose.WorkingDayMonth, lastClose.WorkingDayDay);
@@ -488,36 +488,51 @@ public sealed partial class OperatorMemberWalletService(
 
         if (body.GiftToman is < 0)
         {
-            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_gift", "Opening gift cannot be negative.");
+            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_gift", "هدیهٔ افتتاحیه نمی‌تواند منفی باشد.");
+        }
+
+        if (body.RealToman is long realToman)
+        {
+            OperatorMoneyValidation.EnsureNonNegativeBounded(realToman, "invalid_opening");
+        }
+
+        if (body.GiftToman is long giftToman)
+        {
+            OperatorMoneyValidation.EnsureNonNegativeBounded(giftToman, "invalid_gift");
+        }
+
+        if (body.DebtToman is long debtToman)
+        {
+            OperatorMoneyValidation.EnsurePositiveBounded(debtToman, "invalid_opening");
         }
 
         if (body.LifetimeHours is not null && body.LevelName is not null)
         {
-            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_opening", "Enter play hours or level, not both.");
+            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_opening", "ساعت بازی یا سطح را وارد کنید، نه هر دو.");
         }
 
         if (body.RealToman is > 0 && body.DebtToman is > 0)
         {
-            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_opening", "Opening cannot include both real money and debt.");
+            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_opening", "پول واقعی و بدهی را با هم وارد نکنید.");
         }
 
         var hasMoneyFields = body.RealToman is not null || body.GiftToman is not null || body.DebtToman is not null;
         if (!hasMoneyFields && body.LifetimeHours is null && body.LevelName is null)
         {
-            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_opening", "Enter opening amounts or play hours.");
+            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_opening", "مبلغ افتتاحیه یا ساعت بازی را وارد کنید.");
         }
 
         await WithMemberWriteLockAsync(customerId, async (_, member, innerCt) =>
         {
             if (member.HasOpeningBalance)
             {
-                throw new ApiException(StatusCodes.Status409Conflict, "opening_exists", "Opening balance already recorded.");
+                throw new ApiException(StatusCodes.Status409Conflict, "opening_exists", "ماندهٔ افتتاحیه قبلاً ثبت شده است.");
             }
 
             var spendableBefore = member.RealToman + member.GiftToman;
             if (!hasMoneyFields && spendableBefore != 0)
             {
-                throw new ApiException(StatusCodes.Status400BadRequest, "invalid_opening", "Enter opening wallet amounts.");
+                throw new ApiException(StatusCodes.Status400BadRequest, "invalid_opening", "مبلغ کیف پول افتتاحیه را وارد کنید.");
             }
 
             var before = new
@@ -537,7 +552,7 @@ public sealed partial class OperatorMemberWalletService(
             else if (body.LevelName is string levelName)
             {
                 var row = ladder.Levels.FirstOrDefault(l => l.Name.Equals(levelName, StringComparison.Ordinal))
-                    ?? throw new ApiException(StatusCodes.Status400BadRequest, "invalid_level", "Unknown level.");
+                    ?? throw new ApiException(StatusCodes.Status400BadRequest, "invalid_level", "سطح ناشناخته است.");
                 member.LifetimePlayMinutes = row.MinimumLifetimeHours * 60;
             }
 
@@ -647,7 +662,12 @@ public sealed partial class OperatorMemberWalletService(
         var settings = await db.BranchMemberSettings.FirstAsync(ct);
         if (floorToman is > 0)
         {
-            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_floor", "Debt floor must be zero or negative.");
+            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_floor", "سقف بدهی باید صفر یا منفی باشد.");
+        }
+
+        if (floorToman < -OperatorMoneyValidation.MaxToman)
+        {
+            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_floor", "مبلغ باید عدد صحیح مثبت باشد.");
         }
 
         settings.WalletDebtFloorToman = floorToman;
@@ -705,7 +725,7 @@ public sealed partial class OperatorMemberWalletService(
         EnsureManager();
         if (maxCombinedPercent is < 0 or > 100)
         {
-            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_cap", "Combined discount cap must be between 0 and 100.");
+            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_cap", "سقف تخفیف ترکیبی باید بین ۰ و ۱۰۰ باشد.");
         }
 
         var settings = await db.BranchMemberSettings.FirstAsync(ct);
@@ -823,7 +843,7 @@ public sealed class OperatorMemberBillingService(AppDbContext db, OperatorMember
     {
         if (!allocation.IsValid)
         {
-            throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", "Wallet allocation failed.");
+            throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", "تخصیص کیف پول انجام نشد.");
         }
 
         var member = await db.CustomerMembers.FirstAsync(m => m.CustomerId == customerId, ct);
@@ -847,7 +867,7 @@ public sealed class OperatorMemberBillingService(AppDbContext db, OperatorMember
         {
             if (!pocket.TrySpend(t.AmountToman, debt, out pocket, out var gift, out var real))
             {
-                throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", "Wallet spend failed.");
+                throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", "خرج از کیف پول انجام نشد.");
             }
 
             realDrawn = MoneyMath.CheckedAdd(realDrawn, real);

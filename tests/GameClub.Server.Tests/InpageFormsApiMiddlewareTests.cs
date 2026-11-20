@@ -30,11 +30,9 @@ public sealed class InpageFormsApiMiddlewareTests(GameClubWebApplicationFactory 
         using var doc = JsonDocument.Parse(raw);
         var root = doc.RootElement;
         Assert.Equal(JsonValueKind.Object, root.ValueKind);
-        Assert.Equal(3, root.EnumerateObject().Count());
-        Assert.True(root.TryGetProperty("error", out var err));
+        Assert.Equal(2, root.EnumerateObject().Count());
         Assert.True(root.TryGetProperty("code", out var code));
         Assert.True(root.TryGetProperty("message", out var message));
-        Assert.Equal(err.GetString(), code.GetString());
         Assert.Equal(BillingErrors.InvalidLevel, code.GetString());
         Assert.Equal("جدول سطح‌ها نامعتبر است.", message.GetString());
 

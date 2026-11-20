@@ -92,25 +92,25 @@ public sealed class OperatorCustomerService(AppDbContext db, IClock clock, Audit
         var displayName = CustomerIdentityNormalizer.NormalizeName(name);
         if (displayName.Length == 0)
         {
-            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_name", "Name is required.");
+            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_name", "نام الزامی است.");
         }
 
         var normalizedMobile = CustomerIdentityNormalizer.NormalizeMobile(mobile);
         if (normalizedMobile.Length == 0)
         {
-            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_mobile", "Mobile is required.");
+            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_mobile", "شماره موبایل الزامی است.");
         }
 
         if (await db.Customers.AnyAsync(c => c.Mobile == normalizedMobile, ct))
         {
-            throw new ApiException(StatusCodes.Status409Conflict, "duplicate_mobile", "A customer with this mobile already exists.");
+            throw new ApiException(StatusCodes.Status409Conflict, "duplicate_mobile", "مشتری با این موبایل وجود دارد.");
         }
 
         var code = CustomerIdentityNormalizer.NormalizeMembershipCode(membershipCode);
         var codeKey = CustomerIdentityNormalizer.MembershipCodeKey(code);
         if (codeKey is not null && await db.Customers.AnyAsync(c => c.MembershipCodeKey == codeKey, ct))
         {
-            throw new ApiException(StatusCodes.Status409Conflict, "duplicate_membership_code", "Membership code is already in use.");
+            throw new ApiException(StatusCodes.Status409Conflict, "duplicate_membership_code", "کد عضویت قبلاً استفاده شده است.");
         }
 
         var entity = new CustomerEntity
@@ -129,11 +129,11 @@ public sealed class OperatorCustomerService(AppDbContext db, IClock clock, Audit
         }
         catch (DbUpdateException ex) when (PostgresErrors.IsCustomerMobileUniqueViolation(ex))
         {
-            throw new ApiException(StatusCodes.Status409Conflict, "duplicate_mobile", "A customer with this mobile already exists.");
+            throw new ApiException(StatusCodes.Status409Conflict, "duplicate_mobile", "مشتری با این موبایل وجود دارد.");
         }
         catch (DbUpdateException ex) when (PostgresErrors.IsCustomerMembershipCodeUniqueViolation(ex))
         {
-            throw new ApiException(StatusCodes.Status409Conflict, "duplicate_membership_code", "Membership code is already in use.");
+            throw new ApiException(StatusCodes.Status409Conflict, "duplicate_membership_code", "کد عضویت قبلاً استفاده شده است.");
         }
 
         return entity;
@@ -144,10 +144,10 @@ public sealed class OperatorCustomerService(AppDbContext db, IClock clock, Audit
         var session = await db.Sessions
             .Include(s => s.Station)!.ThenInclude(st => st!.Group)
             .FirstOrDefaultAsync(s => s.Id == sessionId, ct)
-            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Session not found.");
+            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "جلسه یافت نشد.");
         if (session.Status == SessionStatus.Closed)
         {
-            throw new ApiException(StatusCodes.Status409Conflict, "closed", "Session is closed.");
+            throw new ApiException(StatusCodes.Status409Conflict, "closed", "جلسه بسته شده است.");
         }
 
         if (customerId is Guid cid
@@ -159,7 +159,7 @@ public sealed class OperatorCustomerService(AppDbContext db, IClock clock, Audit
                     && (s.Status == SessionStatus.Open || s.Status == SessionStatus.Paused),
                 ct))
         {
-            throw new ApiException(StatusCodes.Status409Conflict, "session_elsewhere", "Customer already has an open PC session.");
+            throw new ApiException(StatusCodes.Status409Conflict, "session_elsewhere", "عضو جلسهٔ بازی PC باز دارد.");
         }
 
         var before = session.CustomerId;
@@ -180,7 +180,7 @@ public sealed class OperatorCustomerService(AppDbContext db, IClock clock, Audit
     private async Task SetOpenSaleLinkCoreAsync(Guid openSaleId, Guid? customerId, CancellationToken ct)
     {
         var sale = await db.OpenSales.FirstOrDefaultAsync(o => o.Id == openSaleId, ct)
-            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Open sale not found.");
+            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "فروش باز یافت نشد.");
         var before = sale.CustomerId;
         sale.CustomerId = customerId;
         await audit.AppendAsync(
@@ -201,7 +201,7 @@ public sealed class OperatorCustomerService(AppDbContext db, IClock clock, Audit
     {
         if (!await db.Customers.AnyAsync(c => c.Id == customerId, ct))
         {
-            throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Customer not found.");
+            throw new ApiException(StatusCodes.Status404NotFound, "not_found", "مشتری یافت نشد.");
         }
     }
 

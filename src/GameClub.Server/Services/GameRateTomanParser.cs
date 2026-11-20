@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
+using GameClub.Server.Operator;
 using Microsoft.AspNetCore.Http;
 
 namespace GameClub.Server.Services;
@@ -26,13 +27,17 @@ public static partial class GameRateTomanParser
 
         if (value.ValueKind == JsonValueKind.String)
         {
-            var parsed = TryParseStrict(value.GetString() ?? string.Empty, out var toman);
-            if (!parsed)
+            if (TryParseStrict(value.GetString(), out var parsed))
             {
-                throw new ApiException(StatusCodes.Status400BadRequest, "invalid_rate", InvalidRateMessage);
+                if (parsed > OperatorMoneyValidation.MaxToman)
+                {
+                    throw new ApiException(StatusCodes.Status400BadRequest, "invalid_rate", "مبلغ باید عدد صحیح مثبت باشد.");
+                }
+
+                return parsed;
             }
 
-            return toman;
+            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_rate", InvalidRateMessage);
         }
 
         if (value.ValueKind == JsonValueKind.Number)
@@ -49,6 +54,11 @@ public static partial class GameRateTomanParser
                     StatusCodes.Status400BadRequest,
                     "invalid_rate",
                     nonPositiveMessage ?? "نرخ ساعتی بازی باید بیشتر از صفر باشد.");
+            }
+
+            if (toman > OperatorMoneyValidation.MaxToman)
+            {
+                throw new ApiException(StatusCodes.Status400BadRequest, "invalid_rate", "مبلغ باید عدد صحیح مثبت باشد.");
             }
 
             return toman;
