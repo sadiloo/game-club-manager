@@ -81,7 +81,7 @@ public sealed class ApiExceptionMiddleware(RequestDelegate next)
 
             await context.Response.WriteAsync(JsonSerializer.Serialize(payload));
         }
-        catch (DbUpdateException ex) when (PostgresErrors.IsActiveSessionStationBusyConflict(ex))
+        catch (DbUpdateException ex) when (PostgresErrors.IsActiveSessionUniqueViolation(ex))
         {
             await WriteConflictAsync(context, "station_busy", "Station already has an open session.");
         }
