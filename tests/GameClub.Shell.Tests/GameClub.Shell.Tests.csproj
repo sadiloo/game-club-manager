@@ -15,6 +15,7 @@
     <Compile Include="..\..\src\GameClub.Shell\Shell\WebViewProcessRecoveryPolicy.cs" Link="Shell\WebViewProcessRecoveryPolicy.cs" />
     <Compile Include="..\..\src\GameClub.Shell\Shell\PanelNavigationRetryPolicy.cs" Link="Shell\PanelNavigationRetryPolicy.cs" />
     <Compile Include="..\..\src\GameClub.Shell\Shell\PanelNavigationHttpOutcome.cs" Link="Shell\PanelNavigationHttpOutcome.cs" />
+    <Compile Include="..\..\src\GameClub.Shell\Shell\PanelNavigationPendingRegistry.cs" Link="Shell\PanelNavigationPendingRegistry.cs" />
     <Compile Include="..\..\src\GameClub.Shell\Shell\PanelOfflineFlashAssert.cs" Link="Shell\PanelOfflineFlashAssert.cs" />
     <Compile Include="..\..\src\GameClub.Shell\Shell\RunningStabilityTracker.cs" Link="Shell\RunningStabilityTracker.cs" />
     <Compile Include="..\..\src\GameClub.Shell\Shell\ShellServerVisualState.cs" Link="Shell\ShellServerVisualState.cs" />

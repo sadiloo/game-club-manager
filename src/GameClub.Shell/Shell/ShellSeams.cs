@@ -192,7 +192,7 @@ public sealed class ProductionHttpProbeSeam : IHttpProbeSeam
         statusCode = 0;
         try
         {
-            var request = System.Net.WebRequest.Create(ShellSeams.ResolvePanelUrl());
+            var request = System.Net.WebRequest.Create(ShellSeams.ResolveHttpProbeUrl());
             request.Timeout = 3000;
             using var response = (System.Net.HttpWebResponse)request.GetResponse();
             statusCode = (int)response.StatusCode;
@@ -250,7 +250,17 @@ public static class ShellSeams
 
     public static string? PanelNavigationUrlOverride { get; set; }
 
+    public static string? PanelOriginOverride
+    {
+        get => ShellPaths.AllowedPanelOriginOverride;
+        set => ShellPaths.AllowedPanelOriginOverride = value;
+    }
+
+    public static string? HttpProbeUrlOverride { get; set; }
+
     public static string ResolvePanelUrl() => PanelNavigationUrlOverride ?? ShellPaths.PanelUrl;
+
+    public static string ResolveHttpProbeUrl() => HttpProbeUrlOverride ?? ResolvePanelUrl();
 
     public static DialogResult ShowMessageBox(
         string text,

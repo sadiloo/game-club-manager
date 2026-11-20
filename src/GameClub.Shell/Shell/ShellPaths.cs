@@ -7,6 +7,8 @@ internal static class ShellPaths
 {
     public const string PanelOrigin = "http://127.0.0.1:5000";
     public const string PanelUrl = PanelOrigin + "/operator/";
+    public static string? AllowedPanelOriginOverride { get; set; }
+    public static string ResolveAllowedPanelOrigin() => AllowedPanelOriginOverride ?? PanelOrigin;
     public const string ServiceName = "CheckpointServer";
     public const string ServerConfigPath = @"C:\ProgramData\Checkpoint\config\server.json";
     public static string ProgramDataLogs =>

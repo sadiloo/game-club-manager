@@ -45,10 +45,19 @@ public partial class MainWindow : Window
     private int _processRecoveryInFlight;
     private int _pendingBrowserRecreate;
     private readonly HashSet<ulong> _blockedNavigationIds = new();
-    private readonly Dictionary<ulong, string> _pendingNavigationUris = new();
+    private readonly PanelNavigationPendingRegistry _panelNavigationPending = new();
     private Task? _exhaustedRecoveryRetryTask;
+    private int _panelWebViewWireCount;
+    private int _navigationCompletedHandledCount;
 
     public int NavigationStartingCount => _navigationStartingCount;
+
+    internal int PanelWebViewWireCountForTests => _panelWebViewWireCount;
+
+    internal int NavigationCompletedHandledCountForTests => _navigationCompletedHandledCount;
+
+    internal int PanelNavigationPendingCountForTests => _panelNavigationPending.PendingCount;
+
     public double CurrentZoomFactor => PanelWebView?.ZoomFactor ?? 1.0;
 
     public MainWindow()
@@ -111,6 +120,17 @@ public partial class MainWindow : Window
                         ScheduleExhaustedRecoveryRetryIfNeeded();
                         return;
                     }
+
+                    if (!_processRecoveryPolicy.CanRetryFast(utcNow))
+                    {
+                        ShowOfflineAfterProcessRecoveryExhausted();
+                        ScheduleExhaustedRecoveryRetryIfNeeded();
+                        return;
+                    }
+
+                    var runningRecoverAttempt = _processRecoveryPolicy.RecordAttemptAndGetIndex(utcNow);
+                    ShellFileLog.Write(
+                        $"RunningRecover attempt={runningRecoverAttempt} outcome=pending");
 
                     _offlineShown = false;
                     _currentOfflineState = null;
@@ -246,12 +266,13 @@ public partial class MainWindow : Window
         core.NewWindowRequested += OnPanelNewWindowRequested;
         core.NavigationCompleted += OnNavigationCompleted;
         core.ProcessFailed += OnWebViewProcessFailed;
+        _panelWebViewWireCount++;
     }
 
     private void OnPanelNavigationStarting(object? sender, CoreWebView2NavigationStartingEventArgs args)
     {
         _lastNavigationUri = args.Uri;
-        _pendingNavigationUris[args.NavigationId] = args.Uri;
+        _panelNavigationPending.RecordNavigationStarting(args.NavigationId, args.Uri);
         _navigationStartingCount++;
         if (_allowOfflineDataNav
             && args.Uri.StartsWith("data:text/html", StringComparison.OrdinalIgnoreCase))
@@ -294,7 +315,7 @@ public partial class MainWindow : Window
 
     private void OnNavigationCompleted(object? sender, CoreWebView2NavigationCompletedEventArgs e)
     {
-        if (!_pendingNavigationUris.TryGetValue(e.NavigationId, out var startUri))
+        if (!_panelNavigationPending.TryTakeNavigationCompleted(e.NavigationId, out var startUri))
         {
             LogOfflineTrace(
                 "nav-completed-orphan",
@@ -302,8 +323,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        _pendingNavigationUris.Remove(e.NavigationId);
-
+        _navigationCompletedHandledCount++;
         var loopbackPanel = IsLoopbackPanelTarget(startUri);
 
         if (_blockedNavigationIds.Remove(e.NavigationId))
@@ -881,6 +901,7 @@ public partial class MainWindow : Window
         core.NavigationStarting -= OnPanelNavigationStarting;
         core.NewWindowRequested -= OnPanelNewWindowRequested;
         core.NavigationCompleted -= OnNavigationCompleted;
+        _panelWebViewWireCount = Math.Max(0, _panelWebViewWireCount - 1);
     }
 
     private async Task RecreatePanelWebViewAsync()

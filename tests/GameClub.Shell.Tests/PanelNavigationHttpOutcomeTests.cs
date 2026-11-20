@@ -22,4 +22,13 @@ public sealed class PanelNavigationHttpOutcomeTests
         Assert.False(PanelNavigationHttpOutcome.IsSuccessfulPanelHttpNavigation(true, true, 0));
         Assert.True(PanelNavigationHttpOutcome.ShouldRecoverFromPanelNavigation(true, true, true, 200));
     }
+
+    [Fact]
+    public void after_http_zero_failure_confirmed_2xx_clears_failing_state()
+    {
+        const bool failing = true;
+        Assert.False(PanelNavigationHttpOutcome.ShouldRecoverFromPanelNavigation(failing, true, true, 0));
+        Assert.True(PanelNavigationHttpOutcome.ShouldRecoverFromPanelNavigation(failing, true, true, 200));
+        Assert.False(PanelNavigationHttpOutcome.ShouldRecoverFromPanelNavigation(failing, true, true, 503));
+    }
 }

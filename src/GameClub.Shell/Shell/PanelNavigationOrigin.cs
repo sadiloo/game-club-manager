@@ -31,7 +31,7 @@ internal static class PanelNavigationOrigin
             return false;
         }
 
-        if (!Uri.TryCreate(ShellPaths.PanelOrigin, UriKind.Absolute, out var allowedOrigin))
+        if (!Uri.TryCreate(ShellPaths.ResolveAllowedPanelOrigin(), UriKind.Absolute, out var allowedOrigin))
         {
             return false;
         }
@@ -41,6 +41,6 @@ internal static class PanelNavigationOrigin
 
     public static bool TryGetPanelOrigin(out Uri origin)
     {
-        return Uri.TryCreate(ShellPaths.PanelOrigin, UriKind.Absolute, out origin!);
+        return Uri.TryCreate(ShellPaths.ResolveAllowedPanelOrigin(), UriKind.Absolute, out origin!);
     }
 }
