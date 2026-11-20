@@ -96,24 +96,39 @@ internal sealed class InternetPipeServer
         _shutdownCt = ct;
         _runTimelineOriginTicks = Stopwatch.GetTimestamp();
         InternetGuardShellLaunchGate.ResetReady();
-        AppendPipeTimeline("run_begin");
-        if (!_on)
+        try
         {
-            var earlyReassert = Stopwatch.StartNew();
-            AppendPipeTimeline("early_reassert_off_lock_wait");
-            RunWithFirewallGate("early_reassert", () =>
+            AppendPipeTimeline("run_begin");
+            if (!_on)
             {
-                AppendPipeTimeline("early_reassert_off_lock_enter");
-                ReassertPersistedLocked();
-                AppendPipeTimeline($"early_reassert_off_lock_exit elapsed_ms={earlyReassert.ElapsedMilliseconds}");
-            });
+                try
+                {
+                    var earlyReassert = Stopwatch.StartNew();
+                    AppendPipeTimeline("early_reassert_off_lock_wait");
+                    RunWithFirewallGate("early_reassert", () =>
+                    {
+                        AppendPipeTimeline("early_reassert_off_lock_enter");
+                        ReassertPersistedLocked();
+                        AppendPipeTimeline($"early_reassert_off_lock_exit elapsed_ms={earlyReassert.ElapsedMilliseconds}");
+                    });
 
-            GuardWatchdogLog.Append(
-                $"GUARD_TIMELINE event=early_reassert_off elapsed_ms={earlyReassert.ElapsedMilliseconds}");
+                    GuardWatchdogLog.Append(
+                        $"GUARD_TIMELINE event=early_reassert_off elapsed_ms={earlyReassert.ElapsedMilliseconds}");
+                }
+                finally
+                {
+                    InternetGuardShellLaunchGate.MarkReady();
+                }
+            }
+            else
+            {
+                InternetGuardShellLaunchGate.MarkReady();
+            }
         }
-        else
+        catch
         {
             InternetGuardShellLaunchGate.MarkReady();
+            throw;
         }
 
         var reconcileThread = new Thread(() => RunReconcileBackground(ct))
@@ -122,10 +137,6 @@ internal sealed class InternetPipeServer
             Name = "CheckpointInternetReconcile",
         };
         reconcileThread.Start();
-        if (!_on)
-        {
-            InternetGuardShellLaunchGate.MarkReady();
-        }
 
         var drift = new Thread(() => RunDriftWatchdog(ct))
         {

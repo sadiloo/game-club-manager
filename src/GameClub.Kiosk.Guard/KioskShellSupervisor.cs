@@ -18,6 +18,9 @@ internal sealed class KioskShellSupervisor
     private DateTime _lastRelaunchUtc = DateTime.MinValue;
     private Process? _supervised;
     private uint? _supervisedSessionId;
+    private DateTime? _shellGateWaitBeginUtc;
+
+    private static readonly TimeSpan ShellGateMaxWait = TimeSpan.FromSeconds(20);
 
     internal KioskShellSupervisor(KioskGuardIdentity identity) => _identity = identity;
 
@@ -59,8 +62,22 @@ internal sealed class KioskShellSupervisor
 
             if (!InternetGuardShellLaunchGate.IsReady)
             {
-                Wait(ct, TimeSpan.FromMilliseconds(250));
-                continue;
+                _shellGateWaitBeginUtc ??= DateTime.UtcNow;
+                var gateWait = DateTime.UtcNow - _shellGateWaitBeginUtc.Value;
+                if (gateWait < ShellGateMaxWait)
+                {
+                    Wait(ct, TimeSpan.FromMilliseconds(250));
+                    continue;
+                }
+
+                File.AppendAllText(
+                    LogPath,
+                    $"{DateTime.UtcNow:O} guard.shell_gate_timeout elapsed_ms={(int)gateWait.TotalMilliseconds}{Environment.NewLine}");
+                _shellGateWaitBeginUtc = null;
+            }
+            else
+            {
+                _shellGateWaitBeginUtc = null;
             }
 
             if (!EnsureShellRunning(sessionId.Value, protection))

@@ -1,7 +1,9 @@
 #if NET48
 #nullable disable
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using GameClub.Kiosk.Windows.IntegrationTests.Server;
 
 namespace GameClub.Kiosk.Windows.IntegrationTests.Guard;
@@ -87,24 +89,57 @@ internal static class GuardProcessLifecycle
 
     internal static void StopOrphanedInternetPowerShell(TimeSpan timeout)
     {
+        var killed = new List<int>();
         try
         {
-            using var killer = Process.Start(
-                new ProcessStartInfo(
-                    "powershell.exe",
-                    "-NoProfile -NonInteractive -Command \"Get-CimInstance Win32_Process -Filter \\\"Name='powershell.exe'\\\" | "
-                    + "Where-Object { $_.CommandLine -match 'Checkpoint|EncodedCommand' } | "
-                    + "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }\"")
+            var psi = new ProcessStartInfo
+            {
+                FileName = "powershell.exe",
+                Arguments =
+                    "-NoProfile -NonInteractive -Command "
+                    + "\"Get-CimInstance Win32_Process -Filter \\\"Name='powershell.exe'\\\" | "
+                    + "Where-Object { $_.CommandLine -like '*Checkpoint Internet Off*' } | "
+                    + "Select-Object -ExpandProperty ProcessId\"",
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                CreateNoWindow = true,
+            };
+            using var lister = Process.Start(psi);
+            if (lister is null)
+            {
+                Console.WriteLine("CI_ORPHAN_INTERNET_PS killed=0 pids=");
+                return;
+            }
+
+            var output = lister.StandardOutput.ReadToEnd();
+            lister.WaitForExit((int)Math.Max(1, timeout.TotalMilliseconds / 2));
+            foreach (var line in output.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                if (!int.TryParse(line.Trim(), out var pid) || pid <= 0)
                 {
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                });
-            killer?.WaitForExit((int)Math.Max(1, timeout.TotalMilliseconds));
+                    continue;
+                }
+
+                try
+                {
+                    using var proc = Process.GetProcessById(pid);
+                    proc.Kill();
+                    proc.WaitForExit((int)Math.Max(1, timeout.TotalMilliseconds / 4));
+                    killed.Add(pid);
+                }
+                catch
+                {
+                    /* already exited */
+                }
+            }
         }
         catch
         {
             /* best-effort */
         }
+
+        Console.WriteLine(
+            $"CI_ORPHAN_INTERNET_PS killed={killed.Count} pids={string.Join(",", killed.Select(p => p.ToString()))}");
     }
 }
 #endif

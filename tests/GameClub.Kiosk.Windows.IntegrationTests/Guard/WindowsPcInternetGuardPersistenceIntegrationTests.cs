@@ -78,6 +78,58 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
         "Set-NetFirewallProfile -Name Domain,Private,Public -DefaultOutboundAction NotConfigured; "
         + "Get-NetFirewallRule -Group 'Checkpoint Internet Off' | Select-Object -First 1 | Remove-NetFirewallRule -ErrorAction SilentlyContinue";
 
+    [Fact(Timeout = 60_000)]
+    public async Task internet_corrupt_guard_config_still_launches_shell_within_shell_gate()
+    {
+        RequireWindowsAdmin();
+        var logOffset = GuardWatchdogTimelineReader.CurrentLogLength();
+        Directory.CreateDirectory(Path.GetDirectoryName(InternetGuardPaths.ConfigPath)!);
+        string prior = null;
+        if (File.Exists(InternetGuardPaths.ConfigPath))
+        {
+            prior = File.ReadAllText(InternetGuardPaths.ConfigPath);
+        }
+
+        File.WriteAllText(InternetGuardPaths.ConfigPath, "{ not-valid-json");
+        Process guard = null;
+        try
+        {
+            guard = GuardProcessStart.StartGuard();
+            var deadline = DateTime.UtcNow.AddSeconds(25);
+            while (DateTime.UtcNow < deadline)
+            {
+                var launched = GuardWatchdogTimelineReader.ReadLinesSince(logOffset)
+                    .Any(l => l.Contains("guard.restart", StringComparison.Ordinal)
+                        && l.Contains("launched_pid_", StringComparison.Ordinal));
+                if (launched)
+                {
+                    return;
+                }
+
+                await Task.Delay(500);
+            }
+
+            Assert.Fail("Corrupt internet guard config must not block kiosk shell launch (shell gate / MarkReady).");
+        }
+        finally
+        {
+            if (guard is not null)
+            {
+                GuardProcessLifecycle.StopGuardProcessTree(guard, TimeSpan.FromSeconds(8));
+                guard.Dispose();
+            }
+
+            if (prior is not null)
+            {
+                File.WriteAllText(InternetGuardPaths.ConfigPath, prior);
+            }
+            else
+            {
+                TryDelete(InternetGuardPaths.ConfigPath);
+            }
+        }
+    }
+
     [Fact(Timeout = 120_000)]
     public async Task internet_off_guard_process_restart_reasserts_before_pipe_ready()
     {
@@ -126,14 +178,14 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
             Assert.True(TryTcp("1.1.1.1", 443, 3_000), "Sanity: profile tamper must temporarily open egress.");
             GuardTimeline("tamper_egress_open");
 
-            guard2 = GuardProcessStart.StartGuard();
             var guard2LogOffset = GuardWatchdogTimelineReader.CurrentLogLength();
+            guard2 = GuardProcessStart.StartGuard();
             GuardTimeline($"guard2_start pid={guard2.Id}");
             var restored = DateTime.UtcNow.AddSeconds(15);
             while (DateTime.UtcNow < restored)
             {
-                var logText = GuardWatchdogTimelineReader.ReadAllTextWithShare();
-                if (logText.Contains("GUARD_TIMELINE event=early_reassert_off", StringComparison.Ordinal)
+                var guard2Lines = GuardWatchdogTimelineReader.ReadLinesSince(guard2LogOffset);
+                if (guard2Lines.Any(l => l.Contains("GUARD_TIMELINE event=early_reassert_off", StringComparison.Ordinal))
                     && !TryTcp("1.1.1.1", 443, 500))
                 {
                     GuardTimeline($"first_egress_blocked ms={timeline.ElapsedMilliseconds}");
