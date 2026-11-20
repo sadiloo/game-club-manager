@@ -534,6 +534,19 @@ public partial class MainWindow : Window
         ShellFileLog.Write(
             $"webview-process-failed kind=BrowserProcessExited environmentExitKind={e.BrowserProcessExitKind} pid={e.BrowserProcessId}");
         _webViewReady = false;
+        try
+        {
+            if (PanelWebView.CoreWebView2 is not null)
+            {
+                ShellFileLog.Write(
+                    "webview-process-failed kind=BrowserProcessExited outcome=defer-to-core trigger=environment-browser-exited");
+                return;
+            }
+        }
+        catch (InvalidOperationException)
+        {
+        }
+
         BeginBrowserProcessRecovery("environment-browser-exited");
     }
 
@@ -794,7 +807,16 @@ public partial class MainWindow : Window
         var oldWebView = PanelWebView;
         var zoom = oldWebView.ZoomFactor;
         var visibility = oldWebView.Visibility;
-        UnwirePanelWebView(oldWebView.CoreWebView2);
+        CoreWebView2? oldCore = null;
+        try
+        {
+            oldCore = oldWebView.CoreWebView2;
+        }
+        catch (InvalidOperationException)
+        {
+        }
+
+        UnwirePanelWebView(oldCore);
 
         try
         {
@@ -816,18 +838,19 @@ public partial class MainWindow : Window
         RegisterName("PanelWebView", replacement);
         PanelHost.Children.Add(replacement);
 
-        _webViewEnvironment ??= await CoreWebView2Environment.CreateAsync(userDataFolder: ShellPaths.WebView2UserData);
+        if (_webViewEnvironment is not null)
+        {
+            _webViewEnvironment.BrowserProcessExited -= OnEnvironmentBrowserProcessExited;
+            _webViewEnvironment = null;
+        }
+
+        _webViewEnvironment = await CoreWebView2Environment.CreateAsync(userDataFolder: ShellPaths.WebView2UserData);
+        _webViewEnvironment.BrowserProcessExited += OnEnvironmentBrowserProcessExited;
         await PanelWebView.EnsureCoreWebView2Async(_webViewEnvironment);
         if (PanelWebView.CoreWebView2 is null)
         {
             ShellFileLog.Write("webview-recreate failed reason=null-core");
             return;
-        }
-
-        if (_webViewEnvironment is not null)
-        {
-            _webViewEnvironment.BrowserProcessExited -= OnEnvironmentBrowserProcessExited;
-            _webViewEnvironment.BrowserProcessExited += OnEnvironmentBrowserProcessExited;
         }
 
         WirePanelWebView(PanelWebView.CoreWebView2);

@@ -112,6 +112,8 @@ public sealed class ShellWindowPlacementRegressionTests
     {
         var root = Path.Combine(Path.GetTempPath(), "gcm-shell-" + Guid.NewGuid().ToString("N"));
         Environment.SetEnvironmentVariable("CHECKPOINT_SHELL_DATA", root);
+        Directory.CreateDirectory(Path.Combine(root, "logs"));
+        Directory.CreateDirectory(Path.Combine(root, "WebView2"));
         return root;
     }
 
