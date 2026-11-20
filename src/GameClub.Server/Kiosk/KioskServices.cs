@@ -791,6 +791,12 @@ public sealed class KioskSessionService(
                     PlaySessionEntity session;
                     try
                     {
+                        if (KioskAttachPathTestSeam.InjectBeforeMemberStartAsync is { } inject)
+                        {
+                            KioskAttachPathTestSeam.InjectBeforeMemberStartAsync = null;
+                            throw await inject(ct);
+                        }
+
                         session = await sessions.StartAsync(sid, 1, PlayMode.Offline, null, null, ct);
                         await customers.LinkSessionAsync(session.Id, customerId, ct);
                     }
