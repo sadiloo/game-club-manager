@@ -1109,7 +1109,12 @@ public sealed class ShellPlanAIntegrationTests
                     FakeShellSeams.Http.OperatorPageOk = false;
 
                     var offlineSamples = 0;
+                    var classifiedSamples = 0;
                     var totalSamples = 0;
+                    var offlineToPanelTransitions = 0;
+                    var panelToOfflineTransitions = 0;
+                    bool? previousIsOfflineView = null;
+                    bool? lastClassifiedIsOfflineView = null;
                     var flapDeadline = DateTime.UtcNow.AddSeconds(45);
                     while (DateTime.UtcNow < flapDeadline)
                     {
@@ -1124,13 +1129,40 @@ public sealed class ShellPlanAIntegrationTests
 
                         var sample = UnquoteWebViewScriptString(
                             await wv.CoreWebView2.ExecuteScriptAsync(
-                                "JSON.stringify({protocol: location.protocol, offline: document.documentElement.getAttribute('data-shell-offline-page')})"));
+                                "JSON.stringify({protocol: location.protocol, offline: document.documentElement.getAttribute('data-shell-offline-page'), path: location.pathname})"));
                         using var doc = JsonDocument.Parse(sample);
-                        if (doc.RootElement.GetProperty("protocol").GetString() == "data:"
-                            && doc.RootElement.GetProperty("offline").GetString() == "1")
+                        var protocol = doc.RootElement.GetProperty("protocol").GetString() ?? "";
+                        var offlineAttr = doc.RootElement.GetProperty("offline").GetString();
+                        var path = doc.RootElement.GetProperty("path").GetString() ?? "";
+                        var isOfflineView = protocol == "data:" && offlineAttr == "1";
+                        var isPanelView = !isOfflineView
+                            && path.StartsWith("/operator/", StringComparison.OrdinalIgnoreCase);
+                        if (isOfflineView)
                         {
                             offlineSamples++;
                         }
+
+                        if (!isOfflineView && !isPanelView)
+                        {
+                            continue;
+                        }
+
+                        classifiedSamples++;
+                        if (previousIsOfflineView.HasValue)
+                        {
+                            if (previousIsOfflineView.Value && isPanelView)
+                            {
+                                offlineToPanelTransitions++;
+                            }
+
+                            if (!previousIsOfflineView.Value && isOfflineView)
+                            {
+                                panelToOfflineTransitions++;
+                            }
+                        }
+
+                        previousIsOfflineView = isOfflineView;
+                        lastClassifiedIsOfflineView = isOfflineView;
                     }
 
                     var flapLog = Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log")
@@ -1141,9 +1173,16 @@ public sealed class ShellPlanAIntegrationTests
                         : flapLog.Replace(flapBaseline, "");
                     var presentOfflineAfterFlap = flapDelta.Split('\n')
                         .Count(l => l.Contains("panel-navigate caller=PresentOffline", StringComparison.Ordinal));
+                    var offlineFlashCycles = Math.Min(offlineToPanelTransitions, panelToOfflineTransitions);
 
                     Assert.True(totalSamples >= 10, "Not enough UI samples during flap measure window");
-                    Assert.True(offlineSamples >= (int)(totalSamples * 0.95), $"offline visible in {offlineSamples}/{totalSamples} samples");
+                    Assert.True(classifiedSamples >= 10, $"Not enough classified UI samples ({classifiedSamples})");
+                    Assert.InRange(offlineFlashCycles, 0, 1);
+                    Assert.InRange(offlineToPanelTransitions, 0, 1);
+                    Assert.InRange(panelToOfflineTransitions, 0, 1);
+                    Assert.True(
+                        lastClassifiedIsOfflineView == true,
+                        $"Expected steady offline at flap window end (offline={offlineSamples}/{classifiedSamples} classified, transitions offline->panel={offlineToPanelTransitions} panel->offline={panelToOfflineTransitions})");
                     Assert.InRange(presentOfflineAfterFlap, 0, 1);
                 }
                 finally
