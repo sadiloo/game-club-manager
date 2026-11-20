@@ -6,16 +6,6 @@ using System.Threading;
 
 namespace GameClub.Shell.Shell;
 
-internal enum ShellServerVisualState
-{
-    Running,
-    Starting,
-    Stopping,
-    Stopped,
-    Error,
-    NoAnswer,
-}
-
 internal sealed class ServerStateSnapshot
 {
     public ShellServerVisualState VisualState { get; set; }

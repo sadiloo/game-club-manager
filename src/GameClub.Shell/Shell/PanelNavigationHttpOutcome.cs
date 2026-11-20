@@ -14,7 +14,7 @@ internal static class PanelNavigationHttpOutcome
             return false;
         }
 
-        return httpStatusCode == 0 || (httpStatusCode >= 200 && httpStatusCode < 300);
+        return httpStatusCode >= 200 && httpStatusCode < 300;
     }
 
     /// <summary>

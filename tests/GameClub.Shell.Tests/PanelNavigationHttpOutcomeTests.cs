@@ -15,10 +15,11 @@ public sealed class PanelNavigationHttpOutcomeTests
     }
 
     [Fact]
-    public void while_failing_http_zero_does_not_recover_but_successful_path_allows_zero()
+    public void http_zero_navigation_never_counts_as_panel_recovery()
     {
         Assert.False(PanelNavigationHttpOutcome.ShouldRecoverFromPanelNavigation(true, true, true, 0));
-        Assert.True(PanelNavigationHttpOutcome.ShouldRecoverFromPanelNavigation(false, true, true, 0));
+        Assert.False(PanelNavigationHttpOutcome.ShouldRecoverFromPanelNavigation(false, true, true, 0));
+        Assert.False(PanelNavigationHttpOutcome.IsSuccessfulPanelHttpNavigation(true, true, 0));
         Assert.True(PanelNavigationHttpOutcome.ShouldRecoverFromPanelNavigation(true, true, true, 200));
     }
 }

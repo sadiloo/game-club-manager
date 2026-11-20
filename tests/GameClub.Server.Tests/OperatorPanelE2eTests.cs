@@ -454,6 +454,7 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
             r.Request.Method == "GET"
             && r.Url.Contains("/buffet-only/", StringComparison.Ordinal)
             && !r.Url.Contains("/lines/", StringComparison.Ordinal)
+            && !r.Url.Contains("/bill/preview", StringComparison.Ordinal)
             && r.Ok);
         await page.ClickAsync("#buffetCheckoutBtn");
         await checkoutDone;
@@ -471,7 +472,7 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
         var billRefresh = page.WaitForResponseAsync(r =>
             r.Request.Method == "GET"
             && r.Url.Contains("/buffet-only/", StringComparison.Ordinal)
-            && !r.Url.Contains("/lines/", StringComparison.Ordinal)
+            && r.Url.Contains("/bill/preview", StringComparison.Ordinal)
             && r.Ok);
         await page.Locator("#buffetSaleLines button", new() { HasText = "حذف" }).Last.ClickAsync();
         await deleteDone;

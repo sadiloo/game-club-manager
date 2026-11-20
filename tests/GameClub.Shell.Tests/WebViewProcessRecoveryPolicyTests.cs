@@ -13,7 +13,7 @@ public sealed class WebViewProcessRecoveryPolicyTests
         Assert.Equal(WebViewProcessRecoveryBackoff.Delay1, policy.GetBackoffForAttempt(1));
         Assert.Equal(WebViewProcessRecoveryBackoff.Delay2, policy.GetBackoffForAttempt(2));
         Assert.Equal(WebViewProcessRecoveryBackoff.Delay3, policy.GetBackoffForAttempt(3));
-        Assert.Null(policy.GetBackoffForAttempt(4));
+        Assert.Equal(WebViewProcessRecoveryBackoff.ExhaustedRetryDelay, policy.GetBackoffForAttempt(4));
     }
 
     [Fact]
@@ -21,13 +21,14 @@ public sealed class WebViewProcessRecoveryPolicyTests
     {
         var policy = new WebViewProcessRecoveryPolicy();
         var t0 = new DateTime(2026, 1, 1, 12, 0, 0, DateTimeKind.Utc);
-        Assert.True(policy.CanRetry(t0));
+        Assert.True(policy.CanRetryFast(t0));
         Assert.Equal(1, policy.RecordAttemptAndGetIndex(t0));
-        Assert.True(policy.CanRetry(t0.AddSeconds(1)));
+        Assert.True(policy.CanRetryFast(t0.AddSeconds(1)));
         Assert.Equal(2, policy.RecordAttemptAndGetIndex(t0.AddSeconds(1)));
-        Assert.True(policy.CanRetry(t0.AddSeconds(2)));
+        Assert.True(policy.CanRetryFast(t0.AddSeconds(2)));
         Assert.Equal(3, policy.RecordAttemptAndGetIndex(t0.AddSeconds(2)));
-        Assert.False(policy.CanRetry(t0.AddSeconds(3)));
+        Assert.False(policy.CanRetryFast(t0.AddSeconds(3)));
+        Assert.True(policy.CanRetry(t0.AddSeconds(3)));
         Assert.Equal(3, policy.AttemptCountInWindow(t0.AddSeconds(3)));
     }
 
@@ -39,9 +40,9 @@ public sealed class WebViewProcessRecoveryPolicyTests
         policy.RecordAttemptAndGetIndex(t0);
         policy.RecordAttemptAndGetIndex(t0.AddSeconds(1));
         policy.RecordAttemptAndGetIndex(t0.AddSeconds(2));
-        Assert.False(policy.CanRetry(t0.AddSeconds(3)));
+        Assert.False(policy.CanRetryFast(t0.AddSeconds(3)));
         var afterWindow = t0.Add(WebViewProcessRecoveryBackoff.RollingWindow).AddSeconds(5);
         Assert.Equal(0, policy.AttemptCountInWindow(afterWindow));
-        Assert.True(policy.CanRetry(afterWindow));
+        Assert.True(policy.CanRetryFast(afterWindow));
     }
 }

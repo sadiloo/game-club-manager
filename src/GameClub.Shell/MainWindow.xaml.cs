@@ -37,12 +37,16 @@ public partial class MainWindow : Window
     private CoreWebView2Environment? _webViewEnvironment;
     private readonly WebViewProcessRecoveryPolicy _processRecoveryPolicy = new();
     private readonly PanelNavigationRetryPolicy _panelNavRetryPolicy = new();
+    private readonly RunningStabilityTracker _runningStabilityTracker = new();
     private int _panelProbeInFlight;
     private ShellServerVisualState _lastObservedVisualState = ShellServerVisualState.Starting;
     private bool _runningPanelLoadFailing;
+    private bool _processRecoveryExhaustedMode;
     private int _processRecoveryInFlight;
     private int _pendingBrowserRecreate;
     private readonly HashSet<ulong> _blockedNavigationIds = new();
+    private readonly Dictionary<ulong, string> _pendingNavigationUris = new();
+    private Task? _exhaustedRecoveryRetryTask;
 
     public int NavigationStartingCount => _navigationStartingCount;
     public double CurrentZoomFactor => PanelWebView?.ZoomFactor ?? 1.0;
@@ -83,10 +87,15 @@ public partial class MainWindow : Window
             _tray?.UpdateSnapshot(snap);
             var priorVisual = _lastObservedVisualState;
             _lastObservedVisualState = snap.VisualState;
-            if (snap.VisualState == ShellServerVisualState.Running && priorVisual != ShellServerVisualState.Running)
+            var utcNow = DateTime.UtcNow;
+            _runningStabilityTracker.Observe(snap.VisualState, utcNow);
+            if (_runningStabilityTracker.IsRunningStable(utcNow))
             {
                 _panelNavRetryPolicy.Reset();
-                _runningPanelLoadFailing = false;
+                if (snap.VisualState == ShellServerVisualState.Running)
+                {
+                    _runningPanelLoadFailing = false;
+                }
             }
 
             if (snap.VisualState == ShellServerVisualState.Running && _webViewReady)
@@ -97,6 +106,12 @@ public partial class MainWindow : Window
                 }
                 else if (_offlineShown)
                 {
+                    if (_processRecoveryExhaustedMode)
+                    {
+                        ScheduleExhaustedRecoveryRetryIfNeeded();
+                        return;
+                    }
+
                     _offlineShown = false;
                     _currentOfflineState = null;
                     _allowOfflineDataNav = false;
@@ -236,6 +251,7 @@ public partial class MainWindow : Window
     private void OnPanelNavigationStarting(object? sender, CoreWebView2NavigationStartingEventArgs args)
     {
         _lastNavigationUri = args.Uri;
+        _pendingNavigationUris[args.NavigationId] = args.Uri;
         _navigationStartingCount++;
         if (_allowOfflineDataNav
             && args.Uri.StartsWith("data:text/html", StringComparison.OrdinalIgnoreCase))
@@ -278,18 +294,27 @@ public partial class MainWindow : Window
 
     private void OnNavigationCompleted(object? sender, CoreWebView2NavigationCompletedEventArgs e)
     {
-        var lastUri = _lastNavigationUri ?? "";
-        var loopbackPanel = IsLoopbackPanelTarget(lastUri);
+        if (!_pendingNavigationUris.TryGetValue(e.NavigationId, out var startUri))
+        {
+            LogOfflineTrace(
+                "nav-completed-orphan",
+                $"id={e.NavigationId} IsSuccess={e.IsSuccess} webError={e.WebErrorStatus} http={e.HttpStatusCode}");
+            return;
+        }
+
+        _pendingNavigationUris.Remove(e.NavigationId);
+
+        var loopbackPanel = IsLoopbackPanelTarget(startUri);
 
         if (_blockedNavigationIds.Remove(e.NavigationId))
         {
             LogOfflineTrace(
                 "nav-completed-blocked",
-                $"id={e.NavigationId} IsSuccess={e.IsSuccess} webError={e.WebErrorStatus} http={e.HttpStatusCode} lastUri={FormatUriForLog(lastUri)}");
+                $"id={e.NavigationId} IsSuccess={e.IsSuccess} webError={e.WebErrorStatus} http={e.HttpStatusCode} startUri={FormatUriForLog(startUri)}");
             return;
         }
 
-        if (lastUri.StartsWith("data:text/html", StringComparison.OrdinalIgnoreCase))
+        if (startUri.StartsWith("data:text/html", StringComparison.OrdinalIgnoreCase))
         {
             _allowOfflineDataNav = false;
             LogOfflineTrace(
@@ -298,12 +323,13 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (loopbackPanel && PanelNavigationOrigin.IsAllowedPanelNavigationUri(lastUri))
+        if (loopbackPanel && PanelNavigationOrigin.IsAllowedPanelNavigationUri(startUri))
         {
             if (ShouldRecoverFromPanelNavigation(e))
             {
                 _panelNavRetryPolicy.Reset();
                 _runningPanelLoadFailing = false;
+                _processRecoveryExhaustedMode = false;
                 if (_offlineShown)
                 {
                     _offlineShown = false;
@@ -312,7 +338,7 @@ public partial class MainWindow : Window
 
                 LogOfflineTrace(
                     "nav-completed-panel-ok",
-                    $"webError={e.WebErrorStatus} http={e.HttpStatusCode} lastUri={FormatUriForLog(lastUri)}");
+                    $"webError={e.WebErrorStatus} http={e.HttpStatusCode} startUri={FormatUriForLog(startUri)}");
                 return;
             }
 
@@ -320,7 +346,7 @@ public partial class MainWindow : Window
             {
                 LogOfflineTrace(
                     "nav-completed-panel-fail",
-                    $"id={e.NavigationId} IsSuccess={e.IsSuccess} webError={e.WebErrorStatus} http={e.HttpStatusCode} lastUri={FormatUriForLog(lastUri)}");
+                    $"id={e.NavigationId} IsSuccess={e.IsSuccess} webError={e.WebErrorStatus} http={e.HttpStatusCode} startUri={FormatUriForLog(startUri)}");
                 HandleRunningPanelNavigationFailure();
                 return;
             }
@@ -338,7 +364,7 @@ public partial class MainWindow : Window
         {
             LogOfflineTrace(
                 "nav-completed-skip",
-                $"IsSuccess={e.IsSuccess} webError={e.WebErrorStatus} loopbackTarget=false lastUri={FormatUriForLog(lastUri)}");
+                $"IsSuccess={e.IsSuccess} webError={e.WebErrorStatus} loopbackTarget=false startUri={FormatUriForLog(startUri)}");
             return;
         }
 
@@ -346,7 +372,7 @@ public partial class MainWindow : Window
         {
             LogOfflineTrace(
                 "nav-completed-skip",
-                $"IsSuccess={e.IsSuccess} webError={e.WebErrorStatus} loopbackTarget={loopbackPanel} lastUri={FormatUriForLog(lastUri)}");
+                $"IsSuccess={e.IsSuccess} webError={e.WebErrorStatus} loopbackTarget={loopbackPanel} startUri={FormatUriForLog(startUri)}");
             return;
         }
 
@@ -357,7 +383,7 @@ public partial class MainWindow : Window
         };
         LogOfflineTrace(
             "nav-completed-fallback",
-            $"IsSuccess={e.IsSuccess} webError={e.WebErrorStatus} offlineState={state} lastUri={FormatUriForLog(lastUri)}");
+            $"IsSuccess={e.IsSuccess} webError={e.WebErrorStatus} offlineState={state} startUri={FormatUriForLog(startUri)}");
         _panelNavigated = false;
         _ = PresentOfflinePageAsync(state);
     }
@@ -670,71 +696,124 @@ public partial class MainWindow : Window
 
     private async Task RunProcessFailureRecoveryAsync(CoreWebView2ProcessFailedKind kind)
     {
-        var utcNow = DateTime.UtcNow;
-        if (!_processRecoveryPolicy.CanRetry(utcNow))
+        while (!_closed)
         {
+            var utcNow = DateTime.UtcNow;
+            if (!_processRecoveryPolicy.CanRetryFast(utcNow))
+            {
+                ShellFileLog.Write(
+                    $"webview-process-failed kind={kind} attempt=exhausted outcome=offline-page");
+                await Dispatcher.InvokeAsync(new Action(ShowOfflineAfterProcessRecoveryExhausted));
+                ScheduleExhaustedRecoveryRetryIfNeeded();
+                return;
+            }
+
+            var attempt = _processRecoveryPolicy.RecordAttemptAndGetIndex(utcNow);
+            var delay = _processRecoveryPolicy.GetBackoffForAttempt(attempt);
             ShellFileLog.Write(
-                $"webview-process-failed kind={kind} attempt=exhausted outcome=offline-page");
-            await Dispatcher.InvokeAsync(new Action(ShowOfflineAfterProcessRecoveryExhausted));
+                $"webview-process-failed kind={kind} attempt={attempt} delaySec={delay.TotalSeconds:F0} outcome=pending");
+
+            await Task.Delay(delay);
+            if (_closed)
+            {
+                ShellFileLog.Write(
+                    $"webview-process-failed kind={kind} attempt={attempt} outcome=cancelled reason=window-closed");
+                return;
+            }
+
+            if (kind == CoreWebView2ProcessFailedKind.BrowserProcessExited)
+            {
+                ShellFileLog.Write(
+                    $"webview-process-failed kind={kind} attempt={attempt} outcome=recreate-browser");
+                try
+                {
+                    if (Dispatcher.CheckAccess())
+                    {
+                        await RecreatePanelWebViewAsync();
+                    }
+                    else
+                    {
+                        await (await Dispatcher.InvokeAsync(() => RecreatePanelWebViewAsync()));
+                    }
+
+                    ShellFileLog.Write(
+                        $"webview-process-failed kind={kind} attempt={attempt} outcome=recreate-done result=success");
+                }
+                catch (Exception ex)
+                {
+                    ShellFileLog.Write(
+                        $"webview-process-failed kind={kind} attempt={attempt} outcome=recreate-done result=failure detail={ex.GetType().Name}");
+                }
+            }
+            else
+            {
+                ShellFileLog.Write(
+                    $"webview-process-failed kind={kind} attempt={attempt} outcome=reload");
+                await Dispatcher.InvokeAsync(() =>
+                {
+                    if (!_closed && PanelWebView.CoreWebView2 is not null)
+                    {
+                        PanelWebView.CoreWebView2.Reload();
+                    }
+                });
+            }
+
+            return;
+        }
+    }
+
+    private void ScheduleExhaustedRecoveryRetryIfNeeded()
+    {
+        if (_closed || _exhaustedRecoveryRetryTask is { IsCompleted: false })
+        {
             return;
         }
 
-        var attempt = _processRecoveryPolicy.RecordAttemptAndGetIndex(utcNow);
-        var delay = _processRecoveryPolicy.GetBackoffForAttempt(attempt);
-        if (delay is null)
-        {
-            ShellFileLog.Write(
-                $"webview-process-failed kind={kind} attempt={attempt} outcome=offline-page reason=no-backoff");
-            await Dispatcher.InvokeAsync(new Action(ShowOfflineAfterProcessRecoveryExhausted));
-            return;
-        }
+        _exhaustedRecoveryRetryTask = RunExhaustedRecoveryRetryLoopAsync();
+    }
 
-        ShellFileLog.Write(
-            $"webview-process-failed kind={kind} attempt={attempt} delaySec={delay.Value.TotalSeconds:F0} outcome=pending");
-
-        await Task.Delay(delay.Value);
-        if (_closed)
+    private async Task RunExhaustedRecoveryRetryLoopAsync()
+    {
+        while (!_closed && _processRecoveryExhaustedMode)
         {
+            var attemptIndex = _processRecoveryPolicy.AttemptCountInWindow(DateTime.UtcNow) + 1;
+            var delay = _processRecoveryPolicy.GetBackoffForAttempt(attemptIndex);
             ShellFileLog.Write(
-                $"webview-process-failed kind={kind} attempt={attempt} outcome=cancelled reason=window-closed");
-            return;
-        }
+                $"webview-process-failed attempt=exhausted-long-retry delaySec={delay.TotalSeconds:F0} outcome=pending");
+            await Task.Delay(delay);
+            if (_closed)
+            {
+                return;
+            }
 
-        if (kind == CoreWebView2ProcessFailedKind.BrowserProcessExited)
-        {
+            var utcNow = DateTime.UtcNow;
+            var attempt = _processRecoveryPolicy.RecordAttemptAndGetIndex(utcNow);
+            if (_processRecoveryPolicy.CanRetryFast(utcNow))
+            {
+                await RunProcessFailureRecoveryAsync(CoreWebView2ProcessFailedKind.RenderProcessExited);
+                return;
+            }
+
             ShellFileLog.Write(
-                $"webview-process-failed kind={kind} attempt={attempt} outcome=recreate-browser");
+                $"webview-process-failed attempt={attempt} outcome=exhausted-long-retry action=reload");
             try
             {
-                if (Dispatcher.CheckAccess())
+                await Dispatcher.InvokeAsync(() =>
                 {
-                    await RecreatePanelWebViewAsync();
-                }
-                else
-                {
-                    await (await Dispatcher.InvokeAsync(() => RecreatePanelWebViewAsync()));
-                }
-
-                ShellFileLog.Write(
-                    $"webview-process-failed kind={kind} attempt={attempt} outcome=recreate-done result=success");
+                    if (!_closed && PanelWebView.CoreWebView2 is not null)
+                    {
+                        PanelWebView.CoreWebView2.Reload();
+                    }
+                    else if (!_closed)
+                    {
+                        _ = PresentOfflinePageAsync(ResolveExhaustedOfflineState());
+                    }
+                });
             }
-            catch (Exception ex)
+            catch
             {
-                ShellFileLog.Write(
-                    $"webview-process-failed kind={kind} attempt={attempt} outcome=recreate-done result=failure detail={ex.GetType().Name}");
+                await Dispatcher.InvokeAsync(new Action(ShowOfflineAfterProcessRecoveryExhausted));
             }
-        }
-        else
-        {
-            ShellFileLog.Write(
-                $"webview-process-failed kind={kind} attempt={attempt} outcome=reload");
-            await Dispatcher.InvokeAsync(() =>
-            {
-                if (!_closed && PanelWebView.CoreWebView2 is not null)
-                {
-                    PanelWebView.CoreWebView2.Reload();
-                }
-            });
         }
     }
 
@@ -776,9 +855,19 @@ public partial class MainWindow : Window
             return;
         }
 
-        var state = _poller?.Current.VisualState == ShellServerVisualState.Starting ? "starting" : "stopped";
+        _processRecoveryExhaustedMode = true;
         _panelNavigated = false;
-        _ = PresentOfflinePageAsync(state);
+        _ = PresentOfflinePageAsync(ResolveExhaustedOfflineState());
+    }
+
+    private string ResolveExhaustedOfflineState()
+    {
+        return _poller?.Current.VisualState switch
+        {
+            ShellServerVisualState.Starting => "starting",
+            ShellServerVisualState.Running => "webview-recovery-exhausted",
+            _ => "stopped",
+        };
     }
 
     private void UnwirePanelWebView(CoreWebView2? core)
@@ -961,10 +1050,7 @@ public partial class MainWindow : Window
         }
         finally
         {
-            if (_closed)
-            {
-                _allowOfflineDataNav = false;
-            }
+            _allowOfflineDataNav = false;
         }
     }
 

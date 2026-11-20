@@ -83,8 +83,14 @@ public sealed class ShellWebViewChromeTests
             await Task.Delay(2000);
             var before = window.NavigationStartingCount;
             window.ReloadPanel();
-            await Task.Delay(500);
-            Assert.True(window.NavigationStartingCount >= before);
+            var navDeadline = DateTime.UtcNow.AddSeconds(10);
+            while (DateTime.UtcNow < navDeadline
+                   && window.NavigationStartingCount < before + 1)
+            {
+                await Task.Delay(100);
+            }
+
+            Assert.Equal(before + 1, window.NavigationStartingCount);
             window.Close();
         }, TimeSpan.FromSeconds(30));
     }

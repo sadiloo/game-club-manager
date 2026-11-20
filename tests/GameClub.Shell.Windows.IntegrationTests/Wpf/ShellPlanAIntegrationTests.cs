@@ -1056,6 +1056,150 @@ public sealed class ShellPlanAIntegrationTests
     }
 
     [Fact]
+    public void shell_running_panel_confirmed_probe_2xx_recovery_after_navigation_failure()
+    {
+        if (!WebView2RuntimePresent()) throw new InvalidOperationException("WebView2 runtime required");
+        var root = AllocateShellDataRoot();
+        try
+        {
+            _fixture.RunAsync(async () =>
+            {
+                MainWindow? window = null;
+                try
+                {
+                    FakeShellSeams.Install();
+                    FakeShellSeams.Http.Answers = true;
+                    FakeShellSeams.Http.OperatorPageOk = false;
+                    FakeShellSeams.Service.Status = ServiceControllerStatus.Running;
+
+                    window = new MainWindow();
+                    window.Show();
+                    var wv = await WaitForPanelWebViewAsync(window, TimeSpan.FromSeconds(45));
+                    await WaitForPanelUnavailableOfflineAsync(wv, TimeSpan.FromSeconds(60));
+
+                    ShellFileLog.Write("shell-confirmed-2xx-baseline");
+                    var baseline = Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log")
+                        .Select(File.ReadAllText)
+                        .Aggregate("", string.Concat);
+
+                    FakeShellSeams.Http.OperatorPageOk = true;
+                    var panelDeadline = DateTime.UtcNow.AddSeconds(75);
+                    var panelOk = false;
+                    while (DateTime.UtcNow < panelDeadline)
+                    {
+                        await Task.Delay(500);
+                        wv = window.FindName("PanelWebView") as Microsoft.Web.WebView2.Wpf.WebView2;
+                        if (wv?.CoreWebView2 is null)
+                        {
+                            continue;
+                        }
+
+                        var loc = UnquoteWebViewScriptString(
+                            await wv.CoreWebView2.ExecuteScriptAsync(
+                                "location.pathname + '|' + document.readyState"));
+                        if (loc.StartsWith("/operator/", StringComparison.OrdinalIgnoreCase)
+                            && loc.EndsWith("|complete", StringComparison.Ordinal))
+                        {
+                            panelOk = true;
+                            break;
+                        }
+                    }
+
+                    Assert.True(panelOk, "Operator panel did not load after confirmed probe 2xx recovery");
+                    var log = Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log")
+                        .Select(File.ReadAllText)
+                        .Aggregate("", string.Concat);
+                    var delta = baseline.Length == 0 ? log : log.Replace(baseline, "");
+                    Assert.Contains("nav-completed-panel-ok", delta, StringComparison.Ordinal);
+                    Assert.Contains("action=probe", delta, StringComparison.Ordinal);
+                }
+                finally
+                {
+                    FakeShellSeams.RestoreProduction();
+                    window?.Close();
+                }
+            }, TimeSpan.FromSeconds(150));
+        }
+        finally
+        {
+            CleanupShellDataRoot(root);
+        }
+    }
+
+    [Fact]
+    public void shell_running_healthy_ticks_do_not_emit_extra_panel_navigations()
+    {
+        if (!WebView2RuntimePresent()) throw new InvalidOperationException("WebView2 runtime required");
+        var root = AllocateShellDataRoot();
+        try
+        {
+            _fixture.RunAsync(async () =>
+            {
+                MainWindow? window = null;
+                try
+                {
+                    FakeShellSeams.Install();
+                    FakeShellSeams.Http.Answers = true;
+                    FakeShellSeams.Http.OperatorPageOk = true;
+                    FakeShellSeams.Service.Status = ServiceControllerStatus.Running;
+
+                    window = new MainWindow();
+                    window.Show();
+                    var wv = await WaitForPanelWebViewAsync(window, TimeSpan.FromSeconds(45));
+                    var panelDeadline = DateTime.UtcNow.AddSeconds(45);
+                    while (DateTime.UtcNow < panelDeadline)
+                    {
+                        await Task.Delay(300);
+                        wv = window.FindName("PanelWebView") as Microsoft.Web.WebView2.Wpf.WebView2;
+                        if (wv?.CoreWebView2 is null)
+                        {
+                            continue;
+                        }
+
+                        var loc = UnquoteWebViewScriptString(
+                            await wv.CoreWebView2.ExecuteScriptAsync(
+                                "location.pathname + '|' + document.readyState"));
+                        if (loc.StartsWith("/operator/", StringComparison.OrdinalIgnoreCase)
+                            && loc.EndsWith("|complete", StringComparison.Ordinal))
+                        {
+                            break;
+                        }
+                    }
+
+                    ShellFileLog.Write("shell-healthy-tick-baseline");
+                    var baseline = Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log")
+                        .Select(File.ReadAllText)
+                        .Aggregate("", string.Concat);
+                    var navBefore = window.NavigationStartingCount;
+                    var measureDeadline = DateTime.UtcNow.AddSeconds(30);
+                    while (DateTime.UtcNow < measureDeadline)
+                    {
+                        await Task.Delay(500);
+                    }
+
+                    Assert.Equal(navBefore, window.NavigationStartingCount);
+                    var log = Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log")
+                        .Select(File.ReadAllText)
+                        .Aggregate("", string.Concat);
+                    var delta = baseline.Length == 0 ? log : log.Replace(baseline, "");
+                    var navigateCount = delta.Split('\n')
+                        .Count(l => l.Contains("panel-navigate caller=", StringComparison.Ordinal));
+                    Assert.InRange(navigateCount, 0, 0);
+                }
+                finally
+                {
+                    FakeShellSeams.RestoreProduction();
+                    window?.Close();
+                }
+            }, TimeSpan.FromSeconds(120));
+        }
+        finally
+        {
+            CleanupShellDataRoot(root);
+        }
+    }
+
+    [Fact]
     public void shell_running_panel_transient_probe_ok_then_fail_avoids_offline_flash_loop()
     {
         if (!WebView2RuntimePresent()) throw new InvalidOperationException("WebView2 runtime required");
@@ -1108,22 +1252,20 @@ public sealed class ShellPlanAIntegrationTests
                         .Aggregate("", string.Concat);
                     FakeShellSeams.Http.OperatorPageOk = false;
 
-                    var offlineSamples = 0;
-                    var classifiedSamples = 0;
-                    var totalSamples = 0;
-                    var offlineToPanelTransitions = 0;
-                    var panelToOfflineTransitions = 0;
-                    bool? previousIsOfflineView = null;
-                    bool? lastClassifiedIsOfflineView = null;
-                    var flapDeadline = DateTime.UtcNow.AddSeconds(45);
+                    var flapSamples = new List<PanelOfflineFlashAssert.FlashSample>();
+                    var flapWindowStart = DateTime.UtcNow;
+                    var flapDeadline = flapWindowStart.AddSeconds(45);
                     while (DateTime.UtcNow < flapDeadline)
                     {
-                        await Task.Delay(500);
-                        totalSamples++;
+                        await Task.Delay(PanelOfflineFlashAssert.DefaultSampleIntervalMilliseconds);
                         Assert.Equal(ShellServerVisualState.Running, window.PollerVisualStateForTests);
                         wv = window.FindName("PanelWebView") as Microsoft.Web.WebView2.Wpf.WebView2;
+                        var elapsedMs = (int)(DateTime.UtcNow - flapWindowStart).TotalMilliseconds;
                         if (wv?.CoreWebView2 is null)
                         {
+                            flapSamples.Add(new PanelOfflineFlashAssert.FlashSample(
+                                PanelOfflineFlashAssert.SampleViewKind.NoWebView,
+                                elapsedMs));
                             continue;
                         }
 
@@ -1133,36 +1275,11 @@ public sealed class ShellPlanAIntegrationTests
                         using var doc = JsonDocument.Parse(sample);
                         var protocol = doc.RootElement.GetProperty("protocol").GetString() ?? "";
                         var offlineAttr = doc.RootElement.GetProperty("offline").GetString();
-                        var path = doc.RootElement.GetProperty("path").GetString() ?? "";
                         var isOfflineView = protocol == "data:" && offlineAttr == "1";
-                        var isPanelView = !isOfflineView
-                            && path.StartsWith("/operator/", StringComparison.OrdinalIgnoreCase);
-                        if (isOfflineView)
-                        {
-                            offlineSamples++;
-                        }
-
-                        if (!isOfflineView && !isPanelView)
-                        {
-                            continue;
-                        }
-
-                        classifiedSamples++;
-                        if (previousIsOfflineView.HasValue)
-                        {
-                            if (previousIsOfflineView.Value && isPanelView)
-                            {
-                                offlineToPanelTransitions++;
-                            }
-
-                            if (!previousIsOfflineView.Value && isOfflineView)
-                            {
-                                panelToOfflineTransitions++;
-                            }
-                        }
-
-                        previousIsOfflineView = isOfflineView;
-                        lastClassifiedIsOfflineView = isOfflineView;
+                        var viewKind = isOfflineView
+                            ? PanelOfflineFlashAssert.SampleViewKind.Offline
+                            : PanelOfflineFlashAssert.SampleViewKind.NonOffline;
+                        flapSamples.Add(new PanelOfflineFlashAssert.FlashSample(viewKind, elapsedMs));
                     }
 
                     var flapLog = Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log")
@@ -1173,16 +1290,10 @@ public sealed class ShellPlanAIntegrationTests
                         : flapLog.Replace(flapBaseline, "");
                     var presentOfflineAfterFlap = flapDelta.Split('\n')
                         .Count(l => l.Contains("panel-navigate caller=PresentOffline", StringComparison.Ordinal));
-                    var offlineFlashCycles = Math.Min(offlineToPanelTransitions, panelToOfflineTransitions);
-
-                    Assert.True(totalSamples >= 10, "Not enough UI samples during flap measure window");
-                    Assert.True(classifiedSamples >= 10, $"Not enough classified UI samples ({classifiedSamples})");
-                    Assert.InRange(offlineFlashCycles, 0, 1);
-                    Assert.InRange(offlineToPanelTransitions, 0, 1);
-                    Assert.InRange(panelToOfflineTransitions, 0, 1);
+                    var flashMeasure = PanelOfflineFlashAssert.Evaluate(flapSamples);
                     Assert.True(
-                        lastClassifiedIsOfflineView == true,
-                        $"Expected steady offline at flap window end (offline={offlineSamples}/{classifiedSamples} classified, transitions offline->panel={offlineToPanelTransitions} panel->offline={panelToOfflineTransitions})");
+                        flashMeasure.Passes,
+                        $"B-1 anti-flash: {flashMeasure.FailureReason} total={flashMeasure.TotalSamples} offline={flashMeasure.OfflineSamples} offline->panel={flashMeasure.OfflineToPanelTransitions} panel->offline={flashMeasure.PanelToOfflineTransitions}");
                     Assert.InRange(presentOfflineAfterFlap, 0, 1);
                 }
                 finally

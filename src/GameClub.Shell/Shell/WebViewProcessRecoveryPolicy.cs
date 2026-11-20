@@ -9,8 +9,9 @@ internal static class WebViewProcessRecoveryBackoff
     public static readonly TimeSpan Delay1 = TimeSpan.FromSeconds(1);
     public static readonly TimeSpan Delay2 = TimeSpan.FromSeconds(5);
     public static readonly TimeSpan Delay3 = TimeSpan.FromSeconds(15);
+    public static readonly TimeSpan ExhaustedRetryDelay = TimeSpan.FromSeconds(60);
     public static readonly TimeSpan RollingWindow = TimeSpan.FromMinutes(5);
-    public const int MaxAttemptsPerRollingWindow = 3;
+    public const int MaxFastAttemptsPerRollingWindow = 3;
 }
 
 internal sealed class WebViewProcessRecoveryPolicy
@@ -24,20 +25,26 @@ internal sealed class WebViewProcessRecoveryPolicy
         return _attemptUtcTimestamps.Count;
     }
 
+    public bool CanRetryFast(DateTime utcNow)
+    {
+        Prune(utcNow);
+        return _attemptUtcTimestamps.Count < WebViewProcessRecoveryBackoff.MaxFastAttemptsPerRollingWindow;
+    }
+
     public bool CanRetry(DateTime utcNow)
     {
         Prune(utcNow);
-        return _attemptUtcTimestamps.Count < WebViewProcessRecoveryBackoff.MaxAttemptsPerRollingWindow;
+        return true;
     }
 
-    public TimeSpan? GetBackoffForAttempt(int attemptIndex)
+    public TimeSpan GetBackoffForAttempt(int attemptIndex)
     {
         return attemptIndex switch
         {
             1 => WebViewProcessRecoveryBackoff.Delay1,
             2 => WebViewProcessRecoveryBackoff.Delay2,
             3 => WebViewProcessRecoveryBackoff.Delay3,
-            _ => null,
+            _ => WebViewProcessRecoveryBackoff.ExhaustedRetryDelay,
         };
     }
 

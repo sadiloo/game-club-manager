@@ -6,6 +6,11 @@ internal static class PanelNavigationOrigin
 {
     public static bool IsSamePanelOrigin(Uri candidate, Uri allowedOrigin)
     {
+        if (!string.IsNullOrEmpty(candidate.UserInfo))
+        {
+            return false;
+        }
+
         if (!string.Equals(candidate.Scheme, allowedOrigin.Scheme, StringComparison.OrdinalIgnoreCase))
         {
             return false;
