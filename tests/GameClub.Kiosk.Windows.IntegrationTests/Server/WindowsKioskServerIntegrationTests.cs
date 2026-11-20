@@ -411,6 +411,7 @@ public sealed class WindowsKioskServerIntegrationTests
             }, leaseCts.Token);
 
             await runtime.StartAsync(default);
+            await WaitUntilTransportConnectedAsync(runtime, TimeSpan.FromSeconds(45));
             var heartbeatBefore = await backend.CountHeartbeatsAsync();
             await WaitForHeartbeatAdvanceAsync(backend, runtime, deviceId, heartbeatBefore, await backend.DeviceLastSeenUtcAsync(deviceId));
 
