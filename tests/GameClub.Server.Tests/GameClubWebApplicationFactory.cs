@@ -10,6 +10,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
 
 namespace GameClub.Server.Tests;
@@ -23,6 +24,9 @@ public class GameClubWebApplicationFactory : WebApplicationFactory<Program>
     /// Enable only in tests that assert on the hosted background timer.
     /// </summary>
     public bool DeadPcBackgroundSweepEnabled { get; set; }
+
+    /// <summary>When true, bootstrap does not drop the database (B-8 restart parity).</summary>
+    public bool PreserveDatabaseOnBootstrap { get; set; }
 
     public string ConnectionString { get; private set; } = "";
 
@@ -71,9 +75,12 @@ public class GameClubWebApplicationFactory : WebApplicationFactory<Program>
     protected override IHost CreateHost(IHostBuilder builder)
     {
         var options = new DbContextOptionsBuilder<AppDbContext>().UseNpgsql(ConnectionString).Options;
-        using (var bootstrap = new AppDbContext(options))
+        if (!PreserveDatabaseOnBootstrap)
         {
-            bootstrap.Database.EnsureDeleted();
+            using (var bootstrap = new AppDbContext(options))
+            {
+                bootstrap.Database.EnsureDeleted();
+            }
         }
 
         var host = base.CreateHost(builder);
@@ -86,7 +93,7 @@ public class GameClubWebApplicationFactory : WebApplicationFactory<Program>
         using var scope = host.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         db.Database.Migrate();
-        DatabaseSeed.EnsureAsync(db).GetAwaiter().GetResult();
+        DatabaseSeed.EnsureAsync(db, scope.ServiceProvider.GetService<IConfiguration>()).GetAwaiter().GetResult();
         Program.ApplyAuditImmutabilityAsync(db).GetAwaiter().GetResult();
     }
 }

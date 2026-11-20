@@ -100,6 +100,10 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
 
     public DbSet<KioskLeaseSigningKeyEntity> KioskLeaseSigningKeys => Set<KioskLeaseSigningKeyEntity>();
 
+    public DbSet<KioskCredentialEntity> KioskCredentials => Set<KioskCredentialEntity>();
+
+    public DbSet<KioskFreeUseEntity> KioskFreeUses => Set<KioskFreeUseEntity>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<StationGroupEntity>(e =>
@@ -467,6 +471,23 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             e.ToTable("kiosk_heartbeats");
             e.HasKey(x => x.Id);
             e.HasOne(x => x.Device).WithMany().HasForeignKey(x => x.DeviceId);
+        });
+
+        modelBuilder.Entity<KioskCredentialEntity>(e =>
+        {
+            e.ToTable("kiosk_credentials");
+            e.HasKey(x => x.Role);
+            e.Property(x => x.Role).HasMaxLength(16);
+        });
+
+        modelBuilder.Entity<KioskFreeUseEntity>(e =>
+        {
+            e.ToTable("kiosk_free_uses");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.StationId).HasMaxLength(64);
+            e.Property(x => x.EndReason).HasMaxLength(32);
+            e.Property(x => x.ActorRole).HasMaxLength(16);
+            e.HasIndex(x => new { x.StationId, x.EndedAtUtc });
         });
     }
 

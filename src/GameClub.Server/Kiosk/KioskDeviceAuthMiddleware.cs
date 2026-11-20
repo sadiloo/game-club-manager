@@ -1,4 +1,5 @@
 using GameClub.Server.Data;
+using GameClub.Server.Time;
 using Microsoft.EntityFrameworkCore;
 
 namespace GameClub.Server.Kiosk;
@@ -8,7 +9,7 @@ public sealed class KioskDeviceAuthMiddleware(RequestDelegate next)
     public const string DeviceIdHeader = "X-Device-Id";
     public const string DeviceKeyHeader = "X-Device-Key";
 
-    public async Task InvokeAsync(HttpContext context, AppDbContext db)
+    public async Task InvokeAsync(HttpContext context, AppDbContext db, IClock clock)
     {
         if (!context.Request.Path.StartsWithSegments("/api/kiosk")
             && !context.Request.Path.StartsWithSegments("/hubs/kiosk"))
@@ -19,6 +20,12 @@ public sealed class KioskDeviceAuthMiddleware(RequestDelegate next)
 
         if (context.Request.Path.StartsWithSegments("/api/kiosk/pair")
             && HttpMethods.IsPost(context.Request.Method))
+        {
+            await next(context);
+            return;
+        }
+
+        if (context.Request.Path.StartsWithSegments("/api/kiosk/setup"))
         {
             await next(context);
             return;
@@ -44,6 +51,12 @@ public sealed class KioskDeviceAuthMiddleware(RequestDelegate next)
 
         context.Items["KioskDeviceId"] = deviceId;
         context.Items["KioskStationId"] = device.StationId;
+
+        var contactUtc = clock.UtcNow.UtcDateTime;
+        await db.KioskDevices
+            .Where(d => d.Id == deviceId)
+            .ExecuteUpdateAsync(s => s.SetProperty(d => d.LastSeenUtc, contactUtc));
+
         await next(context);
     }
 }

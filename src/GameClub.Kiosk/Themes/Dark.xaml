@@ -1,0 +1,21 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <!-- Spec §0.4 dark tokens (kiosk/*). -->
+  <SolidColorBrush x:Key="Kiosk.BgBrush" Color="#0B0F19" />
+  <SolidColorBrush x:Key="Kiosk.SurfaceBrush" Color="#151B28" />
+  <SolidColorBrush x:Key="Kiosk.SurfaceRaisedBrush" Color="#1E2638" />
+  <SolidColorBrush x:Key="Kiosk.BorderBrush" Color="#344059" />
+  <SolidColorBrush x:Key="Kiosk.BorderStrongBrush" Color="#67748C" />
+  <SolidColorBrush x:Key="Kiosk.TextBrush" Color="#E9EEF7" />
+  <SolidColorBrush x:Key="Kiosk.MutedBrush" Color="#A4AFC2" />
+  <SolidColorBrush x:Key="Kiosk.PrimaryBrush" Color="#A08CFF" />
+  <SolidColorBrush x:Key="Kiosk.PrimarySoftBrush" Color="#2E2F4F" />
+  <SolidColorBrush x:Key="Kiosk.OnPrimaryBrush" Color="#140C33" />
+  <SolidColorBrush x:Key="Kiosk.FreeBrush" Color="#3FCB8E" />
+  <SolidColorBrush x:Key="Kiosk.FreeSoftBrush" Color="#1D3B3A" />
+  <SolidColorBrush x:Key="Kiosk.WarningBrush" Color="#FF9457" />
+  <SolidColorBrush x:Key="Kiosk.WarningSoftBrush" Color="#3F3130" />
+  <SolidColorBrush x:Key="Kiosk.DangerBrush" Color="#FF6F86" />
+  <SolidColorBrush x:Key="Kiosk.DangerSoftBrush" Color="#3F2A39" />
+  <SolidColorBrush x:Key="Kiosk.ScrimBrush" Color="#99000000" />
+</ResourceDictionary>

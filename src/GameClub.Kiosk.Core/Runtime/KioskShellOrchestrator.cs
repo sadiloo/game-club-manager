@@ -124,6 +124,26 @@ public sealed class KioskShellOrchestrator
     public void EnqueuePoweredSegmentOnDisconnect(Guid sessionId, long clientMonotonicMs)
         => EnqueuePoweredSegment(sessionId, clientMonotonicMs);
 
+    public void EnqueueFreeUseEnd(Guid freeUseId, string reason, DateTime endedAtUtc)
+    {
+        if (_queue is null || freeUseId == Guid.Empty)
+        {
+            return;
+        }
+
+        var payload = JsonSerializer.Serialize(new
+        {
+            freeUseId,
+            reason,
+            endedAtUtc = endedAtUtc.ToString("O"),
+        });
+        _queue.EnqueueAsync(
+            Guid.NewGuid(),
+            "kiosk_free_use_end",
+            payload,
+            endedAtUtc).GetAwaiter().GetResult();
+    }
+
     public void TrackLaunchedProcess(int processId)
     {
         if (!_trackedLaunchPids.Contains(processId))

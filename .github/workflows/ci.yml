@@ -172,3 +172,16 @@ jobs:
             artifacts/ci-timeout-marker.log
             artifacts/**/*.trx
             artifacts/**/Sequence*.xml
+
+  windows-installer:
+    name: windows-2022 installer
+    timeout-minutes: 60
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.403
+      - name: installer acceptance
+        shell: pwsh
+        run: ./scripts/windows/ci-installer.ps1

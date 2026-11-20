@@ -176,6 +176,13 @@
       <div id="cafeSettings" class="hidden">
         <label><input type="checkbox" id="shiftsEnabledToggle" /> شیفت فعال</label>
         <label><input type="checkbox" id="multiOperatorToggle" /> چند اپراتور / کشوی مشترک</label>
+        <div id="mgrFreeIdleRow">
+          <label for="mgrFreeIdleMinutes">قفل خودکار استفادهٔ رایگان بعد از چند دقیقه بی‌حرکتی</label>
+          <input id="mgrFreeIdleMinutes" type="text" inputmode="numeric" value="۵" aria-describedby="mgrFreeIdleHelp" />
+          <p id="mgrFreeIdleHelp" class="muted">پیش‌فرض ۵ دقیقه. عدد کامل از ۱ تا ۲۴۰.</p>
+          <p id="mgrFreeIdleApplyNote" class="muted">مقدار تازه با تماس بعدی هر کیوسک با سرور اعمال می‌شود، حتی روی استفاده‌های رایگانِ باز.</p>
+          <button id="mgrFreeIdleSaveBtn" type="button">ذخیره</button>
+        </div>
         <button id="saveCafeSettingsBtn" type="button">ذخیره تنظیمات</button>
       </div>
       <button id="openShiftBtn" type="button">باز کردن شیفت</button>
@@ -203,6 +210,7 @@
       <label>از — سال <input id="usageFromJy" type="number" value="1405" /> ماه <input id="usageFromJm" type="number" value="8" /> روز <input id="usageFromJd" type="number" value="16" /></label>
       <label>تا — سال <input id="usageToJy" type="number" value="1405" /> ماه <input id="usageToJm" type="number" value="8" /> روز <input id="usageToJd" type="number" value="17" /></label>
       <button id="usageBtn" type="button">مصرف ایستگاه</button>
+      <button id="freeUseReportBtn" type="button">استفادهٔ رایگان کیوسک</button>
       <button id="cu8Btn" type="button">CU-8 کیف پول</button>
       <p>فیلتر تاریخچه</p>
       <label>از — سال <input id="histFromJy" type="number" /> ماه <input id="histFromJm" type="number" /> روز <input id="histFromJd" type="number" /></label>

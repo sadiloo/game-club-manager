@@ -30,12 +30,22 @@ public sealed class KioskHeartbeatRequest
 public sealed class KioskHeartbeatAck
 {
     public DateTime ServerUtc { get; init; }
+
     public DateTime? LastAcceptedCheckpointUtc { get; init; }
+
     public string SessionStatus { get; init; } = "";
+
     public SignedSessionLease? Lease { get; init; }
+
     public KioskDisplayDto? Display { get; init; }
+
     public bool ManualSettle { get; init; }
+
     public DateTime? DeadPcDeadlineUtc { get; init; }
+
+    public int CredentialsVersion { get; init; }
+
+    public int KioskFreeUseIdleMinutes { get; init; }
 }
 
 public sealed class KioskDisplayDto

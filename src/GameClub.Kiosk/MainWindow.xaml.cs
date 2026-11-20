@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Input;
+using GameClub.Kiosk.Core.Setup;
 using GameClub.Kiosk.Services;
 
 namespace GameClub.Kiosk;
@@ -24,21 +25,79 @@ public partial class MainWindow : Window
             GameSearchBox,
             GameCategoryBox);
         ServerUrlBox.Text = _host.ServerBase;
+        var setupStore = new KioskSetupStore();
+        if (setupStore.ShouldShowFirstRun())
+        {
+            LockPanel.Visibility = Visibility.Collapsed;
+            LauncherPanel.Visibility = Visibility.Collapsed;
+            PlayingPanel.Visibility = Visibility.Collapsed;
+            FooterText.Visibility = Visibility.Collapsed;
+            FirstRunSetup.Visibility = Visibility.Visible;
+            FirstRunSetup.SetupCompleted += OnFirstRunSetupCompleted;
+        }
+        else if (setupStore.TryLoad()?.IsComplete == true)
+        {
+            AdminUrlPasswordBox.Visibility = Visibility.Collapsed;
+            FooterText.Text = "F9: safe test exit";
+        }
+
+        AdminPanel.ServerSettingsRequested += (_, _) =>
+        {
+            FirstRunSetup.Visibility = Visibility.Visible;
+            LockPanel.Visibility = Visibility.Collapsed;
+        };
+
+        AdminPanel.RolePicked += (_, role) => _host.NotifyAdminRole(role);
+
+        AdminPanel.OperatorLockRequested += async (_, _) =>
+        {
+            var err = await _host.TryOperatorLockAsync();
+            if (err is not null)
+            {
+                AdminPanel.ShowOperatorError(err);
+            }
+            else
+            {
+                AdminPanel.HidePanel();
+            }
+        };
+
+        AdminPanel.OperatorUnlockRequested += async (_, _) =>
+        {
+            var err = await _host.TryOperatorUnlockAsync();
+            if (err is not null)
+            {
+                AdminPanel.ShowOperatorError(err);
+            }
+            else
+            {
+                AdminPanel.HidePanel();
+            }
+        };
+
         GameCategoryBox.Items.Add("All");
         GameCategoryBox.Items.Add("1");
         GameCategoryBox.Items.Add("2");
         GameCategoryBox.SelectedIndex = 0;
         KeyDown += OnKeyDown;
+        RefreshThemeToggleVisibility();
     }
 
     private void OnKeyDown(object sender, KeyEventArgs e)
     {
         if (e.Key == Key.F8)
         {
-            if (_host.TryUnlockServerUrlEdit(AdminUrlPasswordBox.Password))
+            if (KioskLegacyDevPath.IsActive())
             {
-                ServerUrlBox.IsReadOnly = false;
-                ServerUrlBox.Focus();
+                if (_host.TryUnlockServerUrlEdit(AdminUrlPasswordBox.Password))
+                {
+                    ServerUrlBox.IsReadOnly = false;
+                    ServerUrlBox.Focus();
+                }
+            }
+            else if (new KioskSetupStore().TryLoad()?.IsComplete == true)
+            {
+                AdminPanel.ShowPanel();
             }
         }
         else if (e.Key == Key.F9 && _host.TrySafeTestExit(AdminUrlPasswordBox.Password))
@@ -72,4 +131,31 @@ public partial class MainWindow : Window
     }
 
     public Task PairAsync(string code) => _host.SubmitPairingCodeAsync(code);
+
+    private void RefreshThemeToggleVisibility()
+    {
+        var show = LockPanel.Visibility == Visibility.Visible;
+        ThemeToggle.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+        if (show)
+        {
+            ThemeToggle.RefreshChrome();
+        }
+    }
+
+    private void OnFirstRunSetupCompleted(object? sender, EventArgs e)
+    {
+        FirstRunSetup.Visibility = Visibility.Collapsed;
+        var setup = new KioskSetupStore().TryLoad();
+        if (setup is not null && !string.IsNullOrEmpty(setup.ServerBase))
+        {
+            _host.SetServerBase(setup.ServerBase);
+            ServerUrlBox.Text = setup.ServerBase;
+        }
+
+        LockPanel.Visibility = Visibility.Visible;
+        FooterText.Visibility = Visibility.Visible;
+        AdminUrlPasswordBox.Visibility = Visibility.Collapsed;
+        FooterText.Text = "F8: مدیریت کیوسک · F9: safe test exit";
+        RefreshThemeToggleVisibility();
+    }
 }
