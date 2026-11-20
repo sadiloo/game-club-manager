@@ -11,6 +11,7 @@
       "tests/GameClub.Billing.Tests/GameClub.Billing.Tests.csproj",
       "tests/GameClub.Kiosk.Core.Tests/GameClub.Kiosk.Core.Tests.csproj",
       "tests/GameClub.Server.Tests/GameClub.Server.Tests.csproj",
+      "tests/GameClub.Shell.Tests/GameClub.Shell.Tests.csproj",
       "tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj"
     ]
   }

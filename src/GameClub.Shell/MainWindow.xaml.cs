@@ -30,6 +30,7 @@ public partial class MainWindow : Window
     private bool _offlineShown;
     private string? _currentOfflineState;
     private bool _allowOfflineDataNav;
+    private string? _offlinePresentInFlightState;
     private bool _panelNavigated;
     private bool _closed;
     private Task? _ensureWebViewTask;
@@ -134,6 +135,7 @@ public partial class MainWindow : Window
 
                     _offlineShown = false;
                     _currentOfflineState = null;
+                    _offlinePresentInFlightState = null;
                     _allowOfflineDataNav = false;
                     var recoverUri = new Uri(ShellSeams.ResolvePanelUrl());
                     LogPanelNavigate("RunningRecover", recoverUri);
@@ -146,7 +148,11 @@ public partial class MainWindow : Window
                     _panelNavigated = true;
                     PanelWebView.Source = recoverUri;
                 }
-                else
+                else if (!_runningPanelLoadFailing && _panelNavigated && IsActiveOnPanelOrigin())
+                {
+                    // Healthy running panel: poller ticks must not probe-navigate again.
+                }
+                else if (!_runningPanelLoadFailing)
                 {
                     _ = TryProbeThenNavigatePanelAsync();
                 }
@@ -328,6 +334,13 @@ public partial class MainWindow : Window
 
         if (_blockedNavigationIds.Remove(e.NavigationId))
         {
+            if (startUri.StartsWith("data:text/html", StringComparison.OrdinalIgnoreCase))
+            {
+                _offlinePresentInFlightState = null;
+                _offlineShown = false;
+                _allowOfflineDataNav = false;
+            }
+
             LogOfflineTrace(
                 "nav-completed-blocked",
                 $"id={e.NavigationId} IsSuccess={e.IsSuccess} webError={e.WebErrorStatus} http={e.HttpStatusCode} startUri={FormatUriForLog(startUri)}");
@@ -337,6 +350,16 @@ public partial class MainWindow : Window
         if (startUri.StartsWith("data:text/html", StringComparison.OrdinalIgnoreCase))
         {
             _allowOfflineDataNav = false;
+            _offlinePresentInFlightState = null;
+            if (e.IsSuccess)
+            {
+                _offlineShown = true;
+            }
+            else
+            {
+                _offlineShown = false;
+            }
+
             LogOfflineTrace(
                 "nav-completed-offline-data",
                 $"id={e.NavigationId} IsSuccess={e.IsSuccess} webError={e.WebErrorStatus} offlineState={_currentOfflineState}");
@@ -354,6 +377,7 @@ public partial class MainWindow : Window
                 {
                     _offlineShown = false;
                     _currentOfflineState = null;
+                    _offlinePresentInFlightState = null;
                 }
 
                 LogOfflineTrace(
@@ -1071,8 +1095,17 @@ public partial class MainWindow : Window
         }
         finally
         {
-            _allowOfflineDataNav = false;
+            if (_closed)
+            {
+                _allowOfflineDataNav = false;
+            }
         }
+    }
+
+    private bool IsOfflineDataPageActive()
+    {
+        var uri = CurrentPanelUriForTrace();
+        return uri.StartsWith("data:text/html", StringComparison.OrdinalIgnoreCase);
     }
 
     private string CurrentPanelUriForTrace()
@@ -1233,18 +1266,34 @@ public partial class MainWindow : Window
             return Task.CompletedTask;
         }
 
-        if (_offlineShown && string.Equals(_currentOfflineState, state, StringComparison.Ordinal))
+        if (_offlineShown
+            && string.Equals(_currentOfflineState, state, StringComparison.Ordinal)
+            && IsOfflineDataPageActive())
         {
             LogOfflineTrace("present-offline-skip", $"offlineState={state} alreadyShown=true");
             return Task.CompletedTask;
         }
 
+        if (string.Equals(_offlinePresentInFlightState, state, StringComparison.Ordinal))
+        {
+            LogOfflineTrace("present-offline-skip", $"offlineState={state} alreadyInFlight=true");
+            return Task.CompletedTask;
+        }
+
         LogOfflineTrace("present-offline-enter", $"offlineState={state}");
         _panelNavigated = false;
-        _offlineShown = true;
         _currentOfflineState = state;
+        _offlinePresentInFlightState = state;
         var html = LoadOfflineHtml(state);
-        NavigateOfflineHtmlToPanel(html, "PresentOffline");
+        try
+        {
+            NavigateOfflineHtmlToPanel(html, "PresentOffline");
+        }
+        catch
+        {
+            _offlinePresentInFlightState = null;
+            throw;
+        }
 
         LogOfflineTrace("present-offline-navigated", $"offlineState={state}");
         return Task.CompletedTask;
