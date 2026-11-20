@@ -450,6 +450,139 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
         }
     }
 
+    [Fact(Timeout = 90_000)]
+    public async Task internet_pipe_on_apply_rejected_when_early_reassert_fails()
+    {
+        RequireWindowsAdmin();
+        using var rsa = RSA.Create(2048);
+        var pub = ExportPublicKeyPem(rsa);
+        var config = BuildConfig(pub);
+        var setup = new InternetFirewallApplier();
+        CancellationTokenSource cts = null;
+        Thread pipeThread = null;
+        try
+        {
+            var epoch = Guid.NewGuid();
+            var off = Sign(rsa, new InternetCommandPayload
+            {
+                StationId = config.StationId,
+                Epoch = epoch,
+                Version = 1,
+                On = false,
+                IssuedAtUtc = DateTime.UtcNow,
+            });
+            Assert.Equal("applied", setup.ApplyWithStoreEcho(config, on: false));
+            InternetVerifiedStateFile.Save(InternetGuardPaths.StatePath, off.Payload);
+            WriteInternetConfig(config);
+
+            var logOffset = GuardWatchdogTimelineReader.CurrentLogLength();
+            cts = new CancellationTokenSource();
+            var throwing = new ThrowingEarlyReassertInternetFirewallApplier();
+            var server = new InternetPipeServer(config, throwing);
+            pipeThread = new Thread(() => server.Run(cts.Token)) { IsBackground = true };
+            pipeThread.Start();
+
+            await GuardWatchdogTimelineReader.WaitForTimelineMarkerAsync(
+                logOffset,
+                "GUARD_TIMELINE event=early_reassert_off_failed",
+                TimeSpan.FromSeconds(25));
+
+            var onCommand = Sign(rsa, new InternetCommandPayload
+            {
+                StationId = config.StationId,
+                Epoch = epoch,
+                Version = 2,
+                On = true,
+                IssuedAtUtc = DateTime.UtcNow,
+            });
+            var client = new GuardInternetClient();
+            var response = await client.ApplyAsync(onCommand);
+            Assert.Contains("apply_failed:early_reassert_off", response, StringComparison.OrdinalIgnoreCase);
+            Assert.False(TryTcp("1.1.1.1", 443, 2_000), "ON apply must not open egress when early reassert failed.");
+        }
+        finally
+        {
+            InternetPipeServerTestTeardown.Stop(cts, pipeThread);
+            setup.RunResetScript();
+            TryDelete(InternetGuardPaths.ConfigPath);
+            TryDelete(InternetGuardPaths.StatePath);
+        }
+    }
+
+    [Fact(Timeout = 120_000)]
+    public async Task internet_pipe_on_apply_allowed_after_off_apply_when_early_reassert_failed()
+    {
+        RequireWindowsAdmin();
+        using var rsa = RSA.Create(2048);
+        var pub = ExportPublicKeyPem(rsa);
+        var config = BuildConfig(pub);
+        var setup = new InternetFirewallApplier();
+        CancellationTokenSource cts = null;
+        Thread pipeThread = null;
+        try
+        {
+            var epoch = Guid.NewGuid();
+            var off = Sign(rsa, new InternetCommandPayload
+            {
+                StationId = config.StationId,
+                Epoch = epoch,
+                Version = 1,
+                On = false,
+                IssuedAtUtc = DateTime.UtcNow,
+            });
+            Assert.Equal("applied", setup.ApplyWithStoreEcho(config, on: false));
+            InternetVerifiedStateFile.Save(InternetGuardPaths.StatePath, off.Payload);
+            WriteInternetConfig(config);
+
+            var logOffset = GuardWatchdogTimelineReader.CurrentLogLength();
+            cts = new CancellationTokenSource();
+            var throwing = new ThrowingEarlyReassertInternetFirewallApplier();
+            var server = new InternetPipeServer(config, throwing);
+            pipeThread = new Thread(() => server.Run(cts.Token)) { IsBackground = true };
+            pipeThread.Start();
+
+            await GuardWatchdogTimelineReader.WaitForTimelineMarkerAsync(
+                logOffset,
+                "GUARD_TIMELINE event=early_reassert_off_failed",
+                TimeSpan.FromSeconds(25));
+
+            var offAgain = Sign(rsa, new InternetCommandPayload
+            {
+                StationId = config.StationId,
+                Epoch = epoch,
+                Version = 2,
+                On = false,
+                IssuedAtUtc = DateTime.UtcNow,
+            });
+            var client = new GuardInternetClient();
+            var offResponse = await client.ApplyAsync(offAgain);
+            Assert.Contains("applied", offResponse, StringComparison.OrdinalIgnoreCase);
+            await GuardWatchdogTimelineReader.WaitForTimelineMarkerAsync(
+                logOffset,
+                "GUARD_TIMELINE event=early_reassert_refusal_cleared",
+                TimeSpan.FromSeconds(30));
+
+            var onCommand = Sign(rsa, new InternetCommandPayload
+            {
+                StationId = config.StationId,
+                Epoch = epoch,
+                Version = 3,
+                On = true,
+                IssuedAtUtc = DateTime.UtcNow,
+            });
+            var onResponse = await client.ApplyAsync(onCommand);
+            Assert.Contains("applied", onResponse, StringComparison.OrdinalIgnoreCase);
+            Assert.True(TryTcp("1.1.1.1", 443, 2_000), "ON apply must open egress after refusal cleared.");
+        }
+        finally
+        {
+            InternetPipeServerTestTeardown.Stop(cts, pipeThread);
+            setup.RunResetScript();
+            TryDelete(InternetGuardPaths.ConfigPath);
+            TryDelete(InternetGuardPaths.StatePath);
+        }
+    }
+
     [Fact(Timeout = 60_000)]
     public async Task internet_pipe_rejects_older_signed_on_while_still_off()
     {

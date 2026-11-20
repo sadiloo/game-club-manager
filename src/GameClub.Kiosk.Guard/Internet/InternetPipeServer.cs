@@ -42,6 +42,7 @@ internal sealed class InternetPipeServer
     private int _heldRequestNextTicket;
     private int _heldRequestServingTicket;
     private Thread? _earlyReassertThread;
+    private bool _firstPipeListenerAttemptDone;
 
     public InternetPipeServer(InternetGuardConfig config, IInternetFirewallApplier? firewall = null)
     {
@@ -176,6 +177,18 @@ internal sealed class InternetPipeServer
         }
     }
 
+    private void TryClearEarlyReassertRefusalAfterVerifiedOffApply()
+    {
+        if (!_earlyReassertApplyBlocked)
+        {
+            return;
+        }
+
+        _earlyReassertApplyBlocked = false;
+        GuardWatchdogLog.Append("GUARD_TIMELINE event=early_reassert_refusal_cleared");
+        AppendPipeTimeline("early_reassert_refusal_cleared");
+    }
+
     private static void LogPipeListeningOnce(InternetPipeServer server)
     {
         if (server._loggedPipeListening)
@@ -186,6 +199,21 @@ internal sealed class InternetPipeServer
         server._loggedPipeListening = true;
         GuardWatchdogLog.Append("GUARD_TIMELINE event=pipe_listening");
         server.AppendPipeTimeline("pipe_listening");
+    }
+
+    private void StartEarlyReassertOffThread()
+    {
+        if (_earlyReassertThread is not null || _on)
+        {
+            return;
+        }
+
+        _earlyReassertThread = new Thread(RunEarlyReassertOffOnBackgroundThread)
+        {
+            IsBackground = true,
+            Name = "CheckpointInternetEarlyReassertOff",
+        };
+        _earlyReassertThread.Start();
     }
 
     private void MaybeLogPipeReadyAfterRequest(int handlerThread)
@@ -209,6 +237,8 @@ internal sealed class InternetPipeServer
         _earlyReassertApplyBlocked = false;
         _loggedPipeListening = false;
         _loggedPipeReady = 0;
+        _earlyReassertThread = null;
+        _firstPipeListenerAttemptDone = false;
         AppendPipeTimeline("run_begin");
         if (!_on)
         {
@@ -238,9 +268,11 @@ internal sealed class InternetPipeServer
         {
             while (!ct.IsCancellationRequested)
             {
+                var firstListenerAttempt = !_firstPipeListenerAttemptDone;
+                NamedPipeServerStream? server = null;
                 try
                 {
-                    var server = new NamedPipeServerStream(
+                    server = new NamedPipeServerStream(
                         GuardInternetClient.PipeName,
                         PipeDirection.InOut,
                         NamedPipeServerStream.MaxAllowedServerInstances,
@@ -249,18 +281,14 @@ internal sealed class InternetPipeServer
                     LogPipeListeningOnce(this);
                     if (!_on && _earlyReassertThread is null)
                     {
-                        _earlyReassertThread = new Thread(RunEarlyReassertOffOnBackgroundThread)
-                        {
-                            IsBackground = true,
-                            Name = "CheckpointInternetEarlyReassertOff",
-                        };
-                        _earlyReassertThread.Start();
+                        StartEarlyReassertOffThread();
                     }
 
                     server.WaitForConnection();
                     GuardWatchdogLog.Append(
                         $"pipe_accept thread={Thread.CurrentThread.ManagedThreadId}");
                     var pipe = server;
+                    server = null;
                     var handler = new Thread(() => HandleConnectedClient(pipe))
                     {
                         IsBackground = true,
@@ -281,6 +309,18 @@ internal sealed class InternetPipeServer
                     }
 
                     Thread.Sleep(200);
+                }
+                finally
+                {
+                    server?.Dispose();
+                    if (firstListenerAttempt)
+                    {
+                        _firstPipeListenerAttemptDone = true;
+                        if (!_on && _earlyReassertThread is null)
+                        {
+                            StartEarlyReassertOffThread();
+                        }
+                    }
                 }
             }
         }
@@ -315,7 +355,11 @@ internal sealed class InternetPipeServer
             }
 
             JoinPipeClientHandlerThreads(InternetPipeServerShutdownBudgets.HandlerJoinBudget);
-            JoinPipeBackgroundThread(_earlyReassertThread, "early_reassert_off", 30_000);
+            var earlyReassert = _earlyReassertThread;
+            if (earlyReassert is not null)
+            {
+                JoinPipeBackgroundThread(earlyReassert, "early_reassert_off", 30_000);
+            }
             AppendPipeTimeline("stop_join_end");
         }
     }
@@ -369,7 +413,7 @@ internal sealed class InternetPipeServer
     private void HandleConnectedClient(NamedPipeServerStream server)
     {
         var handlerThread = Thread.CurrentThread.ManagedThreadId;
-        var holdTicket = AcquireHeldRequestTicket();
+        var holdTicket = -1;
         try
         {
             using (server)
@@ -391,6 +435,7 @@ internal sealed class InternetPipeServer
 
                 GuardWatchdogLog.Append(
                     $"pipe_read_ok thread={handlerThread} bytes={Encoding.UTF8.GetByteCount(body)}");
+                holdTicket = AcquireHeldRequestTicket();
                 WaitForHeldRequestTurn(holdTicket);
                 if (_shutdownCt.IsCancellationRequested)
                 {
@@ -399,7 +444,7 @@ internal sealed class InternetPipeServer
 
                 AppendPipeTimeline($"pipe_request_hold_release ticket={holdTicket}");
                 string response;
-                if (_earlyReassertApplyBlocked && IsApplyVerb(body))
+                if (_earlyReassertApplyBlocked && IsOnApplyRequest(body))
                 {
                     response = JsonSerializer.Serialize(new { error = "apply_failed:early_reassert_off" });
                 }
@@ -433,17 +478,34 @@ internal sealed class InternetPipeServer
         }
         finally
         {
-            ReleaseHeldRequestTurn(holdTicket);
+            if (holdTicket >= 0)
+            {
+                ReleaseHeldRequestTurn(holdTicket);
+            }
         }
     }
 
-    private static bool IsApplyVerb(string body)
+    private static bool IsOnApplyRequest(string body)
     {
         try
         {
             using var doc = JsonDocument.Parse(body);
-            var verb = doc.RootElement.GetProperty("verb").GetString();
-            return string.Equals(verb, "apply", StringComparison.OrdinalIgnoreCase);
+            if (!string.Equals(doc.RootElement.GetProperty("verb").GetString(), "apply", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            if (!doc.RootElement.TryGetProperty("command", out var command))
+            {
+                return false;
+            }
+
+            if (!command.TryGetProperty("payload", out var payload))
+            {
+                return false;
+            }
+
+            return payload.TryGetProperty("on", out var on) && on.GetBoolean();
         }
         catch
         {
@@ -846,6 +908,11 @@ internal sealed class InternetPipeServer
             }
 
             return JsonSerializer.Serialize(new { error = code, on = _on, version = _appliedVersion });
+        }
+
+        if (!p.On)
+        {
+            TryClearEarlyReassertRefusalAfterVerifiedOffApply();
         }
 
         _state.SaveVerified(p);
