@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <RootNamespace>GameClub.Shell</RootNamespace>
+    <AssemblyName>GameClub.Shell</AssemblyName>
+    <StartupObject>GameClub.Shell.Program</StartupObject>
+    <ApplicationIcon>Assets\shell-brand.ico</ApplicationIcon>
+    <NoWarn>$(NoWarn);NU1902;NU1903</NoWarn>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="System.ServiceProcess" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2903.40" />
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3">
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="System.Text.Json" Version="8.0.5" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Assets\offline.html" />
+    <Resource Include="Assets\shell-brand.ico" />
+    <Resource Include="Assets\tray-green.ico" />
+    <Resource Include="Assets\tray-yellow.ico" />
+    <Resource Include="Assets\tray-red.ico" />
+    <Resource Include="Assets\tray-stopped.ico" />
+  </ItemGroup>
+
+</Project>
