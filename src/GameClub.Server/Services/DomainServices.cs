@@ -375,7 +375,7 @@ public sealed class SessionCloser(
             var method = OperatorPaymentMethods.Parse(pay.Method);
             if (pay.AmountToman <= 0)
             {
-                throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", "Payment amounts must be positive.");
+                throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", "مبلغ هر خط پرداخت باید بیشتر از صفر باشد.");
             }
 
             var walletDraw = amounts.Detail?.Allocation?.Tenders

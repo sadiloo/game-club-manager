@@ -143,6 +143,8 @@
     moneyLeadingZero: "مبلغ نباید با صفر شروع شود.",
     moneyTooLong: "مبلغ نباید بیشتر از ۱۵ رقم باشد.",
     moneyPositive: "مبلغ باید عدد صحیح مثبت باشد.",
+    moneyNonNegative: "مبلغ نمی‌تواند منفی باشد.",
+    f12PercentEmpty: "درصد تولد را وارد کنید.",
     numberFormat: "عدد درست نیست؛ فقط رقم بنویسید.",
     numberTooLong: "عدد نباید بیشتر از ۱۵ رقم باشد.",
     generic: "کار انجام نشد. دوباره تلاش کنید.",
@@ -247,7 +249,8 @@
     gift_cap_exceeded: "هدیه از سقف اپراتور بیشتر است.",
     gift_not_allowed_with_debt:
       "مشتری بدهی دارد و این شارژ بدهی را کامل صاف نمی‌کند؛ بدون هدیه دوباره ثبت کنید.",
-    invalid_money: "مبلغ باید عدد صحیح مثبت باشد.",
+    invalid_money: "مبلغ نمی‌تواند منفی باشد.",
+    invalid_opening: "مانده افتتاحیه درست نیست.",
     invalid_method: "روش شارژ درست نیست.",
     no_open_shift: "شیفتی باز نیست. اول شیفت را باز کنید.",
     shift_closed: "شیفت بسته شده است.",
@@ -283,18 +286,8 @@
     if (code === "gift_not_allowed_with_debt" && message && /[\u0600-\u06FF]/.test(message)) {
       return message;
     }
-    if (code === "invalid_opening" && message) {
-      const m = String(message);
-      if (m.includes("Enter play hours or level, not both")) return "ساعت بازی یا سطح، نه هر دو.";
-      if (m.includes("Opening cannot include both real money and debt")) {
-        return "مانده واقعی و بدهی را با هم وارد نکنید.";
-      }
-      if (m.includes("Enter opening amounts or play hours")) return "دست‌کم یک خانه را پر کنید.";
-      if (m.includes("Enter opening wallet amounts")) return "برای این عضو باید مبلغ افتتاحیه هم وارد شود.";
-      return "مانده افتتاحیه درست نیست.";
-    }
-    if (code && ERROR_MAP[code]) return ERROR_MAP[code];
     if (message && /[\u0600-\u06FF]/.test(message)) return message;
+    if (code && ERROR_MAP[code]) return ERROR_MAP[code];
     return CP_ERR.generic;
   }
 

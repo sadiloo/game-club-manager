@@ -14,11 +14,14 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Npgsql;
 
 namespace GameClub.Server.Tests;
 
 public class GameClubWebApplicationFactory : WebApplicationFactory<Program>
 {
+    private bool _dropGeneratedDatabaseOnDispose;
+    private string? _generatedDatabaseName;
     public MutableClock Clock { get; } = new(DateTimeOffset.UtcNow);
 
     /// <summary>
@@ -55,9 +58,19 @@ public class GameClubWebApplicationFactory : WebApplicationFactory<Program>
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
-        ConnectionString = Environment.GetEnvironmentVariable("GAMECLUB_TEST_DATABASE")
-            ?? Environment.GetEnvironmentVariable("GAMECLUB_DATABASE")
-            ?? $"Host=localhost;Database=autotest_{Guid.NewGuid():N};Username=gameclub;Password=gameclub";
+        var configured = Environment.GetEnvironmentVariable("GAMECLUB_TEST_DATABASE")
+            ?? Environment.GetEnvironmentVariable("GAMECLUB_DATABASE");
+        if (!string.IsNullOrWhiteSpace(configured))
+        {
+            ConnectionString = configured;
+        }
+        else
+        {
+            _generatedDatabaseName = $"gameclub_test_pr51r3_{Guid.NewGuid():N}";
+            _dropGeneratedDatabaseOnDispose = true;
+            ConnectionString =
+                $"Host=localhost;Database={_generatedDatabaseName};Username=gameclub;Password=gameclub";
+        }
 
         Environment.SetEnvironmentVariable("GAMECLUB_DATABASE", ConnectionString);
         Environment.SetEnvironmentVariable("GAMECLUB_API_KEY", "dev-key");
@@ -93,6 +106,28 @@ public class GameClubWebApplicationFactory : WebApplicationFactory<Program>
         var host = base.CreateHost(builder);
         SeedDatabase(host);
         return host;
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing && _dropGeneratedDatabaseOnDispose && !string.IsNullOrWhiteSpace(_generatedDatabaseName))
+        {
+            try
+            {
+                var admin = new NpgsqlConnectionStringBuilder(ConnectionString) { Database = "postgres" }.ConnectionString;
+                using var conn = new NpgsqlConnection(admin);
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = $"DROP DATABASE IF EXISTS \"{_generatedDatabaseName}\" WITH (FORCE)";
+                cmd.ExecuteNonQuery();
+            }
+            catch
+            {
+                // Best-effort teardown for locally generated test databases.
+            }
+        }
+
+        base.Dispose(disposing);
     }
 
     private static void SeedDatabase(IHost host)

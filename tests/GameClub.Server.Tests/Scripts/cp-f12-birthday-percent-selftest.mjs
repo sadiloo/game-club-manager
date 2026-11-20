@@ -8,6 +8,7 @@ import {
 } from "./operator-jsdom-harness.mjs";
 
 const ERR_PERCENT = "درصد تولد باید بین ۰ و ۱۰۰ باشد.";
+const ERR_PERCENT_EMPTY = "درصد تولد را وارد کنید.";
 const BIRTHDAY_PUT = "/api/operator/members/settings/birthday";
 
 function percentFieldError(document) {
@@ -18,6 +19,33 @@ function percentFieldError(document) {
 
 function putBirthdayCalls(cap) {
   return cap.log.filter((x) => x.method === "PUT" && x.url.includes(BIRTHDAY_PUT));
+}
+
+{
+  const { window, document, ctx } = loadOperatorApp();
+  const cap = installFetchCapture(window, ctx);
+  cap.stub(BIRTHDAY_PUT, "GET", {
+    percent: 10,
+    windowKind: "birth_month",
+    windowDays: 3,
+    anchor: "on_and_after",
+  });
+  document.getElementById("mgrBirthdayBtn")?.click();
+  await waitCpVisible(document);
+  const input = document.querySelector('[data-cp-field="percent"]');
+  if (input) input.value = "";
+  cap.reset();
+  await clickCpSubmit(document);
+  await sleep(40);
+  if (putBirthdayCalls(cap).length !== 0) {
+    throw new Error("empty percent must not call PUT birthday");
+  }
+  const errEmpty = percentFieldError(document);
+  if (!errEmpty || errEmpty.textContent !== ERR_PERCENT_EMPTY) {
+    throw new Error(`expected empty percent error, got: ${errEmpty?.textContent}`);
+  }
+  document.querySelector('[data-cp-role="cancel"]')?.click();
+  await sleep(30);
 }
 
 {

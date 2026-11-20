@@ -77,15 +77,10 @@ public sealed class InpageFormsStoredBirthdayBillTests(GameClubWebApplicationFac
         var res = await op.PostAsync($"/api/operator/sessions/{sessionId}/bill/open", null);
         var diag = FormatBillDiag(res);
         output.WriteLine($"D6-report percent=150 invalid windowKind/anchor: {diag}");
-        Assert.True(
-            res.StatusCode is HttpStatusCode.OK or HttpStatusCode.BadRequest,
-            $"D6-report percent=150: {diag}");
-        Assert.NotEqual(HttpStatusCode.InternalServerError, res.StatusCode);
-        if (res.StatusCode == HttpStatusCode.BadRequest)
-        {
-            var body = await res.Content.ReadFromJsonAsync<JsonElement>();
-            Assert.True(body.TryGetProperty("code", out _));
-        }
+        Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
+        var body = await res.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("invalid_policy", body.GetProperty("code").GetString());
+        AssertUserVisiblePersian(body);
     }
 
     [Fact]
@@ -97,9 +92,16 @@ public sealed class InpageFormsStoredBirthdayBillTests(GameClubWebApplicationFac
         var res = await op.PostAsync($"/api/operator/sessions/{sessionId}/bill/open", null);
         var diag = FormatBillDiag(res);
         output.WriteLine($"D6-report percent=-5 invalid windowKind/anchor: {diag}");
-        Assert.True(
-            res.StatusCode is HttpStatusCode.OK or HttpStatusCode.BadRequest,
-            $"D6-report percent=-5: {diag}");
-        Assert.NotEqual(HttpStatusCode.InternalServerError, res.StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
+        var body = await res.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("invalid_policy", body.GetProperty("code").GetString());
+        AssertUserVisiblePersian(body);
+    }
+
+    private static void AssertUserVisiblePersian(JsonElement body)
+    {
+        var msg = body.GetProperty("message").GetString() ?? "";
+        Assert.False(string.IsNullOrWhiteSpace(msg));
+        Assert.Matches(@"[\u0600-\u06FF]", msg);
     }
 }

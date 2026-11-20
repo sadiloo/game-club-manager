@@ -206,6 +206,21 @@ async function main() {
   );
 
   await runCase(
+    "8b",
+    "F08 opening real+gift+debt0",
+    async ({ document }) => {
+      document.getElementById("mgrOpeningBtn")?.click();
+    },
+    async (document) => {
+      await fillMoneyField(document, "realToman", "10000");
+      await fillMoneyField(document, "giftToman", "0");
+      await fillMoneyField(document, "debtToman", "0");
+    },
+    "/opening-balance",
+    { realToman: 10000, giftToman: 0, debtToman: 0 },
+  );
+
+  await runCase(
     9,
     "F08 opening debt",
     async ({ document }) => {
@@ -430,7 +445,7 @@ async function main() {
   for (const r of results) {
     console.log(`QA${r.qaRow}\t${r.formId}\t${r.endpoint}\t${JSON.stringify(r.body)}`);
   }
-  if (results.length !== 19) throw new Error(`expected 19 form results, got ${results.length}`);
+  if (results.length !== 20) throw new Error(`expected 20 form results, got ${results.length}`);
   console.log("cp-money-forms-qa19-selftest: ok");
 }
 

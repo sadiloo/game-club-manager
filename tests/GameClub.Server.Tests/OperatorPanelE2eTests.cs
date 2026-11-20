@@ -60,7 +60,7 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
     {
         if (NativeDialogRecorders.TryGetValue(page, out var recorder))
         {
-            Assert.Empty(recorder.Calls);
+            NativeDialogRecorderAssert.AssertNoUnexpectedNativeDialogs(recorder.Calls);
         }
     }
 
@@ -269,6 +269,8 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
             Assert.Equal(PaymentConfirmationStatus.Confirmed, (await db.PaymentLines.SingleAsync()).ConfirmationStatus);
         }
+
+        AssertNoUnexpectedNativeDialogs(page);
     }
 
     [Fact]

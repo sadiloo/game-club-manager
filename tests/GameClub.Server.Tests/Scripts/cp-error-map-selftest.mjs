@@ -26,10 +26,13 @@ const unknown = ctx.window.cpTranslateApiError("xyz_unknown", "Something broke")
 if (/[A-Za-z]/.test(unknown)) throw new Error("unknown should not leak Latin");
 const openingBoth = ctx.window.cpTranslateApiError(
   "invalid_opening",
-  "Enter play hours or level, not both.",
+  "ساعت بازی یا سطح را وارد کنید، نه هر دو.",
 );
-if (openingBoth !== "ساعت بازی یا سطح، نه هر دو.") {
-  throw new Error("invalid_opening message branch must run before ERROR_MAP");
+if (openingBoth !== "ساعت بازی یا سطح را وارد کنید، نه هر دو.") {
+  throw new Error("invalid_opening must prefer server Persian message");
+}
+if (ctx.window.cpTranslateApiError("invalid_opening", "") !== "مانده افتتاحیه درست نیست.") {
+  throw new Error("invalid_opening fallback");
 }
 const invalidAmountGift = ctx.window.cpTranslateApiError("invalid_amount", "", { scope: "member_gift" });
 if (invalidAmountGift !== "هدیه نمی‌تواند منفی باشد.") throw new Error("invalid_amount gift scope");

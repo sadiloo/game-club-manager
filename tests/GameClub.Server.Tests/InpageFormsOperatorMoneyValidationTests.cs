@@ -276,6 +276,21 @@ public sealed class InpageFormsOperatorMoneyValidationTests(GameClubWebApplicati
     }
 
     [Fact]
+    public async Task opening_balance_rejects_negative_real_with_non_negative_message()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var mgr = await factory.CreateOperatorClientAsync("manager", "1234");
+        var customerId = await CreateCustomerAsync(mgr);
+        var res = await mgr.PostAsJsonAsync(
+            $"/api/operator/members/customers/{customerId}/opening-balance",
+            new { realToman = -1L });
+        Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
+        var body = await ReadJsonAsync(res);
+        AssertPersianMoney400(body, "invalid_opening");
+        Assert.Equal("مبلغ نمی‌تواند منفی باشد.", body.GetProperty("message").GetString());
+    }
+
+    [Fact]
     public async Task opening_balance_rejects_gift_overflow()
     {
         await S3TestHelpers.ResetAsync(factory);

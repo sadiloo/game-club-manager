@@ -10,9 +10,14 @@ internal static class OperatorMoneyValidation
 
     public static void EnsureNonNegativeBounded(long value, string code = "invalid_amount")
     {
-        if (value < 0 || value > MaxToman)
+        if (value < 0)
         {
-            throw new ApiException(StatusCodes.Status400BadRequest, code, "مبلغ باید عدد صحیح مثبت باشد.");
+            throw new ApiException(StatusCodes.Status400BadRequest, code, "مبلغ نمی‌تواند منفی باشد.");
+        }
+
+        if (value > MaxToman)
+        {
+            throw new ApiException(StatusCodes.Status400BadRequest, code, "مبلغ از حد مجاز بیشتر است.");
         }
     }
 

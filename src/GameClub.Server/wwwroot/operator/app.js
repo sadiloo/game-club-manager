@@ -2270,7 +2270,13 @@ bindClick("mgrBirthdayBtn", async () => {
     title: CP_TEXT.f12.title,
     confirmLabel: "ذخیره",
     fields: [
-      { name: "percent", kind: "number", label: CP_TEXT.f12.percent, value: cur.percent ?? "" },
+      {
+        name: "percent",
+        kind: "number",
+        label: CP_TEXT.f12.percent,
+        value: cur.percent ?? "",
+        emptyLabel: "درصد تولد را وارد کنید.",
+      },
       {
         name: "windowKind",
         kind: "radio",

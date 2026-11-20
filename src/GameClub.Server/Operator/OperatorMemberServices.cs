@@ -503,7 +503,7 @@ public sealed partial class OperatorMemberWalletService(
 
         if (body.DebtToman is long debtToman)
         {
-            OperatorMoneyValidation.EnsurePositiveBounded(debtToman, "invalid_opening");
+            OperatorMoneyValidation.EnsureNonNegativeBounded(debtToman, "invalid_opening");
         }
 
         if (body.LifetimeHours is not null && body.LevelName is not null)
@@ -667,7 +667,7 @@ public sealed partial class OperatorMemberWalletService(
 
         if (floorToman < -OperatorMoneyValidation.MaxToman)
         {
-            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_floor", "مبلغ باید عدد صحیح مثبت باشد.");
+            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_floor", "مبلغ از حد مجاز بیشتر است.");
         }
 
         settings.WalletDebtFloorToman = floorToman;

@@ -64,5 +64,17 @@ public sealed class InpageFormsOperatorPersianErrorsTests(GameClubWebApplication
         var opForbidden = await op.PutAsync("/api/operator/members/settings/debt-floor", JsonContent.Create(new { floorToman = (long?)null }));
         Assert.Equal(HttpStatusCode.Forbidden, opForbidden.StatusCode);
         AssertUserVisiblePersian(await BodyAsync(opForbidden));
+
+        var api = factory.CreateClientWithKey();
+        var opBill = await factory.CreateOperatorClientAsync();
+        await S3TestHelpers.RegisterConsole(api, opBill, "PS5-PAYFA", 1);
+        factory.Clock.SetTehran(2026, 6, 3, 14, 0);
+        var sessionId = await S3TestHelpers.StartSession(api, "PS5-PAYFA", 1);
+        (await opBill.PostAsync($"/api/operator/sessions/{sessionId}/bill/open", null)).EnsureSuccessStatusCode();
+        var zeroPay = await opBill.PostAsJsonAsync(
+            $"/api/operator/sessions/{sessionId}/bill/confirm",
+            new { payments = new[] { new { method = "Cash", amountToman = 0L } } });
+        Assert.Equal(HttpStatusCode.BadRequest, zeroPay.StatusCode);
+        AssertUserVisiblePersian(await BodyAsync(zeroPay));
     }
 }
