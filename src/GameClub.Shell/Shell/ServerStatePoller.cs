@@ -46,7 +46,11 @@ internal sealed class ServerStatePoller : IDisposable
         _timer = new System.Threading.Timer(_ => Tick(), null, TimeSpan.Zero, TimeSpan.FromSeconds(5));
     }
 
-    public ServerStateSnapshot Current { get; private set; } = new();
+    public ServerStateSnapshot Current { get; private set; } = new()
+    {
+        VisualState = ShellServerVisualState.Starting,
+        IconState = TrayIconState.Yellow,
+    };
 
     private void Tick()
     {

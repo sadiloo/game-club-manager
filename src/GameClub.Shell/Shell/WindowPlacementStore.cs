@@ -1,6 +1,8 @@
 using System;
 using System.IO;
 using System.Text.Json;
+using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Forms;
 
@@ -20,6 +22,15 @@ internal static class WindowPlacementStore
 {
     private const double DefaultWidth = 1280;
     private const double DefaultHeight = 800;
+
+    private static readonly JsonSerializerOptions LoadOptions = new()
+    {
+        NumberHandling = JsonNumberHandling.AllowNamedFloatingPointLiterals,
+    };
+
+    private static readonly Regex BareNonFinite = new(
+        @"(?<=[:,\[]\s*)(-?Infinity|NaN)(?=\s*[,}\]])",
+        RegexOptions.CultureInvariant);
 
     public static void Apply(Window window)
     {
@@ -87,7 +98,25 @@ internal static class WindowPlacementStore
                 return new WindowPlacement();
             }
 
-            var raw = JsonSerializer.Deserialize<WindowPlacement>(File.ReadAllText(ShellPaths.WindowJsonPath)) ?? new WindowPlacement();
+            var text = File.ReadAllText(ShellPaths.WindowJsonPath);
+            WindowPlacement raw;
+            try
+            {
+                raw = JsonSerializer.Deserialize<WindowPlacement>(text, LoadOptions) ?? new WindowPlacement();
+            }
+            catch (JsonException)
+            {
+                var sanitized = BareNonFinite.Replace(text, "\"$1\"");
+                try
+                {
+                    raw = JsonSerializer.Deserialize<WindowPlacement>(sanitized, LoadOptions) ?? new WindowPlacement();
+                }
+                catch (JsonException)
+                {
+                    return new WindowPlacement();
+                }
+            }
+
             return Normalize(raw);
         }
         catch

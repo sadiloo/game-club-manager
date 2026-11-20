@@ -32,6 +32,7 @@ public sealed class ShellPlanAIntegrationTests
     [Fact]
     public void shell_first_run_enables_checkpoint_shell_run_value()
     {
+        FakeShellSeams.RestoreProduction();
         var backup = BackupAutostartValue();
         try
         {
@@ -294,40 +295,61 @@ public sealed class ShellPlanAIntegrationTests
     [Fact]
     public void shell_elevated_stop_with_zero_sessions_skips_warning()
     {
-        FakeShellSeams.Install();
-        ShellSeams.ReadOpenSessionCount = () => 0;
-        ShellSeams.MessageBoxHandler = _ => throw new InvalidOperationException("dialog should not appear");
-        FakeShellSeams.Service.Status = ServiceControllerStatus.Running;
-        var code = ServerControlProgram.Run("stop");
-        Assert.InRange(code, 0, 4);
+        try
+        {
+            FakeShellSeams.Install();
+            ShellSeams.ReadOpenSessionCount = () => 0;
+            ShellSeams.MessageBoxHandler = _ => throw new InvalidOperationException("dialog should not appear");
+            FakeShellSeams.Service.Status = ServiceControllerStatus.Running;
+            var code = ServerControlProgram.Run("stop");
+            Assert.InRange(code, 0, 4);
+        }
+        finally
+        {
+            FakeShellSeams.RestoreProduction();
+        }
     }
 
     [Fact]
     public void shell_elevated_stop_shows_open_session_count_warning()
     {
-        FakeShellSeams.Install();
-        ShellSeams.ReadOpenSessionCount = () => 2;
-        ShellSeams.MessageBoxHandler = req =>
+        try
         {
-            Assert.Contains("۲", req.Text);
-            return System.Windows.Forms.DialogResult.Cancel;
-        };
-        FakeShellSeams.Service.Status = ServiceControllerStatus.Running;
-        var code = ServerControlProgram.Run("stop");
-        Assert.Equal(1, code);
-        Assert.NotNull(ShellSeams.LastMessageBoxRequest);
+            FakeShellSeams.Install();
+            ShellSeams.ReadOpenSessionCount = () => 2;
+            ShellSeams.MessageBoxHandler = req =>
+            {
+                Assert.Contains("۲", req.Text);
+                return System.Windows.Forms.DialogResult.Cancel;
+            };
+            FakeShellSeams.Service.Status = ServiceControllerStatus.Running;
+            var code = ServerControlProgram.Run("stop");
+            Assert.Equal(1, code);
+            Assert.NotNull(ShellSeams.LastMessageBoxRequest);
+        }
+        finally
+        {
+            FakeShellSeams.RestoreProduction();
+        }
     }
 
     [Fact]
     public void shell_elevated_stop_cancel_leaves_service_running()
     {
-        FakeShellSeams.Install();
-        ShellSeams.ReadOpenSessionCount = () => 3;
-        ShellSeams.MessageBoxHandler = _ => System.Windows.Forms.DialogResult.Cancel;
-        FakeShellSeams.Service.Status = ServiceControllerStatus.Running;
-        var code = ServerControlProgram.Run("stop");
-        Assert.Equal(1, code);
-        Assert.Equal(ServiceControllerStatus.Running, FakeShellSeams.Service.Status);
+        try
+        {
+            FakeShellSeams.Install();
+            ShellSeams.ReadOpenSessionCount = () => 3;
+            ShellSeams.MessageBoxHandler = _ => System.Windows.Forms.DialogResult.Cancel;
+            FakeShellSeams.Service.Status = ServiceControllerStatus.Running;
+            var code = ServerControlProgram.Run("stop");
+            Assert.Equal(1, code);
+            Assert.Equal(ServiceControllerStatus.Running, FakeShellSeams.Service.Status);
+        }
+        finally
+        {
+            FakeShellSeams.RestoreProduction();
+        }
     }
 
     [Fact]
@@ -380,6 +402,7 @@ public sealed class ShellPlanAIntegrationTests
     [Fact]
     public void shell_shows_persian_offline_when_service_stopped()
     {
+        FakeShellSeams.RestoreProduction();
         if (!WebView2RuntimePresent()) throw new InvalidOperationException("WebView2 runtime required");
         StopServiceIfRunning();
         var root = AllocateShellDataRoot();
@@ -405,7 +428,7 @@ public sealed class ShellPlanAIntegrationTests
                         }
 
                         html = await wv.CoreWebView2.ExecuteScriptAsync("document.body.innerText");
-                        if (!string.IsNullOrWhiteSpace(UnquoteWebViewScriptString(html)))
+                        if (UnquoteWebViewScriptString(html).Contains("سرور", StringComparison.Ordinal))
                         {
                             break;
                         }
@@ -430,6 +453,7 @@ public sealed class ShellPlanAIntegrationTests
     [Fact]
     public void shell_shows_persian_offline_after_service_stops_post_webview_ready()
     {
+        FakeShellSeams.RestoreProduction();
         if (!WebView2RuntimePresent()) throw new InvalidOperationException("WebView2 runtime required");
         EnsureServiceRunning();
         var root = AllocateShellDataRoot();
@@ -477,7 +501,7 @@ public sealed class ShellPlanAIntegrationTests
                         }
 
                         html = await wv.CoreWebView2.ExecuteScriptAsync("document.body.innerText");
-                        if (!string.IsNullOrWhiteSpace(UnquoteWebViewScriptString(html)))
+                        if (UnquoteWebViewScriptString(html).Contains("سرور", StringComparison.Ordinal))
                         {
                             break;
                         }
@@ -502,6 +526,7 @@ public sealed class ShellPlanAIntegrationTests
     [Fact]
     public void shell_navigates_to_operator_within_ten_seconds_after_service_start()
     {
+        FakeShellSeams.RestoreProduction();
         if (!WebView2RuntimePresent()) throw new InvalidOperationException("WebView2 runtime required");
         EnsureServiceRunning();
         var root = AllocateShellDataRoot();
@@ -535,6 +560,7 @@ public sealed class ShellPlanAIntegrationTests
     [Fact]
     public void shell_blocks_external_navigation_and_new_window_with_log_line()
     {
+        FakeShellSeams.RestoreProduction();
         if (!WebView2RuntimePresent()) throw new InvalidOperationException("WebView2 runtime required");
         EnsureServiceRunning();
         var root = AllocateShellDataRoot();
@@ -568,6 +594,7 @@ public sealed class ShellPlanAIntegrationTests
     [Fact]
     public void shell_new_window_blocked_log_redacts_host_in_shell_log()
     {
+        FakeShellSeams.RestoreProduction();
         if (!WebView2RuntimePresent()) throw new InvalidOperationException("WebView2 runtime required");
         EnsureServiceRunning();
         var root = AllocateShellDataRoot();
@@ -614,6 +641,7 @@ public sealed class ShellPlanAIntegrationTests
     [Fact]
     public void shell_offline_page_clears_when_service_returns_to_running()
     {
+        FakeShellSeams.RestoreProduction();
         if (!WebView2RuntimePresent()) throw new InvalidOperationException("WebView2 runtime required");
         var root = AllocateShellDataRoot();
         try
@@ -690,6 +718,7 @@ public sealed class ShellPlanAIntegrationTests
     [Fact]
     public void shell_page_alert_still_shows_webview_default_dialog()
     {
+        FakeShellSeams.RestoreProduction();
         if (!WebView2RuntimePresent()) throw new InvalidOperationException("WebView2 runtime required");
         EnsureServiceRunning();
         var root = AllocateShellDataRoot();
@@ -721,6 +750,15 @@ public sealed class ShellPlanAIntegrationTests
                     while (DateTime.UtcNow < operatorDeadline && !operatorNav.Task.IsCompleted)
                     {
                         await Task.Delay(200);
+                        var loc = UnquoteWebViewScriptString(
+                            await wv.CoreWebView2.ExecuteScriptAsync(
+                                "location.pathname + '|' + document.readyState"));
+                        if (loc.StartsWith("/operator/", StringComparison.OrdinalIgnoreCase)
+                            && loc.EndsWith("|complete", StringComparison.Ordinal))
+                        {
+                            operatorNav.TrySetResult(true);
+                            break;
+                        }
                     }
 
                     Assert.True(operatorNav.Task.IsCompleted, "operator page did not finish navigation");
@@ -770,6 +808,23 @@ public sealed class ShellPlanAIntegrationTests
         Environment.SetEnvironmentVariable("CHECKPOINT_SHELL_DATA", null);
         try
         {
+            var logsDir = Path.Combine(root, "logs");
+            if (Directory.Exists(logsDir))
+            {
+                foreach (var logPath in Directory.GetFiles(logsDir, "shell-*.log"))
+                {
+                    foreach (var line in File.ReadAllLines(logPath))
+                    {
+                        if (line.Contains("SHELL-OFFLINE-TRACE", StringComparison.Ordinal)
+                            || line.Contains("SHELL-RACE-NAV", StringComparison.Ordinal)
+                            || line.Contains("panel-navigate", StringComparison.Ordinal))
+                        {
+                            Console.WriteLine($"SHELL-TRACE-DUMP root={Path.GetFileName(root)} {line}");
+                        }
+                    }
+                }
+            }
+
             if (Directory.Exists(root))
             {
                 Directory.Delete(root, true);

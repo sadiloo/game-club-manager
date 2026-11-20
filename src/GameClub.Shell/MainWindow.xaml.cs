@@ -165,11 +165,19 @@ public partial class MainWindow : Window
             }
             else
             {
-                await NavigatePanelAsync();
+                if (_poller?.Current is { OperatorAnswers: false } snap && ShouldPresentPendingOffline())
+                {
+                    await ShowOfflineAsync(snap);
+                }
+                else
+                {
+                    await NavigatePanelAsync();
+                }
             }
         }
-        catch
+        catch (Exception ex)
         {
+            LogOfflineTrace("ensure-webview-failed", ex.GetType().Name);
             NativeHost.Visibility = Visibility.Visible;
             PanelWebView.Visibility = Visibility.Collapsed;
             NativeTitle.Text = "برای نمایش پنل، WebView2 لازم است";

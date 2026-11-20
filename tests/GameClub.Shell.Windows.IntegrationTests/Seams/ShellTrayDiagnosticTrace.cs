@@ -6,16 +6,8 @@ namespace GameClub.Shell.Windows.IntegrationTests.Seams;
 
 internal static class ShellTrayDiagnosticTrace
 {
-    private static bool _wired;
-
     public static void Wire()
     {
-        if (_wired)
-        {
-            return;
-        }
-
-        _wired = true;
         ShellSeams.TrayStopInProgressTrace = (value, caller, stack) =>
         {
             var shortStack = ShortStack(stack);
