@@ -77,6 +77,8 @@ internal static class FakeShellSeams
         ShellSeams.OnTickSkippedReentrant = null;
         ShellSeams.TrayStopInProgressTrace = null;
         ShellSeams.OnPollerTickTrace = null;
+        ShellSeams.StartElevatedProcess = null;
+        ShellSeams.TrayStopObserved = false;
         ShellSeams.UtcNow = () => DateTime.UtcNow;
         ShellSeams.SystemUptime = () => TimeSpan.FromMilliseconds(Environment.TickCount & int.MaxValue);
     }
@@ -89,6 +91,8 @@ internal static class FakeShellSeams
         ShellSeams.BeforeBuildSnapshot = null;
         ShellSeams.OnTickEntered = null;
         ShellSeams.OnTickSkippedReentrant = null;
+        ShellSeams.StartElevatedProcess = null;
+        ShellSeams.TrayStopObserved = false;
     }
 
     public static void Install()

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.ServiceProcess;
 using System.Windows.Forms;
 
@@ -220,13 +221,22 @@ public static class ShellSeams
     public static Func<LocalServerStatusDto?>? ReadLocalStatus { get; set; }
     public static bool TrayStopInProgress { get; private set; }
 
+    internal static bool TrayStopObserved { get; set; }
+
     public static Action<bool, string, string>? TrayStopInProgressTrace { get; set; }
 
     public static Action<int>? OnPollerTickTrace { get; set; }
 
+    public static Func<ProcessStartInfo, Process?>? StartElevatedProcess { get; set; }
+
     public static void SetTrayStopInProgress(bool value, string caller)
     {
         TrayStopInProgress = value;
+        if (value)
+        {
+            TrayStopObserved = false;
+        }
+
         TrayStopInProgressTrace?.Invoke(value, caller, Environment.StackTrace);
     }
     public static Func<DateTime> UtcNow { get; set; } = () => DateTime.UtcNow;

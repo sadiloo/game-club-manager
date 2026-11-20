@@ -1,59 +1,41 @@
-# PR42 R12 — GEOM proposal (no src change)
+# PR42 R12 — GEOM fix (applied)
 
-## R11 SHELL-GEOM evidence (CI run 44650203381)
+## R11 failure (CI run 44650203381)
 
-### placement-restore (`shell_window_json_restores_size_position_maximized`)
-
-| Phase | state | W×H | note |
-|-------|-------|-----|------|
-| Loaded | Maximized | 1024×**640** | `RestoreBounds.Height` assert expects **700** |
-| SourceInitialized | Maximized | 1024×**700** | after `WindowPlacementStore` `ApplyBounds` |
-| Show | Maximized | 1040×744 | frame |
-
-### infinity-round-trip (`shell_window_json_infinity_input_round_trips_*`)
-
-| Phase | state | W×H |
-|-------|-------|-----|
-| Loaded | **Normal** | 1024×640 |
-| SourceInitialized | Normal | 1024×728 |
-| Assert | **Expected Maximized, Actual Normal** | |
+At **Loaded**, `RestoreBounds.Height` was **640** (`MainWindow.xaml:8` `MinHeight`) instead of saved **700**, and infinity round-trip saw **Normal** instead of **Maximized** at the Loaded assert.
 
 ## Cause
 
-1. **640 = `MinHeight`** — `MainWindow.xaml:8` sets `MinHeight="640"`. Before saved placement is applied, the WPF window uses default layout height clamped to at least `MinHeight` (640).
+`OnLoadedOnce` (`WindowPlacementStore.cs:50-56`) set `WindowState = Maximized` without re-applying clamped JSON bounds. WPF captured `RestoreBounds` from the current layout (often still `MinHeight` 640) even though `OnSourceInitialized` had already called `ApplyBounds` once. Handler order and layout timing on Loaded left maximize reading the wrong restore size.
 
-2. **Maximize captures `RestoreBounds` too early** — `WindowPlacementStore.Apply` (`WindowPlacementStore.cs:50-56`) sets `WindowState = Maximized` on the **Loaded** event. If that runs while `Height` is still 640 (default/min) rather than the normalized JSON height (700), WPF records `RestoreBounds.Height = 640` for the maximized window. R11 traces show **Loaded** at 640 and **SourceInitialized-after-ApplyBounds** at 700, so the loaded assert (which runs on Loaded) observes 640.
+R6 **deliberately** keeps maximize on **Loaded** (not `SourceInitialized`); moving maximize earlier risks regressing the R6 red scenario.
 
-3. **Infinity + maximize** — `Normalize` (`WindowPlacementStore.cs:98-108`) replaces non-finite width/height with defaults (1280×800) but still honors `IsMaximized: true`. When maximize is applied on Loaded while layout height is still the min clamp (640) and/or `Show` has not completed the maximize path, `WindowState` can remain **Normal** at the Loaded assert (R11: Expected Maximized, Actual Normal).
+## Fix (in `WindowPlacementStore.cs`)
 
-## Minimal proposed diff (not applied in R12)
-
-Defer `WindowState = Maximized` until after `ApplyBounds` has set width/height from JSON (e.g. only in `OnSourceInitialized` after `ApplyBounds`, or on Loaded **after** verifying `Height` matches saved placement). Optionally apply maximize from `ContentRendered` when `placement.IsMaximized` and bounds match normalize output.
+In `OnLoadedOnce`, when `placement.IsMaximized`, call **`ApplyBounds()`** (same clamp as `SourceInitialized`) **immediately before** `WindowState = Maximized`, so restore bounds reflect saved/normalized width×height, then maximize in Loaded as before.
 
 ```diff
---- a/src/GameClub.Shell/Shell/WindowPlacementStore.cs
-+++ b/src/GameClub.Shell/Shell/WindowPlacementStore.cs
-@@ -44,15 +44,18 @@ internal static class WindowPlacementStore
-         void OnSourceInitialized(object? sender, EventArgs e)
-         {
-             window.SourceInitialized -= OnSourceInitialized;
-             ApplyBounds();
-+            if (placement.IsMaximized)
-+            {
-+                window.WindowState = WindowState.Maximized;
-+            }
-         }
- 
          void OnLoadedOnce(object? sender, EventArgs e)
          {
              window.Loaded -= OnLoadedOnce;
--            if (placement.IsMaximized)
--            {
--                window.WindowState = WindowState.Maximized;
--            }
+             if (placement.IsMaximized)
+             {
++                ApplyBounds();
+                 window.WindowState = WindowState.Maximized;
+             }
          }
 ```
 
-## Tray test isolation note (R11 failure)
+## Expected test outcomes (unchanged assertions)
 
-`shell_tray_initiated_stop_shows_no_unexpected_stop_notification` set `TrayStopInProgress = true` **before** `WpfStaApplicationFixture.RunAsync`, which calls `FakeShellSeams.ResetHarnessStatics()` and cleared the flag before the poller ran — producing an unexpected toast. R12 moves the flag set **inside** the test body (after reset) and adds `SHELL-TRAY-TRACE` logging for flag writes and poller instance id on each tick.
+| Test | Expectation |
+|------|-------------|
+| R6 maximized test | Stays green |
+| `shell_window_json_restores_size_position_maximized` | `Maximized`, `RestoreBounds` 1024×700 (clamped) |
+| `shell_window_json_infinity_input_round_trips_*` | `Maximized`, `RestoreBounds` = `Normalize` defaults after clamp (1280×800 capped to work area) |
+
+## Tray (same R12 round)
+
+- `TrayStopObserved`: no clear on first Running/Green tick while stop is still in flight; clear only after a non-Running/Green snapshot, then StartPending or Running/Green.
+- Test (i): flag set while Running, ≥1 Running tick, then Stopped → 0 toasts.
+- Test (iii): `ShellSeams.StartElevatedProcess` seam; `LaunchServerControlForTests("stop")` with `Win32Exception(1223)` clears flag; unexpected stop → 1 toast.

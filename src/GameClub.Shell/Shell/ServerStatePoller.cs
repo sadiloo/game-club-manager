@@ -109,22 +109,34 @@ internal sealed class ServerStatePoller : IDisposable
             return;
         }
 
-        if (snapshot.IconState == TrayIconState.Green
-            || snapshot.VisualState == ShellServerVisualState.Running)
+        var recovery = IsRunningOrGreen(snapshot) || IsStartPendingServiceStatus();
+        if (!recovery)
         {
-            ShellSeams.SetTrayStopInProgress(false, "poller-running-or-green");
+            ShellSeams.TrayStopObserved = true;
             return;
         }
 
+        if (!ShellSeams.TrayStopObserved)
+        {
+            return;
+        }
+
+        ShellSeams.SetTrayStopInProgress(false, "poller-recovery-after-tray-stop");
+    }
+
+    private static bool IsRunningOrGreen(ServerStateSnapshot snapshot)
+        => snapshot.IconState == TrayIconState.Green
+           || snapshot.VisualState == ShellServerVisualState.Running;
+
+    private static bool IsStartPendingServiceStatus()
+    {
         try
         {
-            if (ShellSeams.Service.Status == ServiceControllerStatus.StartPending)
-            {
-                ShellSeams.SetTrayStopInProgress(false, "poller-start-pending");
-            }
+            return ShellSeams.Service.Status == ServiceControllerStatus.StartPending;
         }
         catch
         {
+            return false;
         }
     }
 

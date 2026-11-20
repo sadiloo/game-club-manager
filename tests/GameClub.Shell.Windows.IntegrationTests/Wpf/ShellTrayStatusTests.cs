@@ -1,5 +1,6 @@
 #if NET48
 using System;
+using System.ComponentModel;
 using System.ServiceProcess;
 using System.Threading.Tasks;
 using GameClub.Shell.Shell;
@@ -102,14 +103,16 @@ public sealed class ShellTrayStatusTests
         FakeShellSeams.Install();
         _fixture.RunAsync(async () =>
         {
-            ShellSeams.SetTrayStopInProgress(true, "shell_tray_initiated_stop_shows_no_unexpected_stop_notification");
             using var poller = new ServerStatePoller();
-            await Task.Delay(100);
+            await Task.Delay(500);
+            ShellSeams.SetTrayStopInProgress(true, "shell_tray_initiated_stop_shows_no_unexpected_stop_notification");
+            await Task.Delay(500);
             FakeShellSeams.Service.Status = ServiceControllerStatus.Stopped;
+            FakeShellSeams.Http.Answers = false;
             await Task.Delay(6000);
             Assert.Equal(0, FakeShellSeams.Notifications.UnexpectedStopCount);
             ShellSeams.SetTrayStopInProgress(false, "shell_tray_initiated_stop_shows_no_unexpected_stop_notification.cleanup");
-        }, TimeSpan.FromSeconds(20));
+        }, TimeSpan.FromSeconds(25));
     }
 
     [Fact]
@@ -146,13 +149,11 @@ public sealed class ShellTrayStatusTests
         FakeShellSeams.Install();
         _fixture.RunAsync(async () =>
         {
-            ShellSeams.SetTrayStopInProgress(true, "shell_tray_stop_declined_uac");
+            ShellSeams.StartElevatedProcess = _ => throw new Win32Exception(1223);
             using var poller = new ServerStatePoller();
-            await Task.Delay(100);
-            ShellSeams.SetTrayStopInProgress(false, "shell_tray_stop_declined_uac.simulate-uac-decline");
-            FakeShellSeams.Service.Status = ServiceControllerStatus.Running;
-            FakeShellSeams.Http.Answers = true;
-            await Task.Delay(100);
+            await Task.Delay(500);
+            ShellTrayHost.LaunchServerControlForTests("stop");
+            Assert.False(ShellSeams.TrayStopInProgress);
             FakeShellSeams.Service.Status = ServiceControllerStatus.Stopped;
             FakeShellSeams.Http.Answers = false;
             await Task.Delay(6000);

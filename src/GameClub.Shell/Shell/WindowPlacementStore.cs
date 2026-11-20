@@ -52,6 +52,7 @@ internal static class WindowPlacementStore
             window.Loaded -= OnLoadedOnce;
             if (placement.IsMaximized)
             {
+                ApplyBounds();
                 window.WindowState = WindowState.Maximized;
             }
         }
