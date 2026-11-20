@@ -69,6 +69,11 @@ public sealed class ApiExceptionMiddleware(RequestDelegate next, ILogger<ApiExce
         }
         catch (BillingException ex)
         {
+            logger.LogWarning(
+                "BillingException {BillingCode} on {Method} {Path}",
+                ex.Code,
+                context.Request.Method,
+                context.Request.Path);
             var userMessage = BillingExceptionUserMessages.ForCode(ex.Code);
             await WriteJsonErrorAsync(context, StatusCodes.Status400BadRequest, ex.Code, userMessage, null);
         }
@@ -85,6 +90,14 @@ public sealed class ApiExceptionMiddleware(RequestDelegate next, ILogger<ApiExce
             await WriteConflictAsync(context, "closed", "Session is closed.");
         }
         catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (IOException) when (context.RequestAborted.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (BadHttpRequestException) when (context.RequestAborted.IsCancellationRequested)
         {
             throw;
         }

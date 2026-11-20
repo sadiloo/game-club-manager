@@ -12,6 +12,7 @@ public sealed class InpageFormsApiMiddlewareTests(GameClubWebApplicationFactory 
     [Fact]
     public async Task api_middleware_maps_billing_exception_to_400()
     {
+        factory.LogCollector.Clear();
         var client = factory.CreateClient();
         var login = await client.PostAsJsonAsync("/api/operator/auth/login", new { username = "manager", pin = "1234" });
         login.EnsureSuccessStatusCode();
@@ -36,6 +37,16 @@ public sealed class InpageFormsApiMiddlewareTests(GameClubWebApplicationFactory 
         Assert.Equal(err.GetString(), code.GetString());
         Assert.Equal(BillingErrors.InvalidLevel, code.GetString());
         Assert.Equal("جدول سطح‌ها نامعتبر است.", message.GetString());
+
+        var billingLogs = factory.LogCollector.Entries
+            .Where(e =>
+                e.Category == typeof(ApiExceptionMiddleware).FullName
+                && e.Level is LogLevel.Information or LogLevel.Warning)
+            .ToList();
+        Assert.Single(billingLogs);
+        Assert.Contains(BillingErrors.InvalidLevel, billingLogs[0].Message, StringComparison.Ordinal);
+        Assert.Contains("PUT", billingLogs[0].Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("level name", billingLogs[0].Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

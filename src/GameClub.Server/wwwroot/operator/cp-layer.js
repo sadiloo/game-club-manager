@@ -133,49 +133,92 @@
     return out;
   }
 
-  function cpParseNumber(raw, opts = {}) {
+  const CP_ERR = {
+    moneyRequired: "مبلغ را وارد کنید.",
+    moneyFormat: "مبلغ درست نیست؛ فقط رقم بنویسید.",
+    moneyLeadingZero: "مبلغ نباید با صفر شروع شود.",
+    moneyTooLong: "مبلغ نباید بیشتر از ۱۵ رقم باشد.",
+    moneyPositive: "مبلغ باید عدد صحیح مثبت باشد.",
+    numberFormat: "عدد درست نیست؛ فقط رقم بنویسید.",
+    numberTooLong: "عدد نباید بیشتر از ۱۵ رقم باشد.",
+    generic: "کار انجام نشد. دوباره تلاش کنید.",
+    f07Empty: "دقیقه را وارد کنید.",
+    f07Zero: "دقیقه باید بیشتر از صفر باشد.",
+  };
+
+  function cpParseNumberResult(raw, opts = {}) {
     const allowZero = opts.allowZero === true;
     const positive = opts.positive !== false;
     const allowSeparators = opts.allowSeparators !== false;
     const trimmed = raw == null ? "" : String(raw).trim();
-    if (!trimmed) return null;
-    if (cpHasIllegalNumericChars(trimmed, allowSeparators)) return null;
-    if (allowSeparators) {
-      if (!cpHasValidThousandsGrouping(trimmed)) return null;
-    }
+    if (!trimmed) return { ok: false, reason: "empty" };
+    if (cpHasIllegalNumericChars(trimmed, allowSeparators)) return { ok: false, reason: "format" };
+    if (allowSeparators && !cpHasValidThousandsGrouping(trimmed)) return { ok: false, reason: "format" };
     const s = digitsOnlyFromMoneyRaw(trimmed);
-    if (!s) return null;
-    if (s.length > 15) return null;
-    if (s.length > 1 && s[0] === "0") return null;
+    if (!s) return { ok: false, reason: "format" };
+    if (s.length > 15) return { ok: false, reason: "too_long" };
+    if (s.length > 1 && s[0] === "0") return { ok: false, reason: "leading_zero" };
     const n = Number(s);
-    if (!Number.isFinite(n) || !Number.isInteger(n)) return null;
-    if (n < 0) return null;
-    if (n === 0 && !allowZero) return null;
-    if (positive && n <= 0 && !(allowZero && n === 0)) return null;
-    return n;
+    if (!Number.isFinite(n) || !Number.isInteger(n)) return { ok: false, reason: "format" };
+    if (n < 0) return { ok: false, reason: "format" };
+    if (positive && n <= 0 && !(allowZero && n === 0)) return { ok: false, reason: "non_positive" };
+    if (n === 0 && !allowZero) return { ok: false, reason: "zero" };
+    return { ok: true, value: n };
+  }
+
+  function cpParseNumber(raw, opts = {}) {
+    const r = cpParseNumberResult(raw, opts);
+    return r.ok ? r.value : null;
+  }
+
+  function cpMoneyMessageFromResult(r, field) {
+    if (r.ok) return null;
+    switch (r.reason) {
+      case "empty":
+        return field.emptyLabel || CP_ERR.moneyRequired;
+      case "format":
+        return field.invalidFormatLabel || CP_ERR.moneyFormat;
+      case "leading_zero":
+        return CP_ERR.moneyLeadingZero;
+      case "too_long":
+        return CP_ERR.moneyTooLong;
+      case "zero":
+      case "non_positive":
+        return CP_ERR.moneyPositive;
+      default:
+        return CP_ERR.moneyFormat;
+    }
+  }
+
+  function cpParseIntegerResult(raw) {
+    const trimmed = raw == null ? "" : String(raw).trim();
+    if (!trimmed) return { ok: false, reason: "empty" };
+    if (cpHasIllegalNumericChars(trimmed, false)) return { ok: false, reason: "format" };
+    const s = digitsOnlyFromMoneyRaw(trimmed);
+    if (!s) return { ok: false, reason: "format" };
+    if (s.length > 15) return { ok: false, reason: "too_long" };
+    const n = Number(s);
+    if (!Number.isInteger(n)) return { ok: false, reason: "format" };
+    return { ok: true, value: n };
   }
 
   function cpParseInteger(raw) {
-    const trimmed = raw == null ? "" : String(raw).trim();
-    if (!trimmed) return null;
-    if (cpHasIllegalNumericChars(trimmed, false)) return null;
-    const s = digitsOnlyFromMoneyRaw(trimmed);
-    if (!s) return null;
-    if (s.length > 15) return null;
-    if (s.length > 1 && s[0] === "0") return null;
-    const n = Number(s);
-    return Number.isInteger(n) ? n : null;
+    const r = cpParseIntegerResult(raw);
+    return r.ok ? r.value : null;
   }
+
+  const SESSION_STALE_MSG = "جلسه تغییر کرده است. صفحه تازه شد؛ دوباره تلاش کنید.";
 
   const ERROR_MAP = {
     payment_invalid: "دست‌کم یک خط پرداخت با مبلغ بیشتر از صفر لازم است.",
     wallet_requires_member: "برای پرداخت کیف پول، عضو را پیوند دهید.",
     reason_required: "دلیل باطل را وارد کنید.",
     forbidden: "فقط مدیر می‌تواند فاکتور را باطل کند.",
+    forbidden_manager: "فقط مدیر یا مالک می‌تواند این کار را انجام دهد.",
     forbidden_ladder: "فقط مدیر یا مالک می‌تواند جدول سطح‌ها را عوض کند.",
     invalid_gift: "هدیه نمی‌تواند منفی باشد.",
     invalid_amount: "مبلغ نامعتبر است.",
-    invalid_opening: "دست‌کم یکی از خانه‌ها را پر کنید.",
+    invalid_amount_gift: "هدیه نمی‌تواند منفی باشد.",
     opening_exists: "مانده افتتاحیهٔ این عضو قبلاً ثبت شده است.",
     invalid_floor: "سقف نسیه باید صفر یا منفی باشد.",
     same_station: "این ایستگاه الان نمی‌تواند جلسه بگیرد. فهرست تازه شد.",
@@ -184,39 +227,71 @@
     target_unavailable: "این ایستگاه الان نمی‌تواند جلسه بگیرد. فهرست تازه شد.",
     no_group: "این ایستگاه الان نمی‌تواند جلسه بگیرد. فهرست تازه شد.",
     station_busy: "این ایستگاه الان نمی‌تواند جلسه بگیرد. فهرست تازه شد.",
-    stale_version: "جلسه تغییر کرده است. صفحه تازه شد؛ دوباره تلاش کنید.",
-    session_busy: "جلسه تغییر کرده است. صفحه تازه شد؛ دوباره تلاش کنید.",
-    not_transferable: "جلسه تغییر کرده است. صفحه تازه شد؛ دوباره تلاش کنید.",
-    awaiting_payment: "جلسه تغییر کرده است. صفحه تازه شد؛ دوباره تلاش کنید.",
-    invalid_level: "جدول سطح‌ها نامعتبر است.",
+    stale_version: SESSION_STALE_MSG,
+    session_busy: SESSION_STALE_MSG,
+    not_transferable: SESSION_STALE_MSG,
+    awaiting_payment: SESSION_STALE_MSG,
+    closed: SESSION_STALE_MSG,
+    invalid_session: SESSION_STALE_MSG,
+    stale_bill: SESSION_STALE_MSG,
+    invalid_level: "جدول سطح‌ها درست نیست. نام‌ها، ساعت‌ها و درصدها را بررسی کنید.",
     invalid_date: "تاریخ درست نیست.",
     invalid_policy: "تنظیم تولد نامعتبر است.",
-    invalid_window_days: "تعداد روزهای پنجره باید دست‌کم ۱ باشد.",
+    invalid_window_days: "دست‌کم ۱ روز.",
     description_required: "توضیح الزامی است.",
     no_change: "تغییری نسبت به مقدار فعلی ندارد.",
     gift_cap_exceeded: "هدیه از سقف اپراتور بیشتر است.",
-    gift_not_allowed_with_debt: "هدیه با بدهی مجاز نیست.",
+    gift_not_allowed_with_debt:
+      "مشتری بدهی دارد و این شارژ بدهی را کامل صاف نمی‌کند؛ بدون هدیه دوباره ثبت کنید.",
     invalid_money: "مبلغ باید عدد صحیح مثبت باشد.",
+    invalid_method: "روش شارژ درست نیست.",
+    no_open_shift: "شیفتی باز نیست. اول شیفت را باز کنید.",
+    shift_closed: "شیفت بسته شده است.",
+    not_found: "این مورد پیدا نشد. صفحه را تازه کنید.",
+    not_pending: "این مورد قبلاً انجام شده است.",
+    gift_already_spent: "هدیهٔ این شارژ خرج شده است.",
+    correction_window_closed: "شیفت این شارژ بسته شده؛ فقط مدیر می‌تواند اصلاحش کند.",
+    correction_exceeds_balance:
+      "این اصلاح موجودی پرداختی مشتری را منفی می‌کند (مشتری قبلاً خرج کرده). اصلاح انجام نشد؛ به مدیر خبر دهید.",
     prepaid_exists: "این جلسه از قبل رزرو دارد.",
     below_minimum: "این مبلغ از حداقل زمان بازی تعرفه کمتر است.",
-    not_console: "فقط برای کنسول.",
-    invalid_float: "تنخواه نامعتبر است.",
+    not_console: "رزرو فقط برای کنسول و میز است.",
+    invalid_state: "این جلسه فعال نیست.",
+    invalid_minutes: CP_ERR.f07Zero,
+    invalid_time: "زمان درست نیست.",
+    billing_error: CP_ERR.generic,
+    invalid_cap: "سقف هدیه درست نیست. مبلغ و درصد را بررسی کنید.",
+    invalid_float: "تنخواه نمی‌تواند منفی باشد.",
+    shift_open: "شیفت از قبل باز است.",
+    shifts_disabled: "شیفت در تنظیمات خاموش است.",
+    unauthorized: "دوباره وارد شوید.",
   };
 
   function cpTranslateApiError(code, message, ctx) {
-    if (code === "forbidden" && ctx && ctx.scope === "level_ladder") {
-      return ERROR_MAP.forbidden_ladder;
+    if (code === "forbidden") {
+      if (ctx && ctx.scope === "level_ladder") return ERROR_MAP.forbidden_ladder;
+      if (ctx && ctx.scope === "void_invoice") return ERROR_MAP.forbidden;
+      if (ctx && ctx.scope === "manager_action") return ERROR_MAP.forbidden_manager;
+    }
+    if (code === "invalid_amount" && ctx && ctx.scope === "member_gift") {
+      return ERROR_MAP.invalid_amount_gift;
+    }
+    if (code === "gift_not_allowed_with_debt" && message && /[\u0600-\u06FF]/.test(message)) {
+      return message;
+    }
+    if (code === "invalid_opening" && message) {
+      const m = String(message);
+      if (m.includes("Enter play hours or level, not both")) return "ساعت بازی یا سطح، نه هر دو.";
+      if (m.includes("Opening cannot include both real money and debt")) {
+        return "مانده واقعی و بدهی را با هم وارد نکنید.";
+      }
+      if (m.includes("Enter opening amounts or play hours")) return "دست‌کم یک خانه را پر کنید.";
+      if (m.includes("Enter opening wallet amounts")) return "برای این عضو باید مبلغ افتتاحیه هم وارد شود.";
+      return "مانده افتتاحیه درست نیست.";
     }
     if (code && ERROR_MAP[code]) return ERROR_MAP[code];
     if (message && /[\u0600-\u06FF]/.test(message)) return message;
-    if (message && code === "invalid_opening") {
-      const m = String(message);
-      if (m.includes("real balance and debt")) return "مانده واقعی و بدهی را با هم وارد نکنید.";
-      if (m.includes("at least one")) return "دست‌کم یکی از خانه‌ها را پر کنید.";
-      if (m.includes("lifetime hours")) return "ساعت بازی یا سطح، نه هر دو.";
-      if (m.includes("opening amount")) return "برای این عضو باید مبلغ افتتاحیه هم وارد شود.";
-    }
-    return "کار انجام نشد. دوباره تلاش کنید.";
+    return CP_ERR.generic;
   }
 
   function cpToast({ tone = "success", text }) {
@@ -506,11 +581,29 @@
   function readMoneyField(input, field) {
     const allowZero = field.allowZero === true;
     const positive = field.positive !== false;
-    const n = cpParseNumber(input.value, { allowZero, positive });
-    if (n == null && String(input.value).trim() === "" && field.required === false) return { empty: true };
-    if (n == null) return { error: field.emptyLabel || "مبلغ را وارد کنید." };
-    if (positive && n <= 0 && !(allowZero && n === 0)) return { error: "مبلغ باید عدد صحیح مثبت باشد." };
-    return { value: n };
+    const parsed = cpParseNumberResult(input.value, { allowZero, positive });
+    if (!parsed.ok) {
+      if (parsed.reason === "empty" && field.required === false) return { empty: true };
+      return { error: cpMoneyMessageFromResult(parsed, field) };
+    }
+    return { value: parsed.value };
+  }
+
+  function readNumberField(input, field) {
+    const trimmed = String(input.value ?? "").trim();
+    if (!trimmed) {
+      if (field.required === false) return { skip: true };
+      return { error: field.emptyLabel || CP_ERR.f07Empty };
+    }
+    const parsed = cpParseIntegerResult(input.value);
+    if (!parsed.ok) {
+      if (parsed.reason === "too_long") return { error: field.tooLongLabel || CP_ERR.numberTooLong };
+      return { error: field.formatLabel || CP_ERR.numberFormat };
+    }
+    if (field.positive === true && parsed.value <= 0) {
+      return { error: field.positiveErr || CP_ERR.f07Zero };
+    }
+    return { value: parsed.value };
   }
 
   function openForm(spec) {
@@ -531,7 +624,9 @@
               } else if (field.kind === "number") {
                 const w = document.createElement("label");
                 w.className = "cp-field";
-                w.innerHTML = `<span>${field.label}${field.required === false ? " (اختیاری)" : ""}</span>`;
+                const labelSpan = document.createElement("span");
+                labelSpan.textContent = `${field.label}${field.required === false ? " (اختیاری)" : ""}`;
+                w.appendChild(labelSpan);
                 const input = document.createElement("input");
                 input.type = "text";
                 input.inputMode = "numeric";
@@ -548,7 +643,9 @@
               } else if (field.kind === "textarea") {
                 const w = document.createElement("label");
                 w.className = "cp-field";
-                w.innerHTML = `<span>${field.label}</span>`;
+                const labelSpan = document.createElement("span");
+                labelSpan.textContent = field.label || "";
+                w.appendChild(labelSpan);
                 const ta = document.createElement("textarea");
                 ta.rows = 3;
                 ta.dataset.cpField = field.name;
@@ -563,7 +660,9 @@
               } else if (field.kind === "select") {
                 const w = document.createElement("label");
                 w.className = "cp-field";
-                w.innerHTML = `<span>${field.label}</span>`;
+                const labelSpan = document.createElement("span");
+                labelSpan.textContent = field.label || "";
+                w.appendChild(labelSpan);
                 const sel = document.createElement("select");
                 sel.dataset.cpField = field.name;
                 for (const opt of field.options || []) {
@@ -610,7 +709,9 @@
               } else {
                 const w = document.createElement("label");
                 w.className = "cp-field";
-                w.innerHTML = `<span>${field.label}</span>`;
+                const labelSpan = document.createElement("span");
+                labelSpan.textContent = field.label || "";
+                w.appendChild(labelSpan);
                 const input = document.createElement("input");
                 input.type = "text";
                 input.dataset.cpField = field.name;
@@ -635,10 +736,9 @@
                 else if (!r.empty) values[field.name] = r.value;
               } else if (field.kind === "number") {
                 const input = session.fieldEls[field.name];
-                const n = cpParseInteger(input.value);
-                if (n == null && String(input.value).trim() === "" && field.required === false) continue;
-                if (n == null) errs[field.name] = field.err || "عدد نامعتبر است.";
-                else values[field.name] = n;
+                const nr = readNumberField(input, field);
+                if (nr.error) errs[field.name] = nr.error;
+                else if (!nr.skip) values[field.name] = nr.value;
               } else if (field.kind === "textarea" || field.kind === "text" || field.kind === "latin") {
                 const input = session.fieldEls[field.name];
                 const v = String(input.value || "").trim();
@@ -752,7 +852,14 @@
               const btn = document.createElement("button");
               btn.type = "button";
               btn.className = "cp-pick-row";
-              btn.innerHTML = `<strong>${item.title}</strong>${item.subtitle ? `<span>${item.subtitle}</span>` : ""}`;
+              const titleEl = document.createElement("strong");
+              titleEl.textContent = item.title ?? "";
+              btn.appendChild(titleEl);
+              if (item.subtitle) {
+                const sub = document.createElement("span");
+                sub.textContent = item.subtitle;
+                btn.appendChild(sub);
+              }
               btn.onclick = () => session._finish(item);
               host.appendChild(btn);
             }
@@ -799,7 +906,9 @@
 
   window.cpLayer = cpLayer;
   window.cpParseNumber = cpParseNumber;
+  window.cpParseNumberResult = cpParseNumberResult;
   window.cpParseInteger = cpParseInteger;
+  window.cpParseIntegerResult = cpParseIntegerResult;
   window.cpTranslateApiError = cpTranslateApiError;
   window.cpForm = cpForm;
   window.cpPrompt = cpPrompt;

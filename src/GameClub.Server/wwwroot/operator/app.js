@@ -287,9 +287,24 @@ function validateLevelLadderFieldErrors(rowDrafts) {
 
     let hours = null;
     if (!hoursTrim) mark(`${prefix}:hours`, CP_TEXT.f14.err.hoursEmpty);
-    else {
+    else if (typeof cpParseIntegerResult === "function") {
+      const hp = cpParseIntegerResult(hoursTrim);
+      if (!hp.ok) {
+        if (hp.reason === "too_long") mark(`${prefix}:hours`, "عدد نباید بیشتر از ۱۵ رقم باشد.");
+        else mark(`${prefix}:hours`, "عدد درست نیست؛ فقط رقم بنویسید.");
+      } else {
+        hours = hp.value;
+        if (hours < 0) mark(`${prefix}:hours`, CP_TEXT.f14.err.hoursEmpty);
+        else if (previousHours != null && hours <= previousHours) {
+          mark(
+            `${prefix}:hours`,
+            cpTextFormat(CP_TEXT.f14.err.hoursOrder, { h: cpTextFaDigits(previousHours) }),
+          );
+        }
+      }
+    } else {
       hours = cpParseInteger(hoursTrim);
-      if (hours == null) mark(`${prefix}:hours`, CP_TEXT.f14.err.hoursEmpty);
+      if (hours == null) mark(`${prefix}:hours`, "عدد درست نیست؛ فقط رقم بنویسید.");
       else if (hours < 0) mark(`${prefix}:hours`, CP_TEXT.f14.err.hoursEmpty);
       else if (previousHours != null && hours <= previousHours) {
         mark(
@@ -301,9 +316,18 @@ function validateLevelLadderFieldErrors(rowDrafts) {
 
     let pct = null;
     if (!pctTrim) mark(`${prefix}:percent`, CP_TEXT.f14.err.percentEmpty);
-    else {
+    else if (typeof cpParseIntegerResult === "function") {
+      const pp = cpParseIntegerResult(pctTrim);
+      if (!pp.ok) {
+        if (pp.reason === "too_long") mark(`${prefix}:percent`, "عدد نباید بیشتر از ۱۵ رقم باشد.");
+        else mark(`${prefix}:percent`, "عدد درست نیست؛ فقط رقم بنویسید.");
+      } else {
+        pct = pp.value;
+        if (pct < 0 || pct > 100) mark(`${prefix}:percent`, CP_TEXT.f14.err.percentRange);
+      }
+    } else {
       pct = cpParseInteger(pctTrim);
-      if (pct == null) mark(`${prefix}:percent`, CP_TEXT.f14.err.percentEmpty);
+      if (pct == null) mark(`${prefix}:percent`, "عدد درست نیست؛ فقط رقم بنویسید.");
       else if (pct < 0 || pct > 100) mark(`${prefix}:percent`, CP_TEXT.f14.err.percentRange);
     }
 
@@ -602,7 +626,18 @@ async function api(path, options = {}) {
       msg = "این مورد قبلاً انجام شده است.";
     }
     if (typeof cpTranslateApiError === "function") {
-      const scope = path.includes("level-ladder") ? { scope: "level_ladder" } : null;
+      let scope = null;
+      if (path.includes("level-ladder")) scope = { scope: "level_ladder" };
+      else if (path.includes("/void")) scope = { scope: "void_invoice" };
+      else if (path.includes("/wallet/gift")) scope = { scope: "member_gift" };
+      else if (
+        path.includes("/members/settings") ||
+        path.includes("/opening-balance") ||
+        path.includes("/birthday") ||
+        path.includes("/shift/open")
+      ) {
+        scope = { scope: "manager_action" };
+      }
       msg = cpTranslateApiError(code, msg, scope);
     }
     if (isBackground) {
@@ -1970,7 +2005,15 @@ bindClick("prepaidDurationBtn", async () => {
     title: "رزرو زمان",
     body: tile?.id,
     confirmLabel: "ثبت رزرو",
-    field: { kind: "number", label: "دقیقه", placeholder: "۶۰", positive: true },
+    field: {
+      kind: "number",
+      label: "دقیقه",
+      placeholder: "۶۰",
+      positive: true,
+      emptyLabel: "دقیقه را وارد کنید.",
+      positiveErr: "دقیقه باید بیشتر از صفر باشد.",
+      formatLabel: "عدد درست نیست؛ فقط رقم بنویسید.",
+    },
     onSubmit: async (v) => {
       await api(`/api/operator/sessions/${selectedSessionId}/prepaid/duration`, {
         method: "POST",
@@ -2176,6 +2219,7 @@ bindClick("mgrOpeningBtn", async () => {
 bindClick("mgrFloorBtn", async () => {
   const values = await cpForm({
     title: "سقف نسیه",
+    body: "خالی یا ۰ یعنی نسیه ممنوع. فقط برای کنسول و میز.",
     confirmLabel: "ذخیره",
     fields: [
       {
@@ -2388,17 +2432,16 @@ bindClick("openShiftBtn", async () => {
     confirmLabel: "باز کردن شیفت",
     field: {
       kind: "money",
-      label: "تنخواه اول شیفت (تومان)",
-      value: 0,
+      label: "تنخواه (تومان)",
+      required: false,
       allowZero: true,
       positive: false,
-      help: "خالی = ۰",
+      help: "خالی یعنی ۰ تومان.",
     },
-    onSubmit: async (n) => {
-      const openingFloatToman = n == null ? 0 : n;
+    onSubmit: async (values) => {
+      const openingFloatToman = values?.value ?? 0;
       await api("/api/operator/shift/open", { method: "POST", body: JSON.stringify({ openingFloatToman }) });
       await refreshShiftState();
-      cpToast({ tone: "success", text: "شیفت باز شد." });
     },
   });
   if (v == null) return;
@@ -2495,10 +2538,20 @@ function gregorianDayRangeUtc(g) {
   return { fromUtc: from.toISOString(), toUtc: to.toISOString() };
 }
 
+function escapeHtmlText(value) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
 function renderReportsTable(title, headers, rows) {
-  const head = headers.map((h) => `<th>${h}</th>`).join("");
-  const body = rows.map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join("")}</tr>`).join("");
-  return `<h3>${title}</h3><table dir="rtl" border="1" cellpadding="4"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+  const head = headers.map((h) => `<th>${escapeHtmlText(h)}</th>`).join("");
+  const body = rows
+    .map((r) => `<tr>${r.map((c) => `<td>${escapeHtmlText(c)}</td>`).join("")}</tr>`)
+    .join("");
+  return `<h3>${escapeHtmlText(title)}</h3><table dir="rtl" border="1" cellpadding="4"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
 }
 
 function renderIncomeSummary(body) {
@@ -2621,19 +2674,33 @@ function renderCloseSessions(openSessions) {
   const host = document.getElementById("closeSessionList");
   if (!host) return;
   closeSettleExtraToman = 0;
+  host.replaceChildren();
   if (!openSessions?.length) {
-    host.innerHTML = "<p>جلسهٔ بازی باز نیست.</p>";
+    const p = document.createElement("p");
+    p.textContent = "جلسهٔ بازی باز نیست.";
+    host.appendChild(p);
     return;
   }
-  host.innerHTML = openSessions
-    .map(
-      (s) => `<div data-session="${s.sessionId}">
-        <strong>${s.stationId}</strong> — ${s.status}
-        <button type="button" data-action="settle" data-session="${s.sessionId}">تسویه در همین بستن</button>
-        <button type="button" data-action="carry" data-session="${s.sessionId}">انتقال به دوره بعد</button>
-      </div>`
-    )
-    .join("");
+  for (const s of openSessions) {
+    const row = document.createElement("div");
+    row.dataset.session = String(s.sessionId);
+    const strong = document.createElement("strong");
+    strong.textContent = s.stationId ?? "";
+    row.appendChild(strong);
+    row.appendChild(document.createTextNode(` — ${s.status ?? ""} `));
+    const settle = document.createElement("button");
+    settle.type = "button";
+    settle.dataset.action = "settle";
+    settle.dataset.session = String(s.sessionId);
+    settle.textContent = "تسویه در همین بستن";
+    const carry = document.createElement("button");
+    carry.type = "button";
+    carry.dataset.action = "carry";
+    carry.dataset.session = String(s.sessionId);
+    carry.textContent = "انتقال به دوره بعد";
+    row.append(settle, carry);
+    host.appendChild(row);
+  }
   host.querySelectorAll("button[data-action]").forEach((btn) => {
     btn.addEventListener("click", async () => {
       const sid = btn.getAttribute("data-session");
@@ -2702,8 +2769,20 @@ bindClick("closeShiftBtn", async () => {
   const jm = Number(document.getElementById("closeJm").value);
   const jd = Number(document.getElementById("closeJd").value);
   const g = await jalaliToGregorian(jy, jm, jd);
-  const actualCashToman = Number(String(document.getElementById("closeCash").value || "0").replace(/,/g, ""));
-  const actualCardReaderToman = Number(String(document.getElementById("closeReader").value || "0").replace(/,/g, ""));
+  const cashRaw = document.getElementById("closeCash").value;
+  const readerRaw = document.getElementById("closeReader").value;
+  const parseCloseToman = (raw) => {
+    if (typeof window.cpParseNumber !== "function") return null;
+    const trimmed = String(raw ?? "").trim();
+    if (!trimmed) return 0;
+    return window.cpParseNumber(trimmed, { allowZero: true, positive: false });
+  };
+  const actualCashToman = parseCloseToman(cashRaw);
+  const actualCardReaderToman = parseCloseToman(readerRaw);
+  if (actualCashToman == null || actualCardReaderToman == null) {
+    showError("مبلغ درست نیست؛ فقط رقم بنویسید.");
+    return;
+  }
   const discrepancyExplanation = document.getElementById("closeExpl").value.trim() || null;
   await api("/api/operator/shift/close", {
     method: "POST",

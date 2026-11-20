@@ -34,8 +34,13 @@ assertNull(cpParseInteger(""), "empty");
 if (cpParseInteger("۱۵") !== 15) throw new Error("persian digits");
 if (cpParseInteger("٩") !== 9) throw new Error("arabic-indic digits");
 if (cpParseInteger("42") !== 42) throw new Error("latin digits");
+if (cpParseInteger("05") !== 5) throw new Error("F13 leading zero month/day");
+if (cpParseInteger("07") !== 7) throw new Error("F13 leading zero day");
+if (ctx.window.cpParseIntegerResult("1234567890123456").reason !== "too_long") throw new Error("integer 16 digits");
+if (ctx.window.cpParseIntegerResult("12 000").reason !== "format") throw new Error("integer inner space");
 
 assertNull(cpParseNumber("۱.۵"), "money decimal");
+assertNull(cpParseNumber("05", { allowZero: true }), "money leading zero still rejected");
 assertNull(cpParseNumber("-1"), "money negative");
 if (cpParseNumber("1,500") !== 1500) throw new Error("money grouping");
 if (cpParseNumber("150000") !== 150000) throw new Error("money plain");

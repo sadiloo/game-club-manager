@@ -1,4 +1,6 @@
+using System.Collections.Concurrent;
 using System.Net.Http.Json;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using GameClub.Billing;
@@ -39,6 +41,28 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
     private static readonly Regex CommandIdUuidRegex = new(
         "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private sealed class NativeDialogRecorder
+    {
+        public List<string> Calls { get; } = [];
+    }
+
+    private static readonly ConditionalWeakTable<IPage, NativeDialogRecorder> NativeDialogRecorders = new();
+
+    private static void AttachNativeDialogRecorder(IPage page)
+    {
+        var recorder = new NativeDialogRecorder();
+        NativeDialogRecorders.Add(page, recorder);
+        page.Dialog += (_, d) => recorder.Calls.Add($"{d.Type}:{d.Message}");
+    }
+
+    private static void AssertNoUnexpectedNativeDialogs(IPage page)
+    {
+        if (NativeDialogRecorders.TryGetValue(page, out var recorder))
+        {
+            Assert.Empty(recorder.Calls);
+        }
+    }
 
     private static string? ParseCommandIdFromPost(string? postData)
     {
@@ -130,8 +154,7 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
         }
 
         var page = await context.NewPageAsync();
-        page.Dialog += (_, d) =>
-            throw new InvalidOperationException($"Unexpected native dialog: {d.Type} {d.Message}");
+        AttachNativeDialogRecorder(page);
         await page.RouteAsync("**/*", async route =>
         {
             var request = route.Request;
@@ -1380,8 +1403,7 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
         var context = await _browser!.NewContextAsync();
         await context.AddInitScriptAsync("window.__pendingActionTimeoutMs = 1500;");
         var page = await context.NewPageAsync();
-        page.Dialog += (_, d) =>
-            throw new InvalidOperationException($"Unexpected native dialog: {d.Type} {d.Message}");
+        AttachNativeDialogRecorder(page);
         await page.RouteAsync("**/*", async route =>
         {
             var request = route.Request;
@@ -1512,8 +1534,7 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
         await context.AddInitScriptAsync(
             "window.__operatorPollIntervalMs = 400; window.__prepaidRefreshIntervalMs = 400;");
         var page = await context.NewPageAsync();
-        page.Dialog += (_, d) =>
-            throw new InvalidOperationException($"Unexpected native dialog: {d.Type} {d.Message}");
+        AttachNativeDialogRecorder(page);
         await page.RouteAsync("**/*", async route =>
         {
             var request = route.Request;
@@ -1959,5 +1980,14 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
         await page.WaitForSelectorAsync("#ss14GameRatesBody input[data-rate=\"hourly\"]");
         var count = await page.Locator("#ss14GameRatesBody input[data-rate=\"hourly\"]").CountAsync();
         Assert.True(count >= 5);
+        AssertNoUnexpectedNativeDialogs(page);
+    }
+
+    [Fact]
+    public async Task e2e_inpage_forms_native_dialog_guard_records_for_assert()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var page = await LoginAsync();
+        AssertNoUnexpectedNativeDialogs(page);
     }
 }

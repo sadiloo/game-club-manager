@@ -17,6 +17,11 @@ public sealed class OperatorPrepaidService(
 {
     public async Task<object> StartDurationAsync(Guid sessionId, int minutes, CancellationToken ct)
     {
+        if (minutes <= 0)
+        {
+            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_minutes", "Prepaid minutes must be positive.");
+        }
+
         var session = await LoadOpenConsoleSessionAsync(sessionId, ct);
         if (session.PrepaidKind != PrepaidSessionKind.None)
         {
