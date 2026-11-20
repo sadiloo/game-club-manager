@@ -197,6 +197,21 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
             await pipeClient.GetStatusAsync();
             GuardTimeline("guard2_status_ok");
 
+            await GuardWatchdogTimelineReader.WaitForTimelineMarkerAsync(
+                guard2LogOffset,
+                "early_reassert_off_lock_enter",
+                TimeSpan.FromSeconds(20));
+            var offDuringHold = Sign(rsa, new InternetCommandPayload
+            {
+                StationId = config.StationId,
+                Epoch = offPayload.Epoch,
+                Version = offPayload.Version + 1,
+                On = false,
+                IssuedAtUtc = DateTime.UtcNow,
+            });
+            _ = pipeClient.ApplyAsync(offDuringHold);
+            GuardTimeline("guard2_off_apply_during_hold");
+
             var restored = DateTime.UtcNow.AddSeconds(15);
             while (DateTime.UtcNow < restored)
             {
@@ -207,6 +222,10 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
                         guard2LogOffset,
                         "guard.restart launched_pid_",
                         TimeSpan.FromSeconds(15));
+                    await GuardWatchdogTimelineReader.WaitForTimelineMarkerAsync(
+                        guard2LogOffset,
+                        "GUARD_TIMELINE event=pipe_ready",
+                        TimeSpan.FromSeconds(30));
                     GuardWatchdogTimelineReader.AssertExactlyOneGuardRestart(guard2LogOffset);
                     GuardWatchdogTimelineReader.AssertPipeRestartHandlingOrder(
                         guard2LogOffset,
@@ -325,6 +344,53 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
             applier.RunResetScript();
             TryDelete(InternetGuardPaths.StatePath);
             Environment.SetEnvironmentVariable("CHECKPOINT_INTERNET_DRIFT_INTERVAL_MS", prior);
+        }
+    }
+
+    [Fact(Timeout = 60_000)]
+    public async Task internet_pipe_ready_logged_when_early_reassert_completes_without_pipe_client()
+    {
+        RequireWindowsAdmin();
+        using var rsa = RSA.Create(2048);
+        var pub = ExportPublicKeyPem(rsa);
+        var config = BuildConfig(pub);
+        var applier = new InternetFirewallApplier();
+        CancellationTokenSource cts = null;
+        Thread pipeThread = null;
+        try
+        {
+            Assert.Equal("applied", applier.ApplyWithStoreEcho(config, on: false));
+            var offPayload = new InternetCommandPayload
+            {
+                StationId = config.StationId,
+                Epoch = Guid.NewGuid(),
+                Version = 1,
+                On = false,
+                IssuedAtUtc = DateTime.UtcNow,
+            };
+            InternetVerifiedStateFile.Save(InternetGuardPaths.StatePath, offPayload);
+            WriteInternetConfig(config);
+
+            var logOffset = GuardWatchdogTimelineReader.CurrentLogLength();
+            cts = new CancellationTokenSource();
+            pipeThread = new Thread(() => new InternetPipeServer(config).Run(cts.Token)) { IsBackground = true };
+            pipeThread.Start();
+
+            await GuardWatchdogTimelineReader.WaitForTimelineMarkerAsync(
+                logOffset,
+                "early_reassert_off_lock_exit",
+                TimeSpan.FromSeconds(30));
+            await GuardWatchdogTimelineReader.WaitForTimelineMarkerAsync(
+                logOffset,
+                "GUARD_TIMELINE event=pipe_ready",
+                TimeSpan.FromSeconds(5));
+        }
+        finally
+        {
+            InternetPipeServerTestTeardown.Stop(cts, pipeThread);
+            applier.RunResetScript();
+            TryDelete(InternetGuardPaths.ConfigPath);
+            TryDelete(InternetGuardPaths.StatePath);
         }
     }
 

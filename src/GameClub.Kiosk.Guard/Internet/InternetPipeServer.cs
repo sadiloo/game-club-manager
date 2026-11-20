@@ -139,6 +139,7 @@ internal sealed class InternetPipeServer
             InternetGuardShellLaunchGate.MarkReady();
             _earlyReassertFinished.Set();
             PulseHeldRequestFifo();
+            TryLogPipeReadyWhenEarlyReassertCompletes(Thread.CurrentThread.ManagedThreadId);
         }
     }
 
@@ -227,6 +228,32 @@ internal sealed class InternetPipeServer
         _earlyReassertThread.Start();
     }
 
+    private void LogPipeReadyOnce(int thread)
+    {
+        if (Interlocked.CompareExchange(ref _loggedPipeReady, 1, 0) != 0)
+        {
+            return;
+        }
+
+        GuardWatchdogLog.Append(
+            $"GUARD_TIMELINE event=pipe_ready thread={thread}");
+    }
+
+    private void TryLogPipeReadyWhenEarlyReassertCompletes(int thread)
+    {
+        if (!_earlyReassertFinished.IsSet)
+        {
+            return;
+        }
+
+        if (Volatile.Read(ref _heldRequestNextTicket) != 0)
+        {
+            return;
+        }
+
+        LogPipeReadyOnce(thread);
+    }
+
     private void MaybeLogPipeReadyAfterRequest(int handlerThread)
     {
         if (!_earlyReassertFinished.IsSet)
@@ -234,13 +261,7 @@ internal sealed class InternetPipeServer
             return;
         }
 
-        if (Interlocked.CompareExchange(ref _loggedPipeReady, 1, 0) != 0)
-        {
-            return;
-        }
-
-        GuardWatchdogLog.Append(
-            $"GUARD_TIMELINE event=pipe_ready thread={handlerThread}");
+        LogPipeReadyOnce(handlerThread);
     }
 
     public void Run(CancellationToken ct)

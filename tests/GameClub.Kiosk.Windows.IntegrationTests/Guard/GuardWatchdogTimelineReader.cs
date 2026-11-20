@@ -133,16 +133,22 @@ internal static class GuardWatchdogTimelineReader
 
         var listeningIdx = IndexOf("GUARD_TIMELINE event=pipe_listening");
         var lockExitIdx = IndexOf("early_reassert_off_lock_exit");
-        var handledIdx = IndexOf("GUARD_TIMELINE event=pipe_request_handled");
+        var statusHandledIdx = IndexOf("GUARD_TIMELINE event=pipe_request_handled ticket=-1");
+        var holdReleaseIdx = IndexOf("pipe_request_hold_release ticket=0");
+        var mutatingHandledIdx = IndexOf("GUARD_TIMELINE event=pipe_request_handled ticket=0");
         var pipeReadyIdx = IndexOf("GUARD_TIMELINE event=pipe_ready");
 
         Assert.True(listeningIdx >= 0, "watchdog must log GUARD_TIMELINE event=pipe_listening");
         Assert.True(lockExitIdx >= 0, "watchdog must log PIPE_TIMELINE early_reassert_off_lock_exit");
-        Assert.True(handledIdx >= 0, "watchdog must log GUARD_TIMELINE event=pipe_request_handled after client request");
+        Assert.True(statusHandledIdx >= 0, "watchdog must log GUARD_TIMELINE event=pipe_request_handled ticket=-1 for status request");
+        Assert.True(holdReleaseIdx >= 0, "watchdog must log pipe_request_hold_release ticket=0 for held OFF apply");
+        Assert.True(mutatingHandledIdx >= 0, "watchdog must log GUARD_TIMELINE event=pipe_request_handled ticket=0 for held OFF apply");
         Assert.True(pipeReadyIdx >= 0, "watchdog must log GUARD_TIMELINE event=pipe_ready for guard2 run");
         Assert.True(listeningIdx < lockExitIdx, "pipe_listening must precede early_reassert_off_lock_exit");
-        Assert.True(lockExitIdx < handledIdx, "early_reassert_off_lock_exit must precede pipe_request_handled");
-        Assert.True(handledIdx < pipeReadyIdx, "pipe_request_handled must precede pipe_ready");
+        Assert.True(statusHandledIdx < lockExitIdx, "status pipe_request_handled ticket=-1 must precede early_reassert_off_lock_exit");
+        Assert.True(lockExitIdx < holdReleaseIdx, "early_reassert_off_lock_exit must precede pipe_request_hold_release ticket=0");
+        Assert.True(holdReleaseIdx < mutatingHandledIdx, "pipe_request_hold_release ticket=0 must precede pipe_request_handled ticket=0");
+        Assert.True(mutatingHandledIdx < pipeReadyIdx, "pipe_request_handled ticket=0 must precede pipe_ready");
     }
 
     internal static void AssertEarlyOffReassertBeforePipeReady(long logStartOffset, Action<string> trace)
