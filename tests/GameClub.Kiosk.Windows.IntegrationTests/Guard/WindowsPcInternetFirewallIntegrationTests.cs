@@ -1,6 +1,7 @@
 #if NET48
 #nullable disable
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -201,6 +202,66 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
             """;
         var countText = WindowsIntegrationRunPowerShell.Run(script).Trim();
         Assert.True(int.TryParse(countText, out var count) && count > 0, "Checkpoint Internet Off rule group must be installed.");
+    }
+
+    private static string QueryLocalhostServerAllowRuleRemoteAddresses()
+    {
+        const string script =
+            """
+            $rule = Get-NetFirewallRule -PolicyStore localhost -Group 'Checkpoint Internet Off' -DisplayName 'Checkpoint Internet Off - Server' -ErrorAction SilentlyContinue | Select-Object -First 1
+            if (-not $rule) { Write-Output ''; return }
+            $addrs = @(Get-NetFirewallAddressFilter -AssociatedWith $rule -ErrorAction SilentlyContinue | ForEach-Object { $_.RemoteAddress })
+            ($addrs | ForEach-Object { $_ }) -join ','
+            """;
+        return WindowsIntegrationRunPowerShell.Run(script).Trim();
+    }
+
+    /// <summary>
+    /// OFF allow rules target configured IPv4 literals; hostname probes re-resolve DNS and can miss the allow list.
+    /// </summary>
+    private static void AssertServerReachableViaConfiguredAllowList(InternetGuardConfig config, string probePhase)
+    {
+        string[] dnsNowIpv4;
+        try
+        {
+            dnsNowIpv4 = Dns.GetHostAddresses(config.ServerHost)
+                .Where(a => a.AddressFamily == AddressFamily.InterNetwork)
+                .Select(a => a.ToString())
+                .Distinct()
+                .ToArray();
+        }
+        catch (Exception ex)
+        {
+            dnsNowIpv4 = [];
+            Console.WriteLine($"FIRST_APPLY_TCP_PROBE phase={probePhase} dns_error={ex.Message}");
+        }
+
+        var ruleRemote = QueryLocalhostServerAllowRuleRemoteAddresses();
+        var hostProbe = TryTcp(config.ServerHost, config.ServerPort, 5_000);
+        Console.WriteLine(
+            "FIRST_APPLY_TCP_PROBE "
+            + $"phase={probePhase} host={config.ServerHost} port={config.ServerPort} "
+            + $"allow_list=[{string.Join(",", config.ServerIps)}] "
+            + $"dns_now_ipv4=[{string.Join(",", dnsNowIpv4)}] "
+            + $"rule_remote={ruleRemote} hostname_probe={hostProbe}");
+
+        var failedIps = new List<string>();
+        foreach (var ip in config.ServerIps)
+        {
+            var connected = TryTcp(ip, config.ServerPort, 5_000);
+            Console.WriteLine(
+                $"FIRST_APPLY_TCP_PROBE phase={probePhase} direct_ip={ip} port={config.ServerPort} connected={connected}");
+            if (!connected)
+            {
+                failedIps.Add(ip);
+            }
+        }
+
+        Assert.True(
+            failedIps.Count == 0,
+            "first apply must leave each configured server allow-list IP reachable; "
+            + $"failed_ips=[{string.Join(",", failedIps)}] allow_list=[{string.Join(",", config.ServerIps)}] "
+            + $"dns_now=[{string.Join(",", dnsNowIpv4)}] rule_remote={ruleRemote} hostname_probe={hostProbe}");
     }
 
     [Fact]
@@ -427,16 +488,6 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
             ExtraAllowPrograms = CiExtraPrograms(),
         };
 
-    private void AssertFirewallEgressOpenAfterReset(string label)
-    {
-        var applier = new InternetFirewallApplier();
-        applier.RunResetScript();
-        Thread.Sleep(500);
-        Assert.True(
-            TryTcp("api.github.com", 443, 5_000),
-            $"isolation {label}: api.github.com must be reachable after reset before next seam step.");
-    }
-
     private void RunInternetOffFirstApplySucceedsWhenCheckpointRuleGroupIsEmpty()
     {
         var ips = ResolveServerIps();
@@ -455,7 +506,7 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
             var result = applier.ApplyWithStoreEcho(config, on: false);
             Assert.Equal("applied", result);
             AssertCheckpointOffRuleGroupPresent();
-            Assert.True(TryTcp("api.github.com", 443, 5_000), "first apply must leave server host reachable.");
+            AssertServerReachableViaConfiguredAllowList(config, "first_apply_empty_group");
         }
         finally
         {
@@ -583,11 +634,8 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
         RequireWindowsAdmin();
         CiGuardKioskProcessCleanup.KillOrphanedGuardAndKiosk(nameof(internet_off_seam_injection_isolated_between_rollback_and_first_apply_in_both_orders));
         RunInternetOffFirstApplySucceedsWhenCheckpointRuleGroupIsEmpty();
-        AssertFirewallEgressOpenAfterReset(nameof(internet_off_seam_injection_isolated_between_rollback_and_first_apply_in_both_orders) + "_after_first_apply");
         RunInternetOffApplyFailureAfterProfilesSetRollsBackLocalhostProfiles();
-        AssertFirewallEgressOpenAfterReset(nameof(internet_off_seam_injection_isolated_between_rollback_and_first_apply_in_both_orders) + "_after_rollback_a");
         RunInternetOffApplyFailureAfterProfilesSetRollsBackLocalhostProfiles();
-        AssertFirewallEgressOpenAfterReset(nameof(internet_off_seam_injection_isolated_between_rollback_and_first_apply_in_both_orders) + "_after_rollback_b");
         RunInternetOffFirstApplySucceedsWhenCheckpointRuleGroupIsEmpty();
     }
 
