@@ -207,8 +207,22 @@ function Add-CiCheckpointPublicEgressEvidence {
 
     $publicBlocked = -not (Test-CiTcpConnect -TargetHost "1.1.1.1" -Port 443 -TimeoutMs 2000)
     $serverReachable = Test-CiTcpConnect -TargetHost $checkpointHost -Port $checkpointPort -TimeoutMs 2000
+    $serverProcessAlive = $false
+    $serverPid = $env:GAMECLUB_SERVER_PID
+    if (-not [string]::IsNullOrWhiteSpace($serverPid) -and $serverPid -match '^\d+$') {
+        $serverProcessAlive = $null -ne (Get-Process -Id ([int]$serverPid) -ErrorAction SilentlyContinue)
+    }
+
+    $loopbackNote = if (-not $serverReachable -and -not $serverProcessAlive) {
+        "expected_server_stopped"
+    } elseif (-not $serverReachable -and $serverProcessAlive) {
+        "unexpected_loopback_blocked_while_server_alive"
+    } else {
+        "ok"
+    }
+
     $publicLine = "CI_EGRESS label=$Label guard_rules=$guardRuleCount state_present=$statePresent public=1.1.1.1:443 blocked=$publicBlocked"
-    $serverLine = "CI_EGRESS label=$Label checkpoint=${checkpointHost}:${checkpointPort} reachable=$serverReachable guard_rules=$guardRuleCount state_present=$statePresent"
+    $serverLine = "CI_EGRESS label=$Label checkpoint=${checkpointHost}:${checkpointPort} reachable=$serverReachable server_process_alive=$serverProcessAlive loopback_note=$loopbackNote guard_rules=$guardRuleCount state_present=$statePresent"
     try {
         Add-Content -Path $Path -Value $publicLine -Encoding UTF8
         Add-Content -Path $Path -Value $serverLine -Encoding UTF8

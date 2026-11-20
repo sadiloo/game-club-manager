@@ -1,4 +1,5 @@
 #if NET48
+using System;
 using System.Threading;
 using GameClub.Kiosk.Guard.Internet;
 
@@ -18,7 +19,13 @@ internal sealed class SlowReconcileInternetFirewallApplier : IInternetFirewallAp
     {
         if (_resetDelayMs > 0)
         {
-            Thread.Sleep(_resetDelayMs);
+            var remaining = _resetDelayMs;
+            while (remaining > 0)
+            {
+                var slice = Math.Min(100, remaining);
+                Thread.Sleep(slice);
+                remaining -= slice;
+            }
         }
 
         return _inner.RunResetScript();

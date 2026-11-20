@@ -37,6 +37,34 @@ function Assert-TestPhaseExit([string]$PhaseName, [int]$Exit) {
     }
 }
 
+function Assert-FirewallPhaseTestsExecuted {
+    param(
+        [string]$TrxPath,
+        [int]$ExpectedCount = 38
+    )
+
+    if (-not (Test-Path $TrxPath)) {
+        throw "FW_PHASE_TESTS missing_trx path=$TrxPath"
+    }
+
+    $results = @(Select-Xml -Path $TrxPath -XPath "//*[local-name()='UnitTestResult']" -ErrorAction SilentlyContinue)
+    $names = @()
+    foreach ($row in $results) {
+        $name = $row.Node.testName
+        if ([string]::IsNullOrWhiteSpace($name)) { continue }
+        $names += $name
+        Write-Host "FW_PHASE_TESTS $name"
+        Write-PhaseLog "FW_PHASE_TESTS $name"
+    }
+
+    $count = $names.Count
+    Write-Host "FW_PHASE_TESTS count=$count expected=$ExpectedCount"
+    Write-PhaseLog "FW_PHASE_TESTS count=$count expected=$ExpectedCount"
+    if ($count -lt $ExpectedCount) {
+        throw "FW_PHASE_TESTS incomplete count=$count expected=$ExpectedCount reason=phase_aborted_before_full_inventory"
+    }
+}
+
 function Write-TimeoutLine([string]$message) {
     $line = "{0:u}  {1}" -f (Get-Date), $message
     Add-Content -Path $phaseLog -Value $line -Encoding UTF8
@@ -771,10 +799,12 @@ try {
         "--results-directory", $artifactDir,
         "--logger", "console;verbosity=detailed"
     )
+    $fwTrxPath = Join-Path $artifactDir "kiosk-windows-pc-internet-firewall.trx"
     $fwTestExit = Invoke-DotNetWithWatchdog -PhaseName "dotnet-test-pc-internet-firewall" -ArgumentList $fwTestArgs -PhaseCapMs (8 * 60 * 1000)
-    Publish-ServerLeaseBuildEvidence -phaseName "dotnet-test-pc-internet-firewall" -TrxPath (Join-Path $artifactDir "kiosk-windows-pc-internet-firewall.trx")
+    Publish-ServerLeaseBuildEvidence -phaseName "dotnet-test-pc-internet-firewall" -TrxPath $fwTrxPath
     Write-CiPhaseFirewallProbe -label "after-dotnet-test-pc-internet-firewall"
     Assert-TestPhaseExit -PhaseName "dotnet-test-pc-internet-firewall" -Exit $fwTestExit
+    Assert-FirewallPhaseTestsExecuted -TrxPath $fwTrxPath -ExpectedCount 38
 
     $wpfStabilityRuns = 0
     if ($env:WPF_STABILITY_RUNS -match '^\d+$') {

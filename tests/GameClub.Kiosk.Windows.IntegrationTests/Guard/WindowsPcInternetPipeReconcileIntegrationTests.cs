@@ -110,7 +110,7 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
         }
         finally
         {
-            StopInternetPipeServer(cts, pipeThread, TimeSpan.FromSeconds(5));
+            StopInternetPipeServer(cts, pipeThread);
             new InternetFirewallApplier().RunResetScript();
             TryDeleteState();
         }
@@ -160,7 +160,7 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
         }
         finally
         {
-            StopInternetPipeServer(cts, pipeThread, TimeSpan.FromSeconds(5));
+            StopInternetPipeServer(cts, pipeThread);
             new InternetFirewallApplier().RunResetScript();
             TryDeleteState();
         }
@@ -320,7 +320,7 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
         finally
         {
             hung.Release();
-            StopInternetPipeServer(cts, pipeThread, TimeSpan.FromSeconds(10));
+            StopInternetPipeServer(cts, pipeThread);
             Environment.SetEnvironmentVariable("CHECKPOINT_INTERNET_RECONCILE_TIMEOUT_MS", priorBudget);
             new InternetFirewallApplier().RunResetScript();
             TryDeleteState();
@@ -399,7 +399,7 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
         {
             hangRelease.Set();
             InternetGuardReconcileTestSeams.HangBeforeLocalhostCleanup = null;
-            StopInternetPipeServer(cts, pipeThread, TimeSpan.FromSeconds(5));
+            StopInternetPipeServer(cts, pipeThread);
             hangRelease.Dispose();
             Environment.SetEnvironmentVariable("CHECKPOINT_INTERNET_RECONCILE_TIMEOUT_MS", priorBudget);
             new InternetFirewallApplier().RunResetScript();
@@ -462,14 +462,14 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
             var applyBody = await new GuardInternetClient().ApplyAsync(onCommand);
             Assert.Contains("applied", applyBody, StringComparison.OrdinalIgnoreCase);
 
-            var ruleCount = RunPowerShell(
+            var ruleCount = WindowsIntegrationRunPowerShell.Run(
                 "(Get-NetFirewallRule -Group 'Checkpoint Internet Off' -ErrorAction SilentlyContinue | Measure-Object).Count").Trim();
             Assert.True(int.TryParse(ruleCount, out var count) && count == 0, $"rule_count={ruleCount}");
         }
         finally
         {
             hung.Release();
-            StopInternetPipeServer(cts, pipeThread, TimeSpan.FromSeconds(10));
+            StopInternetPipeServer(cts, pipeThread);
             Environment.SetEnvironmentVariable("CHECKPOINT_INTERNET_RECONCILE_TIMEOUT_MS", priorBudget);
             new InternetFirewallApplier().RunResetScript();
             TryDeleteState();
@@ -527,7 +527,7 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
         finally
         {
             hung.Release();
-            StopInternetPipeServer(cts, pipeThread, TimeSpan.FromSeconds(10));
+            StopInternetPipeServer(cts, pipeThread);
             Environment.SetEnvironmentVariable("CHECKPOINT_INTERNET_RECONCILE_TIMEOUT_MS", priorBudget);
             Environment.SetEnvironmentVariable("CHECKPOINT_INTERNET_DRIFT_INTERVAL_MS", priorDrift);
             new InternetFirewallApplier().RunResetScript();
@@ -586,7 +586,7 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
                 }
             }
 
-            StopInternetPipeServer(cts, pipeThread, TimeSpan.FromSeconds(5));
+            StopInternetPipeServer(cts, pipeThread);
             new InternetFirewallApplier().RunResetScript();
         }
     }
@@ -638,7 +638,7 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
         }
         finally
         {
-            StopInternetPipeServer(cts, pipeThread, TimeSpan.FromSeconds(5));
+            StopInternetPipeServer(cts, pipeThread);
         }
     }
 
@@ -749,7 +749,7 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
             using var statusDoc = JsonDocument.Parse(status);
             Assert.True(statusDoc.RootElement.GetProperty("on").GetBoolean());
 
-            var activeOut = RunPowerShell(
+            var activeOut = WindowsIntegrationRunPowerShell.Run(
                 "@('Domain','Private','Public') | ForEach-Object { (Get-NetFirewallProfile -Name $_ -ErrorAction SilentlyContinue).DefaultOutboundAction.ToString() }");
             foreach (var line in activeOut.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
             {
@@ -758,7 +758,7 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
         }
         finally
         {
-            StopInternetPipeServer(cts, pipeThread, TimeSpan.FromSeconds(10));
+            StopInternetPipeServer(cts, pipeThread);
             new InternetFirewallApplier().RunResetScript();
             TryDeleteState();
         }
@@ -783,7 +783,7 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
         Assert.Fail($"status still reconciling after {budget.TotalSeconds:0}s");
     }
 
-    private static void StopInternetPipeServer(CancellationTokenSource cts, Thread pipeThread, TimeSpan joinBudget)
+    private static void StopInternetPipeServer(CancellationTokenSource cts, Thread pipeThread, TimeSpan? joinBudget = null)
         => InternetPipeServerTestTeardown.Stop(cts, pipeThread, joinBudget);
 
     [DllImport("kernel32.dll", SetLastError = true)]
@@ -848,7 +848,7 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
         }
         finally
         {
-            StopInternetPipeServer(cts, pipeThread, TimeSpan.FromSeconds(5));
+            StopInternetPipeServer(cts, pipeThread);
         }
     }
 
@@ -875,7 +875,7 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
         }
         finally
         {
-            StopInternetPipeServer(cts, pipeThread, TimeSpan.FromSeconds(5));
+            StopInternetPipeServer(cts, pipeThread);
         }
     }
 
@@ -914,7 +914,7 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
         }
         finally
         {
-            StopInternetPipeServer(cts, pipeThread, TimeSpan.FromSeconds(5));
+            StopInternetPipeServer(cts, pipeThread);
             new InternetFirewallApplier().RunResetScript();
         }
     }
@@ -953,7 +953,7 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
         finally
         {
             Environment.SetEnvironmentVariable("CHECKPOINT_INTERNET_PIPE_READ_MS", priorRead);
-            StopInternetPipeServer(cts, pipeThread, TimeSpan.FromSeconds(5));
+            StopInternetPipeServer(cts, pipeThread);
         }
     }
 
@@ -1020,7 +1020,7 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
         }
         finally
         {
-            StopInternetPipeServer(cts, pipeThread, TimeSpan.FromSeconds(5));
+            StopInternetPipeServer(cts, pipeThread);
         }
     }
 
@@ -1047,35 +1047,6 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
         using var writer = new StringWriter();
         new PemWriter(writer).WriteObject(pub);
         return writer.ToString();
-    }
-
-    private static string RunPowerShell(string script, bool tolerateNonZeroExit = false)
-    {
-        var psi = new ProcessStartInfo
-        {
-            FileName = "powershell.exe",
-            Arguments = $"-NoProfile -NonInteractive -EncodedCommand {Convert.ToBase64String(Encoding.Unicode.GetBytes(script))}",
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            CreateNoWindow = true,
-        };
-        using var proc = Process.Start(psi) ?? throw new InvalidOperationException("powershell");
-        proc.WaitForExit(60_000);
-        var stdout = proc.StandardOutput.ReadToEnd();
-        var stderr = proc.StandardError.ReadToEnd();
-        if (!string.IsNullOrWhiteSpace(stderr))
-        {
-            Console.WriteLine($"RunPowerShell stderr exit={proc.ExitCode}: {stderr}");
-        }
-
-        if (proc.ExitCode != 0 && !tolerateNonZeroExit)
-        {
-            throw new InvalidOperationException(
-                $"PowerShell exit {proc.ExitCode}. stderr: {stderr}. script: {script}");
-        }
-
-        return stdout;
     }
 
     private static void TryDeleteState()

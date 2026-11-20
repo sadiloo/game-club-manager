@@ -82,6 +82,10 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
     public async Task internet_off_guard_process_restart_reasserts_before_pipe_ready()
     {
         RequireWindowsAdmin();
+        var timeline = Stopwatch.StartNew();
+        void GuardTimeline(string evt) =>
+            Console.WriteLine($"GUARD_TIMELINE ms={timeline.ElapsedMilliseconds} event={evt}");
+
         using var rsa = RSA.Create(2048);
         var pub = ExportPublicKeyPem(rsa);
         var config = BuildConfig(pub);
@@ -92,6 +96,7 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
         {
             Assert.Equal("applied", applier.Apply(config, on: false));
             Assert.False(TryTcp("1.1.1.1", 443, 2_000));
+            GuardTimeline("initial_off_applied");
 
             var offPayload = new InternetCommandPayload
             {
@@ -105,28 +110,49 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
 
             WriteInternetConfig(config);
             guard = GuardProcessStart.StartGuard();
+            GuardTimeline($"guard1_start pid={guard.Id}");
             await Task.Delay(2_000);
 
             Assert.False(TryTcp("1.1.1.1", 443, 2_000), "OFF must persist while Guard is running.");
-            guard.Kill();
+            GuardTimeline("guard1_stop_begin");
+            GuardProcessLifecycle.StopGuardProcessTree(guard, TimeSpan.FromSeconds(8));
             guard.Dispose();
             guard = null;
+            GuardTimeline("guard1_stop_end");
 
-            RunPowerShell(TamperOpenEgressScript);
+            WindowsIntegrationRunPowerShell.Run(TamperOpenEgressScript);
             Assert.True(TryTcp("1.1.1.1", 443, 3_000), "Sanity: profile tamper must temporarily open egress.");
+            GuardTimeline("tamper_egress_open");
 
             guard2 = GuardProcessStart.StartGuard();
+            GuardTimeline($"guard2_start pid={guard2.Id}");
+            long? pipeReadyMs = null;
             var restored = DateTime.UtcNow.AddSeconds(10);
             while (DateTime.UtcNow < restored)
             {
+                if (pipeReadyMs is null && TryGuardPipeStatus(300))
+                {
+                    pipeReadyMs = timeline.ElapsedMilliseconds;
+                    GuardTimeline($"pipe_ready ms={pipeReadyMs}");
+                }
+
                 if (!TryTcp("1.1.1.1", 443, 500))
                 {
+                    var blockedMs = timeline.ElapsedMilliseconds;
+                    GuardTimeline($"first_egress_blocked ms={blockedMs}");
+                    if (pipeReadyMs is not null && pipeReadyMs < blockedMs)
+                    {
+                        Assert.Fail(
+                            $"Re-assert OFF must complete before pipe is ready (pipe_ready_ms={pipeReadyMs} egress_blocked_ms={blockedMs}).");
+                    }
+
                     return;
                 }
 
                 await Task.Delay(500);
             }
 
+            GuardTimeline("timeout egress_still_open");
             Assert.Fail("Guard restart must re-assert OFF rules before serving pipe (egress still blocked within 10s).");
         }
         finally
@@ -201,7 +227,7 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
             pipeThread = new Thread(() => server.Run(cts.Token)) { IsBackground = true, Name = "TestInternetPipe" };
             pipeThread.Start();
 
-            RunPowerShell(TamperOpenEgressScript);
+            WindowsIntegrationRunPowerShell.Run(TamperOpenEgressScript);
             Assert.True(TryTcp("1.1.1.1", 443, 2_000), "Profile tamper must temporarily allow egress.");
 
             var deadline = DateTime.UtcNow.AddSeconds(15);
@@ -218,7 +244,7 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
         }
         finally
         {
-            InternetPipeServerTestTeardown.Stop(cts, pipeThread, TimeSpan.FromSeconds(5));
+            InternetPipeServerTestTeardown.Stop(cts, pipeThread);
             applier.RunResetScript();
             TryDelete(InternetGuardPaths.StatePath);
             Environment.SetEnvironmentVariable("CHECKPOINT_INTERNET_DRIFT_INTERVAL_MS", prior);
@@ -331,7 +357,7 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
         }
         finally
         {
-            InternetPipeServerTestTeardown.Stop(cts, pipeThread, TimeSpan.FromSeconds(5));
+            InternetPipeServerTestTeardown.Stop(cts, pipeThread);
             applier.RunResetScript();
             TryDelete(InternetGuardPaths.ConfigPath);
             TryDelete(InternetGuardPaths.StatePath);
@@ -349,6 +375,20 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
     {
         Directory.CreateDirectory(Path.GetDirectoryName(InternetGuardPaths.ConfigPath));
         File.WriteAllText(InternetGuardPaths.ConfigPath, JsonSerializer.Serialize(config));
+    }
+
+    private static bool TryGuardPipeStatus(int timeoutMs)
+    {
+        try
+        {
+            var client = new GuardInternetClient();
+            var task = client.GetStatusAsync(CancellationToken.None);
+            return task.Wait(timeoutMs) && !string.IsNullOrWhiteSpace(task.Result);
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private static bool TryTcp(string host, int port, int timeoutMs)
@@ -379,34 +419,5 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
         }
     }
 
-    private static string RunPowerShell(string script, bool tolerateNonZeroExit = false)
-    {
-        var encoded = Convert.ToBase64String(Encoding.Unicode.GetBytes(script));
-        var psi = new ProcessStartInfo
-        {
-            FileName = "powershell.exe",
-            Arguments = $"-NoProfile -NonInteractive -EncodedCommand {encoded}",
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            CreateNoWindow = true,
-        };
-        using var proc = Process.Start(psi) ?? throw new InvalidOperationException("powershell");
-        proc.WaitForExit(60_000);
-        var stdout = proc.StandardOutput.ReadToEnd();
-        var stderr = proc.StandardError.ReadToEnd();
-        if (!string.IsNullOrWhiteSpace(stderr))
-        {
-            Console.WriteLine($"RunPowerShell stderr exit={proc.ExitCode}: {stderr}");
-        }
-
-        if (proc.ExitCode != 0 && !tolerateNonZeroExit)
-        {
-            throw new InvalidOperationException(
-                $"PowerShell exit {proc.ExitCode}. stderr: {stderr}. script: {script}");
-        }
-
-        return stdout;
-    }
 }
 #endif

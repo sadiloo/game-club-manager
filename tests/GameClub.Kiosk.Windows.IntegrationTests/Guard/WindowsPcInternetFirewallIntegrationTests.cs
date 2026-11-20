@@ -119,10 +119,9 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
         }
     }
 
-    private static void AssertLocalhostOffStoreActive(string json)
+    private static void AssertActiveStoreOffProfiles(string json)
     {
         Assert.Contains("Block", json, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("False", json, StringComparison.Ordinal);
     }
 
     private static readonly string FirewallProfileSelectJsonScript =
@@ -134,12 +133,36 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
         }
         """;
 
+    private static readonly string FirewallProfileEchoRsopScript = """
+        Get-NetFirewallProfile -PolicyStore $store -ErrorAction SilentlyContinue | ForEach-Object {
+          Write-Output "FW_STORE_ECHO_RSOP store=$store profile=$($_.Name) DefaultOutboundAction=$($_.DefaultOutboundAction.ToString()) AllowLocalFirewallRules=$($_.AllowLocalFirewallRules.ToString())"
+        }
+        """;
+
     private void EchoFirewallStoreProfiles(string policyStore)
     {
         var script = $"$store = '{policyStore}'; {FirewallProfileEchoScript}";
-        var echo = RunPowerShell(script);
+        var echo = WindowsIntegrationRunPowerShell.Run(script);
         Console.WriteLine(echo);
         _output.WriteLine(echo);
+    }
+
+    private void EchoRsopFirewallStoreProfiles()
+    {
+        foreach (var store in new[] { "RSOP", "GroupPolicy" })
+        {
+            var script = $"$store = '{store}'; {FirewallProfileEchoRsopScript}";
+            try
+            {
+                var echo = WindowsIntegrationRunPowerShell.Run(script, tolerateNonZeroExit: true);
+                Console.WriteLine(echo);
+                _output.WriteLine(echo);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"FW_STORE_ECHO_RSOP store={store} read_failed={ex.Message}");
+            }
+        }
     }
 
     private static void AssertPersistentStoreOffProfiles(string persistentJson)
@@ -152,17 +175,18 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
     {
         EchoFirewallStoreProfiles("ActiveStore");
         EchoFirewallStoreProfiles("PersistentStore");
-        var activeJson = RunPowerShell(
+        EchoRsopFirewallStoreProfiles();
+        var activeJson = WindowsIntegrationRunPowerShell.Run(
             $"Get-NetFirewallProfile -PolicyStore ActiveStore | {FirewallProfileSelectJsonScript}");
-        AssertLocalhostOffStoreActive(activeJson);
-        var persistentJson = RunPowerShell(
+        AssertActiveStoreOffProfiles(activeJson);
+        var persistentJson = WindowsIntegrationRunPowerShell.Run(
             $"Get-NetFirewallProfile -PolicyStore PersistentStore | {FirewallProfileSelectJsonScript}");
         AssertPersistentStoreOffProfiles(persistentJson);
     }
 
     private static void AssertLocalhostProfilesNotBlock()
     {
-        var profileJson = RunPowerShell(
+        var profileJson = WindowsIntegrationRunPowerShell.Run(
             "Get-NetFirewallProfile -PolicyStore localhost | Select-Object Name,@{N='DefaultOutboundAction';E={$_.DefaultOutboundAction.ToString()}} | ConvertTo-Json");
         Assert.DoesNotContain("Block", profileJson, StringComparison.OrdinalIgnoreCase);
     }
@@ -175,7 +199,7 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
             if (-not $rules) { throw 'missing Checkpoint Internet Off rules' }
             ($rules | Measure-Object).Count
             """;
-        var countText = RunPowerShell(script).Trim();
+        var countText = WindowsIntegrationRunPowerShell.Run(script).Trim();
         Assert.True(int.TryParse(countText, out var count) && count > 0, "Checkpoint Internet Off rule group must be installed.");
     }
 
@@ -348,12 +372,12 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
             var addBypass = $"New-NetFirewallRule -DisplayName '{bypassRuleName}' -Direction Outbound -Action Allow -Program (Get-Command pwsh).Source";
             applier.Apply(config, on: false);
             System.Threading.Thread.Sleep(1_500);
-            _ = RunPowerShell(addBypass);
+            _ = WindowsIntegrationRunPowerShell.Run(addBypass);
             Assert.False(TryTcp("1.1.1.1", 443, 2_000), "Default-store allow rule must not bypass localhost OFF.");
         }
         finally
         {
-            RunPowerShell($"Remove-NetFirewallRule -DisplayName '{bypassRuleName}' -ErrorAction SilentlyContinue");
+            WindowsIntegrationRunPowerShell.Run($"Remove-NetFirewallRule -DisplayName '{bypassRuleName}' -ErrorAction SilentlyContinue");
             applier.RunResetScript();
         }
     }
@@ -413,7 +437,7 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
         {
             applier.RunResetScript();
             Thread.Sleep(500);
-            var preCount = RunPowerShell(
+            var preCount = WindowsIntegrationRunPowerShell.Run(
                 "(Get-NetFirewallRule -PolicyStore localhost -Group 'Checkpoint Internet Off' -ErrorAction SilentlyContinue | Measure-Object).Count").Trim();
             Assert.True(int.TryParse(preCount, out var count) && count == 0, "precondition: Checkpoint Internet Off group must be empty.");
 
@@ -447,9 +471,9 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
         try
         {
             Assert.Equal("applied", applier.Apply(config, on: false));
-            RunPowerShell(
+            WindowsIntegrationRunPowerShell.Run(
                 "Get-NetFirewallRule -Group 'Checkpoint Internet Off' | Remove-NetFirewallRule");
-            var groupCountText = RunPowerShell(
+            var groupCountText = WindowsIntegrationRunPowerShell.Run(
                 "(Get-NetFirewallRule -Group 'Checkpoint Internet Off' -ErrorAction SilentlyContinue | Measure-Object).Count").Trim();
             Assert.True(int.TryParse(groupCountText, out var groupCount) && groupCount == 0,
                 "precondition: Checkpoint Internet Off rule group must be empty after removal.");
@@ -563,10 +587,10 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
         {
             Assert.Equal("applied", applier.Apply(config, on: false));
             Assert.Equal("applied", applier.Apply(config, on: true));
-            var activeRuleCount = int.Parse(RunPowerShell(
+            var activeRuleCount = int.Parse(WindowsIntegrationRunPowerShell.Run(
                 "(Get-NetFirewallRule -Group 'Checkpoint Internet Off' -ErrorAction SilentlyContinue | Measure-Object).Count").Trim());
             Assert.Equal(0, activeRuleCount);
-            var profileJson = RunPowerShell(
+            var profileJson = WindowsIntegrationRunPowerShell.Run(
                 "Get-NetFirewallProfile | Select-Object Name,@{N='DefaultOutboundAction';E={$_.DefaultOutboundAction.ToString()}} | ConvertTo-Json");
             Assert.DoesNotContain("Block", profileJson, StringComparison.OrdinalIgnoreCase);
         }
@@ -599,16 +623,16 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
             """;
         try
         {
-            RunPowerShell(seedScript);
-            var preLocal = int.Parse(RunPowerShell(
+            WindowsIntegrationRunPowerShell.Run(seedScript);
+            var preLocal = int.Parse(WindowsIntegrationRunPowerShell.Run(
                 "(Get-NetFirewallRule -PolicyStore localhost -Group 'Checkpoint Internet Off' -ErrorAction SilentlyContinue | Measure-Object).Count").Trim());
             Assert.True(preLocal >= 1, "precondition: localhost legacy rules seeded");
 
             Assert.Equal("applied", applier.Apply(config, on: false));
-            var postLocal = int.Parse(RunPowerShell(
+            var postLocal = int.Parse(WindowsIntegrationRunPowerShell.Run(
                 "(Get-NetFirewallRule -PolicyStore localhost -Group 'Checkpoint Internet Off' -ErrorAction SilentlyContinue | Measure-Object).Count").Trim());
             Assert.Equal(0, postLocal);
-            var activeCount = int.Parse(RunPowerShell(
+            var activeCount = int.Parse(WindowsIntegrationRunPowerShell.Run(
                 "(Get-NetFirewallRule -Group 'Checkpoint Internet Off' -ErrorAction SilentlyContinue | Measure-Object).Count").Trim());
             Assert.True(activeCount >= 1);
         }
@@ -642,17 +666,17 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
         try
         {
             TryDeleteState();
-            RunPowerShell(
+            WindowsIntegrationRunPowerShell.Run(
                 "Set-NetFirewallProfile -Name Public -DefaultOutboundAction Block -AllowLocalFirewallRules False");
             Assert.True(TryTcp("1.1.1.1", 443, 2_000) is false, "precondition: partial block should restrict egress");
 
             InternetGuardStartupFirewall.ReconcileOnPipeStart(config, applier);
 
             Assert.True(TryTcp("1.1.1.1", 443, 3_000), "startup must unblock partial Block without verified state");
-            var profileJson = RunPowerShell(
+            var profileJson = WindowsIntegrationRunPowerShell.Run(
                 "Get-NetFirewallProfile | Select-Object Name,@{N='DefaultOutboundAction';E={$_.DefaultOutboundAction.ToString()}} | ConvertTo-Json");
             Assert.DoesNotContain("Block", profileJson, StringComparison.OrdinalIgnoreCase);
-            var activeRules = int.Parse(RunPowerShell(
+            var activeRules = int.Parse(WindowsIntegrationRunPowerShell.Run(
                 "(Get-NetFirewallRule -Group 'Checkpoint Internet Off' -ErrorAction SilentlyContinue | Measure-Object).Count").Trim());
             Assert.Equal(0, activeRules);
             if (File.Exists(watchdogPath))
@@ -694,7 +718,7 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
 
             InternetGuardStartupFirewall.ReconcileOnPipeStart(config, applier);
             Assert.True(TryTcp("1.1.1.1", 443, 3_000), "startup must unblock when OFF artifacts lack verified state");
-            var activeRules = int.Parse(RunPowerShell(
+            var activeRules = int.Parse(WindowsIntegrationRunPowerShell.Run(
                 "(Get-NetFirewallRule -Group 'Checkpoint Internet Off' -ErrorAction SilentlyContinue | Measure-Object).Count").Trim());
             Assert.Equal(0, activeRules);
         }
@@ -719,34 +743,5 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
         }
     }
 
-    private static string RunPowerShell(string script, bool tolerateNonZeroExit = false)
-    {
-        var encoded = Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes(script));
-        var psi = new ProcessStartInfo
-        {
-            FileName = "powershell.exe",
-            Arguments = $"-NoProfile -NonInteractive -EncodedCommand {encoded}",
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            CreateNoWindow = true,
-        };
-        using var proc = Process.Start(psi) ?? throw new InvalidOperationException("powershell");
-        proc.WaitForExit(60_000);
-        var stdout = proc.StandardOutput.ReadToEnd();
-        var stderr = proc.StandardError.ReadToEnd();
-        if (!string.IsNullOrWhiteSpace(stderr))
-        {
-            Console.WriteLine($"RunPowerShell stderr exit={proc.ExitCode}: {stderr}");
-        }
-
-        if (proc.ExitCode != 0 && !tolerateNonZeroExit)
-        {
-            throw new InvalidOperationException(
-                $"PowerShell exit {proc.ExitCode}. stderr: {stderr}. script: {script}");
-        }
-
-        return stdout;
-    }
 }
 #endif

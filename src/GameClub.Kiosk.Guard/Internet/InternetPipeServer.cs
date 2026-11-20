@@ -30,6 +30,9 @@ internal sealed class InternetPipeServer
     private Thread? _reconcileWorkThread;
     private readonly object _pipeHandlerThreadsLock = new();
     private readonly List<Thread> _pipeHandlerThreads = new();
+    private CancellationToken _shutdownCt;
+    private long _runTimelineOriginTicks;
+    private long _pipeTimelineSeq;
 
     public InternetPipeServer(InternetGuardConfig config, IInternetFirewallApplier? firewall = null)
     {
@@ -64,8 +67,30 @@ internal sealed class InternetPipeServer
         }
     }
 
+    private void AppendPipeTimeline(string eventName)
+    {
+        var elapsedMs = (Stopwatch.GetTimestamp() - _runTimelineOriginTicks) * 1000 / Stopwatch.Frequency;
+        var seq = Interlocked.Increment(ref _pipeTimelineSeq);
+        GuardWatchdogLog.Append($"PIPE_TIMELINE seq={seq} ms={elapsedMs} event={eventName}");
+    }
+
     public void Run(CancellationToken ct)
     {
+        _shutdownCt = ct;
+        _runTimelineOriginTicks = Stopwatch.GetTimestamp();
+        AppendPipeTimeline("run_begin");
+        var earlyReassert = Stopwatch.StartNew();
+        AppendPipeTimeline("early_reassert_lock_wait");
+        lock (_firewallGate)
+        {
+            AppendPipeTimeline("early_reassert_lock_enter");
+            ReassertPersistedLocked();
+            AppendPipeTimeline($"early_reassert_lock_exit elapsed_ms={earlyReassert.ElapsedMilliseconds}");
+        }
+
+        GuardWatchdogLog.Append(
+            $"GUARD_TIMELINE event=early_reassert_persisted elapsed_ms={earlyReassert.ElapsedMilliseconds}");
+
         var reconcileThread = new Thread(() => RunReconcileBackground(ct))
         {
             IsBackground = true,
@@ -95,6 +120,8 @@ internal sealed class InternetPipeServer
                     server.WaitForConnection();
                     GuardWatchdogLog.Append(
                         $"pipe_accept thread={Thread.CurrentThread.ManagedThreadId}");
+                    GuardWatchdogLog.Append(
+                        $"GUARD_TIMELINE event=pipe_ready thread={Thread.CurrentThread.ManagedThreadId}");
                     var pipe = server;
                     var handler = new Thread(() => HandleConnectedClient(pipe))
                     {
@@ -121,18 +148,33 @@ internal sealed class InternetPipeServer
         }
         finally
         {
-            JoinPipeBackgroundThread(drift, "drift", InternetDriftWatchdog.ResolveIntervalMs() + 60_000);
-            JoinPipeBackgroundThread(
-                reconcileThread,
-                "reconcile",
-                InternetGuardReconcilePolicy.ResolveReconcileTimeoutMs() + 90_000);
+            AppendPipeTimeline("stop_join_begin");
+            if (ct.IsCancellationRequested)
+            {
+                _reconcileAbandoned = true;
+                InternetPowerShellRunner.MarkAbandonBoundary();
+            }
+
+            var cancelled = ct.IsCancellationRequested;
+            var driftJoinMs = cancelled
+                ? InternetPipeServerShutdownBudgets.CancelledBackgroundJoinMs
+                : InternetDriftWatchdog.ResolveIntervalMs() + 60_000;
+            JoinPipeBackgroundThread(drift, "drift", driftJoinMs);
+            var reconcileJoinMs = cancelled
+                ? InternetPipeServerShutdownBudgets.CancelledBackgroundJoinMs
+                : InternetGuardReconcilePolicy.ResolveReconcileTimeoutMs() + 90_000;
+            JoinPipeBackgroundThread(reconcileThread, "reconcile", reconcileJoinMs);
             var work = _reconcileWorkThread;
             if (work is not null)
             {
-                JoinPipeBackgroundThread(work, "reconcile_work", 120_000);
+                var workJoinMs = cancelled
+                    ? InternetPipeServerShutdownBudgets.CancelledBackgroundJoinMs
+                    : 120_000;
+                JoinPipeBackgroundThread(work, "reconcile_work", workJoinMs);
             }
 
-            JoinPipeClientHandlerThreads(TimeSpan.FromSeconds(10));
+            JoinPipeClientHandlerThreads(InternetPipeServerShutdownBudgets.HandlerJoinBudget);
+            AppendPipeTimeline("stop_join_end");
         }
     }
 
@@ -387,6 +429,11 @@ internal sealed class InternetPipeServer
     {
         try
         {
+            if (_shutdownCt.IsCancellationRequested)
+            {
+                return JsonSerializer.Serialize(new { error = "shutting_down" });
+            }
+
             using var doc = JsonDocument.Parse(body);
             var verb = doc.RootElement.GetProperty("verb").GetString();
             if (string.Equals(verb, "status", StringComparison.OrdinalIgnoreCase))
@@ -425,12 +472,16 @@ internal sealed class InternetPipeServer
 
             try
             {
-                return HandleApplyLocked(doc);
+                AppendPipeTimeline("apply_begin");
+                var response = HandleApplyLocked(doc);
+                AppendPipeTimeline("apply_end");
+                return response;
             }
             finally
             {
                 Monitor.Exit(_firewallGate);
                 GuardWatchdogLog.Append("pipe_gate_exit");
+                AppendPipeTimeline("pipe_gate_exit");
             }
         }
         catch (Exception ex)
@@ -442,24 +493,60 @@ internal sealed class InternetPipeServer
     private bool TryEnterFirewallForApply(out string? busyError)
     {
         busyError = null;
+        if (_shutdownCt.IsCancellationRequested)
+        {
+            busyError = "shutting_down";
+            return false;
+        }
+
         var totalWaitMs = InternetGuardReconcilePolicy.ResolveApplyWaitDuringReconcileMs();
         GuardWatchdogLog.Append($"pipe_gate_wait_begin budget_ms={totalWaitMs}");
+        AppendPipeTimeline($"pipe_gate_wait_begin budget_ms={totalWaitMs}");
         if (!WaitForReconcileApplyWindow(totalWaitMs))
         {
             GuardWatchdogLog.Append("pipe_gate_wait_exit entered=false reason=reconcile_window");
+            AppendPipeTimeline("pipe_gate_wait_exit entered=false reason=reconcile_window");
             busyError = "reconcile_busy";
             return false;
         }
 
         GuardWatchdogLog.Append("pipe_gate_wait_exit entered=true");
-        if (Monitor.TryEnter(_firewallGate, totalWaitMs))
+        AppendPipeTimeline("pipe_gate_wait_exit entered=true");
+        if (TryEnterFirewallGate(totalWaitMs))
         {
             GuardWatchdogLog.Append("pipe_gate_enter ok=true");
+            AppendPipeTimeline("pipe_gate_enter ok=true");
             return true;
         }
 
         GuardWatchdogLog.Append("pipe_gate_enter ok=false");
+        AppendPipeTimeline("pipe_gate_enter ok=false");
         busyError = "reconcile_busy";
+        return false;
+    }
+
+    private bool TryEnterFirewallGate(int totalWaitMs)
+    {
+        var deadline = Environment.TickCount + totalWaitMs;
+        while (Environment.TickCount < deadline)
+        {
+            if (_shutdownCt.IsCancellationRequested)
+            {
+                return false;
+            }
+
+            var sliceMs = Math.Min(200, deadline - Environment.TickCount);
+            if (sliceMs <= 0)
+            {
+                break;
+            }
+
+            if (Monitor.TryEnter(_firewallGate, sliceMs))
+            {
+                return true;
+            }
+        }
+
         return false;
     }
 
@@ -473,6 +560,11 @@ internal sealed class InternetPipeServer
         var deadline = DateTime.UtcNow.AddMilliseconds(totalWaitMs);
         while (DateTime.UtcNow < deadline)
         {
+            if (_shutdownCt.IsCancellationRequested)
+            {
+                return false;
+            }
+
             if (_reconcilePhase != 1 || _reconcileAbandoned)
             {
                 return true;
