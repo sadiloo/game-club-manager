@@ -621,9 +621,11 @@ async function api(path, options = {}) {
   if (!res.ok) {
     let msg = text;
     let code;
+    let serverMessage;
     try {
       const j = JSON.parse(text);
       code = j.code;
+      serverMessage = typeof j.message === "string" ? j.message : undefined;
       msg = j.message || j.code || text;
     } catch (_) {}
     if (res.status === 409 && code === "not_pending") {
@@ -653,6 +655,7 @@ async function api(path, options = {}) {
     const err = new Error(msg);
     err.status = res.status;
     err.code = code;
+    if (serverMessage) err.serverMessage = serverMessage;
     throw err;
   }
   if (isBackground && cpBgPollFailures > 0) {
@@ -2302,9 +2305,10 @@ bindClick("mgrBirthdayBtn", async () => {
       return Object.keys(errs).length ? errs : null;
     },
     mapApiError: (e) => {
+      const serverMsg = e?.serverMessage || "";
       const msg = e?.message || "";
-      if (e?.code === "invalid_policy" && msg.includes("درصد تولد")) {
-        return { percent: msg };
+      if (e?.code === "invalid_policy" && serverMsg.includes("درصد تولد")) {
+        return { percent: serverMsg };
       }
       if (e?.code === "invalid_window_days") {
         return { windowDays: msg || CP_TEXT.f12.errDays };
