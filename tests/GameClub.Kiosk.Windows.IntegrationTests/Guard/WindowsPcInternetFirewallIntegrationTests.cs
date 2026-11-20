@@ -370,14 +370,16 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
         try
         {
             Assert.Equal("applied", applier.ApplyWithStoreEcho(config, on: false));
-            Thread.Sleep(2_000);
-            Assert.True(TryTcp("api.github.com", 443, 5_000), "OFF must still allow configured server host.");
+            AssertOffFirewallStoresAfterApply();
+            AssertServerReachableViaConfiguredAllowList(config, "off_allows_github");
             Assert.False(TryTcp("1.1.1.1", 443, 2_000), "OFF must block arbitrary public egress.");
         }
         finally
         {
             applier.RunResetScript();
-            Thread.Sleep(1_000);
+            var profileJson = WindowsIntegrationRunPowerShell.Run(
+                "Get-NetFirewallProfile | Select-Object Name,@{N='DefaultOutboundAction';E={$_.DefaultOutboundAction.ToString()}} | ConvertTo-Json");
+            Assert.DoesNotContain("Block", profileJson, StringComparison.OrdinalIgnoreCase);
             Assert.True(TryTcp("1.1.1.1", 443, 5_000), "internet-reset must restore outbound access.");
         }
     }
