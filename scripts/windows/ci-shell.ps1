@@ -103,13 +103,46 @@ if (-not $wv2) {
 
 dotnet build tests/GameClub.Shell.Windows.IntegrationTests/GameClub.Shell.Windows.IntegrationTests.csproj -c Release -f net48 --nologo
 & (Join-Path $PSScriptRoot "shell-windowshell-inventory.ps1") -Role Shell
-dotnet test tests/GameClub.Shell.Windows.IntegrationTests/GameClub.Shell.Windows.IntegrationTests.csproj `
-  -c Release -f net48 --no-build --nologo `
-  --filter "Category=WindowsShell" `
-  --logger "console;verbosity=normal" `
-  --results-directory $artifactDir `
-  --logger "trx;LogFileName=shell-windows.trx"
+$testExitCode = 0
+try {
+    dotnet test tests/GameClub.Shell.Windows.IntegrationTests/GameClub.Shell.Windows.IntegrationTests.csproj `
+      -c Release -f net48 --no-build --nologo `
+      --filter "Category=WindowsShell" `
+      --logger "console;verbosity=normal" `
+      --results-directory $artifactDir `
+      --logger "trx;LogFileName=shell-windows.trx"
+    if ($LASTEXITCODE -ne 0) {
+        $testExitCode = $LASTEXITCODE
+    }
+}
+finally {
+    $shellLogsSource = Join-Path $env:LOCALAPPDATA "Checkpoint\Shell\logs"
+    if (-not (Test-Path $shellLogsSource)) {
+        throw "Shell logs directory missing (no trace visibility): $shellLogsSource"
+    }
+
+    $shellLogFiles = @(Get-ChildItem -Path $shellLogsSource -Filter "shell-*.log" -File -ErrorAction SilentlyContinue)
+    if ($shellLogFiles.Count -eq 0) {
+        throw "Shell logs directory is empty (lost trace must not look like a pass): $shellLogsSource"
+    }
+
+    Copy-Item -Path (Join-Path $shellLogsSource "*") -Destination $logDir -Force -ErrorAction Stop
+    Write-Host "=== SHELL-OFFLINE-TRACE / SHELL-RACE-NAV (from $shellLogsSource) ==="
+    foreach ($logFile in $shellLogFiles) {
+        $lines = Get-Content -Path $logFile.FullName -ErrorAction Stop
+        foreach ($line in $lines) {
+            if ($line -match "SHELL-OFFLINE-TRACE" -or $line -match "SHELL-RACE-NAV") {
+                Write-Host $line
+            }
+        }
+    }
+    Write-Host "=== end shell trace dump ==="
+}
 
 if (Test-Path (Join-Path $env:LOCALAPPDATA "Checkpoint\Shell\window.json")) {
     Copy-Item (Join-Path $env:LOCALAPPDATA "Checkpoint\Shell\window.json") (Join-Path $artifactDir "window.json") -Force
+}
+
+if ($testExitCode -ne 0) {
+    exit $testExitCode
 }

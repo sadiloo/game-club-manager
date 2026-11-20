@@ -176,7 +176,7 @@ public partial class MainWindow : Window
         {
             LogOfflineTrace(
                 "nav-completed-skip",
-                $"IsSuccess={e.IsSuccess} webError={e.WebErrorStatus} loopbackTarget={IsLoopbackPanelTarget(_lastNavigationUri ?? "")} lastUri={_lastNavigationUri}");
+                $"IsSuccess={e.IsSuccess} webError={e.WebErrorStatus} loopbackTarget={IsLoopbackPanelTarget(_lastNavigationUri ?? "")} lastUri={FormatUriForLog(_lastNavigationUri)}");
             return;
         }
 
@@ -187,7 +187,7 @@ public partial class MainWindow : Window
         };
         LogOfflineTrace(
             "nav-completed-fallback",
-            $"IsSuccess={e.IsSuccess} webError={e.WebErrorStatus} offlineState={state} lastUri={_lastNavigationUri}");
+            $"IsSuccess={e.IsSuccess} webError={e.WebErrorStatus} offlineState={state} lastUri={FormatUriForLog(_lastNavigationUri)}");
         _ = PresentOfflinePageAsync(state);
     }
 
@@ -213,6 +213,33 @@ public partial class MainWindow : Window
         }
 
         return hex.Length >= 8 ? hex.ToString(0, 8) : hex.ToString().PadRight(8, '0');
+    }
+
+    private static string FormatUriForLog(string? uriString)
+    {
+        var raw = uriString ?? "";
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return "";
+        }
+
+        if (raw.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+        {
+            return "scheme=data host_hash8=" + Sha256Hex8("offline-html");
+        }
+
+        if (!Uri.TryCreate(raw, UriKind.Absolute, out var uri))
+        {
+            return "scheme=unknown host_hash8=00000000";
+        }
+
+        var host = (uri.Host ?? "").ToLowerInvariant();
+        if (host is "127.0.0.1" or "localhost" or "::1")
+        {
+            return host + uri.AbsolutePath;
+        }
+
+        return $"scheme={uri.Scheme} host_hash8={Sha256Hex8(host)}";
     }
 
     private static void LogPanelNavigate(string caller, Uri uri)
@@ -241,7 +268,7 @@ public partial class MainWindow : Window
     private void LogOfflineTrace(string branch, string reason)
     {
         ShellFileLog.Write(
-            $"SHELL-OFFLINE-TRACE UTC={DateTime.UtcNow:O} thread={Environment.CurrentManagedThreadId} branch={branch} reason={reason} uri={CurrentPanelUriForTrace()}");
+            $"SHELL-OFFLINE-TRACE UTC={DateTime.UtcNow:O} thread={Environment.CurrentManagedThreadId} branch={branch} reason={reason} uri={FormatUriForLog(CurrentPanelUriForTrace())}");
     }
 
     private void LogRaceNav(string caller)

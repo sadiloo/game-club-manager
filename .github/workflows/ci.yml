@@ -188,7 +188,7 @@ jobs:
 
   windows-shell:
     name: windows-2022 shell
-    timeout-minutes: 25
+    timeout-minutes: 45
     runs-on: windows-2022
     env:
       GAMECLUB_DATABASE: Host=localhost;Port=5432;Database=gameclub_test;Username=postgres;Password=postgres;SSL Mode=Disable

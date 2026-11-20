@@ -111,22 +111,32 @@ public sealed class ShellPlanAIntegrationTests
                 {
                     WriteShellGeom("placement-restore", "Loaded", window);
                     WriteGeometryTimeline("placement-restore", "Loaded", window);
-                    Assert.Equal(WindowState.Maximized, window.WindowState);
-                    // Maximized frame size includes borders; normal restore bounds follow WindowPlacementStore clamp.
-                    var area = Screen.PrimaryScreen!.WorkingArea;
-                    Assert.Equal(Math.Min(1024, area.Width), window.RestoreBounds.Width, 0);
-                    Assert.Equal(Math.Min(700, area.Height), window.RestoreBounds.Height, 0);
-                    loadedPlacement.TrySetResult(true);
+                    try
+                    {
+                        ShellGeomLoadedWait.RunLoadedAsserts(
+                            window,
+                            "placement-restore",
+                            () =>
+                            {
+                                Assert.Equal(WindowState.Maximized, window.WindowState);
+                                // Maximized frame size includes borders; normal restore bounds follow WindowPlacementStore clamp.
+                                var area = Screen.PrimaryScreen!.WorkingArea;
+                                Assert.Equal(Math.Min(1024, area.Width), window.RestoreBounds.Width, 0);
+                                Assert.Equal(Math.Min(700, area.Height), window.RestoreBounds.Height, 0);
+                            });
+                        loadedPlacement.TrySetResult(true);
+                    }
+                    catch (Exception ex)
+                    {
+                        loadedPlacement.TrySetException(ex);
+                    }
                 };
                 window.ContentRendered += (_, _) =>
                     WriteGeometryTimeline("placement-restore", "ContentRendered", window);
                 window.Show();
                 WriteShellGeom("placement-restore", "Show", window);
                 WriteGeometryTimeline("placement-restore", "Show", window);
-                if (!loadedPlacement.Task.Wait(TimeSpan.FromSeconds(5)))
-                {
-                    throw new System.TimeoutException("placement-restore Loaded assertions did not run");
-                }
+                ShellGeomLoadedWait.AwaitLoaded(loadedPlacement, "placement-restore", TimeSpan.FromSeconds(5));
 
                 window.Close();
                 return Task.CompletedTask;
