@@ -18,6 +18,7 @@
     <Compile Include="..\..\src\GameClub.Shell\Shell\PanelNavigationPendingRegistry.cs" Link="Shell\PanelNavigationPendingRegistry.cs" />
     <Compile Include="..\..\src\GameClub.Shell\Shell\PanelOfflineFlashAssert.cs" Link="Shell\PanelOfflineFlashAssert.cs" />
     <Compile Include="..\..\src\GameClub.Shell\Shell\RunningStabilityTracker.cs" Link="Shell\RunningStabilityTracker.cs" />
+    <Compile Include="..\..\src\GameClub.Shell\Shell\RunningPanelLoadFailingPollerPolicy.cs" Link="Shell\RunningPanelLoadFailingPollerPolicy.cs" />
     <Compile Include="..\..\src\GameClub.Shell\Shell\ShellServerVisualState.cs" Link="Shell\ShellServerVisualState.cs" />
     <Compile Include="..\..\src\GameClub.Shell\Shell\ShellPaths.cs" Link="Shell\ShellPaths.cs" />
   </ItemGroup>

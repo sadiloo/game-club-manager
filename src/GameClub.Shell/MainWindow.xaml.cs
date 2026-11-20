@@ -148,6 +148,26 @@ public partial class MainWindow : Window
                     _panelNavigated = true;
                     PanelWebView.Source = recoverUri;
                 }
+                else if (RunningPanelLoadFailingPollerPolicy.Applies(_runningPanelLoadFailing, _offlineShown))
+                {
+                    var presentAction = RunningPanelLoadFailingPollerPolicy.ResolvePresentAction(
+                        _offlinePresentInFlightState);
+                    if (presentAction == PanelFailingHiddenOfflinePresentAction.SkipPresentOfflineInFlight)
+                    {
+                        LogOfflineTrace(
+                            "poller-panel-failing-offline-hidden",
+                            $"present=skip inFlight={_offlinePresentInFlightState}");
+                    }
+                    else
+                    {
+                        LogOfflineTrace(
+                            "poller-panel-failing-offline-hidden",
+                            "present=panel-unavailable");
+                        _ = PresentOfflinePageAsync("panel-unavailable");
+                    }
+
+                    TryRunningPanelProbeWhenDue();
+                }
                 else if (!_runningPanelLoadFailing && _panelNavigated && IsActiveOnPanelOrigin())
                 {
                     // Healthy running panel: poller ticks must not probe-navigate again.

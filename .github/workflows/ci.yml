@@ -33,8 +33,10 @@ jobs:
           dotnet-version: 10.0.403
       - name: test net10
         run: |
+          set +e
           set -o pipefail
           dotnet test GameClub.linux.slnf -c Release -f net10.0 --nologo -m:1 2>&1 | tee /tmp/linux-net10-test.log
+          rc=${PIPESTATUS[0]}
           shell_line=$(grep -E 'GameClub\.Shell\.Tests\.dll' /tmp/linux-net10-test.log | grep -E 'Failed:|Passed!' | tail -1 || true)
           if [ -n "$shell_line" ]; then
             passed=$(echo "$shell_line" | sed -n 's/.*Passed: *\([0-9]*\).*/\1/p')
@@ -42,13 +44,10 @@ jobs:
             total=$(echo "$shell_line" | sed -n 's/.*Total: *\([0-9]*\).*/\1/p')
             echo "GAMECLUB_SHELL_TESTS_COUNT passed=${passed:-?} failed=${failed:-?} total=${total:-?}"
           else
-            dotnet test tests/GameClub.Shell.Tests/GameClub.Shell.Tests.csproj -c Release -f net10.0 --no-build --nologo --logger "console;verbosity=minimal" 2>&1 | tee /tmp/shell-tests-only.log
-            shell_line=$(grep -E 'Failed:|Passed!' /tmp/shell-tests-only.log | tail -1)
-            passed=$(echo "$shell_line" | sed -n 's/.*Passed: *\([0-9]*\).*/\1/p')
-            failed=$(echo "$shell_line" | sed -n 's/.*Failed: *\([0-9]*\).*/\1/p')
-            total=$(echo "$shell_line" | sed -n 's/.*Total: *\([0-9]*\).*/\1/p')
-            echo "GAMECLUB_SHELL_TESTS_COUNT passed=${passed:-?} failed=${failed:-?} total=${total:-?}"
+            echo "GAMECLUB_SHELL_TESTS_COUNT missing"
+            rc=1
           fi
+          exit $rc
       - name: kiosk owned-server G2 and re-pair oracle
         if: always()
         timeout-minutes: 25
