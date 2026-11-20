@@ -390,7 +390,25 @@ public partial class MainWindow : Window
         {
             ShellFileLog.Write(
                 $"webview-process-failed kind={kind} attempt={attempt} outcome=recreate-browser");
-            await Dispatcher.InvokeAsync(async () => await RecreatePanelWebViewAsync());
+            try
+            {
+                if (Dispatcher.CheckAccess())
+                {
+                    await RecreatePanelWebViewAsync();
+                }
+                else
+                {
+                    await (await Dispatcher.InvokeAsync(() => RecreatePanelWebViewAsync()));
+                }
+
+                ShellFileLog.Write(
+                    $"webview-process-failed kind={kind} attempt={attempt} outcome=recreate-done result=success");
+            }
+            catch (Exception ex)
+            {
+                ShellFileLog.Write(
+                    $"webview-process-failed kind={kind} attempt={attempt} outcome=recreate-done result=failure detail={ex.GetType().Name}");
+            }
         }
         else
         {
