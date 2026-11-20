@@ -5,6 +5,7 @@ using GameClub.Server.Data.Entities;
 using GameClub.Server.Operator;
 using GameClub.Server.Services;
 using GameClub.Server.Time;
+using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
@@ -41,6 +42,10 @@ public class GameClubWebApplicationFactory : WebApplicationFactory<Program>
     /// <summary>When set, <see cref="SaveTitleSecondSaveFaultInterceptor"/> faults the second SaveChanges in the request.</summary>
     internal SaveTitleSaveFaultGate? SaveTitleSaveFaultGate { get; set; }
 
+    internal KioskProfileInsertRaceGate? ProfileInsertRaceGate { get; set; }
+
+    internal KioskLoginStallGate? LoginStallGate { get; set; }
+
     public HttpClient CreateClientWithKey()
     {
         var client = CreateClient();
@@ -75,9 +80,11 @@ public class GameClubWebApplicationFactory : WebApplicationFactory<Program>
             services.RemoveAll<IClock>();
             services.AddSingleton<IClock>(Clock);
             services.AddSingleton(_ => this);
+            services.AddSingleton<IStartupFilter, KioskLoginStallStartupFilter>();
             services.RemoveAll<IHostedService>();
             services.AddHostedService<TestDeadPcSweepBackgroundService>();
             SaveTitleSecondSaveFaultInjectionRegistration.Register(services);
+            KioskProfileInsertRaceInjectionRegistration.Register(services);
             if (SimulatedRemoteIpAddress is not null)
             {
                 services.AddSingleton<IStartupFilter>(new NonLoopbackRemoteIpStartupFilter(SimulatedRemoteIpAddress));
