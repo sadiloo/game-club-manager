@@ -44,19 +44,23 @@
 
   function pushHistory(id) {
     try {
-      history.pushState({ cpDialog: id }, "");
+      const url = typeof window !== "undefined" && window.location ? window.location.href : "";
+      history.pushState({ cpDialog: id }, "", url);
       cpLayer._historyPushed = true;
     } catch (_) {}
   }
 
   function popHistoryIfNeeded() {
-    if (cpLayer._historyPushed && !cpLayer._closingViaHistory) {
-      cpLayer._closingViaHistory = true;
-      try {
-        history.back();
-      } catch (_) {}
+    if (!cpLayer._historyPushed) return;
+    if (cpLayer._closingViaHistory) {
+      cpLayer._historyPushed = false;
+      return;
     }
+    cpLayer._closingViaHistory = true;
     cpLayer._historyPushed = false;
+    try {
+      history.back();
+    } catch (_) {}
     window.setTimeout(() => {
       cpLayer._closingViaHistory = false;
     }, 0);
@@ -344,7 +348,16 @@
       this._finish(null);
     }
 
+    _detachKeydown() {
+      const root = document.getElementById("cpLayer");
+      if (root && this._keydownHandler) {
+        root.removeEventListener("keydown", this._keydownHandler);
+        this._keydownHandler = null;
+      }
+    }
+
     _finish(value) {
+      this._detachKeydown();
       popHistoryIfNeeded();
       lockBodyScroll(false);
       const root = ensureRoot();
@@ -359,30 +372,35 @@
     }
 
     async submit(values) {
-      if (this.busy) return;
-      const spec = this.spec;
-      if (spec.validate) {
-        const errs = spec.validate(values);
-        if (errs) {
-          this._applyFieldErrors(errs);
-          return;
+      if (this.busy || this._submitInFlight) return;
+      this._submitInFlight = true;
+      try {
+        const spec = this.spec;
+        if (spec.validate) {
+          const errs = spec.validate(values);
+          if (errs) {
+            this._applyFieldErrors(errs);
+            return;
+          }
         }
-      }
-      if (typeof spec.onSubmit === "function") {
-        this.busy = true;
-        this._setBusyUi(true);
-        try {
-          await spec.onSubmit(values);
+        if (typeof spec.onSubmit === "function") {
+          this.busy = true;
+          this._setBusyUi(true);
+          try {
+            await spec.onSubmit(values);
+            this._finish(values);
+          } catch (e) {
+            const msg = e && e.message ? cpTranslateApiError(e.code, e.message) : TIMEOUT_MSG;
+            this.setServerError(msg);
+          } finally {
+            this.busy = false;
+            this._setBusyUi(false);
+          }
+        } else {
           this._finish(values);
-        } catch (e) {
-          const msg = e && e.message ? cpTranslateApiError(e.code, e.message) : TIMEOUT_MSG;
-          this.setServerError(msg);
-        } finally {
-          this.busy = false;
-          this._setBusyUi(false);
         }
-      } else {
-        this._finish(values);
+      } finally {
+        this._submitInFlight = false;
       }
     }
 
@@ -522,14 +540,22 @@
     submitBtn.className = `cp-btn ${session.spec.tone === "danger" ? "cp-danger" : "cp-primary"}`;
     submitBtn.dataset.cpRole = "submit";
     submitBtn.textContent = session.spec.confirmLabel || "ثبت";
-    submitBtn.onclick = () => session.spec.collectAndSubmit();
+    submitBtn.onclick = () => {
+      const run = session.spec.collectAndSubmit;
+      if (typeof run === "function") void run();
+    };
     foot.append(cancelBtn, submitBtn);
+    if (session.spec.role === "alertdialog" && !(session.spec.fields?.length)) {
+      submitBtn.hidden = true;
+    }
     sheet.appendChild(foot);
 
     root.replaceChildren(scrim, sheet);
     lockBodyScroll(true);
     pushHistory(session.id);
-    root.addEventListener("keydown", (e) => {
+    session._detachKeydown();
+    const fieldCount = session.spec.fields?.length ?? 0;
+    session._keydownHandler = (e) => {
       if (e.key === "Escape") {
         e.preventDefault();
         if (!session.busy) session.cancel("escape");
@@ -537,10 +563,29 @@
       }
       if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
         e.preventDefault();
-        if (!session.busy) session.spec.collectAndSubmit?.();
+        if (!session.busy && !session._submitInFlight && typeof session.spec.collectAndSubmit === "function") {
+          void session.spec.collectAndSubmit();
+        }
+        return;
       }
-    });
-    return { fieldsHost, submitBtn, cancelBtn, focusTarget: session.spec.focusCancelFirst ? cancelBtn : submitBtn };
+      if (e.key === "Enter" && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+        if (e.target?.tagName === "TEXTAREA") return;
+        if (fieldCount === 1 && !session.busy && !session._submitInFlight && typeof session.spec.collectAndSubmit === "function") {
+          e.preventDefault();
+          void session.spec.collectAndSubmit();
+        }
+      }
+    };
+    root.addEventListener("keydown", session._keydownHandler);
+    sheet.tabIndex = -1;
+    return {
+      fieldsHost,
+      submitBtn,
+      cancelBtn,
+      foot,
+      sheet,
+      focusTarget: session.spec.focusCancelFirst ? cancelBtn : submitBtn,
+    };
   }
 
   function buildMoneyInput(field, session) {
@@ -722,10 +767,11 @@
                 session.fieldEls[field.name] = input;
               }
             }
-            (ui.focusTarget || host.querySelector("input"))?.focus();
+            (host.querySelector("input, select, textarea") || ui.focusTarget)?.focus({ preventScroll: true });
           };
 
-          session.spec.collectAndSubmit = () => {
+          session.spec.collectAndSubmit = async () => {
+            if (session.busy || session._submitInFlight) return;
             const values = {};
             const errs = {};
             for (const field of spec.fields || []) {
@@ -769,7 +815,7 @@
                 return;
               }
             }
-            session.submit(values);
+            await session.submit(values);
           };
 
           render();
@@ -832,8 +878,9 @@
           ui.cancelBtn.onclick = () => {
             session._finish(false);
           };
-          if (opts.focusCancelFirst !== false) ui.cancelBtn.focus();
-          else ok.focus();
+          ui.sheet.focus({ preventScroll: true });
+          if (opts.focusCancelFirst !== false) ui.cancelBtn.focus({ preventScroll: true });
+          else ok.focus({ preventScroll: true });
         }),
     );
   }
@@ -869,6 +916,7 @@
               host.appendChild(btn);
             }
           }
+          ui.sheet.focus({ preventScroll: true });
         }),
     );
   }
@@ -902,9 +950,11 @@
           const close = document.createElement("button");
           close.type = "button";
           close.className = "cp-btn cp-primary";
-          close.textContent = opts.okLabel || "بستن";
+          close.textContent = opts.okLabel || "ثبت";
           close.onclick = () => session._finish(undefined);
           ui.foot.appendChild(close);
+          ui.sheet.focus({ preventScroll: true });
+          close.focus({ preventScroll: true });
         }),
     );
   }

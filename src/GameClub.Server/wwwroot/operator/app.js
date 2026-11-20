@@ -221,11 +221,15 @@ const CP_JALALI_MONTHS = [
 ];
 
 function cpIsJalaliLeapYear(year) {
-  const breaks = [1, 5, 9, 13, 17, 22, 26, 30];
-  const gy = year + 621;
-  const leap = -14 + Math.floor((gy + 1) * 0.2422);
-  const jp = breaks[(year + 12) % 33];
-  return leap === jp;
+  const r = ((year % 33) + 33) % 33;
+  return r === 1 || r === 5 || r === 9 || r === 13 || r === 17 || r === 22 || r === 26 || r === 30;
+}
+
+function cpCurrentJalaliYear() {
+  const parts = new Intl.DateTimeFormat("en-US-u-ca-persian", { year: "numeric" }).formatToParts(new Date());
+  const y = parts.find((p) => p.type === "year")?.value;
+  const parsed = typeof cpParseInteger === "function" ? cpParseInteger(y) : Number(y);
+  return Number.isFinite(parsed) ? parsed : 1500;
 }
 
 function cpJalaliMonthLength(month, year) {
@@ -235,8 +239,7 @@ function cpJalaliMonthLength(month, year) {
 }
 
 function validateJalaliBirth(year, month, day) {
-  const curJy = new Date().toLocaleDateString("fa-IR-u-ca-persian", { year: "numeric" }).replace(/[^\d]/g, "");
-  const maxY = Number(curJy) || 1500;
+  const maxY = cpCurrentJalaliYear();
   if (year < 1300 || year > maxY || month < 1 || month > 12) return "تاریخ درست نیست.";
   const maxDay = cpJalaliMonthLength(month, year);
   if (day < 1 || day > maxDay) return "تاریخ درست نیست.";
@@ -2290,7 +2293,7 @@ bindClick("mgrBirthdayBtn", async () => {
     validate: (v) => {
       const errs = {};
       const pct = cpParseInteger(String(v.percent));
-      if (pct == null || pct < 0) errs.percent = "درصد را وارد کنید.";
+      if (pct == null || pct < 0 || pct > 100) errs.percent = "درصد را وارد کنید.";
       if (v.windowKind === "day_window") {
         const days = cpParseInteger(String(v.windowDays));
         if (days == null || days < 1) errs.windowDays = CP_TEXT.f12.errDays;
@@ -2543,7 +2546,8 @@ function escapeHtmlText(value) {
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 function renderReportsTable(title, headers, rows) {
@@ -2872,7 +2876,7 @@ bindClick("historyBtn", async () => {
 bindClick("exportHistoryBtn", async () => {
   const res = await fetch(`/api/operator/reports/history/export${await historyQuery()}`, { credentials: "include" });
   const text = await res.text();
-  document.getElementById("reportsOut").innerHTML = `<h3>خروجی CSV</h3><pre>${text.replace(/</g, "&lt;")}</pre>`;
+  document.getElementById("reportsOut").innerHTML = `<h3>خروجی CSV</h3><pre>${escapeHtmlText(text)}</pre>`;
 });
 
 async function refreshCafeSettingsUi() {

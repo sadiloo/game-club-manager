@@ -57,7 +57,7 @@ public class GameClubWebApplicationFactory : WebApplicationFactory<Program>
     {
         ConnectionString = Environment.GetEnvironmentVariable("GAMECLUB_TEST_DATABASE")
             ?? Environment.GetEnvironmentVariable("GAMECLUB_DATABASE")
-            ?? "Host=localhost;Database=gameclub_test;Username=gameclub;Password=gameclub";
+            ?? $"Host=localhost;Database=autotest_{Guid.NewGuid():N};Username=gameclub;Password=gameclub";
 
         Environment.SetEnvironmentVariable("GAMECLUB_DATABASE", ConnectionString);
         Environment.SetEnvironmentVariable("GAMECLUB_API_KEY", "dev-key");

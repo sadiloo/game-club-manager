@@ -22,6 +22,8 @@ public sealed class OperatorPrepaidService(
             throw new ApiException(StatusCodes.Status400BadRequest, "invalid_minutes", "Prepaid minutes must be positive.");
         }
 
+        OperatorMoneyValidation.EnsurePositiveBounded(minutes, "invalid_minutes");
+
         var session = await LoadOpenConsoleSessionAsync(sessionId, ct);
         if (session.PrepaidKind != PrepaidSessionKind.None)
         {
@@ -55,6 +57,8 @@ public sealed class OperatorPrepaidService(
         {
             throw new ApiException(StatusCodes.Status400BadRequest, "invalid_amount", "Prepaid amount must be positive.");
         }
+
+        OperatorMoneyValidation.EnsurePositiveBounded(amountToman);
 
         var session = await LoadOpenConsoleSessionAsync(sessionId, ct);
         if (session.PrepaidKind != PrepaidSessionKind.None)

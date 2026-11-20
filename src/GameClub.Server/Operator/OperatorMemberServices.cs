@@ -673,9 +673,27 @@ public sealed partial class OperatorMemberWalletService(
     public async Task UpdateBirthdaySettingsAsync(int percent, string windowKind, int windowDays, string anchor, CancellationToken ct)
     {
         EnsureManager();
-        if (string.Equals(windowKind, "day_window", StringComparison.Ordinal) && windowDays < 1)
+        if (percent is < 0 or > 100)
         {
-            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_window_days", "Birthday window days must be at least 1.");
+            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_policy", "Birthday percent must be between 0 and 100.");
+        }
+
+        if (!IsAllowedBirthdayWindowKind(windowKind))
+        {
+            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_policy", "Invalid birthday window kind.");
+        }
+
+        if (string.Equals(windowKind, "day_window", StringComparison.Ordinal))
+        {
+            if (windowDays < 1)
+            {
+                throw new ApiException(StatusCodes.Status400BadRequest, "invalid_window_days", "Birthday window days must be at least 1.");
+            }
+
+            if (!IsAllowedBirthdayAnchor(anchor))
+            {
+                throw new ApiException(StatusCodes.Status400BadRequest, "invalid_policy", "Invalid birthday window anchor.");
+            }
         }
 
         var settings = await db.BranchMemberSettings.FirstAsync(ct);
@@ -781,11 +799,20 @@ public sealed partial class OperatorMemberWalletService(
         row.WorkingDayDay = close.WorkingDayDay;
     }
 
+    private static bool IsAllowedBirthdayWindowKind(string windowKind) =>
+        string.Equals(windowKind, "birth_month", StringComparison.Ordinal)
+        || string.Equals(windowKind, "exact_day", StringComparison.Ordinal)
+        || string.Equals(windowKind, "day_window", StringComparison.Ordinal);
+
+    private static bool IsAllowedBirthdayAnchor(string anchor) =>
+        string.Equals(anchor, "on_and_after", StringComparison.Ordinal)
+        || string.Equals(anchor, "around", StringComparison.Ordinal);
+
     private void EnsureManager()
     {
         if (op.Role is not UserRole.Manager and not UserRole.Owner)
         {
-            throw new ApiException(StatusCodes.Status403Forbidden, "forbidden", "Manager permission required.");
+            throw new ApiException(StatusCodes.Status403Forbidden, "forbidden", "فقط مدیر یا مالک می‌تواند این کار را انجام دهد.");
         }
     }
 }

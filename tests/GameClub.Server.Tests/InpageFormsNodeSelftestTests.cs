@@ -24,6 +24,8 @@ public sealed class InpageFormsNodeSelftestTests
         "cp-shift-close-money-selftest.mjs",
         "cp-money-junk-selftest.mjs",
         "cp-prompt-submit-bodies-selftest.mjs",
+        "cp-layer-keydown-selftest.mjs",
+        "cp-jalali-leap-selftest.mjs",
     ];
 
     [Fact]
