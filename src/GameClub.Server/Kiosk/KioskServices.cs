@@ -794,7 +794,7 @@ public sealed class KioskSessionService(
                         session = await sessions.StartAsync(sid, 1, PlayMode.Offline, null, null, ct);
                         await customers.LinkSessionAsync(session.Id, customerId, ct);
                     }
-                    catch (DbUpdateException ex) when (PostgresErrors.IsActiveSessionStationBusyConflict(ex))
+                    catch (DbUpdateException ex) when (PostgresErrors.IsActiveSessionUniqueViolation(ex))
                     {
                         db.ChangeTracker.Clear();
                         return await ResolveStationBusyAfterStartRaceAsync(customerId, sid, ct);

@@ -5,6 +5,7 @@ using GameClub.Server.Data.Entities;
 using GameClub.Server.Operator;
 using GameClub.Server.Services;
 using GameClub.Server.Time;
+using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
@@ -30,6 +31,8 @@ public class GameClubWebApplicationFactory : WebApplicationFactory<Program>
     internal SaveTitleSaveFaultGate? SaveTitleSaveFaultGate { get; set; }
 
     internal KioskProfileInsertRaceGate? ProfileInsertRaceGate { get; set; }
+
+    internal KioskLoginStallGate? LoginStallGate { get; set; }
 
     public HttpClient CreateClientWithKey()
     {
@@ -64,6 +67,7 @@ public class GameClubWebApplicationFactory : WebApplicationFactory<Program>
             services.RemoveAll<IClock>();
             services.AddSingleton<IClock>(Clock);
             services.AddSingleton(_ => this);
+            services.AddSingleton<IStartupFilter, KioskLoginStallStartupFilter>();
             services.RemoveAll<IHostedService>();
             services.AddHostedService<TestDeadPcSweepBackgroundService>();
             SaveTitleSecondSaveFaultInjectionRegistration.Register(services);
