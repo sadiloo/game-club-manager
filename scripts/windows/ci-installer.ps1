@@ -16,12 +16,6 @@ Write-Host "ci-installer: static installer rules"
 & (Join-Path $root "installer/tests/NoBackupDelete.Tests.ps1")
 
 $expectedInno = [Version]"6.7.1"
-if (-not (Get-Command iscc.exe -ErrorAction SilentlyContinue)) {
-  throw "ci-installer: iscc.exe not on PATH; Inno Setup required."
-}
-$isccPath = (Get-Command iscc.exe).Source
-$isccDir = [System.IO.Path]::GetFullPath((Split-Path -Parent $isccPath)).TrimEnd('\')
-$rawIsccHelp = & $isccPath /? 2>&1 | Out-String
 
 function NormalizeDir([string]$path) {
   if ([string]::IsNullOrWhiteSpace($path)) {
@@ -30,110 +24,177 @@ function NormalizeDir([string]$path) {
   return [System.IO.Path]::GetFullPath($path).TrimEnd('\')
 }
 
-$uninstallRoots = @(
-  "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
-  "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"
-)
-$knownInnoKeySuffixes = @("Inno Setup 6_is1", "{code-Inno Setup 6_is1}")
-
-$registryMatches = [System.Collections.Generic.List[object]]::new()
-foreach ($root in $uninstallRoots) {
-  if (-not (Test-Path -LiteralPath $root)) {
-    continue
+function Get-ChocoInnoPackageVersion {
+  $libRoot = "C:\ProgramData\chocolatey\lib\innosetup"
+  if (Test-Path -LiteralPath $libRoot) {
+    $nuspec = Get-ChildItem -LiteralPath $libRoot -Filter "*.nuspec" -Recurse -ErrorAction SilentlyContinue |
+      Sort-Object FullName |
+      Select-Object -First 1
+    if ($null -ne $nuspec) {
+      try {
+        [xml]$xml = Get-Content -LiteralPath $nuspec.FullName -ErrorAction Stop
+        return [Version]([string]$xml.package.metadata.version)
+      }
+      catch {
+        Write-Host "ci-installer: failed to parse nuspec $($nuspec.FullName): $_"
+      }
+    }
   }
-  foreach ($suffix in $knownInnoKeySuffixes) {
-    $keyPath = Join-Path $root $suffix
-    if (-not (Test-Path -LiteralPath $keyPath)) {
+
+  $choco = Get-Command choco.exe -ErrorAction SilentlyContinue
+  if ($null -eq $choco) {
+    return $null
+  }
+  $lines = & $choco.Source list --local-only --limit-output innosetup 2>&1
+  foreach ($line in $lines) {
+    if ($line -match '^innosetup\|([0-9.]+)') {
+      return [Version]$Matches[1]
+    }
+  }
+  return $null
+}
+
+function Get-InnoPeFileVersion([string]$installDir) {
+  foreach ($name in @("ISCmplr.dll", "Compil32.exe", "ISCC.exe")) {
+    $path = Join-Path $installDir $name
+    if (-not (Test-Path -LiteralPath $path)) {
       continue
     }
-    $props = Get-ItemProperty -LiteralPath $keyPath -ErrorAction SilentlyContinue
-    if ($null -ne $props) {
-      $registryMatches.Add([PSCustomObject]@{
-          RegistryKeyPath = $keyPath
-          DisplayVersion  = $props.DisplayVersion
-          InstallLocation = $props.InstallLocation
-        })
+    $ver = (Get-Item -LiteralPath $path).VersionInfo.FileVersion
+    if (-not [string]::IsNullOrWhiteSpace($ver)) {
+      return $ver
     }
   }
+  return $null
+}
 
-  Get-ChildItem -LiteralPath $root -ErrorAction SilentlyContinue | ForEach-Object {
-    $props = Get-ItemProperty -LiteralPath $_.PSPath -ErrorAction SilentlyContinue
-    if ($null -eq $props) {
-      return
-    }
-    $name = [string]$props.DisplayName
-    if ($name -notmatch "(?i)Inno Setup 6") {
-      return
-    }
-    $registryMatches.Add([PSCustomObject]@{
-        RegistryKeyPath = $_.PSPath
-        DisplayVersion  = $props.DisplayVersion
-        InstallLocation = $props.InstallLocation
-      })
+function Test-InnoVersionMatches([string]$fileVersion, [Version]$expected) {
+  if ([string]::IsNullOrWhiteSpace($fileVersion)) {
+    return $false
+  }
+  try {
+    $parsed = [Version]$fileVersion
+    return $parsed.Major -eq $expected.Major `
+      -and $parsed.Minor -eq $expected.Minor `
+      -and $parsed.Build -eq $expected.Build
+  }
+  catch {
+    return $false
   }
 }
 
-$deduped = $registryMatches | Sort-Object RegistryKeyPath -Unique
-$matchedInstall = $null
-foreach ($entry in $deduped) {
-  $installDir = NormalizeDir $entry.InstallLocation
-  if ($null -ne $installDir -and $installDir -ieq $isccDir) {
-    $matchedInstall = $entry
+function Resolve-RealInnoInstallDirectory {
+  $candidates = [System.Collections.Generic.List[string]]::new()
+
+  $chocoTools = "C:\ProgramData\chocolatey\lib\innosetup\tools"
+  if (Test-Path -LiteralPath $chocoTools) {
+    $candidates.Add((NormalizeDir $chocoTools))
+  }
+
+  $chocoLib = "C:\ProgramData\chocolatey\lib\innosetup"
+  if (Test-Path -LiteralPath $chocoLib) {
+    Get-ChildItem -LiteralPath $chocoLib -Filter ISCC.exe -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
+      $dir = NormalizeDir (Split-Path -Parent $_.FullName)
+      if ($null -ne $dir) {
+        $candidates.Add($dir)
+      }
+    }
+  }
+
+  $pf86 = ${env:ProgramFiles(x86)}
+  if (-not [string]::IsNullOrWhiteSpace($pf86)) {
+    $inno6 = Join-Path $pf86 "Inno Setup 6"
+    if (Test-Path -LiteralPath $inno6) {
+      $candidates.Add((NormalizeDir $inno6))
+    }
+  }
+
+  $pathIscc = Get-Command iscc.exe -ErrorAction SilentlyContinue
+  if ($null -ne $pathIscc) {
+    $shimDir = NormalizeDir (Split-Path -Parent $pathIscc.Source)
+    if ($null -ne $shimDir -and $shimDir -notmatch '(?i)chocolatey\\bin') {
+      $candidates.Add($shimDir)
+    }
+  }
+
+  return $candidates | Sort-Object -Unique
+}
+
+$chocoVersion = Get-ChocoInnoPackageVersion
+$pathIsccResolved = if (Get-Command iscc.exe -ErrorAction SilentlyContinue) {
+  (Get-Command iscc.exe).Source
+} else {
+  "(not on PATH)"
+}
+
+$candidateDirs = Resolve-RealInnoInstallDirectory
+$realInnoDir = $null
+$peFileVersion = $null
+foreach ($dir in $candidateDirs) {
+  $isccCandidate = Join-Path $dir "ISCC.exe"
+  if (-not (Test-Path -LiteralPath $isccCandidate)) {
+    continue
+  }
+  $ver = Get-InnoPeFileVersion $dir
+  if (Test-InnoVersionMatches $ver $expectedInno) {
+    $realInnoDir = $dir
+    $peFileVersion = $ver
     break
   }
 }
-if ($null -eq $matchedInstall -and $deduped.Count -eq 1) {
-  $only = $deduped[0]
-  $installDir = NormalizeDir $only.InstallLocation
-  if ($null -ne $installDir -and $installDir -ieq $isccDir) {
-    $matchedInstall = $only
-  }
-}
 
-$registryKeyPath = if ($matchedInstall) { $matchedInstall.RegistryKeyPath } else { "(no matching uninstall key)" }
-$displayVersionText = if ($matchedInstall) { [string]$matchedInstall.DisplayVersion } else { "(unset)" }
-$installLocationText = if ($matchedInstall) { [string]$matchedInstall.InstallLocation } else { "(unset)" }
+$realIscc = if ($null -ne $realInnoDir) { Join-Path $realInnoDir "ISCC.exe" } else { $null }
+$versionOk = $null -ne $chocoVersion `
+  -and $chocoVersion.Major -eq $expectedInno.Major `
+  -and $chocoVersion.Minor -eq $expectedInno.Minor `
+  -and $chocoVersion.Build -eq $expectedInno.Build `
+  -and $null -ne $realIscc `
+  -and (Test-Path -LiteralPath $realIscc) `
+  -and (Test-InnoVersionMatches $peFileVersion $expectedInno)
 
-$resolvedInno = $null
-if (-not [string]::IsNullOrWhiteSpace($displayVersionText) -and $displayVersionText -ne "(unset)") {
-  try {
-    $parsed = [Version]$displayVersionText
-    $resolvedInno = [Version]"$($parsed.Major).$($parsed.Minor).$($parsed.Build)"
-  }
-  catch {
-    $resolvedInno = $null
-  }
-}
-
-$versionOk = $null -ne $resolvedInno `
-  -and $resolvedInno.Major -eq $expectedInno.Major `
-  -and $resolvedInno.Minor -eq $expectedInno.Minor `
-  -and $resolvedInno.Build -eq $expectedInno.Build
-$locationOk = $null -ne $matchedInstall
-if (-not $versionOk -or -not $locationOk) {
+if (-not $versionOk) {
+  $candidateText = ($candidateDirs -join "; ")
+  if ([string]::IsNullOrWhiteSpace($candidateText)) { $candidateText = "(none)" }
   Write-Error @"
-ci-installer: expected Inno Setup $expectedInno installed at the same directory as iscc on PATH.
-registryKeyPath=$registryKeyPath
-DisplayVersion=$displayVersionText
-InstallLocation=$installLocationText
-resolved iscc path=$isccPath
-iscc install directory=$isccDir
-iscc /? output:
-$rawIsccHelp
+ci-installer: Inno Setup $expectedInno required (real ISCC, not Chocolatey shim only).
+choco local innosetup version=$chocoVersion
+PATH iscc.exe=$pathIsccResolved
+candidate install directories=$candidateText
+resolved real ISCC=$realIscc
+pe file version=$peFileVersion
 "@
   exit 1
 }
-Write-Host "ci-installer: Inno $resolvedInno; compile server and kiosk iss"
+
+Write-Host "ci-installer: Inno choco=$chocoVersion pe=$peFileVersion dir=$realInnoDir; compile server and kiosk iss"
 $issTargets = @(
   (Join-Path $root "installer/server/CheckpointServer.iss"),
   (Join-Path $root "installer/kiosk/CheckpointKiosk.iss")
 )
+$compiledOutputs = [System.Collections.Generic.List[string]]::new()
 foreach ($iss in $issTargets) {
-  Write-Host "ci-installer: iscc $iss"
-  & iscc.exe $iss
+  Write-Host "ci-installer: iscc $iss (via $realIscc)"
+  $compileLog = & $realIscc $iss 2>&1 | Out-String
+  Write-Host $compileLog
   if ($LASTEXITCODE -ne 0) {
-    throw "ci-installer: iscc failed for $iss (exit $LASTEXITCODE)"
+    Write-Error "ci-installer: iscc failed for $iss (exit $LASTEXITCODE)"
+    exit 1
   }
+  if ($compileLog -match 'Resulting Setup program filename is:\s*(.+\.exe)') {
+    $compiledOutputs.Add($Matches[1].Trim())
+  }
+}
+if ($compiledOutputs.Count -lt $issTargets.Count) {
+  Write-Error "ci-installer: expected $($issTargets.Count) compiled setup exe outputs, got $($compiledOutputs.Count)"
+  exit 1
+}
+foreach ($outPath in ($compiledOutputs | Sort-Object -Unique)) {
+  if (-not (Test-Path -LiteralPath $outPath)) {
+    Write-Error "ci-installer: expected compiled output missing: $outPath"
+    exit 1
+  }
+  $len = (Get-Item -LiteralPath $outPath).Length
+  Write-Host ("ci-installer: compiled output path={0} bytes={1}" -f $outPath, $len)
 }
 Get-ChildItem installer -Recurse -Filter *.exe | ForEach-Object {
   Write-Host ("ci-installer: artifact {0} bytes={1}" -f $_.Name, $_.Length)
