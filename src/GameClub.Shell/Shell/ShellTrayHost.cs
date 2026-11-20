@@ -37,8 +37,8 @@ internal sealed class ShellTrayHost : IDisposable
         _menu = new ContextMenuStrip { RightToLeft = RightToLeft.Yes };
         _statusLine = new ToolStripMenuItem("سرور: …") { Enabled = false };
         _reloadItem = new ToolStripMenuItem("بازخوانی", null, (_, _) => _window.ReloadPanel());
-        _startItem = new ToolStripMenuItem("شروع سرور", null, (_, _) => LaunchServerControlForTests("start"));
-        _stopItem = new ToolStripMenuItem("توقف سرور", null, (_, _) => LaunchServerControlForTests("stop"));
+        _startItem = new ToolStripMenuItem("شروع سرور", null, (_, _) => LaunchServerControl("start"));
+        _stopItem = new ToolStripMenuItem("توقف سرور", null, (_, _) => LaunchServerControl("stop"));
         _autostartItem = new ToolStripMenuItem("اجرای خودکار پنجره با ویندوز", null, (_, _) => ToggleAutostart())
         {
             CheckOnClick = true,
@@ -96,9 +96,7 @@ internal sealed class ShellTrayHost : IDisposable
         AutostartRegistry.SetEnabled(_autostartItem.Checked);
     }
 
-    internal static void LaunchServerControlForTests(string verb) => LaunchServerControl(verb);
-
-    private static void LaunchServerControl(string verb)
+    internal static void LaunchServerControl(string verb)
     {
         var isStop = string.Equals(verb, "stop", StringComparison.OrdinalIgnoreCase);
         if (isStop)

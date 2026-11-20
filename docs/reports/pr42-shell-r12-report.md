@@ -38,4 +38,5 @@ In `OnLoadedOnce`, when `placement.IsMaximized`, call **`ApplyBounds()`** (same 
 
 - `TrayStopObserved`: no clear on first Running/Green tick while stop is still in flight; clear only after a non-Running/Green snapshot, then StartPending or Running/Green.
 - Test (i): flag set while Running, ≥1 Running tick, then Stopped → 0 toasts.
-- Test (iii): `ShellSeams.StartElevatedProcess` seam; `LaunchServerControlForTests("stop")` with `Win32Exception(1223)` clears flag; unexpected stop → 1 toast.
+- Test (iii): `ShellSeams.StartElevatedProcess` seam; internal `ShellTrayHost.LaunchServerControl("stop")` with `Win32Exception(1223)` clears flag; unexpected stop → 1 toast.
+- Test (i): waits for an `OnTickEntered` tick while Running with flag set before transitioning to Stopped.

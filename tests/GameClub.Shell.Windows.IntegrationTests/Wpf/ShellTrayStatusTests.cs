@@ -2,6 +2,7 @@
 using System;
 using System.ComponentModel;
 using System.ServiceProcess;
+using System.Threading;
 using System.Threading.Tasks;
 using GameClub.Shell.Shell;
 using GameClub.Shell.Windows.IntegrationTests.Seams;
@@ -103,16 +104,37 @@ public sealed class ShellTrayStatusTests
         FakeShellSeams.Install();
         _fixture.RunAsync(async () =>
         {
+            var tickCount = 0;
+            ShellSeams.OnTickEntered = () => Interlocked.Increment(ref tickCount);
             using var poller = new ServerStatePoller();
             await Task.Delay(500);
             ShellSeams.SetTrayStopInProgress(true, "shell_tray_initiated_stop_shows_no_unexpected_stop_notification");
-            await Task.Delay(500);
+            FakeShellSeams.Service.Status = ServiceControllerStatus.Running;
+            FakeShellSeams.Http.Answers = true;
+            var ticksWhenFlagged = tickCount;
+            var deadline = DateTime.UtcNow.AddSeconds(7);
+            while (DateTime.UtcNow < deadline && tickCount <= ticksWhenFlagged)
+            {
+                await Task.Delay(100);
+            }
+
+            Assert.True(
+                tickCount > ticksWhenFlagged,
+                $"expected a poller tick while Running with tray stop flag; ticks={tickCount} atFlag={ticksWhenFlagged}");
+            Assert.True(ShellSeams.TrayStopInProgress);
+
             FakeShellSeams.Service.Status = ServiceControllerStatus.Stopped;
             FakeShellSeams.Http.Answers = false;
-            await Task.Delay(6000);
+            var ticksWhenStopped = tickCount;
+            deadline = DateTime.UtcNow.AddSeconds(7);
+            while (DateTime.UtcNow < deadline && tickCount <= ticksWhenStopped)
+            {
+                await Task.Delay(100);
+            }
+
             Assert.Equal(0, FakeShellSeams.Notifications.UnexpectedStopCount);
             ShellSeams.SetTrayStopInProgress(false, "shell_tray_initiated_stop_shows_no_unexpected_stop_notification.cleanup");
-        }, TimeSpan.FromSeconds(25));
+        }, TimeSpan.FromSeconds(35));
     }
 
     [Fact]
@@ -152,7 +174,7 @@ public sealed class ShellTrayStatusTests
             ShellSeams.StartElevatedProcess = _ => throw new Win32Exception(1223);
             using var poller = new ServerStatePoller();
             await Task.Delay(500);
-            ShellTrayHost.LaunchServerControlForTests("stop");
+            ShellTrayHost.LaunchServerControl("stop");
             Assert.False(ShellSeams.TrayStopInProgress);
             FakeShellSeams.Service.Status = ServiceControllerStatus.Stopped;
             FakeShellSeams.Http.Answers = false;
