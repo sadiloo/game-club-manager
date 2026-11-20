@@ -181,15 +181,14 @@ function Write-FirewallPartialTrxFromConsole {
         return
     }
 
-    $esc = [System.Security.SecurityElement]::Escape
     $utc = (Get-Date).ToUniversalTime().ToString("o")
     $sb = New-Object System.Text.StringBuilder
     [void]$sb.AppendLine('<?xml version="1.0" encoding="utf-8"?>')
     [void]$sb.AppendLine("<TestRun xmlns=`"http://microsoft.com/schemas/VisualStudio/TeamTest/2010`">")
     [void]$sb.AppendLine("  <Results>")
     foreach ($row in $results) {
-        $testName = $esc($row.Name)
-        $outcome = $esc($row.Outcome)
+        $testName = [System.Security.SecurityElement]::Escape([string]$row.Name)
+        $outcome = [System.Security.SecurityElement]::Escape([string]$row.Outcome)
         [void]$sb.AppendLine("    <UnitTestResult testName=`"$testName`" outcome=`"$outcome`" />")
     }
     [void]$sb.AppendLine("  </Results>")

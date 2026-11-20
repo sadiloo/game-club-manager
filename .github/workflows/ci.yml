@@ -28,6 +28,9 @@ jobs:
       GAMECLUB_API_KEY: ci-test-key
     steps:
       - uses: actions/checkout@v4
+      - name: powershell parse check
+        shell: pwsh
+        run: ./scripts/ci/ps-parse-check.ps1
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.403
@@ -82,6 +85,9 @@ jobs:
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
+      - name: powershell parse check
+        shell: pwsh
+        run: ./scripts/ci/ps-parse-check.ps1
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.403
@@ -112,6 +118,9 @@ jobs:
       WPF_STABILITY_RUNS: "20"
     steps:
       - uses: actions/checkout@v4
+      - name: powershell parse check
+        shell: pwsh
+        run: ./scripts/ci/ps-parse-check.ps1
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.403
