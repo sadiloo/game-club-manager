@@ -205,10 +205,8 @@ public sealed partial class OperatorMemberWalletService
             throw new ApiException(StatusCodes.Status400BadRequest, "description_required", "توضیح الزامی است.");
         }
 
-        if (body.NewAmountToman < 0 || body.NewGiftToman < 0)
-        {
-            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_amount", "مبالغ نمی‌توانند منفی باشند.");
-        }
+        OperatorMoneyValidation.EnsureNonNegativeBounded(body.NewAmountToman, "invalid_amount");
+        OperatorMoneyValidation.EnsureNonNegativeBounded(body.NewGiftToman, "invalid_gift");
 
         var original = await db.WalletLedger.AsNoTracking()
             .Where(w => w.TopUpGroupId == topUpGroupId && w.Kind == WalletLedgerKind.TopUpReal)
@@ -310,6 +308,7 @@ public sealed partial class OperatorMemberWalletService
                 pocket = MemberWalletMapper.RefreshSpendBasis(pocket);
             }
 
+            OperatorMoneyValidation.EnsureWalletBalances(pocket.RealToman, pocket.GiftToman, "invalid_amount");
             MemberWalletMapper.ApplyPocket(member, pocket);
 
             var ledger = new WalletLedgerEntryEntity

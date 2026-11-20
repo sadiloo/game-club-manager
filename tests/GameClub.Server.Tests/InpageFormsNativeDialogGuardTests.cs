@@ -18,4 +18,25 @@ public sealed class InpageFormsNativeDialogGuardTests
         var failure = Record.Exception(() => NativeDialogRecorderAssert.AssertNoUnexpectedNativeDialogs([]));
         Assert.Null(failure);
     }
+
+    [Fact]
+    public async Task operator_jsdom_blocks_native_alert()
+    {
+        var scriptDir = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "Scripts"));
+        var script = Path.Combine(scriptDir, "cp-native-dialog-guard-selftest.mjs");
+        Assert.True(File.Exists(script));
+
+        using var proc = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = "node",
+            Arguments = $"\"{script}\"",
+            WorkingDirectory = scriptDir,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        });
+        Assert.NotNull(proc);
+        await proc.WaitForExitAsync();
+        Assert.Equal(0, proc.ExitCode);
+    }
 }

@@ -351,6 +351,26 @@ public sealed class InpageFormsOperatorMoneyValidationTests(GameClubWebApplicati
     }
 
     [Fact]
+    public async Task shift_close_rejects_null_cash_without_closing()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var mgr = await factory.CreateOperatorClientAsync("manager", "1234");
+        await S3TestHelpers.EnableShiftsAsync(mgr);
+        await S3TestHelpers.OpenShiftAsync(mgr);
+        var res = await mgr.PostAsJsonAsync(
+            "/api/operator/shift/close",
+            new
+            {
+                workingDay = new { year = 2026, month = 6, day = 3 },
+                actualCashToman = (long?)null,
+                actualCardReaderToman = 0L,
+                sessionActions = Array.Empty<object>(),
+            });
+        Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
+        AssertPersianMoney400(await ReadJsonAsync(res), "invalid_money");
+    }
+
+    [Fact]
     public async Task shift_close_rejects_card_reader_overflow()
     {
         await S3TestHelpers.ResetAsync(factory);

@@ -1,3 +1,4 @@
+using GameClub.Billing;
 using GameClub.Server.Services;
 using Microsoft.AspNetCore.Http;
 
@@ -26,6 +27,20 @@ internal static class OperatorMoneyValidation
         if (value <= 0 || value > MaxToman)
         {
             throw new ApiException(StatusCodes.Status400BadRequest, code, "مبلغ باید عدد صحیح مثبت باشد.");
+        }
+    }
+
+    public static void EnsureWalletBalances(long realToman, long giftToman, string amountCode = "invalid_amount")
+    {
+        EnsureNonNegativeBounded(realToman, amountCode);
+        EnsureNonNegativeBounded(giftToman, "invalid_gift");
+        var total = MoneyMath.CheckedAdd(realToman, giftToman);
+        if (total > MaxToman)
+        {
+            throw new ApiException(
+                StatusCodes.Status400BadRequest,
+                amountCode,
+                "موجودی کیف پول از حد مجاز بیشتر می‌شود.");
         }
     }
 }

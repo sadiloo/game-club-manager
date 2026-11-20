@@ -2806,7 +2806,7 @@ bindClick("closeShiftBtn", async () => {
   const parseCloseToman = (raw) => {
     if (typeof window.cpParseNumber !== "function") return null;
     const trimmed = String(raw ?? "").trim();
-    if (!trimmed) return 0;
+    if (!trimmed) return null;
     return window.cpParseNumber(trimmed, { allowZero: true, positive: false });
   };
   const actualCashToman = parseCloseToman(cashRaw);

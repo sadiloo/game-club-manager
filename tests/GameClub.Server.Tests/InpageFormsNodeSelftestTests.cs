@@ -32,6 +32,7 @@ public sealed class InpageFormsNodeSelftestTests
         "cp-d4-popstate-back-selftest.mjs",
         "cp-d5-xss-render-selftest.mjs",
         "cp-f12-birthday-percent-selftest.mjs",
+        "cp-native-dialog-guard-selftest.mjs",
     ];
 
     [Fact]

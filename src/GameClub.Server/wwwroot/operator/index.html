@@ -6,9 +6,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content" />
   <script src="/operator/lib/signalr.min.js"></script>
   <style>
-    body { font-family: system-ui, Tahoma, sans-serif; margin: 1rem; max-width: 1040px; }
+    body { font-family: system-ui, Tahoma, sans-serif; margin: 1rem; max-width: 1040px; overflow-x: hidden; }
     #grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 0.5rem; }
-    .tile { border: 1px solid #ccc; padding: 0.75rem; border-radius: 8px; cursor: pointer; position: relative; }
+    .tile { border: 1px solid #ccc; padding: 0.75rem; border-radius: 8px; cursor: pointer; position: relative; overflow-wrap: anywhere; }
     .tile[data-status="Free"] { background: #f4f4f4; }
     .tile[data-status="Playing"] { background: #e8f5e9; }
     .tile[data-status="Paused"] { background: #fff3e0; }
@@ -31,8 +31,8 @@
     .cat-item { display: block; width: 100%; margin: 0.25rem 0; text-align: right; }
     .sale-line { display: flex; justify-content: space-between; gap: 0.5rem; margin: 0.2rem 0; font-size: 0.9rem; }
     #lowStockList { color: #c62828; font-size: 0.9rem; }
-    #customerChip { background: #e8eaf6; padding: 0.35rem 0.5rem; border-radius: 6px; margin: 0.35rem 0; font-size: 0.9rem; }
-    .customer-hit { display: block; width: 100%; text-align: right; margin: 0.2rem 0; }
+    #customerChip { background: #e8eaf6; padding: 0.35rem 0.5rem; border-radius: 6px; margin: 0.35rem 0; font-size: 0.9rem; overflow-wrap: anywhere; }
+    .customer-hit { display: block; width: 100%; text-align: right; margin: 0.2rem 0; overflow-wrap: anywhere; }
     #customerSearchResults { max-height: 10rem; overflow: auto; border: 1px solid #ddd; padding: 0.35rem; margin: 0.25rem 0; border-radius: 6px; }
     .alert { background: #fff3e0; border: 1px solid #e65100; color: #bf360c; padding: 0.5rem 0.75rem; border-radius: 8px; font-weight: 600; }
     #prepaidGlobalAlert { margin: 0.5rem 0; }
@@ -48,7 +48,7 @@
     #cpLayer.cp-phone .cp-scrim { position: fixed; inset: 0; background: rgba(14, 21, 36, 0.4); }
     #cpLayer.cp-phone .cp-sheet { position: relative; z-index: 1; width: 100%; }
     .cp-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
-    .cp-title { flex: 1; margin: 0; font-size: 1.1rem; }
+    .cp-title { flex: 1; margin: 0; font-size: 1.1rem; overflow-wrap: anywhere; }
     .cp-close, .cp-back { min-width: 44px; min-height: 44px; border: none; background: transparent; font-size: 1.25rem; cursor: pointer; }
     .cp-field { display: block; margin: 12px 0; }
     .cp-field-error { display: block; color: #c41b40; font-size: 0.85rem; }
@@ -65,7 +65,7 @@
     .cp-money-row input { flex: 1; border: none; min-height: 46px; font-size: 1rem; }
     .cp-suffix { color: #556173; margin-inline-start: 8px; }
     .cp-radio-row { display: flex; align-items: center; gap: 8px; min-height: 48px; padding: 4px 8px; border-radius: 8px; }
-    .cp-pick-row { display: block; width: 100%; text-align: right; min-height: 48px; margin: 4px 0; border: 1px solid #c5cedc; border-radius: 8px; background: #e8eef8; padding: 8px; cursor: pointer; }
+    .cp-pick-row { display: block; width: 100%; text-align: right; min-height: 48px; margin: 4px 0; border: 1px solid #c5cedc; border-radius: 8px; background: #e8eef8; padding: 8px; cursor: pointer; overflow-wrap: anywhere; }
     .cp-pick-list { max-height: 50vh; overflow: auto; }
     .cp-ladder-card { border: 1px solid #c5cedc; border-radius: 12px; padding: 8px; margin: 8px 0; }
     .cp-ladder-card input { width: 100%; box-sizing: border-box; margin: 4px 0; min-height: 44px; }

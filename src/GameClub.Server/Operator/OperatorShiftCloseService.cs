@@ -190,16 +190,23 @@ public sealed class OperatorShiftCloseService(
 
     public async Task<object> CloseAsync(
         WorkingDayInput workingDay,
-        long actualCashToman,
-        long actualCardReaderToman,
+        long? actualCashToman,
+        long? actualCardReaderToman,
         string? discrepancyExplanation,
         IReadOnlyList<CloseSessionAction> sessionActions,
         Guid? nextRecipientUserId,
         CancellationToken ct)
     {
         _ = new LocalDate(workingDay.Year, workingDay.Month, workingDay.Day);
-        OperatorMoneyValidation.EnsureNonNegativeBounded(actualCashToman, "invalid_money");
-        OperatorMoneyValidation.EnsureNonNegativeBounded(actualCardReaderToman, "invalid_money");
+        if (actualCashToman is null || actualCardReaderToman is null)
+        {
+            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_money", "مبلغ صندوق و کارت‌خوان را وارد کنید.");
+        }
+
+        OperatorMoneyValidation.EnsureNonNegativeBounded(actualCashToman.Value, "invalid_money");
+        OperatorMoneyValidation.EnsureNonNegativeBounded(actualCardReaderToman.Value, "invalid_money");
+        var cashToman = actualCashToman.Value;
+        var cardToman = actualCardReaderToman.Value;
         var settings = await shiftGate.LoadSettingsAsync(ct);
         var openSessionIds = await db.Sessions.AsNoTracking()
             .Where(s => s.Status != SessionStatus.Closed)
@@ -272,8 +279,8 @@ public sealed class OperatorShiftCloseService(
                 var walletPresentation = await BuildWalletPresentationAsync(shift?.Id, periodStart, ct);
                 var discrepancies = new[]
                 {
-                    actualCashToman - expected.CashExpected,
-                    actualCardReaderToman - expected.CardReaderExpected,
+                    cashToman - expected.CashExpected,
+                    cardToman - expected.CardReaderExpected,
                 };
                 if (discrepancies.Any(d => d != 0) && string.IsNullOrWhiteSpace(discrepancyExplanation))
                 {
@@ -290,8 +297,8 @@ public sealed class OperatorShiftCloseService(
                     WorkingDayYear = workingDay.Year,
                     WorkingDayMonth = workingDay.Month,
                     WorkingDayDay = workingDay.Day,
-                    ActualCashToman = actualCashToman,
-                    ActualCardReaderToman = actualCardReaderToman,
+                    ActualCashToman = cashToman,
+                    ActualCardReaderToman = cardToman,
                     DiscrepancyExplanation = discrepancyExplanation?.Trim(),
                     NextRecipientUserId = nextRecipientUserId,
                     ClosedByUserId = op.UserId ?? throw new ApiException(StatusCodes.Status401Unauthorized, "unauthorized", "ورود اپراتور لازم است."),
@@ -323,8 +330,8 @@ public sealed class OperatorShiftCloseService(
                         closeRecord.Id,
                         shiftId = shift?.Id,
                         workingDay,
-                        actualCashToman,
-                        actualCardReaderToman,
+                        actualCashToman = cashToman,
+                        actualCardReaderToman = cardToman,
                         expected,
                         discrepancies,
                     },
@@ -345,8 +352,8 @@ public sealed class OperatorShiftCloseService(
                     },
                     giftIssuedToman = walletPresentation.GiftIssuedToman,
                     postCloseCorrections = walletPresentation.PostCloseCorrections,
-                    actualCashToman,
-                    actualCardReaderToman,
+                    actualCashToman = cashToman,
+                    actualCardReaderToman = cardToman,
                 };
             });
         }

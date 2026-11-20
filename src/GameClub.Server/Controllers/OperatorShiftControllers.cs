@@ -42,8 +42,8 @@ public sealed class OperatorShiftController(OperatorShiftCloseService shifts) : 
 
     public sealed record CloseRequest(
         WorkingDayInput WorkingDay,
-        long ActualCashToman,
-        long ActualCardReaderToman,
+        long? ActualCashToman,
+        long? ActualCardReaderToman,
         string? DiscrepancyExplanation,
         IReadOnlyList<CloseSessionAction>? SessionActions,
         Guid? NextRecipientUserId);

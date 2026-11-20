@@ -266,6 +266,7 @@ public sealed partial class OperatorMemberWalletService(
                     pocket = MemberWalletMapper.ApplyGiftTopUp(pocket, giftToman);
                 }
 
+                OperatorMoneyValidation.EnsureWalletBalances(pocket.RealToman, pocket.GiftToman, "invalid_amount");
                 MemberWalletMapper.ApplyPocket(member, pocket);
                 WriteTopUpLedgerPair(customerId, amountToman, giftToman, method, null, reference, topUpGroupId, shiftId);
                 await audit.AppendAsync("wallet.topup", new { customerId, amountToman, giftToman, method = methodName }, innerCt);
@@ -429,6 +430,7 @@ public sealed partial class OperatorMemberWalletService(
         {
             var pocket = MemberWalletMapper.ToPocket(member);
             pocket = MemberWalletMapper.ApplyGiftTopUp(pocket, giftToman);
+            OperatorMoneyValidation.EnsureWalletBalances(pocket.RealToman, pocket.GiftToman, "invalid_amount");
             MemberWalletMapper.ApplyPocket(member, pocket);
             db.WalletLedger.Add(new WalletLedgerEntryEntity
             {
@@ -581,6 +583,7 @@ public sealed partial class OperatorMemberWalletService(
             }
 
             var pocket = MemberWalletMapper.RefreshSpendBasis(MemberWalletMapper.ToPocket(member));
+            OperatorMoneyValidation.EnsureWalletBalances(pocket.RealToman, pocket.GiftToman, "invalid_opening");
             MemberWalletMapper.ApplyPocket(member, pocket);
             member.HasOpeningBalance = true;
 
@@ -678,6 +681,11 @@ public sealed partial class OperatorMemberWalletService(
     public async Task UpdateLadderAsync(IReadOnlyList<CustomerLevel> levels, CancellationToken ct)
     {
         EnsureManager();
+        foreach (var level in levels)
+        {
+            OperatorMoneyValidation.EnsureNonNegativeBounded(level.MinimumLifetimeHours, "invalid_level");
+        }
+
         var ladder = LevelLadder.Create(levels);
         var settings = await db.BranchMemberSettings.FirstAsync(ct);
         settings.LevelLadderJson = MemberSettingsMapper.SerializeLadder(ladder);
@@ -743,6 +751,12 @@ public sealed partial class OperatorMemberWalletService(
     public async Task SetCustomerBirthdayAsync(Guid customerId, int year, int month, int day, CancellationToken ct)
     {
         EnsureManager();
+        var jalaliToday = JalaliDate.FromGregorian(TehranTime.Date(clock.UtcNow));
+        if (year < 1300 || year > jalaliToday.Year)
+        {
+            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_date", "سال تولد درست نیست.");
+        }
+
         _ = new JalaliDate(year, month, day);
         var member = await members.EnsureMemberAsync(customerId, ct);
         member.BirthYear = year;

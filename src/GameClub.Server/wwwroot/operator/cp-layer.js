@@ -78,6 +78,7 @@
         return;
       }
     }
+    cpLayer._closingViaHistory = true;
     if (!active.busy) active.cancel("history");
   });
   }
@@ -286,8 +287,8 @@
     if (code === "gift_not_allowed_with_debt" && message && /[\u0600-\u06FF]/.test(message)) {
       return message;
     }
-    if (message && /[\u0600-\u06FF]/.test(message)) return message;
     if (code && ERROR_MAP[code]) return ERROR_MAP[code];
+    if (message && /[\u0600-\u06FF]/.test(message)) return message;
     return CP_ERR.generic;
   }
 
@@ -336,8 +337,9 @@
       if (msg) this.serverErrorEl.focus({ preventScroll: true });
     }
 
-    cancel() {
+    cancel(reason) {
       if (this.busy) return;
+      if (reason === "history") cpLayer._closingViaHistory = true;
       this._finish(null);
     }
 

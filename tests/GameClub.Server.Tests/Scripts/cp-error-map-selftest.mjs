@@ -17,6 +17,10 @@ vm.runInContext(layerJs, ctx);
 
 const msg = ctx.window.cpTranslateApiError("reason_required", "Reason is required");
 if (!msg.includes("دلیل")) throw new Error("expected Persian mapping");
+const mappedWins = ctx.window.cpTranslateApiError("invalid_money", "Payment amounts must be positive.");
+if (mappedWins !== "مبلغ درست نیست.") {
+  throw new Error("mapped ERROR_MAP code must win over raw English server message");
+}
 const voidForbidden = ctx.window.cpTranslateApiError("forbidden", "Managers only");
 if (!voidForbidden.includes("فاکتور")) throw new Error("forbidden void invoice text");
 const ladderForbidden = ctx.window.cpTranslateApiError("forbidden", "Managers only", { scope: "level_ladder" });
@@ -24,12 +28,12 @@ if (!ladderForbidden.includes("جدول سطح")) throw new Error("forbidden lad
 if (ladderForbidden.includes("فاکتور")) throw new Error("ladder forbidden must not use void text");
 const unknown = ctx.window.cpTranslateApiError("xyz_unknown", "Something broke");
 if (/[A-Za-z]/.test(unknown)) throw new Error("unknown should not leak Latin");
-const openingBoth = ctx.window.cpTranslateApiError(
-  "invalid_opening",
+const persianFallback = ctx.window.cpTranslateApiError(
+  "unmapped_code",
   "ساعت بازی یا سطح را وارد کنید، نه هر دو.",
 );
-if (openingBoth !== "ساعت بازی یا سطح را وارد کنید، نه هر دو.") {
-  throw new Error("invalid_opening must prefer server Persian message");
+if (persianFallback !== "ساعت بازی یا سطح را وارد کنید، نه هر دو.") {
+  throw new Error("unmapped code must fall back to Persian server message");
 }
 if (ctx.window.cpTranslateApiError("invalid_opening", "") !== "مانده افتتاحیه درست نیست.") {
   throw new Error("invalid_opening fallback");
@@ -37,7 +41,6 @@ if (ctx.window.cpTranslateApiError("invalid_opening", "") !== "مانده افت
 const invalidAmountGift = ctx.window.cpTranslateApiError("invalid_amount", "", { scope: "member_gift" });
 if (invalidAmountGift !== "هدیه نمی‌تواند منفی باشد.") throw new Error("invalid_amount gift scope");
 if (ctx.window.cpTranslateApiError("invalid_amount", "") !== "مبلغ نامعتبر است.") throw new Error("invalid_amount default");
-if (ctx.window.cpTranslateApiError("invalid_money", "x") !== "مبلغ درست نیست.") throw new Error("invalid_money text");
 if (ctx.window.cpTranslateApiError("no_open_shift", "x") !== "شیفتی باز نیست. اول شیفت را باز کنید.") {
   throw new Error("missing no_open_shift code");
 }
