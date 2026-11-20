@@ -826,6 +826,113 @@ public sealed class ShellPlanAIntegrationTests
     }
 
     [Fact]
+    public void shell_running_with_failing_panel_backs_off_and_avoids_offline_flash_loop()
+    {
+        if (!WebView2RuntimePresent()) throw new InvalidOperationException("WebView2 runtime required");
+        var root = AllocateShellDataRoot();
+        try
+        {
+            _fixture.RunAsync(async () =>
+            {
+                MainWindow? window = null;
+                try
+                {
+                    FakeShellSeams.Install();
+                    ShellSeams.PanelNavigationUrlOverride = "http://127.0.0.1:9/operator/";
+                    FakeShellSeams.Http.Answers = true;
+                    FakeShellSeams.Service.Status = ServiceControllerStatus.Running;
+
+                    window = new MainWindow();
+                    window.Show();
+                    Microsoft.Web.WebView2.Wpf.WebView2? wv = null;
+                    var readyDeadline = DateTime.UtcNow.AddSeconds(45);
+                    while (DateTime.UtcNow < readyDeadline)
+                    {
+                        await Task.Delay(200);
+                        wv = window.FindName("PanelWebView") as Microsoft.Web.WebView2.Wpf.WebView2;
+                        if (wv?.CoreWebView2 is not null)
+                        {
+                            break;
+                        }
+                    }
+
+                    Assert.NotNull(wv?.CoreWebView2);
+                    var dataNavStarts = 0;
+                    var panelNavigateCount = 0;
+                    var logPath = "";
+                    void OnNavStarting(object? _, CoreWebView2NavigationStartingEventArgs args)
+                    {
+                        if (args.Uri.StartsWith("data:text/html", StringComparison.OrdinalIgnoreCase))
+                        {
+                            dataNavStarts++;
+                        }
+                    }
+
+                    wv.CoreWebView2.NavigationStarting += OnNavStarting;
+                    var measureStart = DateTime.UtcNow;
+                    var measureDeadline = measureStart.AddSeconds(60);
+                    while (DateTime.UtcNow < measureDeadline)
+                    {
+                        await Task.Delay(500);
+                        var log = Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log")
+                            .Select(File.ReadAllText)
+                            .Aggregate("", string.Concat);
+                        logPath = log;
+                        panelNavigateCount = log.Split('\n')
+                            .Count(l => l.Contains("panel-navigate caller=NavigatePanel", StringComparison.Ordinal));
+                    }
+
+                    wv.CoreWebView2.NavigationStarting -= OnNavStarting;
+                    Assert.InRange(panelNavigateCount, 1, 5);
+                    Assert.InRange(dataNavStarts, 1, 1);
+
+                    ShellSeams.PanelNavigationUrlOverride = null;
+                    var panelDeadline = DateTime.UtcNow.AddSeconds(75);
+                    var panelOk = false;
+                    while (DateTime.UtcNow < panelDeadline)
+                    {
+                        await Task.Delay(500);
+                        wv = window.FindName("PanelWebView") as Microsoft.Web.WebView2.Wpf.WebView2;
+                        if (wv?.CoreWebView2 is null)
+                        {
+                            continue;
+                        }
+
+                        var loc = UnquoteWebViewScriptString(
+                            await wv.CoreWebView2.ExecuteScriptAsync(
+                                "location.pathname + '|' + document.readyState"));
+                        if (loc.StartsWith("/operator/", StringComparison.OrdinalIgnoreCase)
+                            && loc.EndsWith("|complete", StringComparison.Ordinal))
+                        {
+                            panelOk = true;
+                            break;
+                        }
+                    }
+
+                    Assert.True(panelOk, "Operator panel did not load after clearing failing panel URL override");
+                    var finalLog = Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log")
+                        .Select(File.ReadAllText)
+                        .Aggregate("", string.Concat);
+                    Assert.Contains("nav-completed-panel-ok", finalLog, StringComparison.Ordinal);
+                    var postSuccessNavigates = finalLog.Split('\n')
+                        .Count(l => l.Contains("panel-navigate caller=NavigatePanel", StringComparison.Ordinal));
+                    Assert.InRange(postSuccessNavigates, 1, 6);
+                }
+                finally
+                {
+                    ShellSeams.PanelNavigationUrlOverride = null;
+                    FakeShellSeams.RestoreProduction();
+                    window?.Close();
+                }
+            }, TimeSpan.FromSeconds(150));
+        }
+        finally
+        {
+            CleanupShellDataRoot(root);
+        }
+    }
+
+    [Fact]
     public void shell_renderer_process_crash_reloads_operator_panel()
     {
         FakeShellSeams.RestoreProduction();

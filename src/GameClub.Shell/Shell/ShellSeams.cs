@@ -248,6 +248,10 @@ public static class ShellSeams
     public static Action? OnTickEntered { get; set; }
     public static Action? OnTickSkippedReentrant { get; set; }
 
+    public static string? PanelNavigationUrlOverride { get; set; }
+
+    public static string ResolvePanelUrl() => PanelNavigationUrlOverride ?? ShellPaths.PanelUrl;
+
     public static DialogResult ShowMessageBox(
         string text,
         string caption,

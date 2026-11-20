@@ -81,6 +81,7 @@ internal static class FakeShellSeams
         ShellSeams.TrayStopObserved = false;
         ShellSeams.UtcNow = () => DateTime.UtcNow;
         ShellSeams.SystemUptime = () => TimeSpan.FromMilliseconds(Environment.TickCount & int.MaxValue);
+        ShellSeams.PanelNavigationUrlOverride = null;
     }
 
     public static void ResetHarnessStatics()

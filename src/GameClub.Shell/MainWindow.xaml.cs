@@ -35,6 +35,9 @@ public partial class MainWindow : Window
     private Action<ServerStateSnapshot>? _onPollerChanged;
     private CoreWebView2Environment? _webViewEnvironment;
     private readonly WebViewProcessRecoveryPolicy _processRecoveryPolicy = new();
+    private readonly PanelNavigationRetryPolicy _panelNavRetryPolicy = new();
+    private ShellServerVisualState _lastObservedVisualState = ShellServerVisualState.Starting;
+    private bool _runningPanelLoadFailing;
     private int _processRecoveryInFlight;
     private int _pendingBrowserRecreate;
 
@@ -75,14 +78,26 @@ public partial class MainWindow : Window
             }
 
             _tray?.UpdateSnapshot(snap);
+            var priorVisual = _lastObservedVisualState;
+            _lastObservedVisualState = snap.VisualState;
+            if (snap.VisualState == ShellServerVisualState.Running && priorVisual != ShellServerVisualState.Running)
+            {
+                _panelNavRetryPolicy.Reset();
+                _runningPanelLoadFailing = false;
+            }
+
             if (snap.VisualState == ShellServerVisualState.Running && _webViewReady)
             {
-                if (_offlineShown)
+                if (_offlineShown && _runningPanelLoadFailing)
+                {
+                    TryRetryPanelNavigationWhenDue();
+                }
+                else if (_offlineShown)
                 {
                     _offlineShown = false;
                     _currentOfflineState = null;
                     _allowOfflineDataNav = false;
-                    var recoverUri = new Uri(ShellPaths.PanelUrl);
+                    var recoverUri = new Uri(ShellSeams.ResolvePanelUrl());
                     LogPanelNavigate("RunningRecover", recoverUri);
                     LogRaceNav("RunningRecover.Source");
                     if (_closed)
@@ -251,7 +266,26 @@ public partial class MainWindow : Window
     private void OnNavigationCompleted(object? sender, CoreWebView2NavigationCompletedEventArgs e)
     {
         _allowOfflineDataNav = false;
-        if (_offlineShown)
+        var lastUri = _lastNavigationUri ?? "";
+        var loopbackPanel = IsLoopbackPanelTarget(lastUri);
+
+        if (e.IsSuccess && loopbackPanel && PanelNavigationOrigin.IsAllowedPanelNavigationUri(lastUri))
+        {
+            _panelNavRetryPolicy.Reset();
+            _runningPanelLoadFailing = false;
+            if (_offlineShown)
+            {
+                _offlineShown = false;
+                _currentOfflineState = null;
+            }
+
+            LogOfflineTrace(
+                "nav-completed-panel-ok",
+                $"webError={e.WebErrorStatus} lastUri={FormatUriForLog(lastUri)}");
+            return;
+        }
+
+        if (_offlineShown && !_runningPanelLoadFailing)
         {
             LogOfflineTrace(
                 "nav-completed-skip",
@@ -259,11 +293,25 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (e.IsSuccess || !IsLoopbackPanelTarget(_lastNavigationUri ?? ""))
+        if (!loopbackPanel)
         {
             LogOfflineTrace(
                 "nav-completed-skip",
-                $"IsSuccess={e.IsSuccess} webError={e.WebErrorStatus} loopbackTarget={IsLoopbackPanelTarget(_lastNavigationUri ?? "")} lastUri={FormatUriForLog(_lastNavigationUri)}");
+                $"IsSuccess={e.IsSuccess} webError={e.WebErrorStatus} loopbackTarget=false lastUri={FormatUriForLog(lastUri)}");
+            return;
+        }
+
+        if (_poller?.Current.VisualState == ShellServerVisualState.Running)
+        {
+            HandleRunningPanelNavigationFailure();
+            return;
+        }
+
+        if (e.IsSuccess)
+        {
+            LogOfflineTrace(
+                "nav-completed-skip",
+                $"IsSuccess={e.IsSuccess} webError={e.WebErrorStatus} loopbackTarget={loopbackPanel} lastUri={FormatUriForLog(lastUri)}");
             return;
         }
 
@@ -274,9 +322,42 @@ public partial class MainWindow : Window
         };
         LogOfflineTrace(
             "nav-completed-fallback",
-            $"IsSuccess={e.IsSuccess} webError={e.WebErrorStatus} offlineState={state} lastUri={FormatUriForLog(_lastNavigationUri)}");
+            $"IsSuccess={e.IsSuccess} webError={e.WebErrorStatus} offlineState={state} lastUri={FormatUriForLog(lastUri)}");
         _panelNavigated = false;
         _ = PresentOfflinePageAsync(state);
+    }
+
+    private void HandleRunningPanelNavigationFailure()
+    {
+        _runningPanelLoadFailing = true;
+        var utcNow = DateTime.UtcNow;
+        _panelNavRetryPolicy.RecordFailure(utcNow);
+        var attempt = _panelNavRetryPolicy.FailureCount;
+        var nextDelay = _panelNavRetryPolicy.GetNextDelayAfterLastFailure();
+        ShellFileLog.Write($"panel-nav-retry attempt={attempt} nextDelaySec={nextDelay.TotalSeconds:F0}");
+        _panelNavigated = false;
+        if (!_offlineShown)
+        {
+            _ = PresentOfflinePageAsync("stopped");
+        }
+    }
+
+    private void TryRetryPanelNavigationWhenDue()
+    {
+        var utcNow = DateTime.UtcNow;
+        if (!_panelNavRetryPolicy.CanAttempt(utcNow))
+        {
+            LogOfflineTrace(
+                "panel-retry-throttle-skip",
+                $"failureCount={_panelNavRetryPolicy.FailureCount} nextDelaySec={_panelNavRetryPolicy.GetNextDelayAfterLastFailure().TotalSeconds:F0}");
+            return;
+        }
+
+        var attempt = _panelNavRetryPolicy.FailureCount + 1;
+        var nextDelay = _panelNavRetryPolicy.GetNextDelayAfterLastFailure();
+        ShellFileLog.Write(
+            $"panel-nav-retry attempt={attempt} nextDelaySec={nextDelay.TotalSeconds:F0} action=navigate");
+        _ = NavigatePanelAsync();
     }
 
     private bool IsActiveOnPanelOrigin()
@@ -683,7 +764,7 @@ public partial class MainWindow : Window
             return Task.CompletedTask;
         }
 
-        if (_offlineShown)
+        if (_offlineShown && !_runningPanelLoadFailing)
         {
             return Task.CompletedTask;
         }
@@ -693,12 +774,17 @@ public partial class MainWindow : Window
             return Task.CompletedTask;
         }
 
-        if (_panelNavigated && IsActiveOnPanelOrigin())
+        if (_runningPanelLoadFailing && !_panelNavRetryPolicy.CanAttempt(DateTime.UtcNow))
         {
             return Task.CompletedTask;
         }
 
-        var uri = new Uri(ShellPaths.PanelUrl);
+        if (!_runningPanelLoadFailing && _panelNavigated && IsActiveOnPanelOrigin())
+        {
+            return Task.CompletedTask;
+        }
+
+        var uri = new Uri(ShellSeams.ResolvePanelUrl());
         LogPanelNavigate("NavigatePanel", uri);
         LogRaceNav("NavigatePanel.Source");
         _panelNavigated = true;
