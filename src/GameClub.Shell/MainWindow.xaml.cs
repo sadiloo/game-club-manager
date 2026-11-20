@@ -168,9 +168,15 @@ public partial class MainWindow : Window
 
                     TryRunningPanelProbeWhenDue();
                 }
-                else if (!_runningPanelLoadFailing && _panelNavigated && IsActiveOnPanelOrigin())
+                else if (HealthyRunningPanelProbePolicy.ShouldProbeOnPollerTick(
+                             _runningPanelLoadFailing,
+                             _panelNavigated,
+                             IsActiveOnPanelOrigin()))
                 {
-                    // Healthy running panel: poller ticks must not probe-navigate again.
+                    LogOfflineTrace(
+                        "poller-healthy-panel-probe",
+                        $"offlineShown={_offlineShown} inFlight={_offlinePresentInFlightState}");
+                    TryHealthyRunningPanelProbeWhenDue();
                 }
                 else if (!_runningPanelLoadFailing)
                 {
@@ -303,6 +309,9 @@ public partial class MainWindow : Window
         if (_allowOfflineDataNav
             && args.Uri.StartsWith("data:text/html", StringComparison.OrdinalIgnoreCase))
         {
+            LogOfflineTrace(
+                "nav-starting-offline-allowed",
+                $"id={args.NavigationId} scheme=data allowOffline=true closed={_closed}");
             _allowOfflineDataNav = false;
             return;
         }
@@ -322,7 +331,16 @@ public partial class MainWindow : Window
             {
                 ShellFileLog.Write($"navigation-blocked id={args.NavigationId} scheme=unknown host_hash8=00000000");
             }
+
+            LogOfflineTrace(
+                "nav-starting-blocked",
+                $"id={args.NavigationId} scheme={NavigationSchemeForTrace(args.Uri)} allowOffline={_allowOfflineDataNav} closed={_closed}");
+            return;
         }
+
+        LogOfflineTrace(
+            "nav-starting-allowed",
+            $"id={args.NavigationId} scheme={NavigationSchemeForTrace(args.Uri)} allowOffline={_allowOfflineDataNav} closed={_closed}");
     }
 
     private static void OnPanelNewWindowRequested(object? sender, CoreWebView2NewWindowRequestedEventArgs args)
@@ -371,18 +389,25 @@ public partial class MainWindow : Window
         {
             _allowOfflineDataNav = false;
             _offlinePresentInFlightState = null;
-            if (e.IsSuccess)
+            if (e.IsSuccess && OfflineDataNavigationCommitted())
             {
                 _offlineShown = true;
             }
             else
             {
                 _offlineShown = false;
+                if (ShouldMaintainPanelUnavailableOffline())
+                {
+                    LogOfflineTrace(
+                        "nav-completed-offline-data-retry",
+                        $"id={e.NavigationId} IsSuccess={e.IsSuccess} webError={e.WebErrorStatus} onPanelOrigin={IsActiveOnPanelOrigin()}");
+                    _ = PresentOfflinePageAsync(_currentOfflineState ?? "panel-unavailable");
+                }
             }
 
             LogOfflineTrace(
                 "nav-completed-offline-data",
-                $"id={e.NavigationId} IsSuccess={e.IsSuccess} webError={e.WebErrorStatus} offlineState={_currentOfflineState}");
+                $"id={e.NavigationId} IsSuccess={e.IsSuccess} webError={e.WebErrorStatus} offlineState={_currentOfflineState} offlineShown={_offlineShown} onPanelOrigin={IsActiveOnPanelOrigin()}");
             return;
         }
 
@@ -482,7 +507,58 @@ public partial class MainWindow : Window
             return;
         }
 
+        LogOfflineTrace(
+            "panel-retry-probe-due",
+            $"offlineShown={_offlineShown} loadFailing={_runningPanelLoadFailing} failureCount={_panelNavRetryPolicy.FailureCount}");
         _ = TryRunningPanelProbeCoreAsync();
+    }
+
+    private void TryHealthyRunningPanelProbeWhenDue()
+    {
+        if (_panelProbeInFlight != 0)
+        {
+            LogOfflineTrace("healthy-panel-probe-skip", "reason=probe-in-flight");
+            return;
+        }
+
+        _ = TryHealthyRunningPanelProbeCoreAsync();
+    }
+
+    private async Task TryHealthyRunningPanelProbeCoreAsync()
+    {
+        if (Interlocked.CompareExchange(ref _panelProbeInFlight, 1, 0) != 0)
+        {
+            ShellFileLog.Write("panel-nav-retry action=healthy-probe outcome=skipped reason=probe-in-flight");
+            return;
+        }
+
+        try
+        {
+            var (ok, statusCode) = await Task.Run(ProbePanelHttp);
+            await Dispatcher.InvokeAsync(() =>
+            {
+                if (_closed
+                    || _runningPanelLoadFailing
+                    || !_panelNavigated
+                    || !IsActiveOnPanelOrigin())
+                {
+                    return;
+                }
+
+                if (ok)
+                {
+                    LogOfflineTrace("healthy-panel-probe-ok", $"status={statusCode}");
+                    return;
+                }
+
+                LogOfflineTrace("healthy-panel-probe-fail", $"status={statusCode}");
+                EnterRunningPanelLoadFailingMode(statusCode);
+            });
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _panelProbeInFlight, 0);
+        }
     }
 
     private async Task TryRunningPanelProbeCoreAsync()
@@ -1092,6 +1168,12 @@ public partial class MainWindow : Window
         ShellFileLog.Write($"panel-navigate caller={caller} scheme={uri.Scheme} host_hash8={Sha256Hex8(host)}");
     }
 
+    private static string NavigationSchemeForTrace(string uri)
+    {
+        var colon = uri.IndexOf(':');
+        return colon > 0 ? uri.Substring(0, colon) : "unknown";
+    }
+
     private void LogNavigateToString(string caller)
     {
         ShellFileLog.Write($"panel-navigate caller={caller} scheme=data host_hash8={Sha256Hex8("offline-html")}");
@@ -1103,6 +1185,7 @@ public partial class MainWindow : Window
         _lastNavigationUri = dataUri;
         LogNavigateToString(caller);
         LogRaceNav($"{caller}.NavigateData");
+        TryStopInFlightPanelNavigation();
         _allowOfflineDataNav = true;
         try
         {
@@ -1126,6 +1209,38 @@ public partial class MainWindow : Window
     {
         var uri = CurrentPanelUriForTrace();
         return uri.StartsWith("data:text/html", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private bool OfflineDataNavigationCommitted()
+    {
+        if (IsOfflineDataPageActive())
+        {
+            return true;
+        }
+
+        return !IsActiveOnPanelOrigin();
+    }
+
+    private bool ShouldMaintainPanelUnavailableOffline()
+    {
+        if (_poller?.Current.VisualState != ShellServerVisualState.Running)
+        {
+            return false;
+        }
+
+        return _runningPanelLoadFailing
+            || string.Equals(_currentOfflineState, "panel-unavailable", StringComparison.Ordinal);
+    }
+
+    private void TryStopInFlightPanelNavigation()
+    {
+        try
+        {
+            PanelWebView.CoreWebView2?.Stop();
+        }
+        catch (InvalidOperationException)
+        {
+        }
     }
 
     private string CurrentPanelUriForTrace()
@@ -1300,6 +1415,9 @@ public partial class MainWindow : Window
             return Task.CompletedTask;
         }
 
+        LogOfflineTrace(
+            "present-offline-requested",
+            $"offlineState={state} loadFailing={_runningPanelLoadFailing} offlineShown={_offlineShown} active={IsOfflineDataPageActive()}");
         LogOfflineTrace("present-offline-enter", $"offlineState={state}");
         _panelNavigated = false;
         _currentOfflineState = state;
