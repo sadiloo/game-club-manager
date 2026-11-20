@@ -28,7 +28,10 @@ internal sealed class ServerStateSnapshot
 
 internal sealed class ServerStatePoller : IDisposable
 {
+    private static int _nextPollerId;
+
     private readonly System.Threading.Timer _timer;
+    private readonly int _pollerId = Interlocked.Increment(ref _nextPollerId);
     private TrayIconState _lastIcon = TrayIconState.Red;
     private bool _wasServiceRunningClass;
     private bool _armedForUnexpectedToast = true;
@@ -61,6 +64,7 @@ internal sealed class ServerStatePoller : IDisposable
         try
         {
             ShellSeams.OnTickEntered?.Invoke();
+            ShellSeams.OnPollerTickTrace?.Invoke(_pollerId);
             var snapshot = BuildSnapshot();
             if (_armedForUnexpectedToast
                 && _wasServiceRunningClass
@@ -72,6 +76,8 @@ internal sealed class ServerStatePoller : IDisposable
                 ShellSeams.Notifications.ShowUnexpectedStop(snapshot.VisualState == ShellServerVisualState.NoAnswer);
                 _armedForUnexpectedToast = false;
             }
+
+            MaybeClearTrayStopInProgressAfterToast(snapshot);
 
             if (snapshot.IconState == TrayIconState.Green)
             {
@@ -93,6 +99,32 @@ internal sealed class ServerStatePoller : IDisposable
         finally
         {
             Interlocked.Exchange(ref _tickInProgress, 0);
+        }
+    }
+
+    private static void MaybeClearTrayStopInProgressAfterToast(ServerStateSnapshot snapshot)
+    {
+        if (!ShellSeams.TrayStopInProgress)
+        {
+            return;
+        }
+
+        if (snapshot.IconState == TrayIconState.Green
+            || snapshot.VisualState == ShellServerVisualState.Running)
+        {
+            ShellSeams.SetTrayStopInProgress(false, "poller-running-or-green");
+            return;
+        }
+
+        try
+        {
+            if (ShellSeams.Service.Status == ServiceControllerStatus.StartPending)
+            {
+                ShellSeams.SetTrayStopInProgress(false, "poller-start-pending");
+            }
+        }
+        catch
+        {
         }
     }
 

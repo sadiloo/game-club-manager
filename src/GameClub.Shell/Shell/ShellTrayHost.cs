@@ -98,24 +98,42 @@ internal sealed class ShellTrayHost : IDisposable
 
     private static void LaunchServerControl(string verb)
     {
-        if (string.Equals(verb, "stop", StringComparison.OrdinalIgnoreCase))
+        var isStop = string.Equals(verb, "stop", StringComparison.OrdinalIgnoreCase);
+        if (isStop)
         {
-            ShellSeams.TrayStopInProgress = true;
+            ShellSeams.SetTrayStopInProgress(true, "ShellTrayHost.LaunchServerControl");
         }
 
         try
         {
             var exe = Process.GetCurrentProcess().MainModule?.FileName
                       ?? Assembly.GetExecutingAssembly().Location;
-            Process.Start(new ProcessStartInfo(exe, "--server-control " + verb)
+            var process = Process.Start(new ProcessStartInfo(exe, "--server-control " + verb)
             {
                 Verb = "runas",
                 UseShellExecute = true,
             });
+            if (isStop && process is not null)
+            {
+                process.EnableRaisingEvents = true;
+                process.Exited += (_, _) =>
+                {
+                    try
+                    {
+                        if (process.ExitCode != 0)
+                        {
+                            ShellSeams.SetTrayStopInProgress(false, "ShellTrayHost.elevated-stop-exit");
+                        }
+                    }
+                    catch
+                    {
+                    }
+                };
+            }
         }
         catch
         {
-            ShellSeams.TrayStopInProgress = false;
+            ShellSeams.SetTrayStopInProgress(false, "ShellTrayHost.ProcessStartFailed");
         }
     }
 

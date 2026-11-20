@@ -75,6 +75,8 @@ internal static class FakeShellSeams
         ShellSeams.BeforeBuildSnapshot = null;
         ShellSeams.OnTickEntered = null;
         ShellSeams.OnTickSkippedReentrant = null;
+        ShellSeams.TrayStopInProgressTrace = null;
+        ShellSeams.OnPollerTickTrace = null;
         ShellSeams.UtcNow = () => DateTime.UtcNow;
         ShellSeams.SystemUptime = () => TimeSpan.FromMilliseconds(Environment.TickCount & int.MaxValue);
     }
@@ -82,7 +84,7 @@ internal static class FakeShellSeams
     public static void ResetHarnessStatics()
     {
         Notifications.ResetCounts();
-        ShellSeams.TrayStopInProgress = false;
+        ShellSeams.SetTrayStopInProgress(false, "FakeShellSeams.ResetHarnessStatics");
         ShellSeams.MessageBoxHandler = null;
         ShellSeams.BeforeBuildSnapshot = null;
         ShellSeams.OnTickEntered = null;
@@ -92,6 +94,7 @@ internal static class FakeShellSeams
     public static void Install()
     {
         ResetHarnessStatics();
+        ShellTrayDiagnosticTrace.Wire();
         ShellSeams.Service = Service;
         ShellSeams.Notifications = Notifications;
         ShellSeams.HttpProbe = Http;

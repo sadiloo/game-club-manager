@@ -100,16 +100,64 @@ public sealed class ShellTrayStatusTests
     public void shell_tray_initiated_stop_shows_no_unexpected_stop_notification()
     {
         FakeShellSeams.Install();
-        ShellSeams.TrayStopInProgress = true;
         _fixture.RunAsync(async () =>
         {
+            ShellSeams.SetTrayStopInProgress(true, "shell_tray_initiated_stop_shows_no_unexpected_stop_notification");
             using var poller = new ServerStatePoller();
             await Task.Delay(100);
             FakeShellSeams.Service.Status = ServiceControllerStatus.Stopped;
             await Task.Delay(6000);
             Assert.Equal(0, FakeShellSeams.Notifications.UnexpectedStopCount);
-            ShellSeams.TrayStopInProgress = false;
+            ShellSeams.SetTrayStopInProgress(false, "shell_tray_initiated_stop_shows_no_unexpected_stop_notification.cleanup");
         }, TimeSpan.FromSeconds(20));
+    }
+
+    [Fact]
+    public void shell_tray_stop_then_green_then_unexpected_stop_shows_exactly_one_toast()
+    {
+        FakeShellSeams.Install();
+        _fixture.RunAsync(async () =>
+        {
+            ShellSeams.SetTrayStopInProgress(true, "shell_tray_stop_then_green");
+            using var poller = new ServerStatePoller();
+            await Task.Delay(100);
+            FakeShellSeams.Service.Status = ServiceControllerStatus.Stopped;
+            FakeShellSeams.Http.Answers = false;
+            await Task.Delay(6000);
+            Assert.Equal(0, FakeShellSeams.Notifications.UnexpectedStopCount);
+
+            FakeShellSeams.Service.Status = ServiceControllerStatus.StartPending;
+            await Task.Delay(6000);
+            FakeShellSeams.Service.Status = ServiceControllerStatus.Running;
+            FakeShellSeams.Http.Answers = true;
+            await Task.Delay(6000);
+            Assert.False(ShellSeams.TrayStopInProgress);
+
+            FakeShellSeams.Service.Status = ServiceControllerStatus.Stopped;
+            FakeShellSeams.Http.Answers = false;
+            await Task.Delay(6000);
+            Assert.Equal(1, FakeShellSeams.Notifications.UnexpectedStopCount);
+        }, TimeSpan.FromSeconds(45));
+    }
+
+    [Fact]
+    public void shell_tray_stop_declined_uac_then_unexpected_stop_shows_exactly_one_toast()
+    {
+        FakeShellSeams.Install();
+        _fixture.RunAsync(async () =>
+        {
+            ShellSeams.SetTrayStopInProgress(true, "shell_tray_stop_declined_uac");
+            using var poller = new ServerStatePoller();
+            await Task.Delay(100);
+            ShellSeams.SetTrayStopInProgress(false, "shell_tray_stop_declined_uac.simulate-uac-decline");
+            FakeShellSeams.Service.Status = ServiceControllerStatus.Running;
+            FakeShellSeams.Http.Answers = true;
+            await Task.Delay(100);
+            FakeShellSeams.Service.Status = ServiceControllerStatus.Stopped;
+            FakeShellSeams.Http.Answers = false;
+            await Task.Delay(6000);
+            Assert.Equal(1, FakeShellSeams.Notifications.UnexpectedStopCount);
+        }, TimeSpan.FromSeconds(25));
     }
 
     [Fact]

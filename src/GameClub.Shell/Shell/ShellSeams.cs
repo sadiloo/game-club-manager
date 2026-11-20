@@ -218,7 +218,17 @@ public static class ShellSeams
     public static IHttpProbeSeam HttpProbe { get; set; } = new ProductionHttpProbeSeam();
     public static Func<int>? ReadOpenSessionCount { get; set; }
     public static Func<LocalServerStatusDto?>? ReadLocalStatus { get; set; }
-    public static bool TrayStopInProgress { get; set; }
+    public static bool TrayStopInProgress { get; private set; }
+
+    public static Action<bool, string, string>? TrayStopInProgressTrace { get; set; }
+
+    public static Action<int>? OnPollerTickTrace { get; set; }
+
+    public static void SetTrayStopInProgress(bool value, string caller)
+    {
+        TrayStopInProgress = value;
+        TrayStopInProgressTrace?.Invoke(value, caller, Environment.StackTrace);
+    }
     public static Func<DateTime> UtcNow { get; set; } = () => DateTime.UtcNow;
     public static Func<TimeSpan> SystemUptime { get; set; } = () => TimeSpan.FromMilliseconds(Environment.TickCount & int.MaxValue);
     public static Func<string, bool>? MaintenanceFlagExists { get; set; }

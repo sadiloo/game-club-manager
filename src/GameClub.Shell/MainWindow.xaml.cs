@@ -25,6 +25,7 @@ public partial class MainWindow : Window
     private string? _lastNavigationUri;
     private bool _offlineShown;
     private bool _closed;
+    private Task? _ensureWebViewTask;
     private Action<ServerStateSnapshot>? _onPollerChanged;
 
     public int NavigationStartingCount => _navigationStartingCount;
@@ -72,6 +73,11 @@ public partial class MainWindow : Window
                     var recoverUri = new Uri(ShellPaths.PanelUrl);
                     LogPanelNavigate("RunningRecover", recoverUri);
                     LogRaceNav("RunningRecover.Source");
+                    if (_closed)
+                    {
+                        return;
+                    }
+
                     PanelWebView.Source = recoverUri;
                 }
                 else
@@ -89,7 +95,9 @@ public partial class MainWindow : Window
         });
     }
 
-    private async Task EnsureWebViewAsync()
+    private Task EnsureWebViewAsync() => _ensureWebViewTask ??= EnsureWebViewCoreAsync();
+
+    private async Task EnsureWebViewCoreAsync()
     {
         try
         {
@@ -146,7 +154,14 @@ public partial class MainWindow : Window
             if (_pendingOffline)
             {
                 _pendingOffline = false;
-                await PresentOfflinePageAsync(_pendingOfflineState);
+                if (ShouldPresentPendingOffline())
+                {
+                    await PresentOfflinePageAsync(_pendingOfflineState);
+                }
+                else if (_poller?.Current.VisualState == ShellServerVisualState.Running)
+                {
+                    await NavigatePanelAsync();
+                }
             }
             else
             {
@@ -320,6 +335,11 @@ public partial class MainWindow : Window
 
     public Task NavigatePanelAsync()
     {
+        if (_closed)
+        {
+            return Task.CompletedTask;
+        }
+
         if (!_webViewReady)
         {
             return Task.CompletedTask;
@@ -364,6 +384,7 @@ public partial class MainWindow : Window
             LogOfflineTrace("show-offline-deferred", $"webViewReady=false offlineState={state}");
             _pendingOffline = true;
             _pendingOfflineState = state;
+            _ = EnsureWebViewAsync();
             return;
         }
 
@@ -399,6 +420,12 @@ public partial class MainWindow : Window
         PanelWebView.NavigateToString(html);
         LogOfflineTrace("present-offline-navigated", $"offlineState={state}");
         return Task.CompletedTask;
+    }
+
+    private bool ShouldPresentPendingOffline()
+    {
+        var visual = _poller?.Current.VisualState;
+        return visual is ShellServerVisualState.Stopped or ShellServerVisualState.NoAnswer;
     }
 
     private static string LoadOfflineHtml(string state)
