@@ -1164,7 +1164,18 @@ public partial class MainWindow : Window
             ?? throw new InvalidOperationException("offline.html missing");
         using var reader = new StreamReader(stream);
         var html = reader.ReadToEnd();
-        return html.Replace("state=stopped", "state=" + state);
+        html = html.Replace("state=stopped", "state=" + state);
+        if (string.Equals(state, "panel-unavailable", StringComparison.Ordinal))
+        {
+            html = html.Replace(
+                "سرور در دسترس نیست؛ دوباره تلاش می‌شود…",
+                "سرور روشن است؛ پنل در دسترس نیست");
+            html = html.Replace(
+                "برای روشن کردن سرور، روی آیکن چک‌پوینت کنار ساعت ویندوز راست‌کلیک کنید و «شروع سرور» را بزنید.",
+                "چند لحظه صبر کنید. پنل دوباره بارگذاری می‌شود.");
+        }
+
+        return html;
     }
 
     public void ShowFromTray()
