@@ -24,6 +24,32 @@ public sealed class KioskSetupCoreTests
     }
 
     [Fact]
+    public void setup_json_path_env_override_points_at_isolated_file()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "gcm-setup-env-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        var isolated = Path.Combine(dir, "setup.json");
+        var prior = Environment.GetEnvironmentVariable(KioskSetupPaths.SetupJsonPathEnvVar);
+        try
+        {
+            Environment.SetEnvironmentVariable(KioskSetupPaths.SetupJsonPathEnvVar, isolated);
+            Assert.Equal(isolated, KioskSetupPaths.SetupJsonPath);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(KioskSetupPaths.SetupJsonPathEnvVar, prior);
+            try
+            {
+                Directory.Delete(dir, recursive: true);
+            }
+            catch
+            {
+                // best effort
+            }
+        }
+    }
+
+    [Fact]
     public void setup_store_roundtrip_and_gate()
     {
         var dir = Path.Combine(Path.GetTempPath(), "gcm-setup-" + Guid.NewGuid().ToString("N"));
