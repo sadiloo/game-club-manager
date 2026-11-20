@@ -6,8 +6,8 @@ Branches (pushed, no PR):
 
 | Phase | Branch | Base | Head (`git rev-parse`) |
 |-------|--------|------|-------------------------|
-| A | `cursor/kiosk-locked-probe-v3-pr42` | `cursor/kiosk-locked-probe-v2-pr42` @ `b718edd` | `e203184` |
-| B | `cursor/kiosk-locked-probe-v3` | `cursor/kiosk-locked-probe-v2` @ `10f7d6c` | `b2a1ccb` |
+| A | `cursor/kiosk-locked-probe-v3-pr42` | `cursor/kiosk-locked-probe-v2-pr42` @ `b718edd` | `662ea77` |
+| B | `cursor/kiosk-locked-probe-v3` | `cursor/kiosk-locked-probe-v2` @ `10f7d6c` | `8feccf8` |
 
 ## Instrumentation added (logging only)
 
@@ -78,22 +78,37 @@ v3 logging will show whether **`POST /api/kiosk/auth/login`** is absent, 4xx/409
 
 | Phase | Head | Run | Outcome |
 |-------|------|-----|---------|
-| B | `b2a1ccb` | [44639255965](https://github.com/sadiloo/game-club-manager/actions/runs/44639255965) | **success** (~37m integration job) |
-| A | `e203184` | [44639252221](https://github.com/sadiloo/game-club-manager/actions/runs/44639252221) | _in progress at last update_ |
+| B | `b2a1ccb` | [44639255965](https://github.com/sadiloo/game-club-manager/actions/runs/44639255965) | workflow **success** |
+| B (doc) | `8feccf8` | _re-run, same stability script, green_ | workflow **success** |
+| A | `e203184` | [44639252221](https://github.com/sadiloo/game-club-manager/actions/runs/44639252221) | workflow **failure** — integration **success**, shell **failure** |
+| A (doc) | `662ea77` | [44644448396](https://github.com/sadiloo/game-club-manager/actions/runs/44644448396) | same split (integration **success**, shell **failure**) |
 
 ### Pass/fail counts (5 batches × 20) — attempt 4
 
 | Phase | Batch 1 | Batch 2 | Batch 3 | Batch 4 | Batch 5 | Total | Failure evidence |
 |-------|---------|---------|---------|---------|---------|-------|------------------|
-| B | 20/20 | 20/20 | 20/20 | 20/20 | 20/20 | **100/100 pass** | none (`failures=0` each batch; no `wpf-stability-failure-evidence-*.log`) |
-| A | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ |
+| B | 20/20 | 20/20 | 20/20 | 20/20 | 20/20 | **100/100 pass** | none |
+| A | 20/20 | 20/20 | 20/20 | 20/20 | 20/20 | **100/100 pass** ([44639252221](https://github.com/sadiloo/game-club-manager/actions/runs/44639252221)) | none |
 
-Phase **B** (trunk-line v2 base @ `10f7d6c`): v3 instrumentation ran end-to-end; **did not reproduce** the v2 locked / empty-`hostSessionId` / zero-`sessions` pattern in 100 consecutive WPF stability iterations. ~10s per pass (real polls, not harness instant-fail).
+Phase **A** (PR42-line v2 base @ `b718edd`): same outcome as B — **no** locked / empty-`hostSessionId` / zero-`sessions` reproduction in 100 iterations (v2 had captured global **25** on this stack).
+
+Phase **B** (trunk-line v2 base @ `10f7d6c`): identical 100/100 pass.
+
+**Workflow red on A:** parallel `windows-2022 shell` job failed `install and start postgresql` (**CI infra** — e.g. Chocolatey `504 Gateway Timeout` fetching `postgresql16` on [44639252221](https://github.com/sadiloo/game-club-manager/actions/runs/44639252221); kiosk integration job installed Postgres independently and completed stability). Not a probe or product signal.
 
 ### Per-failure timelines (attempt 4)
 
-_None on phase B (all green). Phase A pending — this is the branch stack where v2 captured global-25 locked evidence on PR42._
+_None — no WPF stability failures; `PROBE_V3_FAILURE_EVIDENCE` never written._
+
+## v3 conclusion
+
+| Item | Result |
+|------|--------|
+| Logging pipeline | Validated on **200** stability iterations (100 per phase) |
+| Locked-kiosk hypothesis test | **Inconclusive on root cause** — v2 single failure not re-seen; flake may be &lt;1% or environment-specific |
+| Prior v2 evidence | Still points to **product** path (`KioskShellOrchestrator.cs` ~108, empty host session) when failure occurs |
+| Next product work | Needs targeted fix/repro outside this probe, or higher-N / seeded stress — not in v3 scope |
 
 ## STOP
 
-Probe branches pushed; **no PR.** Phase B attempt 4 complete with no locked flake. Phase A attempt 4 determines whether PR42-line product delta is required to reproduce v2 failure; update this file when [44639252221](https://github.com/sadiloo/game-club-manager/actions/runs/44639252221) finishes.
+Probe branches pushed; **no PR.** Report complete through attempt 4.
