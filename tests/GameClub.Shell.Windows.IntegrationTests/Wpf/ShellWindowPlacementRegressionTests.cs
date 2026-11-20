@@ -33,6 +33,7 @@ public sealed class ShellWindowPlacementRegressionTests
             _fixture.RunAsync(() =>
             {
                 var window = new MainWindow();
+                var loadedPlacement = new TaskCompletionSource<bool>();
                 WriteShellGeom("infinity-round-trip", "PreShow", window);
                 window.SourceInitialized += (_, _) =>
                     WriteShellGeom("infinity-round-trip", "SourceInitialized-after-ApplyBounds", window);
@@ -40,13 +41,19 @@ public sealed class ShellWindowPlacementRegressionTests
                 {
                     WriteShellGeom("infinity-round-trip", "Loaded", window);
                     WriteGeometryTimeline("infinity-round-trip", "Loaded", window);
+                    Assert.Equal(WindowState.Maximized, window.WindowState);
+                    loadedPlacement.TrySetResult(true);
                 };
                 window.ContentRendered += (_, _) =>
                     WriteGeometryTimeline("infinity-round-trip", "ContentRendered", window);
                 window.Show();
                 WriteShellGeom("infinity-round-trip", "Show", window);
                 WriteGeometryTimeline("infinity-round-trip", "Show", window);
-                Assert.Equal(WindowState.Maximized, window.WindowState);
+                if (!loadedPlacement.Task.Wait(TimeSpan.FromSeconds(5)))
+                {
+                    throw new System.TimeoutException("infinity-round-trip Loaded assertions did not run");
+                }
+
                 window.Close();
 
                 var saved = File.ReadAllText(ShellPaths.WindowJsonPath);

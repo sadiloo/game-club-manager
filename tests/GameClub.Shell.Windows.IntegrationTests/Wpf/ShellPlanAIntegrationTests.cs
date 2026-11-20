@@ -103,6 +103,7 @@ public sealed class ShellPlanAIntegrationTests
             _fixture.RunAsync(() =>
             {
                 var window = new MainWindow();
+                var loadedPlacement = new TaskCompletionSource<bool>();
                 WriteShellGeom("placement-restore", "PreShow", window);
                 window.SourceInitialized += (_, _) =>
                     WriteShellGeom("placement-restore", "SourceInitialized-after-ApplyBounds", window);
@@ -110,17 +111,23 @@ public sealed class ShellPlanAIntegrationTests
                 {
                     WriteShellGeom("placement-restore", "Loaded", window);
                     WriteGeometryTimeline("placement-restore", "Loaded", window);
+                    Assert.Equal(WindowState.Maximized, window.WindowState);
+                    // Maximized frame size includes borders; normal restore bounds follow WindowPlacementStore clamp.
+                    var area = Screen.PrimaryScreen!.WorkingArea;
+                    Assert.Equal(Math.Min(1024, area.Width), window.RestoreBounds.Width, 0);
+                    Assert.Equal(Math.Min(700, area.Height), window.RestoreBounds.Height, 0);
+                    loadedPlacement.TrySetResult(true);
                 };
                 window.ContentRendered += (_, _) =>
                     WriteGeometryTimeline("placement-restore", "ContentRendered", window);
                 window.Show();
                 WriteShellGeom("placement-restore", "Show", window);
                 WriteGeometryTimeline("placement-restore", "Show", window);
-                Assert.Equal(WindowState.Maximized, window.WindowState);
-                // CI runner work area is 1024×728; effective size follows WindowPlacementStore work-area clamp.
-                var area = Screen.PrimaryScreen!.WorkingArea;
-                Assert.Equal(Math.Min(1024, area.Width), window.Width, 0);
-                Assert.Equal(Math.Min(700, area.Height), window.Height, 0);
+                if (!loadedPlacement.Task.Wait(TimeSpan.FromSeconds(5)))
+                {
+                    throw new System.TimeoutException("placement-restore Loaded assertions did not run");
+                }
+
                 window.Close();
                 return Task.CompletedTask;
             }, TimeSpan.FromSeconds(15));

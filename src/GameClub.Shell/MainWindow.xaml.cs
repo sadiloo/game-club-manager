@@ -71,6 +71,7 @@ public partial class MainWindow : Window
                     _offlineShown = false;
                     var recoverUri = new Uri(ShellPaths.PanelUrl);
                     LogPanelNavigate("RunningRecover", recoverUri);
+                    LogRaceNav("RunningRecover.Source");
                     PanelWebView.Source = recoverUri;
                 }
                 else
@@ -80,6 +81,9 @@ public partial class MainWindow : Window
             }
             else if (!snap.OperatorAnswers)
             {
+                LogOfflineTrace(
+                    "poller-show-offline",
+                    $"operatorAnswers=false visual={snap.VisualState} icon={snap.IconState}");
                 _ = ShowOfflineAsync(snap);
             }
         });
@@ -162,11 +166,17 @@ public partial class MainWindow : Window
     {
         if (_offlineShown)
         {
+            LogOfflineTrace(
+                "nav-completed-skip",
+                "offlineAlreadyShown=true");
             return;
         }
 
         if (e.IsSuccess || !IsLoopbackPanelTarget(_lastNavigationUri ?? ""))
         {
+            LogOfflineTrace(
+                "nav-completed-skip",
+                $"IsSuccess={e.IsSuccess} webError={e.WebErrorStatus} loopbackTarget={IsLoopbackPanelTarget(_lastNavigationUri ?? "")} lastUri={_lastNavigationUri}");
             return;
         }
 
@@ -175,6 +185,9 @@ public partial class MainWindow : Window
             ShellServerVisualState.Starting => "starting",
             _ => "stopped",
         };
+        LogOfflineTrace(
+            "nav-completed-fallback",
+            $"IsSuccess={e.IsSuccess} webError={e.WebErrorStatus} offlineState={state} lastUri={_lastNavigationUri}");
         _ = PresentOfflinePageAsync(state);
     }
 
@@ -211,6 +224,30 @@ public partial class MainWindow : Window
     private void LogNavigateToString(string caller)
     {
         ShellFileLog.Write($"panel-navigate caller={caller} scheme=data host_hash8={Sha256Hex8("offline-html")}");
+    }
+
+    private string CurrentPanelUriForTrace()
+    {
+        try
+        {
+            return PanelWebView?.Source?.ToString() ?? _lastNavigationUri ?? "";
+        }
+        catch
+        {
+            return _lastNavigationUri ?? "";
+        }
+    }
+
+    private void LogOfflineTrace(string branch, string reason)
+    {
+        ShellFileLog.Write(
+            $"SHELL-OFFLINE-TRACE UTC={DateTime.UtcNow:O} thread={Environment.CurrentManagedThreadId} branch={branch} reason={reason} uri={CurrentPanelUriForTrace()}");
+    }
+
+    private void LogRaceNav(string caller)
+    {
+        ShellFileLog.Write(
+            $"SHELL-RACE-NAV UTC={DateTime.UtcNow:O} thread={Environment.CurrentManagedThreadId} closed={_closed} caller={caller} stack={Environment.StackTrace}");
     }
 
     private void OnShellPreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
@@ -273,6 +310,7 @@ public partial class MainWindow : Window
 
         var uri = new Uri(ShellPaths.PanelUrl);
         LogPanelNavigate("NavigatePanel", uri);
+        LogRaceNav("NavigatePanel.Source");
         PanelWebView.Source = uri;
         return Task.CompletedTask;
     }
@@ -281,6 +319,7 @@ public partial class MainWindow : Window
     {
         if (_webViewReady)
         {
+            LogRaceNav("ReloadPanel");
             PanelWebView.CoreWebView2?.Reload();
         }
     }
@@ -295,16 +334,22 @@ public partial class MainWindow : Window
 
         if (!_webViewReady)
         {
+            LogOfflineTrace("show-offline-deferred", $"webViewReady=false offlineState={state}");
             _pendingOffline = true;
             _pendingOfflineState = state;
             return;
         }
 
-        if (DateTime.UtcNow - _lastReconnectAttempt < TimeSpan.FromSeconds(5))
+        var sinceLastAttempt = DateTime.UtcNow - _lastReconnectAttempt;
+        if (sinceLastAttempt < TimeSpan.FromSeconds(5))
         {
+            LogOfflineTrace(
+                "show-offline-throttle-skip",
+                $"elapsedSec={sinceLastAttempt.TotalSeconds:F3} offlineState={state}");
             return;
         }
 
+        LogOfflineTrace("show-offline-enter", $"offlineState={state}");
         _lastReconnectAttempt = DateTime.UtcNow;
         await PresentOfflinePageAsync(state);
     }
@@ -313,15 +358,19 @@ public partial class MainWindow : Window
     {
         if (!_webViewReady)
         {
+            LogOfflineTrace("present-offline-skip", $"webViewReady=false offlineState={state}");
             _pendingOffline = true;
             _pendingOfflineState = state;
             return Task.CompletedTask;
         }
 
+        LogOfflineTrace("present-offline-enter", $"offlineState={state}");
         _offlineShown = true;
         var html = LoadOfflineHtml(state);
         LogNavigateToString("PresentOffline");
+        LogRaceNav("PresentOffline.NavigateToString");
         PanelWebView.NavigateToString(html);
+        LogOfflineTrace("present-offline-navigated", $"offlineState={state}");
         return Task.CompletedTask;
     }
 
