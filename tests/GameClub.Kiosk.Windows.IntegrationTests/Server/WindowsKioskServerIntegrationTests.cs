@@ -803,6 +803,13 @@ public sealed class WindowsKioskServerIntegrationTests
     {
         await WaitUntilTransportConnectedAsync(runtime, TimeSpan.FromSeconds(45));
 
+        // Factory host uses MutableClock (frozen); KioskDeviceAuthMiddleware stamps LastSeen on login HTTP.
+        // Step server time forward so hub heartbeats advance LastSeenUtc past the login contact.
+        if (backend.UsesFactoryHost)
+        {
+            backend.AdvanceTestClock(TimeSpan.FromSeconds(1));
+        }
+
         var heartbeatPhaseStart = DateTime.UtcNow;
         var deadline = heartbeatPhaseStart.Add(HeartbeatAdvanceCeiling);
         while (DateTime.UtcNow < deadline)
@@ -815,6 +822,11 @@ public sealed class WindowsKioskServerIntegrationTests
                     || (lastSeen.HasValue && lastSeen > lastSeenBefore)))
             {
                 return;
+            }
+
+            if (backend.UsesFactoryHost)
+            {
+                backend.AdvanceTestClock(TimeSpan.FromSeconds(1));
             }
 
             await Task.Delay(500);

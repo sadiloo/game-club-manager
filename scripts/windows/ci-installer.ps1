@@ -20,36 +20,108 @@ if (-not (Get-Command iscc.exe -ErrorAction SilentlyContinue)) {
   throw "ci-installer: iscc.exe not on PATH; Inno Setup required."
 }
 $isccPath = (Get-Command iscc.exe).Source
+$isccDir = [System.IO.Path]::GetFullPath((Split-Path -Parent $isccPath)).TrimEnd('\')
 $rawIsccHelp = & $isccPath /? 2>&1 | Out-String
-$fileVersionText = $null
-$bannerVersionText = $null
-if (Test-Path -LiteralPath $isccPath) {
-  $fileVersionText = (Get-Item -LiteralPath $isccPath).VersionInfo.FileVersion
+
+function NormalizeDir([string]$path) {
+  if ([string]::IsNullOrWhiteSpace($path)) {
+    return $null
+  }
+  return [System.IO.Path]::GetFullPath($path).TrimEnd('\')
 }
-if ($rawIsccHelp -match "(?i)Inno\s+Setup\s+([\d.]+)") {
-  $bannerVersionText = $Matches[1]
-}
-$resolvedInno = $null
-foreach ($candidate in @($fileVersionText, $bannerVersionText)) {
-  if ([string]::IsNullOrWhiteSpace($candidate)) {
+
+$uninstallRoots = @(
+  "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
+  "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"
+)
+$knownInnoKeySuffixes = @("Inno Setup 6_is1", "{code-Inno Setup 6_is1}")
+
+$registryMatches = [System.Collections.Generic.List[object]]::new()
+foreach ($root in $uninstallRoots) {
+  if (-not (Test-Path -LiteralPath $root)) {
     continue
+  }
+  foreach ($suffix in $knownInnoKeySuffixes) {
+    $keyPath = Join-Path $root $suffix
+    if (-not (Test-Path -LiteralPath $keyPath)) {
+      continue
+    }
+    $props = Get-ItemProperty -LiteralPath $keyPath -ErrorAction SilentlyContinue
+    if ($null -ne $props) {
+      $registryMatches.Add([PSCustomObject]@{
+          RegistryKeyPath = $keyPath
+          DisplayVersion  = $props.DisplayVersion
+          InstallLocation = $props.InstallLocation
+        })
+    }
   }
 
-  try {
-    $parsed = [Version]$candidate
-    $normalized = [Version]"$($parsed.Major).$($parsed.Minor).$($parsed.Build)"
-    $resolvedInno = $normalized
+  Get-ChildItem -LiteralPath $root -ErrorAction SilentlyContinue | ForEach-Object {
+    $props = Get-ItemProperty -LiteralPath $_.PSPath -ErrorAction SilentlyContinue
+    if ($null -eq $props) {
+      return
+    }
+    $name = [string]$props.DisplayName
+    if ($name -notmatch "(?i)Inno Setup 6") {
+      return
+    }
+    $registryMatches.Add([PSCustomObject]@{
+        RegistryKeyPath = $_.PSPath
+        DisplayVersion  = $props.DisplayVersion
+        InstallLocation = $props.InstallLocation
+      })
+  }
+}
+
+$deduped = $registryMatches | Sort-Object RegistryKeyPath -Unique
+$matchedInstall = $null
+foreach ($entry in $deduped) {
+  $installDir = NormalizeDir $entry.InstallLocation
+  if ($null -ne $installDir -and $installDir -ieq $isccDir) {
+    $matchedInstall = $entry
     break
   }
-  catch {
-    continue
+}
+if ($null -eq $matchedInstall -and $deduped.Count -eq 1) {
+  $only = $deduped[0]
+  $installDir = NormalizeDir $only.InstallLocation
+  if ($null -ne $installDir -and $installDir -ieq $isccDir) {
+    $matchedInstall = $only
   }
 }
-if ($null -eq $resolvedInno) {
-  throw "ci-installer: could not read Inno Setup compiler version from iscc (path=$isccPath; FileVersion=$fileVersionText; iscc /? output:$rawIsccHelp)"
+
+$registryKeyPath = if ($matchedInstall) { $matchedInstall.RegistryKeyPath } else { "(no matching uninstall key)" }
+$displayVersionText = if ($matchedInstall) { [string]$matchedInstall.DisplayVersion } else { "(unset)" }
+$installLocationText = if ($matchedInstall) { [string]$matchedInstall.InstallLocation } else { "(unset)" }
+
+$resolvedInno = $null
+if (-not [string]::IsNullOrWhiteSpace($displayVersionText) -and $displayVersionText -ne "(unset)") {
+  try {
+    $parsed = [Version]$displayVersionText
+    $resolvedInno = [Version]"$($parsed.Major).$($parsed.Minor).$($parsed.Build)"
+  }
+  catch {
+    $resolvedInno = $null
+  }
 }
-if ($resolvedInno.Major -ne $expectedInno.Major -or $resolvedInno.Minor -ne $expectedInno.Minor -or $resolvedInno.Build -ne $expectedInno.Build) {
-  throw "ci-installer: expected Inno Setup $expectedInno on PATH; resolved $resolvedInno (FileVersion=$fileVersionText; banner=$bannerVersionText; raw iscc /?:$rawIsccHelp)"
+
+$versionOk = $null -ne $resolvedInno `
+  -and $resolvedInno.Major -eq $expectedInno.Major `
+  -and $resolvedInno.Minor -eq $expectedInno.Minor `
+  -and $resolvedInno.Build -eq $expectedInno.Build
+$locationOk = $null -ne $matchedInstall
+if (-not $versionOk -or -not $locationOk) {
+  Write-Error @"
+ci-installer: expected Inno Setup $expectedInno installed at the same directory as iscc on PATH.
+registryKeyPath=$registryKeyPath
+DisplayVersion=$displayVersionText
+InstallLocation=$installLocationText
+resolved iscc path=$isccPath
+iscc install directory=$isccDir
+iscc /? output:
+$rawIsccHelp
+"@
+  exit 1
 }
 Write-Host "ci-installer: Inno $resolvedInno; compile server and kiosk iss"
 $issTargets = @(

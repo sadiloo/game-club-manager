@@ -113,6 +113,20 @@ internal sealed class KioskIntegrationBackend
         _factory.Clock.SetTehran(year, month, day, hour, minute, second);
     }
 
+    /// <summary>True when the in-process test host (frozen <see cref="MutableClock"/>) is in use.</summary>
+    public bool UsesFactoryHost => _factory is not null;
+
+    /// <summary>Advance the test-host clock so heartbeat timestamps move past login contact stamps.</summary>
+    public void AdvanceTestClock(TimeSpan delta)
+    {
+        if (_factory is null)
+        {
+            return;
+        }
+
+        _factory.Clock.SetUtc(_factory.Clock.UtcNow.Add(delta));
+    }
+
     public async Task<int> CountHeartbeatsAsync()
     {
         if (_factory is not null)
