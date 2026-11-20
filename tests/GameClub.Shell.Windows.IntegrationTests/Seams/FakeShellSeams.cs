@@ -49,12 +49,15 @@ internal sealed class FakeNotificationSeam : IShellNotificationSeam
 
 internal sealed class FakeHttpSeam : IHttpProbeSeam
 {
-    public bool Answers { get; set; }
-    public bool TryGetOperatorOk(out int statusCode)
-    {
-        statusCode = Answers ? 200 : 503;
-        return Answers;
-    }
+  public bool Answers { get; set; }
+
+  public bool OperatorPageOk { get; set; } = true;
+
+  public bool TryGetOperatorOk(out int statusCode)
+  {
+    statusCode = OperatorPageOk ? 200 : 503;
+    return OperatorPageOk;
+  }
 }
 
 internal static class FakeShellSeams
@@ -111,6 +114,7 @@ internal static class FakeShellSeams
         Notifications.ResetCounts();
         Service.Status = ServiceControllerStatus.Running;
         Http.Answers = true;
+        Http.OperatorPageOk = true;
         ShellSeams.UtcNow = () => DateTime.UtcNow;
         ShellSeams.SystemUptime = () => TimeSpan.FromMilliseconds(Environment.TickCount & int.MaxValue);
         ShellSeams.MaintenanceFlagExists = null;

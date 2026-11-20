@@ -838,7 +838,8 @@ public sealed class ShellPlanAIntegrationTests
                 try
                 {
                     FakeShellSeams.Install();
-                    FakeShellSeams.Http.Answers = false;
+                    FakeShellSeams.Http.Answers = true;
+                    FakeShellSeams.Http.OperatorPageOk = false;
                     FakeShellSeams.Service.Status = ServiceControllerStatus.Running;
 
                     window = new MainWindow();
@@ -857,6 +858,8 @@ public sealed class ShellPlanAIntegrationTests
 
                     Assert.NotNull(wv?.CoreWebView2);
                     var offlineSamples = 0;
+                    var panelUnavailableSamples = 0;
+                    var runningVisualSamples = 0;
                     var totalSamples = 0;
                     var measureBaselineLog = Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log")
                         .Select(File.ReadAllText)
@@ -866,18 +869,26 @@ public sealed class ShellPlanAIntegrationTests
                     {
                         await Task.Delay(500);
                         totalSamples++;
+                        Assert.Equal(ShellServerVisualState.Running, window.PollerVisualStateForTests);
+                        runningVisualSamples++;
                         var sample = UnquoteWebViewScriptString(
                             await wv.CoreWebView2.ExecuteScriptAsync(
-                                "JSON.stringify({protocol: location.protocol, href: location.href, offline: document.documentElement.getAttribute('data-shell-offline-page')})"));
+                                "JSON.stringify({protocol: location.protocol, href: location.href, offline: document.documentElement.getAttribute('data-shell-offline-page'), title: (document.getElementById('title') || {}).innerText || ''})"));
                         using var doc = JsonDocument.Parse(sample);
                         var href = doc.RootElement.GetProperty("href").GetString() ?? "";
                         var protocol = doc.RootElement.GetProperty("protocol").GetString() ?? "";
                         var offline = doc.RootElement.GetProperty("offline").GetString();
+                        var title = doc.RootElement.GetProperty("title").GetString() ?? "";
                         Assert.DoesNotContain("chrome-error://", href, StringComparison.OrdinalIgnoreCase);
                         Assert.DoesNotContain("edge-error://", href, StringComparison.OrdinalIgnoreCase);
                         if (protocol == "data:" && offline == "1")
                         {
                             offlineSamples++;
+                        }
+
+                        if (title.Contains("پنل در دسترس نیست", StringComparison.Ordinal))
+                        {
+                            panelUnavailableSamples++;
                         }
                     }
 
@@ -891,12 +902,16 @@ public sealed class ShellPlanAIntegrationTests
                     var presentOfflineCount = measureLog.Split('\n')
                         .Count(l => l.Contains("panel-navigate caller=PresentOffline", StringComparison.Ordinal));
                     Assert.True(totalSamples >= 10, "Not enough UI samples during measure window");
+                    Assert.Equal(totalSamples, runningVisualSamples);
                     Assert.True(offlineSamples >= (int)(totalSamples * 0.95), $"offline visible in {offlineSamples}/{totalSamples} samples");
-                    Assert.InRange(probeRetries, 1, 5);
+                    Assert.True(
+                        panelUnavailableSamples >= (int)(totalSamples * 0.95),
+                        $"panel-unavailable title in {panelUnavailableSamples}/{totalSamples} samples");
+                    Assert.InRange(probeRetries, 3, 5);
                     Assert.InRange(presentOfflineCount, 0, 1);
                     Assert.DoesNotContain("navigation-blocked", measureLog, StringComparison.Ordinal);
 
-                    FakeShellSeams.Http.Answers = true;
+                    FakeShellSeams.Http.OperatorPageOk = true;
                     var panelDeadline = DateTime.UtcNow.AddSeconds(75);
                     var panelOk = false;
                     while (DateTime.UtcNow < panelDeadline)

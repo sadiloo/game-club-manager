@@ -36,6 +36,7 @@ public partial class MainWindow : Window
     private CoreWebView2Environment? _webViewEnvironment;
     private readonly WebViewProcessRecoveryPolicy _processRecoveryPolicy = new();
     private readonly PanelNavigationRetryPolicy _panelNavRetryPolicy = new();
+    private int _panelProbeInFlight;
     private ShellServerVisualState _lastObservedVisualState = ShellServerVisualState.Starting;
     private bool _runningPanelLoadFailing;
     private int _processRecoveryInFlight;
@@ -182,6 +183,8 @@ public partial class MainWindow : Window
     }
 
     internal static string HostHash8ForTests(string host) => Sha256Hex8(host.ToLowerInvariant());
+
+    internal ShellServerVisualState? PollerVisualStateForTests => _poller?.Current.VisualState;
 
     internal bool OfflineDataNavigationPermissionArmedForTests => _allowOfflineDataNav;
 
@@ -366,25 +369,38 @@ public partial class MainWindow : Window
 
     private async Task TryRunningPanelProbeCoreAsync()
     {
-        var attempt = _panelNavRetryPolicy.FailureCount + 1;
-        var nextDelayBeforeAttempt = _panelNavRetryPolicy.GetNextDelayAfterLastFailure();
-        var (ok, statusCode) = await Task.Run(ProbePanelHttp);
-        if (!ok)
+        if (Interlocked.CompareExchange(ref _panelProbeInFlight, 1, 0) != 0)
         {
-            var utcNow = DateTime.UtcNow;
-            _panelNavRetryPolicy.RecordFailure(utcNow);
-            var nextDelay = _panelNavRetryPolicy.GetNextDelayAfterLastFailure();
-            ShellFileLog.Write(
-                $"panel-nav-retry attempt={attempt} nextDelaySec={nextDelay.TotalSeconds:F0} action=probe outcome=fail status={statusCode}");
-            LogOfflineTrace(
-                "panel-probe-fail",
-                $"status={statusCode} scheduledDelaySec={nextDelayBeforeAttempt.TotalSeconds:F0}");
+            ShellFileLog.Write("panel-nav-retry action=probe outcome=skipped reason=probe-in-flight");
             return;
         }
 
-        ShellFileLog.Write(
-            $"panel-nav-retry attempt={attempt} nextDelaySec=0 action=probe outcome=ok status={statusCode}");
-        await Dispatcher.InvokeAsync(() => NavigatePanelFromProbe());
+        try
+        {
+            var attempt = _panelNavRetryPolicy.FailureCount + 1;
+            var nextDelayBeforeAttempt = _panelNavRetryPolicy.GetNextDelayAfterLastFailure();
+            var (ok, statusCode) = await Task.Run(ProbePanelHttp);
+            if (!ok)
+            {
+                var utcNow = DateTime.UtcNow;
+                _panelNavRetryPolicy.RecordFailure(utcNow);
+                var nextDelay = _panelNavRetryPolicy.GetNextDelayAfterLastFailure();
+                ShellFileLog.Write(
+                    $"panel-nav-retry attempt={attempt} nextDelaySec={nextDelay.TotalSeconds:F0} action=probe outcome=fail status={statusCode}");
+                LogOfflineTrace(
+                    "panel-probe-fail",
+                    $"status={statusCode} scheduledDelaySec={nextDelayBeforeAttempt.TotalSeconds:F0}");
+                return;
+            }
+
+            ShellFileLog.Write(
+                $"panel-nav-retry attempt={attempt} nextDelaySec=0 action=probe outcome=ok status={statusCode}");
+            await Dispatcher.InvokeAsync(() => NavigatePanelFromProbe());
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _panelProbeInFlight, 0);
+        }
     }
 
     private static (bool Ok, int StatusCode) ProbePanelHttp()
@@ -399,14 +415,27 @@ public partial class MainWindow : Window
 
     private async Task TryProbeThenNavigatePanelAsync()
     {
-        var (ok, statusCode) = await Task.Run(ProbePanelHttp);
-        if (ok)
+        if (Interlocked.CompareExchange(ref _panelProbeInFlight, 1, 0) != 0)
         {
-            NavigatePanelFromProbe();
+            ShellFileLog.Write("panel-nav-retry action=probe outcome=skipped reason=probe-in-flight");
             return;
         }
 
-        EnterRunningPanelLoadFailingMode(statusCode);
+        try
+        {
+            var (ok, statusCode) = await Task.Run(ProbePanelHttp);
+            if (ok)
+            {
+                NavigatePanelFromProbe();
+                return;
+            }
+
+            EnterRunningPanelLoadFailingMode(statusCode);
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _panelProbeInFlight, 0);
+        }
     }
 
     private void EnterRunningPanelLoadFailingMode(int statusCode)
