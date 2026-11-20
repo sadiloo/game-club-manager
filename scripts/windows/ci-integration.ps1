@@ -1,5 +1,6 @@
 param(
-    [switch]$PcInternetFirewallOnly
+    [switch]$PcInternetFirewallOnly,
+    [switch]$EntrySmoke
 )
 
 $ErrorActionPreference = "Stop"
@@ -21,6 +22,11 @@ $heartbeatLog = Join-Path $logDir "ci-heartbeat.log"
 $firewallLog = Join-Path $logDir "ci-firewall.log"
 $cancelFile = Join-Path $logDir "deadman.cancel"
 
+function Write-PhaseLog([string]$message) {
+    $line = "{0:u}  {1}" -f (Get-Date), $message
+    Add-Content -Path $phaseLog -Value $line -Encoding UTF8
+}
+
 function Remove-StaleDeadmanCancelFile([string]$Reason) {
     if (-not (Test-Path -LiteralPath $cancelFile)) { return }
     Remove-Item -Force -LiteralPath $cancelFile
@@ -29,6 +35,15 @@ function Remove-StaleDeadmanCancelFile([string]$Reason) {
 }
 
 Remove-StaleDeadmanCancelFile -Reason "script-entry"
+
+if ($EntrySmoke) {
+    if (-not $PcInternetFirewallOnly) {
+        throw "CI_ENTRY_SMOKE requires -PcInternetFirewallOnly"
+    }
+    Write-PhaseLog "START phase=script-entry"
+    Write-Host "CI_ENTRY_SMOKE ok logDir=$logDir"
+    exit 0
+}
 
 if ($PcInternetFirewallOnly) {
     $script:GlobalDeadline = (Get-Date).AddHours(2)
@@ -49,11 +64,6 @@ if (Test-Path $watchdogAtStart) {
 }
 $script:NightLineVstestPhases = @{}
 $nightLineToken = "wpf_remaining_time_matches_funded_session_special_band_night_line"
-
-function Write-PhaseLog([string]$message) {
-    $line = "{0:u}  {1}" -f (Get-Date), $message
-    Add-Content -Path $phaseLog -Value $line -Encoding UTF8
-}
 
 function Assert-TestPhaseExit([string]$PhaseName, [int]$Exit) {
     if ($Exit -eq 124) {
