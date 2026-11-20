@@ -98,10 +98,9 @@ jobs:
 
   windows-kiosk-integration:
     name: windows-2022 kiosk integration
-    # Job budget: run 44707738775 measured setup 36s + postgres 591s + main kiosk (pre-firewall) 723s
-    # + firewall step 368s (38/38 extrapolated) + reconnect 164s + wpf stability 360s + post 150s = 2392s;
-    # +20% headroom => 2870s (~48 min). Previous 40m job cap cancelled kiosk step at ~990s.
-    timeout-minutes: 48
+    # Job budget: run 44785725466 measured 43m47s with firewall phase cut at 780s; +5 min for full 1080s phase
+    # ≈49 min; +10% headroom => 54 min.
+    timeout-minutes: 54
     runs-on: windows-2022
     env:
       GAMECLUB_DATABASE: Host=localhost;Port=5432;Database=gameclub_test;Username=postgres;Password=postgres;SSL Mode=Disable
@@ -142,10 +141,15 @@ jobs:
         run: ./scripts/windows/ci-integration.ps1
       - name: pc internet firewall integration
         if: ${{ success() || failure() }}
-        # Run 44740272933: firewall phase ~10 min; 44740266172 hung ~37 min until job cancel.
-        timeout-minutes: 20
+        # REF runs 601s and 695s complete phases; cap 1080s + ~90s teardown needs 22 min step budget.
+        timeout-minutes: 22
         shell: pwsh
         run: ./scripts/windows/ci-integration.ps1 -PcInternetFirewallOnly
+      - name: reset kiosk ci firewall and probe egress
+        if: always()
+        timeout-minutes: 3
+        shell: pwsh
+        run: ./scripts/windows/ci-firewall-restore.ps1 -Restore -Evidence
       - name: kiosk host reconnect mutations (net48 D7 and status tick)
         if: always()
         timeout-minutes: 15
@@ -180,11 +184,6 @@ jobs:
             artifacts/kiosk-windows-logs/wpf-stability-server-err.log
             artifacts/kiosk-windows-logs/wpf-stability-*.log
             artifacts/kiosk-windows-logs/live-checkpoint-*.log
-      - name: reset kiosk ci firewall and probe egress
-        if: always()
-        timeout-minutes: 3
-        shell: pwsh
-        run: ./scripts/windows/ci-firewall-restore.ps1 -Restore -Evidence
       - name: print live-server-registry log
         if: always()
         shell: pwsh
