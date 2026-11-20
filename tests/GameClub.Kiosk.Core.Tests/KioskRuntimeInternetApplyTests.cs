@@ -411,4 +411,77 @@ public sealed class KioskRuntimeInternetApplyTests
 
         await runtime.DisposeAsync();
     }
+
+    [Fact]
+    public async Task PcInternet_restart_defers_v2_guard_apply_until_orphaned_v1_finishes()
+    {
+        var v1Entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var v1Release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var v2Entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var concurrent = 0;
+        var peakConcurrent = 0;
+        var transport = new FakeKioskHubTransport();
+        var runtime = new KioskRuntime(() => new HttpClient())
+        {
+            TestHeartbeatInterval = TimeSpan.FromMilliseconds(20),
+        };
+        var epoch = Guid.NewGuid();
+        var first = Command(epoch, 1);
+        var second = Command(epoch, 2);
+        transport.HeartbeatHandler = _ => Task.FromResult(new KioskHeartbeatAck
+        {
+            SessionStatus = "Open",
+            Internet = first,
+        });
+        runtime.TestGuardInternetApplyAsync = async (cmd, _) =>
+        {
+            var depth = Interlocked.Increment(ref concurrent);
+            try
+            {
+                var peak = Volatile.Read(ref peakConcurrent);
+                while (depth > peak
+                       && Interlocked.CompareExchange(ref peakConcurrent, depth, peak) != peak)
+                {
+                    peak = Volatile.Read(ref peakConcurrent);
+                }
+
+                if (cmd.Payload.Version == 1)
+                {
+                    v1Entered.TrySetResult();
+                    await v1Release.Task;
+                    return """{"on":false,"appliedAtUtc":"2026-01-01T00:00:00.0000000Z"}""";
+                }
+
+                v2Entered.TrySetResult();
+                return """{"on":false,"appliedAtUtc":"2026-01-01T00:00:00.0000000Z"}""";
+            }
+            finally
+            {
+                Interlocked.Decrement(ref concurrent);
+            }
+        };
+        runtime.ConfigureForTests(transport, new NoOpQueue(), "http://127.0.0.1:5000", Guid.NewGuid(), "key", "PC-1");
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await runtime.StartAsync(cts.Token);
+        await transport.StartAsync(default);
+        await v1Entered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        transport.HeartbeatHandler = _ => Task.FromResult(new KioskHeartbeatAck
+        {
+            SessionStatus = "Open",
+            Internet = second,
+        });
+        await runtime.StartAsync(cts.Token);
+        await transport.StartAsync(default);
+
+        await Task.Yield();
+        Assert.False(v2Entered.Task.IsCompleted, "v2 must not enter guard while v1 still holds");
+
+        v1Release.TrySetResult();
+        await v2Entered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        await WaitUntilAsync(() => runtime.LastInternetReportForTests is { Version: 2, Error: null }, 2_000);
+        Assert.True(peakConcurrent <= 1, $"peakConcurrent={peakConcurrent}");
+
+        await runtime.DisposeAsync();
+    }
 }

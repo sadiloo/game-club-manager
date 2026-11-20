@@ -41,6 +41,7 @@ public sealed class KioskRuntime : IAsyncDisposable
     private (Guid Epoch, long Version)? _internetApplyInFlightKey;
     private CancellationTokenSource? _internetApplyCts;
     private Task? _internetApplyWorker;
+    private Task _internetApplyWorkerJoin = Task.CompletedTask;
     private int _internetApplyGeneration;
     private int _internetApplyActiveWorkerGeneration;
     private int _internetApplyLastPublishedGeneration;
@@ -241,6 +242,7 @@ public sealed class KioskRuntime : IAsyncDisposable
         {
             Interlocked.Increment(ref _internetApplyGeneration);
             _internetApplyActiveWorkerGeneration = 0;
+            AppendInternetApplyWorkerJoinLocked(_internetApplyWorker);
             _internetApplyQueue.Clear();
             _internetApplyInFlightKey = null;
             _internetApplyWorker = null;
@@ -442,14 +444,53 @@ public sealed class KioskRuntime : IAsyncDisposable
 
         _internetApplyCts?.Cancel();
         _internetApplyCts?.Dispose();
+        AppendInternetApplyWorkerJoinLocked(_internetApplyWorker);
         var generation = Interlocked.Increment(ref _internetApplyGeneration);
         _internetApplyActiveWorkerGeneration = generation;
         _internetApplyCts = CancellationTokenSource.CreateLinkedTokenSource(heartbeatCt);
         _internetApplyWorker = RunInternetApplyWorkerAsync(generation, _internetApplyCts.Token);
     }
 
+    private void AppendInternetApplyWorkerJoinLocked(Task? worker)
+    {
+        if (worker is null || worker.IsCompleted)
+        {
+            return;
+        }
+
+        var tail = _internetApplyWorkerJoin;
+        _internetApplyWorkerJoin = tail.ContinueWith(
+            static (_, state) => (Task)state!,
+            worker,
+            CancellationToken.None,
+            TaskContinuationOptions.RunContinuationsAsynchronously,
+            TaskScheduler.Default).Unwrap();
+    }
+
+    private static async Task AwaitInternetApplyWorkerJoinAsync(Task join)
+    {
+        try
+        {
+            await join.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception)
+        {
+        }
+    }
+
     private async Task RunInternetApplyWorkerAsync(int workerGeneration, CancellationToken ct)
     {
+        Task join;
+        lock (_internetApplyGate)
+        {
+            join = _internetApplyWorkerJoin;
+        }
+
+        await AwaitInternetApplyWorkerJoinAsync(join).ConfigureAwait(false);
+
         try
         {
             while (!ct.IsCancellationRequested)
