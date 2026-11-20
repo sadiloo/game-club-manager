@@ -105,8 +105,7 @@ public static class KioskStatusPresentationBuilder
         segments.Add(new KioskStatusRunSegment(KioskStatusMessages.DisplayText(KioskStatusMessages.Keys.Join), false));
         if (conn == KioskStatusConnectionKind.TimeRemaining && state.TimeRemaining is TimeSpan t)
         {
-            var suffix = KioskStatusMessages.FormatTimeLeftSuffix(t);
-            segments.Add(new KioskStatusRunSegment(suffix, IsolateLatin: true));
+            segments.AddRange(ExpandTimeLeftTemplate(t));
         }
         else
         {
@@ -136,6 +135,34 @@ public static class KioskStatusPresentationBuilder
         }
 
         list.Add(new KioskStatusRunSegment(stationId, IsolateLatin: true));
+        if (after.Length > 0)
+        {
+            list.Add(new KioskStatusRunSegment(after, false));
+        }
+
+        return list;
+    }
+
+    internal static List<KioskStatusRunSegment> ExpandTimeLeftTemplate(TimeSpan remaining)
+    {
+        var template = KioskStatusMessages.DisplayText(KioskStatusMessages.Keys.TimeLeft);
+        const string timeToken = "{time}";
+        var timeValue = KioskStatusMessages.FormatPersianTime(remaining);
+        var idx = template.IndexOf(timeToken, StringComparison.Ordinal);
+        if (idx < 0)
+        {
+            return [new KioskStatusRunSegment(template, false)];
+        }
+
+        var before = template.Substring(0, idx);
+        var after = template.Substring(idx + timeToken.Length);
+        var list = new List<KioskStatusRunSegment>();
+        if (before.Length > 0)
+        {
+            list.Add(new KioskStatusRunSegment(before, false));
+        }
+
+        list.Add(new KioskStatusRunSegment(timeValue, IsolateLatin: true));
         if (after.Length > 0)
         {
             list.Add(new KioskStatusRunSegment(after, false));

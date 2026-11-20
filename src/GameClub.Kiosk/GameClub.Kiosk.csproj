@@ -11,6 +11,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="GameClub.Kiosk.Windows.IntegrationTests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\GameClub.Kiosk.Core\GameClub.Kiosk.Core.csproj" />
     <ProjectReference Include="..\GameClub.Billing\GameClub.Billing.csproj" />
   </ItemGroup>

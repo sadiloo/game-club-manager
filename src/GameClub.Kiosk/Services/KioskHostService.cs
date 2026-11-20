@@ -73,6 +73,8 @@ public sealed class KioskHostService : IAsyncDisposable
 
     internal string? LastLoginFailureKey { get; private set; }
 
+    internal KioskStatusLineState? LastPresentedStatusLineState { get; private set; }
+
     public string ServerBase => _serverBase;
 
     public KioskHostService(
@@ -656,6 +658,7 @@ public sealed class KioskHostService : IAsyncDisposable
 
     private void PresentStatusLine(KioskStatusLineState state)
     {
+        LastPresentedStatusLineState = state;
         var transient = _transientStatusErrorKey;
         _transientStatusErrorKey = null;
         string? loginError = null;

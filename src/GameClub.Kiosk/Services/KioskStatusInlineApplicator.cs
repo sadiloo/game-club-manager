@@ -2,34 +2,34 @@ using System.Text;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
-using System.Windows.Media;
 using GameClub.Kiosk.Core.Runtime;
 
 namespace GameClub.Kiosk.Services;
 
 public static class KioskStatusInlineApplicator
 {
+    private const string MutedBrushKey = "Kiosk.MutedBrush";
+    private const string DangerBrushKey = "Kiosk.DangerBrush";
+
     public static void Apply(TextBlock status, KioskStatusPresentation presentation)
     {
         status.Text = string.Empty;
         status.Inlines.Clear();
-        var muted = (Brush)status.FindResource("Kiosk.MutedBrush");
-        var danger = (Brush)status.FindResource("Kiosk.DangerBrush");
         foreach (var seg in presentation.StatusSegments)
         {
-            status.Inlines.Add(CreateRun(seg, muted));
+            status.Inlines.Add(CreateRun(seg, MutedBrushKey));
         }
 
         if (presentation.ShowSeparator)
         {
             status.Inlines.Add(CreateRun(
                 new KioskStatusRunSegment(KioskStatusMessages.DisplayText(KioskStatusMessages.Keys.Sep), false),
-                muted));
+                MutedBrushKey));
         }
 
         foreach (var seg in presentation.ErrorSegments)
         {
-            status.Inlines.Add(CreateRun(seg, danger));
+            status.Inlines.Add(CreateRun(seg, DangerBrushKey));
         }
     }
 
@@ -52,9 +52,10 @@ public static class KioskStatusInlineApplicator
         return sb.ToString();
     }
 
-    private static Run CreateRun(KioskStatusRunSegment seg, Brush brush)
+    private static Run CreateRun(KioskStatusRunSegment seg, string brushKey)
     {
-        var run = new Run(seg.Text) { Foreground = brush, FontSize = 16 };
+        var run = new Run(seg.Text) { FontSize = 16 };
+        run.SetResourceReference(TextElement.ForegroundProperty, brushKey);
         if (seg.IsolateLatin)
         {
             run.FlowDirection = FlowDirection.LeftToRight;

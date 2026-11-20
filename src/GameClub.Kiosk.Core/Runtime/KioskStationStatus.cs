@@ -64,7 +64,8 @@ public static class KioskStationStatus
 
         if (offline)
         {
-            if (transportPhase == KioskTransportPhase.LastError)
+            if (transportPhase == KioskTransportPhase.LastError
+                && !string.IsNullOrWhiteSpace(lastErrorDetail))
             {
                 return StationConn(stationId, KioskStatusConnectionKind.NotConnected);
             }
@@ -118,11 +119,6 @@ public static class KioskStationStatus
 
     public static bool ImpliesBareConnected(KioskStatusLineState state)
         => KioskStatusMessages.IsBareConnectedConnection(state.Connection);
-
-    public static bool ContainsConnectedWording(string statusText)
-        => statusText.Contains(
-            KioskStatusMessages.DisplayText(KioskStatusMessages.Keys.ConnConnected),
-            StringComparison.Ordinal);
 
     public static string Resolve(
         string stationId,

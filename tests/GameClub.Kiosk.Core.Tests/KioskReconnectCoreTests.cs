@@ -497,7 +497,19 @@ public sealed class KioskReconnectCoreTests
             utcNow: DateTime.UtcNow,
             estimatedRemainingSeconds: null,
             lastErrorDetail: null);
-        Assert.False(KioskStationStatus.ContainsConnectedWording(text));
+        var state = KioskStationStatus.ResolveState(
+            "PC-A",
+            KioskTransportPhase.Reconnecting,
+            hubTransportConnected: true,
+            signalRAutoReconnecting: true,
+            pairingJustFailed: false,
+            hasOpenSession: false,
+            consecutiveHeartbeatFailures: 0,
+            lastHeartbeatAckUtc: null,
+            utcNow: DateTime.UtcNow,
+            estimatedRemainingSeconds: null,
+            lastErrorDetail: null);
+        Assert.False(KioskStationStatus.ImpliesBareConnected(state));
         Assert.Contains(ConnReconnecting, text, StringComparison.Ordinal);
     }
 
@@ -517,7 +529,19 @@ public sealed class KioskReconnectCoreTests
             estimatedRemainingSeconds: null,
             lastErrorDetail: null);
         Assert.Contains(ConnNoResponse, byFailures, StringComparison.Ordinal);
-        Assert.False(KioskStationStatus.ContainsConnectedWording(byFailures));
+        Assert.False(KioskStationStatus.ImpliesBareConnected(
+            KioskStationStatus.ResolveState(
+                "PC-LOCK",
+                KioskTransportPhase.Connected,
+                hubTransportConnected: true,
+                signalRAutoReconnecting: false,
+                pairingJustFailed: false,
+                hasOpenSession: false,
+                consecutiveHeartbeatFailures: 2,
+                lastHeartbeatAckUtc: DateTime.UtcNow,
+                utcNow: DateTime.UtcNow,
+                estimatedRemainingSeconds: null,
+                lastErrorDetail: null)));
 
         var byStaleAck = KioskStationStatus.Resolve(
             "PC-LOCK",
@@ -532,7 +556,19 @@ public sealed class KioskReconnectCoreTests
             estimatedRemainingSeconds: null,
             lastErrorDetail: null);
         Assert.Contains(ConnNoResponse, byStaleAck, StringComparison.Ordinal);
-        Assert.False(KioskStationStatus.ContainsConnectedWording(byStaleAck));
+        Assert.False(KioskStationStatus.ImpliesBareConnected(
+            KioskStationStatus.ResolveState(
+                "PC-LOCK",
+                KioskTransportPhase.Connected,
+                hubTransportConnected: true,
+                signalRAutoReconnecting: false,
+                pairingJustFailed: false,
+                hasOpenSession: false,
+                consecutiveHeartbeatFailures: 0,
+                lastHeartbeatAckUtc: DateTime.UtcNow.AddSeconds(-30),
+                utcNow: DateTime.UtcNow,
+                estimatedRemainingSeconds: null,
+                lastErrorDetail: null)));
     }
 
     [Fact]
@@ -663,7 +699,19 @@ public sealed class KioskReconnectCoreTests
             utcNow: DateTime.UtcNow,
             estimatedRemainingSeconds: null,
             lastErrorDetail: null);
-        Assert.False(KioskStationStatus.ContainsConnectedWording(text));
+        Assert.False(KioskStationStatus.ImpliesBareConnected(
+            KioskStationStatus.ResolveState(
+                "PC-SR",
+                KioskTransportPhase.Connected,
+                hubTransportConnected: true,
+                signalRAutoReconnecting: true,
+                pairingJustFailed: false,
+                hasOpenSession: false,
+                consecutiveHeartbeatFailures: 0,
+                lastHeartbeatAckUtc: DateTime.UtcNow,
+                utcNow: DateTime.UtcNow,
+                estimatedRemainingSeconds: null,
+                lastErrorDetail: null)));
     }
 
     [Fact]
@@ -715,7 +763,52 @@ public sealed class KioskReconnectCoreTests
             estimatedRemainingSeconds: null,
             lastErrorDetail: null);
         Assert.Contains(ConnNotConnected, text, StringComparison.Ordinal);
-        Assert.False(KioskStationStatus.ContainsConnectedWording(text));
+        Assert.False(KioskStationStatus.ImpliesBareConnected(
+            KioskStationStatus.ResolveState(
+                "PC-C",
+                KioskTransportPhase.Connected,
+                hubTransportConnected: true,
+                signalRAutoReconnecting: false,
+                pairingJustFailed: true,
+                hasOpenSession: false,
+                consecutiveHeartbeatFailures: 0,
+                lastHeartbeatAckUtc: null,
+                utcNow: DateTime.UtcNow,
+                estimatedRemainingSeconds: null,
+                lastErrorDetail: null)));
+    }
+
+    [Fact]
+    public void last_error_with_detail_maps_not_connected_without_detail_reconnecting()
+    {
+        var utc = DateTime.UtcNow;
+        var withDetail = KioskStationStatus.ResolveState(
+            "PC-ERR",
+            KioskTransportPhase.LastError,
+            hubTransportConnected: false,
+            signalRAutoReconnecting: false,
+            pairingJustFailed: false,
+            hasOpenSession: false,
+            consecutiveHeartbeatFailures: 0,
+            lastHeartbeatAckUtc: null,
+            utcNow: utc,
+            estimatedRemainingSeconds: null,
+            lastErrorDetail: "hub down");
+        Assert.Equal(KioskStatusConnectionKind.NotConnected, withDetail.Connection);
+
+        var withoutDetail = KioskStationStatus.ResolveState(
+            "PC-ERR",
+            KioskTransportPhase.LastError,
+            hubTransportConnected: false,
+            signalRAutoReconnecting: false,
+            pairingJustFailed: false,
+            hasOpenSession: false,
+            consecutiveHeartbeatFailures: 0,
+            lastHeartbeatAckUtc: null,
+            utcNow: utc,
+            estimatedRemainingSeconds: null,
+            lastErrorDetail: null);
+        Assert.Equal(KioskStatusConnectionKind.Reconnecting, withoutDetail.Connection);
     }
 
     [Fact]
@@ -799,9 +892,9 @@ public sealed class KioskReconnectCoreTests
             lastHeartbeatAckUtc: DateTime.UtcNow,
             utcNow: DateTime.UtcNow,
             lastErrorDetail: null);
-        Assert.Contains("PC-1", text, StringComparison.Ordinal);
-        Assert.Contains(KioskStatusMessages.FormatStationTemplate(KioskStatusMessages.Keys.LockedLeaseExpired, "PC-1"), text, StringComparison.Ordinal);
-        Assert.Contains(KioskStatusMessages.DisplayText(KioskStatusMessages.Keys.Join), text, StringComparison.Ordinal);
+        var leasePrefix = KioskStatusMessages.FormatStationTemplate(KioskStatusMessages.Keys.LockedLeaseExpired, "PC-1")
+            + KioskStatusMessages.DisplayText(KioskStatusMessages.Keys.Join);
+        Assert.StartsWith(leasePrefix, text, StringComparison.Ordinal);
         Assert.Contains(ConnConnected, text, StringComparison.Ordinal);
 
         var stopped = KioskStationStatus.FormatLocalLockScreen(
@@ -815,9 +908,9 @@ public sealed class KioskReconnectCoreTests
             lastHeartbeatAckUtc: DateTime.UtcNow,
             utcNow: DateTime.UtcNow,
             lastErrorDetail: null);
-        Assert.Contains("PC-2", stopped, StringComparison.Ordinal);
-        Assert.Contains(KioskStatusMessages.FormatStationTemplate(KioskStatusMessages.Keys.Locked, "PC-2"), stopped, StringComparison.Ordinal);
-        Assert.Contains(KioskStatusMessages.DisplayText(KioskStatusMessages.Keys.Join), stopped, StringComparison.Ordinal);
+        var activePrefix = KioskStatusMessages.FormatStationTemplate(KioskStatusMessages.Keys.Locked, "PC-2")
+            + KioskStatusMessages.DisplayText(KioskStatusMessages.Keys.Join);
+        Assert.StartsWith(activePrefix, stopped, StringComparison.Ordinal);
         Assert.Contains(ConnNoResponse, stopped, StringComparison.Ordinal);
     }
 
@@ -832,7 +925,7 @@ public sealed class KioskReconnectCoreTests
         await runtime.StartAsync(default);
         transport.SimulateSignalRReconnecting();
         Assert.Equal(KioskTransportPhase.Reconnecting, last);
-        var status = KioskStationStatus.Resolve(
+        var lineState = KioskStationStatus.ResolveState(
             "PC-Rh",
             runtime.TransportPhase,
             runtime.IsTransportConnected,
@@ -844,7 +937,7 @@ public sealed class KioskReconnectCoreTests
             DateTime.UtcNow,
             null,
             null);
-        Assert.False(KioskStationStatus.ContainsConnectedWording(status));
+        Assert.False(KioskStationStatus.ImpliesBareConnected(lineState));
     }
 
     [Fact]

@@ -15,6 +15,19 @@ public sealed class KioskStatusMessageMappingTests
     }
 
     [Fact]
+    public void time_left_template_splits_rtl_ltr_runs()
+    {
+        var segments = KioskStatusPresentationBuilder.ExpandTimeLeftTemplate(TimeSpan.FromSeconds(3661));
+        Assert.Equal(3, segments.Count);
+        Assert.Equal("حدود ", segments[0].Text);
+        Assert.False(segments[0].IsolateLatin);
+        Assert.Equal("۰۱:۰۱:۰۱", segments[1].Text);
+        Assert.True(segments[1].IsolateLatin);
+        Assert.Equal(" مانده", segments[2].Text);
+        Assert.False(segments[2].IsolateLatin);
+    }
+
+    [Fact]
     public void station_connection_preview_composes_persian_join()
     {
         var state = new KioskStatusLineState(
