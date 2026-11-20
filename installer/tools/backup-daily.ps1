@@ -1,4 +1,4 @@
-# Checkpoint daily backup (B-3). Never deletes under backups\.
+# Checkpoint daily backup (B-3). Dumps are kept forever; this script only writes new ones.
 param(
     [string] $PrimaryBackupDir = "C:\ProgramData\Checkpoint\backups",
     [string] $SecondaryBackupDir = "",
