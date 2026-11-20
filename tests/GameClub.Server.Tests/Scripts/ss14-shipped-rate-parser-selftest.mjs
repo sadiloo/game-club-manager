@@ -4,6 +4,7 @@ import vm from "node:vm";
 import { fileURLToPath } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
+const layerJs = path.resolve(here, "../../../src/GameClub.Server/wwwroot/operator/cp-layer.js");
 const appJs = path.resolve(here, "../../../src/GameClub.Server/wwwroot/operator/app.js");
 const js = fs.readFileSync(appJs, "utf8");
 const start = js.indexOf("function ss14IsRateDigitChar");
@@ -13,8 +14,13 @@ if (start < 0 || end < 0) {
   process.exit(2);
 }
 
-const ctx = { console };
+const ctx = {
+  console,
+  window: { addEventListener() {}, matchMedia: () => ({ matches: true }) },
+  document: { getElementById: () => null, body: {} },
+};
 vm.createContext(ctx);
+vm.runInContext(fs.readFileSync(layerJs, "utf8"), ctx);
 vm.runInContext(js.slice(start, end), ctx);
 
 const { ss14IsAllowedRateInput, ss14ParseTomanInput } = ctx;

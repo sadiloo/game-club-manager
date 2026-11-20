@@ -2,6 +2,8 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using GameClub.Billing;
+using GameClub.Server;
+using Microsoft.Extensions.Logging;
 namespace GameClub.Server.Tests;
 
 [Collection("server")]
@@ -39,6 +41,7 @@ public sealed class InpageFormsApiMiddlewareTests(GameClubWebApplicationFactory 
     [Fact]
     public async Task unhandled_exception_returns_generic_500_without_details()
     {
+        factory.LogCollector.Clear();
         var client = factory.CreateClient();
         var login = await client.PostAsJsonAsync("/api/operator/auth/login", new { username = "manager", pin = "1234" });
         login.EnsureSuccessStatusCode();
@@ -49,6 +52,14 @@ public sealed class InpageFormsApiMiddlewareTests(GameClubWebApplicationFactory 
         Assert.DoesNotContain("InvalidOperationException", raw, StringComparison.Ordinal);
         Assert.DoesNotContain("diagnostic fault", raw, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("stack", raw, StringComparison.OrdinalIgnoreCase);
+
+        var errorLogs = factory.LogCollector.Entries
+            .Where(e => e.Level == LogLevel.Error && e.Category == typeof(ApiExceptionMiddleware).FullName)
+            .ToList();
+        Assert.Single(errorLogs);
+        Assert.Contains("GET", errorLogs[0].Message, StringComparison.Ordinal);
+        Assert.Contains("/api/operator/_test/unhandled", errorLogs[0].Message, StringComparison.Ordinal);
+        Assert.NotNull(errorLogs[0].Exception);
     }
 
     [Fact]

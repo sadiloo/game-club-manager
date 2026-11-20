@@ -5,12 +5,15 @@ using GameClub.Server.Data.Entities;
 using GameClub.Server.Operator;
 using GameClub.Server.Services;
 using GameClub.Server.Time;
+using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 
 namespace GameClub.Server.Tests;
 
@@ -25,6 +28,8 @@ public class GameClubWebApplicationFactory : WebApplicationFactory<Program>
     public bool DeadPcBackgroundSweepEnabled { get; set; }
 
     public string ConnectionString { get; private set; } = "";
+
+    public TestLogCollector LogCollector { get; } = new();
 
     /// <summary>When set, <see cref="SaveTitleSecondSaveFaultInterceptor"/> faults the second SaveChanges in the request.</summary>
     internal SaveTitleSaveFaultGate? SaveTitleSaveFaultGate { get; set; }
@@ -57,12 +62,14 @@ public class GameClubWebApplicationFactory : WebApplicationFactory<Program>
         builder.UseSetting("ConnectionStrings:Default", ConnectionString);
         builder.UseSetting($"{DeadPcSweepOptions.SectionName}:SweepIntervalSeconds", "1");
         builder.UseSetting("OperatorSessionSecret", "test-operator-secret");
-        builder.UseSetting("GameClub:EnableTestHooks", "true");
         builder.ConfigureServices(services =>
         {
+            services.AddSingleton<IStartupFilter, UnhandledExceptionTestStartupFilter>();
             services.RemoveAll<IClock>();
             services.AddSingleton<IClock>(Clock);
             services.AddSingleton(_ => this);
+            services.AddSingleton(LogCollector);
+            services.AddSingleton<ILoggerProvider, TestLogCollectorProvider>();
             services.RemoveAll<IHostedService>();
             services.AddHostedService<TestDeadPcSweepBackgroundService>();
             SaveTitleSecondSaveFaultInjectionRegistration.Register(services);

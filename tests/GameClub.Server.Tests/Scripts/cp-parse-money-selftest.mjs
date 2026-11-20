@@ -33,4 +33,17 @@ assertEq(cpParseNumber("0", { allowZero: false }), null, "reject zero");
 assertEq(cpParseNumber("۱۵۰٬۰۰۰"), 150000, "persian");
 assertEq(ss14ParseTomanInput("1,500,000"), 1500000, "ss14");
 
+function assertNull(v, msg) {
+  if (v !== null) throw new Error(`${msg}: expected null, got ${v}`);
+}
+
+assertNull(cpParseNumber("۱.۵"), "reject persian 1.5 as 15");
+assertNull(cpParseNumber("1.5"), "reject latin decimal");
+assertNull(cpParseNumber("-500"), "reject minus");
+assertNull(cpParseNumber("12 000"), "reject inner space");
+assertNull(cpParseNumber("١٫٥"), "reject arabic decimal");
+
+if (cpParseNumber("٠٠١") !== null) throw new Error("reject leading zero run");
+if (cpParseNumber("123456789012345678901") !== null) throw new Error("reject overflow");
+
 console.log("cp-parse-money-selftest: ok");

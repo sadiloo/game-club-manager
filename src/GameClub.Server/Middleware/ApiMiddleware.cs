@@ -2,6 +2,7 @@ using GameClub.Billing;
 using GameClub.Server.Services;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using System.Text.Json;
 
 namespace GameClub.Server;
@@ -54,7 +55,7 @@ public sealed class ApiKeyMiddleware(RequestDelegate next, IConfiguration config
     }
 }
 
-public sealed class ApiExceptionMiddleware(RequestDelegate next)
+public sealed class ApiExceptionMiddleware(RequestDelegate next, ILogger<ApiExceptionMiddleware> logger)
 {
     public async Task InvokeAsync(HttpContext context)
     {
@@ -83,9 +84,18 @@ public sealed class ApiExceptionMiddleware(RequestDelegate next)
         {
             await WriteConflictAsync(context, "closed", "Session is closed.");
         }
-        catch (Exception)
+        catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
         {
             if (context.Response.HasStarted) throw;
+            logger.LogError(
+                ex,
+                "Unhandled exception processing {Method} {Path}",
+                context.Request.Method,
+                context.Request.Path);
             context.Response.StatusCode = StatusCodes.Status500InternalServerError;
             context.Response.ContentType = "text/plain; charset=utf-8";
             await context.Response.WriteAsync("Internal Server Error");

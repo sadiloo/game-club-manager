@@ -17,6 +17,11 @@ vm.runInContext(layerJs, ctx);
 
 const msg = ctx.window.cpTranslateApiError("reason_required", "Reason is required");
 if (!msg.includes("دلیل")) throw new Error("expected Persian mapping");
+const voidForbidden = ctx.window.cpTranslateApiError("forbidden", "Managers only");
+if (!voidForbidden.includes("فاکتور")) throw new Error("forbidden void invoice text");
+const ladderForbidden = ctx.window.cpTranslateApiError("forbidden", "Managers only", { scope: "level_ladder" });
+if (!ladderForbidden.includes("جدول سطح")) throw new Error("forbidden ladder text");
+if (ladderForbidden.includes("فاکتور")) throw new Error("ladder forbidden must not use void text");
 const unknown = ctx.window.cpTranslateApiError("xyz_unknown", "Something broke");
 if (/[A-Za-z]/.test(unknown)) throw new Error("unknown should not leak Latin");
 

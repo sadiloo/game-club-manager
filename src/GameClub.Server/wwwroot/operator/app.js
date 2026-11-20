@@ -18,17 +18,64 @@ let walletCorrectDraftKey = null;
 let lastCollectibleToman = 0;
 let cpBgPollFailures = 0;
 
+/** Spec v2.1 §11 — final copy keyed for text-only edits later. */
 const CP_TEXT = {
+  cp: { retry: "تلاش دوباره" },
   f12: {
+    title: "تنظیم تولد",
+    percent: "درصد تخفیف تولد",
+    windowKind: "بازهٔ تخفیف",
+    windowDays: "تعداد روزها",
+    anchor: "حساب روزها",
+    done: "تنظیم تولد ذخیره شد.",
+    kind: {
+      birth_month: "کل ماه تولد",
+      day_window: "چند روز",
+      exact_day: "فقط روز تولد",
+    },
+    anchorOpt: {
+      on_and_after: "از روز تولد به بعد",
+      around: "دور روز تولد (نیمی پیش، نیمی پس)",
+    },
+    errDays: "دست‌کم ۱ روز.",
+  },
+  f14: {
     title: "جدول سطح‌ها",
-    levelName: "نام سطح",
-    minHours: "حداقل ساعت بازی",
-    discountPercent: "درصد تخفیف",
-    addLevel: "افزودن سطح",
-    remove: "حذف",
-    save: "ذخیره جدول",
+    help: "هر مشتری بالاترین سطحی را می‌گیرد که به حداقل ساعت بازی‌اش رسیده است.",
+    col: { name: "نام سطح", hours: "حداقل ساعت بازی", percent: "درصد تخفیف" },
+    unit: { hours: "ساعت", percent: "٪" },
+    rowLabel: "سطح {i}",
+    add: "افزودن سطح",
+    delete: "حذف",
+    save: "ذخیرهٔ جدول",
+    saving: "در حال ذخیره…",
+    done: "جدول سطح‌ها ذخیره شد.",
+    loading: "در حال بارگذاری…",
+    loadFail: "جدول سطح‌ها بارگذاری نشد.",
+    empty: { title: "هنوز سطحی نیست.", body: "با «افزودن سطح» اولین سطح را بسازید." },
+    err: {
+      summary: "{n} خانه درست نیست. خانه‌های قرمز را درست کنید.",
+      noRows: "دست‌کم یک سطح لازم است.",
+      nameEmpty: "نام سطح را وارد کنید.",
+      nameDuplicate: "این نام برای سطح دیگری هم آمده است.",
+      hoursEmpty: "حداقل ساعت را وارد کنید.",
+      hoursOrder: "باید از سطح قبلی ({h} ساعت) بیشتر باشد.",
+      percentEmpty: "درصد را وارد کنید.",
+      percentRange: "درصد باید بین ۰ و ۱۰۰ باشد.",
+      server: "جدول سطح‌ها درست نیست. نام‌ها، ساعت‌ها و درصدها را بررسی کنید.",
+      forbidden: "فقط مدیر یا مالک می‌تواند جدول سطح‌ها را عوض کند.",
+      saveFail: "جدول سطح‌ها ذخیره نشد. دوباره تلاش کنید.",
+    },
   },
 };
+
+function cpTextFaDigits(n) {
+  return String(n).replace(/\d/g, (d) => "۰۱۲۳۴۵۶۷۸۹"[Number(d)]);
+}
+
+function cpTextFormat(template, vars) {
+  return template.replace(/\{(\w+)\}/g, (_, k) => (vars[k] != null ? String(vars[k]) : ""));
+}
 
 const PENDING_ACTION_TIMEOUT_MS = 15000;
 const pendingRowInFlight = new Set();
@@ -196,95 +243,316 @@ function validateJalaliBirth(year, month, day) {
   return null;
 }
 
-function validateLevelLadderRows(rows) {
-  if (!Array.isArray(rows) || !rows.length) return "دست‌کم یک سطح لازم است.";
-  const names = new Set();
-  let previous = null;
-  for (let i = 0; i < rows.length; i++) {
-    const row = rows[i];
-    const name = String(row.name || "").trim();
-    if (!name) return "نام سطح الزامی است.";
-    if (names.has(name)) return `نام سطح «${name}» تکراری است.`;
-    names.add(name);
-    const hours = Number(row.minimumLifetimeHours);
-    if (!Number.isInteger(hours) || hours < 0) return `سطح «${name}»: ساعت نمی‌تواند منفی باشد.`;
-    const pct = Number(row.discountPercent);
-    if (!Number.isInteger(pct) || pct < 0 || pct > 100) return `سطح «${name}»: درصد باید بین ۰ و ۱۰۰ باشد.`;
-    if (previous != null && hours <= previous) return "ساعت هر سطح باید از سطح قبلی بیشتر باشد.";
-    previous = hours;
-  }
-  return null;
+function snapshotLevelLadderFromDom(host) {
+  const rows = [];
+  host.querySelectorAll(".cp-ladder-card").forEach((card) => {
+    rows.push({
+      name: card.querySelector('[data-ladder="name"]')?.value ?? "",
+      minimumLifetimeHours: card.querySelector('[data-ladder="hours"]')?.value ?? "",
+      discountPercent: card.querySelector('[data-ladder="pct"]')?.value ?? "",
+    });
+  });
+  return rows;
 }
 
-function renderLevelLadderEditor(host, session, rows) {
+/** Mirrors GameClub.Billing/Levels.cs LevelLadder.Create :26-65. */
+function validateLevelLadderFieldErrors(rowDrafts) {
+  const fieldErrors = {};
+  let count = 0;
+  const mark = (key, msg) => {
+    if (!fieldErrors[key]) {
+      fieldErrors[key] = msg;
+      count++;
+    }
+  };
+  if (!Array.isArray(rowDrafts) || !rowDrafts.length) {
+    return { fieldErrors: {}, count: 1, rows: [], formOnly: CP_TEXT.f14.err.noRows };
+  }
+  const names = new Map();
+  let previousHours = null;
+  const rows = [];
+  for (let i = 0; i < rowDrafts.length; i++) {
+    const draft = rowDrafts[i];
+    const prefix = `ladder:${i}`;
+    const nameRaw = String(draft.name ?? "");
+    const name = nameRaw.trim();
+    const hoursTrim = String(draft.minimumLifetimeHours ?? "").trim();
+    const pctTrim = String(draft.discountPercent ?? "").trim();
+
+    if (!name) mark(`${prefix}:name`, CP_TEXT.f14.err.nameEmpty);
+    else {
+      if (!names.has(name)) names.set(name, []);
+      names.get(name).push(`${prefix}:name`);
+    }
+
+    let hours = null;
+    if (!hoursTrim) mark(`${prefix}:hours`, CP_TEXT.f14.err.hoursEmpty);
+    else {
+      hours = cpParseInteger(hoursTrim);
+      if (hours == null) mark(`${prefix}:hours`, CP_TEXT.f14.err.hoursEmpty);
+      else if (hours < 0) mark(`${prefix}:hours`, CP_TEXT.f14.err.hoursEmpty);
+      else if (previousHours != null && hours <= previousHours) {
+        mark(
+          `${prefix}:hours`,
+          cpTextFormat(CP_TEXT.f14.err.hoursOrder, { h: cpTextFaDigits(previousHours) }),
+        );
+      }
+    }
+
+    let pct = null;
+    if (!pctTrim) mark(`${prefix}:percent`, CP_TEXT.f14.err.percentEmpty);
+    else {
+      pct = cpParseInteger(pctTrim);
+      if (pct == null) mark(`${prefix}:percent`, CP_TEXT.f14.err.percentEmpty);
+      else if (pct < 0 || pct > 100) mark(`${prefix}:percent`, CP_TEXT.f14.err.percentRange);
+    }
+
+    if (hours != null) previousHours = hours;
+    rows.push({
+      name,
+      minimumLifetimeHours: hours,
+      discountPercent: pct,
+    });
+  }
+  for (const indices of names.values()) {
+    if (indices.length > 1) {
+      for (const key of indices) mark(key, CP_TEXT.f14.err.nameDuplicate);
+    }
+  }
+  return { fieldErrors, count, rows };
+}
+
+function clearLevelLadderFieldErrors(host) {
+  host.querySelectorAll("[data-cp-ladder-err]").forEach((el) => {
+    el.textContent = "";
+    el.classList.add("hidden");
+  });
+  host.querySelectorAll("[data-cp-ladder-field]").forEach((el) => el.removeAttribute("aria-invalid"));
+}
+
+function mountLevelLadderLoading(host, session) {
   host.classList.add("cp-ladder-host");
   session.fieldEls.ladder = host;
-  const state = { rows: rows.map((r) => ({ ...r })) };
-  const draw = () => {
-    host.replaceChildren();
-    state.rows.forEach((row, idx) => {
+  host.replaceChildren();
+  const p = document.createElement("p");
+  p.className = "cp-ladder-loading";
+  p.textContent = CP_TEXT.f14.loading;
+  host.appendChild(p);
+  session._ladderPhase = "loading";
+  const submit = document.querySelector("#cpLayer [data-cp-role='submit']");
+  if (submit) submit.disabled = true;
+}
+
+function mountLevelLadderLoadError(host, session, reload) {
+  host.replaceChildren();
+  const err = document.createElement("p");
+  err.className = "cp-server-error";
+  err.textContent = CP_TEXT.f14.loadFail;
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "cp-btn cp-secondary";
+  btn.textContent = CP_TEXT.cp.retry;
+  btn.onclick = () => reload();
+  host.append(err, btn);
+  session._ladderPhase = "error";
+}
+
+function renderLevelLadderEditor(host, session, rowDrafts) {
+  host.classList.add("cp-ladder-host");
+  session.fieldEls.ladder = host;
+  session.fieldEls.ladder_summary = host;
+  session._ladderPhase = "edit";
+  const submit = document.querySelector("#cpLayer [data-cp-role='submit']");
+  if (submit) submit.disabled = false;
+
+  const help = document.createElement("p");
+  help.className = "cp-help";
+  help.textContent = CP_TEXT.f14.help;
+
+  const body = document.createElement("div");
+  body.className = "cp-ladder-body";
+
+  const draw = (drafts) => {
+    body.replaceChildren();
+    clearLevelLadderFieldErrors(host);
+    if (!drafts.length) {
+      const empty = document.createElement("p");
+      empty.className = "cp-ladder-empty";
+      empty.textContent = `${CP_TEXT.f14.empty.title} ${CP_TEXT.f14.empty.body}`;
+      body.appendChild(empty);
+    }
+    drafts.forEach((row, idx) => {
       const card = document.createElement("div");
       card.className = "cp-ladder-card";
-      card.innerHTML =
-        `<label>${CP_TEXT.f12.levelName}<input data-ladder="name" data-idx="${idx}" value="${row.name || ""}"/></label>` +
-        `<label>${CP_TEXT.f12.minHours}<input data-ladder="hours" data-idx="${idx}" inputmode="numeric" dir="ltr" value="${row.minimumLifetimeHours ?? ""}"/></label>` +
-        `<label>${CP_TEXT.f12.discountPercent}<input data-ladder="pct" data-idx="${idx}" inputmode="numeric" dir="ltr" value="${row.discountPercent ?? ""}"/></label>`;
+      card.setAttribute("role", "group");
+      card.setAttribute("aria-label", cpTextFormat(CP_TEXT.f14.rowLabel, { i: cpTextFaDigits(idx + 1) }));
+
+      const top = document.createElement("div");
+      top.className = "cp-ladder-card-head";
+      const lbl = document.createElement("span");
+      lbl.textContent = cpTextFormat(CP_TEXT.f14.rowLabel, { i: cpTextFaDigits(idx + 1) });
       const rm = document.createElement("button");
       rm.type = "button";
-      rm.textContent = CP_TEXT.f12.remove;
+      rm.textContent = CP_TEXT.f14.delete;
       rm.className = "cp-secondary cp-btn";
+      rm.setAttribute(
+        "aria-label",
+        row.name
+          ? cpTextFormat("حذف سطح \u2068{name}\u2069", { name: row.name })
+          : cpTextFormat("حذف سطح {i}", { i: cpTextFaDigits(idx + 1) }),
+      );
       rm.onclick = () => {
-        state.rows.splice(idx, 1);
-        draw();
+        const snap = snapshotLevelLadderFromDom(host);
+        snap.splice(idx, 1);
+        draw(snap);
       };
-      card.appendChild(rm);
-      host.appendChild(card);
+      top.append(lbl, rm);
+      card.appendChild(top);
+
+      const addField = (fieldKey, labelText, input) => {
+        const wrap = document.createElement("label");
+        wrap.className = "cp-field";
+        const span = document.createElement("span");
+        span.textContent = labelText;
+        wrap.append(span, input);
+        const err = document.createElement("span");
+        err.className = "cp-field-error hidden";
+        err.dataset.cpLadderErr = `ladder:${idx}:${fieldKey}`;
+        wrap.appendChild(err);
+        card.appendChild(wrap);
+      };
+
+      const nameInp = document.createElement("input");
+      nameInp.type = "text";
+      nameInp.dir = "auto";
+      nameInp.dataset.ladder = "name";
+      nameInp.dataset.cpLadderField = `ladder:${idx}:name`;
+      nameInp.value = row.name ?? "";
+      nameInp.oninput = () => {
+        const e = host.querySelector(`[data-cp-ladder-err="ladder:${idx}:name"]`);
+        if (e) {
+          e.classList.add("hidden");
+          e.textContent = "";
+        }
+        nameInp.removeAttribute("aria-invalid");
+      };
+      addField("name", CP_TEXT.f14.col.name, nameInp);
+
+      const hoursInp = document.createElement("input");
+      hoursInp.type = "text";
+      hoursInp.inputMode = "numeric";
+      hoursInp.dir = "ltr";
+      hoursInp.dataset.ladder = "hours";
+      hoursInp.dataset.cpLadderField = `ladder:${idx}:hours`;
+      hoursInp.value = row.minimumLifetimeHours ?? "";
+      hoursInp.oninput = () => {
+        const e = host.querySelector(`[data-cp-ladder-err="ladder:${idx}:hours"]`);
+        if (e) {
+          e.classList.add("hidden");
+          e.textContent = "";
+        }
+        hoursInp.removeAttribute("aria-invalid");
+      };
+      addField("hours", CP_TEXT.f14.col.hours, hoursInp);
+
+      const pctInp = document.createElement("input");
+      pctInp.type = "text";
+      pctInp.inputMode = "numeric";
+      pctInp.dir = "ltr";
+      pctInp.dataset.ladder = "pct";
+      pctInp.dataset.cpLadderField = `ladder:${idx}:percent`;
+      pctInp.value = row.discountPercent ?? "";
+      pctInp.oninput = () => {
+        const e = host.querySelector(`[data-cp-ladder-err="ladder:${idx}:percent"]`);
+        if (e) {
+          e.classList.add("hidden");
+          e.textContent = "";
+        }
+        pctInp.removeAttribute("aria-invalid");
+      };
+      addField("percent", CP_TEXT.f14.col.percent, pctInp);
+
+      body.appendChild(card);
     });
+
     const add = document.createElement("button");
     add.type = "button";
     add.className = "cp-btn cp-secondary";
-    add.textContent = CP_TEXT.f12.addLevel;
+    add.textContent = CP_TEXT.f14.add;
     add.onclick = () => {
-      const lastH = state.rows.length ? Number(state.rows[state.rows.length - 1].minimumLifetimeHours) || 0 : -1;
-      state.rows.push({ name: "", minimumLifetimeHours: lastH + 1, discountPercent: 0 });
-      draw();
+      const snap = snapshotLevelLadderFromDom(host);
+      const lastH = snap.length ? cpParseInteger(String(snap[snap.length - 1].minimumLifetimeHours)) : null;
+      const nextH = lastH == null ? 0 : lastH + 1;
+      snap.push({ name: "", minimumLifetimeHours: String(nextH), discountPercent: "0" });
+      draw(snap);
+      const lastCard = body.querySelector(".cp-ladder-card:last-of-type");
+      lastCard?.querySelector('[data-ladder="name"]')?.focus();
     };
-    host.appendChild(add);
-    session._ladderState = state;
+    body.appendChild(add);
   };
-  draw();
+
+  host.replaceChildren(help, body);
+  draw(
+    rowDrafts.map((r) => ({
+      name: r.name ?? "",
+      minimumLifetimeHours:
+        r.minimumLifetimeHours === undefined || r.minimumLifetimeHours === null
+          ? ""
+          : String(r.minimumLifetimeHours),
+      discountPercent:
+        r.discountPercent === undefined || r.discountPercent === null ? "" : String(r.discountPercent),
+    })),
+  );
+  session._ladderRedraw = draw;
 }
 
 function readLevelLadderEditor(session) {
   const host = session.fieldEls.ladder || document.querySelector(".cp-ladder-host");
-  if (!host) return { errors: { ladder: "خطای داخلی." } };
-  const state = session._ladderState;
-  const rows = [];
-  const cards = host.querySelectorAll(".cp-ladder-card");
-  cards.forEach((card, idx) => {
-    const name = card.querySelector('[data-ladder="name"]')?.value || "";
-    const hours = card.querySelector('[data-ladder="hours"]')?.value || "";
-    const pct = card.querySelector('[data-ladder="pct"]')?.value || "";
-    rows.push({
-      name: String(name).trim(),
-      minimumLifetimeHours: cpParseInteger(hours),
-      discountPercent: cpParseInteger(pct),
-    });
-    if (state?.rows?.[idx]) {
-      state.rows[idx].name = name;
-      state.rows[idx].minimumLifetimeHours = hours;
-      state.rows[idx].discountPercent = pct;
+  if (!host) return { errors: { _form: "خطای داخلی." } };
+  if (session._ladderPhase === "loading" || session._ladderPhase === "error") {
+    return { errors: { _form: CP_TEXT.f14.loadFail } };
+  }
+  clearLevelLadderFieldErrors(host);
+  const drafts = snapshotLevelLadderFromDom(host);
+  const { fieldErrors, count, rows, formOnly } = validateLevelLadderFieldErrors(drafts);
+  if (count > 0) {
+    if (formOnly) return { errors: { _form: formOnly } };
+    const summary = cpTextFormat(CP_TEXT.f14.err.summary, { n: cpTextFaDigits(count) });
+    for (const [key, msg] of Object.entries(fieldErrors)) {
+      const errEl = host.querySelector(`[data-cp-ladder-err="${key}"]`);
+      const input = host.querySelector(`[data-cp-ladder-field="${key}"]`);
+      if (errEl) {
+        errEl.textContent = msg;
+        errEl.classList.remove("hidden");
+      }
+      if (input) input.setAttribute("aria-invalid", "true");
     }
-  });
-  const msg = validateLevelLadderRows(
-    rows.map((r) => ({
-      name: r.name,
-      minimumLifetimeHours: r.minimumLifetimeHours ?? -1,
-      discountPercent: r.discountPercent ?? -1,
-    })),
-  );
-  if (msg) return { errors: { ladder: msg } };
-  return { values: { ladder: rows } };
+    return { errors: { ...fieldErrors, _form: summary } };
+  }
+  const payload = rows.map((r) => ({
+    name: r.name,
+    minimumLifetimeHours: r.minimumLifetimeHours,
+    discountPercent: r.discountPercent,
+  }));
+  return { values: { ladder: payload } };
+}
+
+function beginLevelLadderForm(host, session) {
+  mountLevelLadderLoading(host, session);
+  const reload = () => {
+    mountLevelLadderLoading(host, session);
+    loadLevelLadderIntoForm(host, session);
+  };
+  loadLevelLadderIntoForm(host, session, reload);
+}
+
+async function loadLevelLadderIntoForm(host, session, onRetry) {
+  try {
+    const cur = await api("/api/operator/members/settings/level-ladder", { background: true });
+    renderLevelLadderEditor(host, session, cur || []);
+  } catch (_e) {
+    mountLevelLadderLoadError(host, session, onRetry || (() => loadLevelLadderIntoForm(host, session, onRetry)));
+  }
 }
 
 function fmtTehran(iso) {
@@ -334,7 +602,8 @@ async function api(path, options = {}) {
       msg = "این مورد قبلاً انجام شده است.";
     }
     if (typeof cpTranslateApiError === "function") {
-      msg = cpTranslateApiError(code, msg);
+      const scope = path.includes("level-ladder") ? { scope: "level_ladder" } : null;
+      msg = cpTranslateApiError(code, msg, scope);
     }
     if (isBackground) {
       cpBgPollFailures++;
@@ -1947,40 +2216,40 @@ bindClick("mgrFloorBtn", async () => {
 bindClick("mgrBirthdayBtn", async () => {
   const cur = (await api("/api/operator/members/settings/birthday")) || {};
   const values = await cpForm({
-    title: "تنظیم تولد",
+    title: CP_TEXT.f12.title,
     confirmLabel: "ذخیره",
     fields: [
-      { name: "percent", kind: "number", label: "درصد تخفیف", value: cur.percent ?? "" },
+      { name: "percent", kind: "number", label: CP_TEXT.f12.percent, value: cur.percent ?? "" },
       {
         name: "windowKind",
         kind: "radio",
-        label: "بازهٔ تخفیف",
+        label: CP_TEXT.f12.windowKind,
         value: cur.windowKind || "birth_month",
         options: [
-          { value: "birth_month", label: "کل ماه تولد" },
-          { value: "day_window", label: "چند روز" },
-          { value: "exact_day", label: "فقط روز تولد" },
+          { value: "birth_month", label: CP_TEXT.f12.kind.birth_month },
+          { value: "day_window", label: CP_TEXT.f12.kind.day_window },
+          { value: "exact_day", label: CP_TEXT.f12.kind.exact_day },
         ],
       },
-      { name: "windowDays", kind: "number", label: "تعداد روز", value: cur.windowDays ?? 1, required: false },
+      { name: "windowDays", kind: "number", label: CP_TEXT.f12.windowDays, value: cur.windowDays ?? 1, required: false },
       {
         name: "anchor",
         kind: "radio",
-        label: "شروع بازه",
+        label: CP_TEXT.f12.anchor,
         value: cur.anchor || "on_and_after",
         options: [
-          { value: "on_and_after", label: "از روز تولد به بعد" },
-          { value: "around", label: "دور روز تولد" },
+          { value: "on_and_after", label: CP_TEXT.f12.anchorOpt.on_and_after },
+          { value: "around", label: CP_TEXT.f12.anchorOpt.around },
         ],
       },
     ],
     validate: (v) => {
       const errs = {};
       const pct = cpParseInteger(String(v.percent));
-      if (pct == null || pct < 0 || pct > 100) errs.percent = "درصد باید بین ۰ و ۱۰۰ باشد.";
+      if (pct == null || pct < 0) errs.percent = "درصد را وارد کنید.";
       if (v.windowKind === "day_window") {
         const days = cpParseInteger(String(v.windowDays));
-        if (days == null || days < 1) errs.windowDays = "دست‌کم ۱ روز.";
+        if (days == null || days < 1) errs.windowDays = CP_TEXT.f12.errDays;
       }
       return Object.keys(errs).length ? errs : null;
     },
@@ -1994,7 +2263,7 @@ bindClick("mgrBirthdayBtn", async () => {
           anchor: v.windowKind === "day_window" ? v.anchor : cur.anchor || "on_and_after",
         }),
       });
-      cpToast({ tone: "success", text: "تنظیم تولد ذخیره شد." });
+      cpToast({ tone: "success", text: CP_TEXT.f12.done });
     },
   });
   if (values == null) return;
@@ -2034,23 +2303,32 @@ bindClick("mgrCustBirthdayBtn", async () => {
 });
 
 bindClick("mgrLadderBtn", async () => {
-  const cur = await api("/api/operator/members/settings/level-ladder");
   const values = await cpForm({
-    title: CP_TEXT.f12.title,
-    confirmLabel: CP_TEXT.f12.save,
+    title: CP_TEXT.f14.title,
+    confirmLabel: CP_TEXT.f14.save,
     wide: true,
     fields: [
       {
         name: "ladder",
         kind: "custom",
         label: "",
-        render: (host, session) => renderLevelLadderEditor(host, session, cur || []),
+        render: (host, session) => beginLevelLadderForm(host, session),
         read: (session) => readLevelLadderEditor(session),
       },
     ],
     onSubmit: async (v) => {
-      await api("/api/operator/members/settings/level-ladder", { method: "PUT", body: JSON.stringify(v.ladder) });
-      cpToast({ tone: "success", text: "جدول سطح‌ها ذخیره شد." });
+      try {
+        await api("/api/operator/members/settings/level-ladder", { method: "PUT", body: JSON.stringify(v.ladder) });
+        cpToast({ tone: "success", text: CP_TEXT.f14.done });
+      } catch (e) {
+        const msg =
+          e && e.code === "invalid_level"
+            ? CP_TEXT.f14.err.server
+            : e && e.code === "forbidden"
+              ? CP_TEXT.f14.err.forbidden
+              : CP_TEXT.f14.err.saveFail;
+        throw Object.assign(new Error(msg), { code: e?.code, message: msg });
+      }
     },
   });
   if (values == null) return;
@@ -2788,6 +3066,9 @@ function ss14IsAllowedRateInput(raw) {
 }
 
 function ss14ParseTomanInput(raw) {
+  if (typeof window.cpParseNumber === "function") {
+    return window.cpParseNumber(raw, { positive: true, allowSeparators: true });
+  }
   if (raw == null) return null;
   const trimmed = String(raw).trim();
   if (trimmed === "" || !ss14IsAllowedRateInput(trimmed)) return null;

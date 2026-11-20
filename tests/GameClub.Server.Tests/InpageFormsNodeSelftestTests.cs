@@ -13,6 +13,7 @@ public sealed class InpageFormsNodeSelftestTests
     private static IEnumerable<string> SelftestScripts() =>
     [
         "cp-parse-money-selftest.mjs",
+        "cp-parse-integer-selftest.mjs",
         "cp-layer-selftest.mjs",
         "cp-error-map-selftest.mjs",
         "cp-flows-f01-f17-selftest.mjs",

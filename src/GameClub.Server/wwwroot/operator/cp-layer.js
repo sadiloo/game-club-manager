@@ -78,6 +78,49 @@
   });
   }
 
+  function cpIsDigitChar(ch) {
+    return (ch >= "0" && ch <= "9") || (ch >= "\u06F0" && ch <= "\u06F9") || (ch >= "\u0660" && ch <= "\u0669");
+  }
+
+  function cpIsMoneySepChar(ch) {
+    return ch === "," || ch === "\u060C" || ch === "\u066C";
+  }
+
+  /** Reject decimals, signs, inner space, or any character outside digits / (optional) money separators. */
+  function cpHasIllegalNumericChars(trimmed, allowSeparators) {
+    for (const ch of trimmed) {
+      if (cpIsDigitChar(ch)) continue;
+      if (allowSeparators && cpIsMoneySepChar(ch)) continue;
+      return true;
+    }
+    return false;
+  }
+
+  function cpHasValidThousandsGrouping(trimmed) {
+    const groups = [];
+    let cur = "";
+    for (const ch of trimmed) {
+      if (cpIsMoneySepChar(ch)) {
+        if (cur.length === 0) return false;
+        groups.push(cur);
+        cur = "";
+      } else if (cpIsDigitChar(ch)) {
+        cur += ch;
+      } else {
+        return false;
+      }
+    }
+    if (cur.length === 0 && groups.length > 0) return false;
+    if (cur.length > 0) groups.push(cur);
+    if (groups.length === 0) return false;
+    if (groups.length === 1) return true;
+    if (groups[0].length < 1 || groups[0].length > 3) return false;
+    for (let i = 1; i < groups.length; i++) {
+      if (groups[i].length !== 3) return false;
+    }
+    return true;
+  }
+
   function digitsOnlyFromMoneyRaw(raw) {
     if (raw == null) return "";
     const fa = "۰۱۲۳۴۵۶۷۸۹";
@@ -93,13 +136,16 @@
   function cpParseNumber(raw, opts = {}) {
     const allowZero = opts.allowZero === true;
     const positive = opts.positive !== false;
-    if (!allowZero && positive && typeof ss14ParseTomanInput === "function") {
-      return ss14ParseTomanInput(raw);
-    }
+    const allowSeparators = opts.allowSeparators !== false;
     const trimmed = raw == null ? "" : String(raw).trim();
     if (!trimmed) return null;
+    if (cpHasIllegalNumericChars(trimmed, allowSeparators)) return null;
+    if (allowSeparators) {
+      if (!cpHasValidThousandsGrouping(trimmed)) return null;
+    }
     const s = digitsOnlyFromMoneyRaw(trimmed);
     if (!s) return null;
+    if (s.length > 15) return null;
     if (s.length > 1 && s[0] === "0") return null;
     const n = Number(s);
     if (!Number.isFinite(n) || !Number.isInteger(n)) return null;
@@ -110,8 +156,13 @@
   }
 
   function cpParseInteger(raw) {
-    const s = digitsOnlyFromMoneyRaw(raw);
+    const trimmed = raw == null ? "" : String(raw).trim();
+    if (!trimmed) return null;
+    if (cpHasIllegalNumericChars(trimmed, false)) return null;
+    const s = digitsOnlyFromMoneyRaw(trimmed);
     if (!s) return null;
+    if (s.length > 15) return null;
+    if (s.length > 1 && s[0] === "0") return null;
     const n = Number(s);
     return Number.isInteger(n) ? n : null;
   }
@@ -121,6 +172,7 @@
     wallet_requires_member: "برای پرداخت کیف پول، عضو را پیوند دهید.",
     reason_required: "دلیل باطل را وارد کنید.",
     forbidden: "فقط مدیر می‌تواند فاکتور را باطل کند.",
+    forbidden_ladder: "فقط مدیر یا مالک می‌تواند جدول سطح‌ها را عوض کند.",
     invalid_gift: "هدیه نمی‌تواند منفی باشد.",
     invalid_amount: "مبلغ نامعتبر است.",
     invalid_opening: "دست‌کم یکی از خانه‌ها را پر کنید.",
@@ -151,7 +203,10 @@
     invalid_float: "تنخواه نامعتبر است.",
   };
 
-  function cpTranslateApiError(code, message) {
+  function cpTranslateApiError(code, message, ctx) {
+    if (code === "forbidden" && ctx && ctx.scope === "level_ladder") {
+      return ERROR_MAP.forbidden_ladder;
+    }
     if (code && ERROR_MAP[code]) return ERROR_MAP[code];
     if (message && /[\u0600-\u06FF]/.test(message)) return message;
     if (message && code === "invalid_opening") {
@@ -271,19 +326,25 @@
     }
 
     _applyFieldErrors(errs) {
+      let firstFocus = null;
       for (const [name, msg] of Object.entries(errs)) {
         if (name === "_form") {
           this.setServerError(msg);
           continue;
         }
-        const errEl = this.fieldEls[`${name}:err`];
-        const input = this.fieldEls[name];
+        const errEl = this.fieldEls[`${name}:err`] || document.querySelector(`[data-cp-ladder-err="${name}"]`);
+        const input =
+          this.fieldEls[name] || document.querySelector(`[data-cp-ladder-field="${name}"]`);
         if (errEl) {
           errEl.textContent = msg;
           errEl.classList.remove("hidden");
         }
-        if (input) input.setAttribute("aria-invalid", "true");
+        if (input) {
+          input.setAttribute("aria-invalid", "true");
+          if (!firstFocus) firstFocus = input;
+        }
       }
+      (firstFocus || this.serverErrorEl)?.focus({ preventScroll: true });
     }
   }
 
@@ -393,6 +454,17 @@
     root.replaceChildren(scrim, sheet);
     lockBodyScroll(true);
     pushHistory(session.id);
+    root.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        if (!session.busy) session.cancel("escape");
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+        e.preventDefault();
+        if (!session.busy) session.spec.collectAndSubmit?.();
+      }
+    });
     return { fieldsHost, submitBtn, cancelBtn, focusTarget: session.spec.focusCancelFirst ? cancelBtn : submitBtn };
   }
 
