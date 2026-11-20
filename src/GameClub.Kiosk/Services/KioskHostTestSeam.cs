@@ -15,4 +15,10 @@ public sealed class KioskHostTestSeam
 
     /// <summary>When set, skips real HTTP and treats this status as the logout POST result.</summary>
     public int? LogoutHttpSimulatedStatusCode { get; init; }
+
+    /// <summary>When set, delays the login POST (test seam only).</summary>
+    public TimeSpan? LoginHttpDelay { get; init; }
+
+    /// <summary>When true, login throws <see cref="TaskCanceledException"/> before HTTP.</summary>
+    public bool LoginHttpSimulateTimeout { get; init; }
 }

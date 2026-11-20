@@ -180,16 +180,14 @@ public sealed class KioskProfileService(AppDbContext db)
     public async Task<StationKioskProfileEntity> EnsureProfileAsync(string stationId, CancellationToken ct)
     {
         var id = StationIdNormalizer.Normalize(stationId);
-        var row = await db.StationKioskProfiles.FirstOrDefaultAsync(p => p.StationId == id, ct);
-        if (row is not null)
-        {
-            return row;
-        }
-
-        row = new StationKioskProfileEntity { StationId = id, NearEndMinutesJson = "[10,5,1]" };
-        db.StationKioskProfiles.Add(row);
-        await db.SaveChangesAsync(ct);
-        return row;
+        await db.Database.ExecuteSqlInterpolatedAsync(
+            $"""
+            INSERT INTO station_kiosk_profiles ("StationId", "IsTestMode", "NearEndMinutesJson")
+            VALUES ({id}, FALSE, '[10,5,1]')
+            ON CONFLICT ("StationId") DO NOTHING
+            """,
+            ct);
+        return await db.StationKioskProfiles.FirstAsync(p => p.StationId == id, ct);
     }
 
     public IReadOnlyList<int> LoadNearEndMinutes(StationKioskProfileEntity profile)
@@ -809,13 +807,17 @@ public sealed class KioskSessionService(
 
     private async Task<PlaySessionEntity> AttachOrStartMemberCoreAsync(Guid customerId, string stationId, CancellationToken ct)
     {
+        var sid = StationIdNormalizer.Normalize(stationId);
         var lockKey = BitConverter.ToInt64(customerId.ToByteArray(), 0);
         await db.Database.OpenConnectionAsync(ct);
         try
         {
-            await db.Database.ExecuteSqlRawAsync("SELECT pg_advisory_lock({0})", lockKey);
+            await db.Database.ExecuteSqlRawAsync("SELECT pg_advisory_lock(hashtext({0}::text))", sid);
             try
             {
+                await db.Database.ExecuteSqlRawAsync("SELECT pg_advisory_lock({0})", lockKey);
+                try
+                {
                 var profile = await profiles.EnsureProfileAsync(stationId, ct);
                 if (profile.IsTestMode)
                 {
@@ -823,7 +825,6 @@ public sealed class KioskSessionService(
                 }
 
                 await funding.EnsureMemberMayPlayAsync(customerId, stationId, ct);
-                var sid = StationIdNormalizer.Normalize(stationId);
                 var busyElsewhere = await db.Sessions
                     .Include(s => s.Station)!.ThenInclude(st => st!.Group)
                     .AnyAsync(
@@ -855,8 +856,23 @@ public sealed class KioskSessionService(
                         throw new ApiException(StatusCodes.Status409Conflict, "session_elsewhere", "Customer already has an open PC session.");
                     }
 
-                    var session = await sessions.StartAsync(sid, 1, PlayMode.Online, null, null, ct);
-                    await customers.LinkSessionAsync(session.Id, customerId, ct);
+                    PlaySessionEntity session;
+                    try
+                    {
+                        if (KioskAttachPathTestSeam.TryTakeInjectForCurrentFlow(out var inject))
+                        {
+                            throw await inject(ct);
+                        }
+
+                        session = await sessions.StartAsync(sid, 1, PlayMode.Online, null, null, ct);
+                        await customers.LinkSessionAsync(session.Id, customerId, ct);
+                    }
+                    catch (DbUpdateException ex) when (PostgresErrors.IsActiveSessionUniqueViolation(ex))
+                    {
+                        db.ChangeTracker.Clear();
+                        return await ResolveStationBusyAfterStartRaceAsync(customerId, sid, ct);
+                    }
+
                     return await db.Sessions.FirstAsync(s => s.Id == session.Id, ct);
                 }
 
@@ -871,16 +887,44 @@ public sealed class KioskSessionService(
                 }
 
                 return open;
+                }
+                finally
+                {
+                    await db.Database.ExecuteSqlRawAsync("SELECT pg_advisory_unlock({0})", lockKey);
+                }
             }
             finally
             {
-                await db.Database.ExecuteSqlRawAsync("SELECT pg_advisory_unlock({0})", lockKey);
+                await db.Database.ExecuteSqlRawAsync("SELECT pg_advisory_unlock(hashtext({0}::text))", sid);
             }
         }
         finally
         {
             await db.Database.CloseConnectionAsync();
         }
+    }
+
+    private async Task<PlaySessionEntity> ResolveStationBusyAfterStartRaceAsync(Guid customerId, string sid, CancellationToken ct)
+    {
+        var open = await db.Sessions
+            .Where(s => s.StationId == sid && (s.Status == SessionStatus.Open || s.Status == SessionStatus.Paused))
+            .FirstOrDefaultAsync(ct);
+        if (open is null)
+        {
+            throw new ApiException(StatusCodes.Status409Conflict, "station_busy", "Station already has an open session.");
+        }
+
+        if (open.CustomerId is Guid existing && existing != customerId)
+        {
+            throw new ApiException(StatusCodes.Status409Conflict, "station_busy", "Station has another customer's session.");
+        }
+
+        if (open.CustomerId is null)
+        {
+            await customers.LinkSessionAsync(open.Id, customerId, ct);
+        }
+
+        return open;
     }
 
     private async Task RollbackGuestAttemptAsync(Guid sessionId, CancellationToken ct)

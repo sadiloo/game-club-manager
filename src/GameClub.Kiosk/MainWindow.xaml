@@ -14,7 +14,7 @@
       <TextBlock Text="اینترنت قطع است" Foreground="#00708A" FontSize="14" FontWeight="Medium" HorizontalAlignment="Center"/>
     </Border>
     <TextBlock Text="Checkpoint PC Kiosk" Foreground="White" FontSize="28" HorizontalAlignment="Center" />
-    <TextBlock x:Name="StatusText" Text="Unpaired — enter operator pairing code" Foreground="#9CA3AF" FontSize="16" Margin="0,12,0,16" TextWrapping="Wrap" TextAlignment="Center" />
+    <TextBlock x:Name="StatusText" FlowDirection="RightToLeft" Text="Unpaired — enter operator pairing code" Foreground="#9CA3AF" FontSize="16" Margin="0,12,0,16" TextWrapping="Wrap" TextAlignment="Center" />
     <PasswordBox x:Name="AdminUrlPasswordBox" Height="32" Margin="0,8" ToolTip="Admin password to unlock server URL"/>
     <TextBox x:Name="PairingCodeBox" Height="40" Margin="0,4" FontSize="18" VerticalContentAlignment="Center" />
     <Button Content="Pair station" Height="40" Margin="0,8" Click="OnPairClick"/>
