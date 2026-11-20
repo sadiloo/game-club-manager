@@ -838,8 +838,7 @@ public sealed class ShellPlanAIntegrationTests
                 try
                 {
                     FakeShellSeams.Install();
-                    ShellSeams.PanelNavigationUrlOverride = "http://127.0.0.1:9/operator/";
-                    FakeShellSeams.Http.Answers = true;
+                    FakeShellSeams.Http.Answers = false;
                     FakeShellSeams.Service.Status = ServiceControllerStatus.Running;
 
                     window = new MainWindow();
@@ -857,36 +856,47 @@ public sealed class ShellPlanAIntegrationTests
                     }
 
                     Assert.NotNull(wv?.CoreWebView2);
-                    var dataNavStarts = 0;
-                    var panelNavigateCount = 0;
-                    var logPath = "";
-                    void OnNavStarting(object? _, CoreWebView2NavigationStartingEventArgs args)
-                    {
-                        if (args.Uri.StartsWith("data:text/html", StringComparison.OrdinalIgnoreCase))
-                        {
-                            dataNavStarts++;
-                        }
-                    }
-
-                    wv.CoreWebView2.NavigationStarting += OnNavStarting;
-                    var measureStart = DateTime.UtcNow;
-                    var measureDeadline = measureStart.AddSeconds(60);
+                    var offlineSamples = 0;
+                    var totalSamples = 0;
+                    var measureBaselineLog = Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log")
+                        .Select(File.ReadAllText)
+                        .Aggregate("", string.Concat);
+                    var measureDeadline = DateTime.UtcNow.AddSeconds(60);
                     while (DateTime.UtcNow < measureDeadline)
                     {
                         await Task.Delay(500);
-                        var log = Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log")
-                            .Select(File.ReadAllText)
-                            .Aggregate("", string.Concat);
-                        logPath = log;
-                        panelNavigateCount = log.Split('\n')
-                            .Count(l => l.Contains("panel-navigate caller=NavigatePanel", StringComparison.Ordinal));
+                        totalSamples++;
+                        var sample = UnquoteWebViewScriptString(
+                            await wv.CoreWebView2.ExecuteScriptAsync(
+                                "JSON.stringify({protocol: location.protocol, href: location.href, offline: document.documentElement.getAttribute('data-shell-offline-page')})"));
+                        using var doc = JsonDocument.Parse(sample);
+                        var href = doc.RootElement.GetProperty("href").GetString() ?? "";
+                        var protocol = doc.RootElement.GetProperty("protocol").GetString() ?? "";
+                        var offline = doc.RootElement.GetProperty("offline").GetString();
+                        Assert.DoesNotContain("chrome-error://", href, StringComparison.OrdinalIgnoreCase);
+                        Assert.DoesNotContain("edge-error://", href, StringComparison.OrdinalIgnoreCase);
+                        if (protocol == "data:" && offline == "1")
+                        {
+                            offlineSamples++;
+                        }
                     }
 
-                    wv.CoreWebView2.NavigationStarting -= OnNavStarting;
-                    Assert.InRange(panelNavigateCount, 1, 5);
-                    Assert.InRange(dataNavStarts, 1, 1);
+                    var measureLog = Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log")
+                        .Select(File.ReadAllText)
+                        .Aggregate("", string.Concat)
+                        .Replace(measureBaselineLog, "");
+                    var probeRetries = measureLog.Split('\n')
+                        .Count(l => l.Contains("panel-nav-retry", StringComparison.Ordinal)
+                            && l.Contains("action=probe", StringComparison.Ordinal));
+                    var presentOfflineCount = measureLog.Split('\n')
+                        .Count(l => l.Contains("panel-navigate caller=PresentOffline", StringComparison.Ordinal));
+                    Assert.True(totalSamples >= 10, "Not enough UI samples during measure window");
+                    Assert.True(offlineSamples >= (int)(totalSamples * 0.95), $"offline visible in {offlineSamples}/{totalSamples} samples");
+                    Assert.InRange(probeRetries, 1, 5);
+                    Assert.InRange(presentOfflineCount, 0, 1);
+                    Assert.DoesNotContain("navigation-blocked", measureLog, StringComparison.Ordinal);
 
-                    ShellSeams.PanelNavigationUrlOverride = null;
+                    FakeShellSeams.Http.Answers = true;
                     var panelDeadline = DateTime.UtcNow.AddSeconds(75);
                     var panelOk = false;
                     while (DateTime.UtcNow < panelDeadline)
@@ -909,18 +919,14 @@ public sealed class ShellPlanAIntegrationTests
                         }
                     }
 
-                    Assert.True(panelOk, "Operator panel did not load after clearing failing panel URL override");
+                    Assert.True(panelOk, "Operator panel did not load after HTTP probe began succeeding");
                     var finalLog = Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log")
                         .Select(File.ReadAllText)
                         .Aggregate("", string.Concat);
                     Assert.Contains("nav-completed-panel-ok", finalLog, StringComparison.Ordinal);
-                    var postSuccessNavigates = finalLog.Split('\n')
-                        .Count(l => l.Contains("panel-navigate caller=NavigatePanel", StringComparison.Ordinal));
-                    Assert.InRange(postSuccessNavigates, 1, 6);
                 }
                 finally
                 {
-                    ShellSeams.PanelNavigationUrlOverride = null;
                     FakeShellSeams.RestoreProduction();
                     window?.Close();
                 }

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="fa" dir="rtl">
+<html lang="fa" dir="rtl" data-shell-offline-page="1">
 <head>
   <meta charset="utf-8" />
   <title>چک‌پوینت</title>
@@ -26,6 +26,9 @@
       if (state === "starting") {
         title.textContent = "سرور در حال روشن شدن است";
         body.textContent = "چند لحظه صبر کنید. پنل خودش باز می‌شود.";
+      } else if (state === "panel-unavailable") {
+        title.textContent = "سرور روشن است؛ پنل در دسترس نیست";
+        body.textContent = "چند لحظه صبر کنید. پنل دوباره بارگذاری می‌شود.";
       }
       var n = 5;
       var cd = document.getElementById("countdown");

@@ -90,7 +90,7 @@ public partial class MainWindow : Window
             {
                 if (_offlineShown && _runningPanelLoadFailing)
                 {
-                    TryRetryPanelNavigationWhenDue();
+                    TryRunningPanelProbeWhenDue();
                 }
                 else if (_offlineShown)
                 {
@@ -110,7 +110,7 @@ public partial class MainWindow : Window
                 }
                 else
                 {
-                    _ = NavigatePanelAsync();
+                    _ = TryProbeThenNavigatePanelAsync();
                 }
             }
             else if (!snap.OperatorAnswers)
@@ -152,7 +152,7 @@ public partial class MainWindow : Window
                 }
                 else if (_poller?.Current.VisualState == ShellServerVisualState.Running)
                 {
-                    await NavigatePanelAsync();
+                    await TryProbeThenNavigatePanelAsync();
                 }
             }
             else
@@ -160,6 +160,10 @@ public partial class MainWindow : Window
                 if (_poller?.Current is { OperatorAnswers: false } snap && ShouldPresentPendingOffline())
                 {
                     await ShowOfflineAsync(snap);
+                }
+                else if (_poller?.Current.VisualState == ShellServerVisualState.Running)
+                {
+                    await TryProbeThenNavigatePanelAsync();
                 }
                 else
                 {
@@ -338,11 +342,15 @@ public partial class MainWindow : Window
         _panelNavigated = false;
         if (!_offlineShown)
         {
-            _ = PresentOfflinePageAsync("stopped");
+            _ = PresentOfflinePageAsync("panel-unavailable");
+        }
+        else
+        {
+            RestoreRunningPanelOfflineView();
         }
     }
 
-    private void TryRetryPanelNavigationWhenDue()
+    private void TryRunningPanelProbeWhenDue()
     {
         var utcNow = DateTime.UtcNow;
         if (!_panelNavRetryPolicy.CanAttempt(utcNow))
@@ -353,11 +361,120 @@ public partial class MainWindow : Window
             return;
         }
 
+        _ = TryRunningPanelProbeCoreAsync();
+    }
+
+    private async Task TryRunningPanelProbeCoreAsync()
+    {
         var attempt = _panelNavRetryPolicy.FailureCount + 1;
+        var nextDelayBeforeAttempt = _panelNavRetryPolicy.GetNextDelayAfterLastFailure();
+        var (ok, statusCode) = await Task.Run(ProbePanelHttp);
+        if (!ok)
+        {
+            var utcNow = DateTime.UtcNow;
+            _panelNavRetryPolicy.RecordFailure(utcNow);
+            var nextDelay = _panelNavRetryPolicy.GetNextDelayAfterLastFailure();
+            ShellFileLog.Write(
+                $"panel-nav-retry attempt={attempt} nextDelaySec={nextDelay.TotalSeconds:F0} action=probe outcome=fail status={statusCode}");
+            LogOfflineTrace(
+                "panel-probe-fail",
+                $"status={statusCode} scheduledDelaySec={nextDelayBeforeAttempt.TotalSeconds:F0}");
+            return;
+        }
+
+        ShellFileLog.Write(
+            $"panel-nav-retry attempt={attempt} nextDelaySec=0 action=probe outcome=ok status={statusCode}");
+        await Dispatcher.InvokeAsync(() => NavigatePanelFromProbe());
+    }
+
+    private static (bool Ok, int StatusCode) ProbePanelHttp()
+    {
+        if (!ShellSeams.HttpProbe.TryGetOperatorOk(out var statusCode))
+        {
+            return (false, statusCode);
+        }
+
+        return (statusCode is >= 200 and < 300, statusCode);
+    }
+
+    private async Task TryProbeThenNavigatePanelAsync()
+    {
+        var (ok, statusCode) = await Task.Run(ProbePanelHttp);
+        if (ok)
+        {
+            NavigatePanelFromProbe();
+            return;
+        }
+
+        EnterRunningPanelLoadFailingMode(statusCode);
+    }
+
+    private void EnterRunningPanelLoadFailingMode(int statusCode)
+    {
+        _runningPanelLoadFailing = true;
+        var utcNow = DateTime.UtcNow;
+        _panelNavRetryPolicy.RecordFailure(utcNow);
+        var attempt = _panelNavRetryPolicy.FailureCount;
         var nextDelay = _panelNavRetryPolicy.GetNextDelayAfterLastFailure();
         ShellFileLog.Write(
-            $"panel-nav-retry attempt={attempt} nextDelaySec={nextDelay.TotalSeconds:F0} action=navigate");
-        _ = NavigatePanelAsync();
+            $"panel-nav-retry attempt={attempt} nextDelaySec={nextDelay.TotalSeconds:F0} action=probe outcome=fail status={statusCode}");
+        _panelNavigated = false;
+        if (!_offlineShown)
+        {
+            _ = PresentOfflinePageAsync("panel-unavailable");
+        }
+    }
+
+    private void NavigatePanelFromProbe()
+    {
+        if (_closed || !_webViewReady)
+        {
+            return;
+        }
+
+        if (_poller?.Current.VisualState != ShellServerVisualState.Running)
+        {
+            return;
+        }
+
+        var uri = new Uri(ShellSeams.ResolvePanelUrl());
+        LogPanelNavigate("NavigatePanel", uri);
+        LogRaceNav("NavigatePanel.Source");
+        _panelNavigated = true;
+        PanelWebView.Source = uri;
+    }
+
+    private void RestoreRunningPanelOfflineView()
+    {
+        if (!_webViewReady || !_offlineShown || !_runningPanelLoadFailing)
+        {
+            return;
+        }
+
+        var uri = CurrentPanelUriForTrace();
+        if (uri.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        var html = LoadOfflineHtml(_currentOfflineState ?? "panel-unavailable");
+        _allowOfflineDataNav = true;
+        try
+        {
+            PanelWebView.NavigateToString(html);
+        }
+        catch
+        {
+            _allowOfflineDataNav = false;
+            throw;
+        }
+        finally
+        {
+            if (_closed)
+            {
+                _allowOfflineDataNav = false;
+            }
+        }
     }
 
     private bool IsActiveOnPanelOrigin()
@@ -764,17 +881,12 @@ public partial class MainWindow : Window
             return Task.CompletedTask;
         }
 
-        if (_offlineShown && !_runningPanelLoadFailing)
+        if (_offlineShown)
         {
             return Task.CompletedTask;
         }
 
         if (_poller?.Current.VisualState != ShellServerVisualState.Running)
-        {
-            return Task.CompletedTask;
-        }
-
-        if (_runningPanelLoadFailing && !_panelNavRetryPolicy.CanAttempt(DateTime.UtcNow))
         {
             return Task.CompletedTask;
         }

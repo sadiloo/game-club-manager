@@ -192,7 +192,7 @@ public sealed class ProductionHttpProbeSeam : IHttpProbeSeam
         statusCode = 0;
         try
         {
-            var request = System.Net.WebRequest.Create(ShellPaths.PanelUrl);
+            var request = System.Net.WebRequest.Create(ShellSeams.ResolvePanelUrl());
             request.Timeout = 3000;
             using var response = (System.Net.HttpWebResponse)request.GetResponse();
             statusCode = (int)response.StatusCode;
