@@ -99,9 +99,10 @@ try {{
             + phaseAfterOffBody
             + BuildReadbackEmitScript()
             + phaseAfterReadback;
-        var raw = InternetPowerShellRunner.Run(script, budgetMs, stepName: "apply_merged_off");
-        var psStartMs = InternetPowerShellRunner.LastPsStartMs;
-        var phases = TryParseOffScriptPhases(InternetPowerShellRunner.LastRunStderr);
+        var telemetry = InternetPowerShellRunner.RunWithTelemetry(script, budgetMs, stepName: "apply_merged_off");
+        var raw = telemetry.Output;
+        var psStartMs = telemetry.PsStartMs;
+        var phases = TryParseOffScriptPhases(telemetry.Stderr);
         var verifySw = Stopwatch.StartNew();
         var result = ClassifyMergedResult(raw, config, requireVerifiedStateFile: false, expectOn: false);
         var verifyMs = verifySw.ElapsedMilliseconds;
@@ -130,15 +131,18 @@ try {{
 
         foreach (var line in stderr.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
         {
-            if (!line.StartsWith("PHASES ", StringComparison.Ordinal))
+            var phasesIdx = line.IndexOf("PHASES ", StringComparison.Ordinal);
+            if (phasesIdx < 0)
             {
                 continue;
             }
 
+            var phaseLine = line.Substring(phasesIdx);
+
             string cleanup = "na";
             string off = "na";
             string readback = "na";
-            foreach (var part in line.Split(' '))
+            foreach (var part in phaseLine.Split(' '))
             {
                 if (part.StartsWith("cleanup_ms=", StringComparison.Ordinal))
                 {
@@ -164,7 +168,7 @@ try {{
         => $@"
 $ErrorActionPreference = 'SilentlyContinue'
 $group = '{GroupName}'
-Get-NetFirewallRule -PolicyStore localhost -Group $group -ErrorAction SilentlyContinue | Remove-NetFirewallRule -PolicyStore localhost -ErrorAction SilentlyContinue
+Remove-NetFirewallRule -PolicyStore localhost -Group $group -ErrorAction SilentlyContinue
 foreach ($prof in @('Domain','Private','Public')) {{
   $p = Get-NetFirewallProfile -PolicyStore localhost -Name $prof -ErrorAction SilentlyContinue
   if ($p -and $p.DefaultOutboundAction.ToString() -eq 'Block') {{

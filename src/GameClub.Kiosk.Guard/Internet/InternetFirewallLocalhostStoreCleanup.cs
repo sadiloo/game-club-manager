@@ -12,7 +12,7 @@ internal static class InternetFirewallLocalhostStoreCleanup
         var script = $@"
 $ErrorActionPreference = 'SilentlyContinue'
 $group = '{GroupName}'
-Get-NetFirewallRule -PolicyStore localhost -Group $group -ErrorAction SilentlyContinue | Remove-NetFirewallRule -PolicyStore localhost -ErrorAction SilentlyContinue
+Remove-NetFirewallRule -PolicyStore localhost -Group $group -ErrorAction SilentlyContinue
 foreach ($prof in @('Domain','Private','Public')) {{
   $p = Get-NetFirewallProfile -PolicyStore localhost -Name $prof -ErrorAction SilentlyContinue
   if ($p -and $p.DefaultOutboundAction.ToString() -eq 'Block') {{

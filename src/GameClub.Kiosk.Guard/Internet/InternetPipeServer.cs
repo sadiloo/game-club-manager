@@ -77,31 +77,65 @@ internal sealed class InternetPipeServer
         };
         drift.Start();
 
-        while (!ct.IsCancellationRequested)
+        try
         {
-            try
+            while (!ct.IsCancellationRequested)
             {
-                var server = new NamedPipeServerStream(
-                    GuardInternetClient.PipeName,
-                    PipeDirection.InOut,
-                    NamedPipeServerStream.MaxAllowedServerInstances,
-                    PipeTransmissionMode.Byte,
-                    PipeOptions.Asynchronous);
-                server.WaitForConnection();
-                GuardWatchdogLog.Append(
-                    $"pipe_accept thread={Thread.CurrentThread.ManagedThreadId}");
-                var pipe = server;
-                var handler = new Thread(() => HandleConnectedClient(pipe))
+                try
                 {
-                    IsBackground = true,
-                    Name = "CheckpointInternetPipeClient",
-                };
-                handler.Start();
+                    var server = new NamedPipeServerStream(
+                        GuardInternetClient.PipeName,
+                        PipeDirection.InOut,
+                        NamedPipeServerStream.MaxAllowedServerInstances,
+                        PipeTransmissionMode.Byte,
+                        PipeOptions.Asynchronous);
+                    server.WaitForConnection();
+                    GuardWatchdogLog.Append(
+                        $"pipe_accept thread={Thread.CurrentThread.ManagedThreadId}");
+                    var pipe = server;
+                    var handler = new Thread(() => HandleConnectedClient(pipe))
+                    {
+                        IsBackground = true,
+                        Name = "CheckpointInternetPipeClient",
+                    };
+                    handler.Start();
+                }
+                catch
+                {
+                    if (ct.IsCancellationRequested)
+                    {
+                        break;
+                    }
+
+                    Thread.Sleep(200);
+                }
             }
-            catch
+        }
+        finally
+        {
+            JoinPipeBackgroundThread(drift, "drift", InternetDriftWatchdog.ResolveIntervalMs() + 60_000);
+            JoinPipeBackgroundThread(
+                reconcileThread,
+                "reconcile",
+                InternetGuardReconcilePolicy.ResolveReconcileTimeoutMs() + 90_000);
+            var work = _reconcileWorkThread;
+            if (work is not null)
             {
-                Thread.Sleep(200);
+                JoinPipeBackgroundThread(work, "reconcile_work", 120_000);
             }
+        }
+    }
+
+    private static void JoinPipeBackgroundThread(Thread thread, string label, int budgetMs)
+    {
+        if (thread is null || !thread.IsAlive)
+        {
+            return;
+        }
+
+        if (!thread.Join(TimeSpan.FromMilliseconds(budgetMs)))
+        {
+            GuardWatchdogLog.Append($"pipe_shutdown_join_timeout thread={label} budget_ms={budgetMs}");
         }
     }
 
@@ -166,11 +200,12 @@ internal sealed class InternetPipeServer
             InternetPowerShellRunner.SetReconcilePathThread(true);
             try
             {
+                var shouldContinue = () => !_reconcileAbandoned && !ct.IsCancellationRequested;
                 InternetGuardStartupFirewall.ReconcileOnPipeStart(
                     _config,
                     _firewall,
-                    () => !_reconcileAbandoned);
-                if (!_reconcileAbandoned)
+                    shouldContinue);
+                if (!_reconcileAbandoned && !ct.IsCancellationRequested)
                 {
                     var reassert = Stopwatch.StartNew();
                     lock (_firewallGate)
@@ -238,7 +273,15 @@ internal sealed class InternetPipeServer
 
     private void RunDriftWatchdog(CancellationToken ct)
     {
-        if (!_reconcileWorkFinished.Wait(TimeSpan.FromMilliseconds(InternetGuardReconcilePolicy.ResolveReconcileTimeoutMs() + 30_000)))
+        try
+        {
+            var reconcileWaitMs = InternetGuardReconcilePolicy.ResolveReconcileTimeoutMs() + 30_000;
+            if (!_reconcileWorkFinished.Wait(TimeSpan.FromMilliseconds(reconcileWaitMs), ct))
+            {
+                return;
+            }
+        }
+        catch (OperationCanceledException)
         {
             return;
         }
@@ -248,14 +291,30 @@ internal sealed class InternetPipeServer
         {
             try
             {
-                Thread.Sleep(InternetDriftWatchdog.ResolveIntervalMs());
+                if (ct.WaitHandle.WaitOne(InternetDriftWatchdog.ResolveIntervalMs()))
+                {
+                    break;
+                }
+
+                if (ct.IsCancellationRequested)
+                {
+                    break;
+                }
+
                 if (!_on)
                 {
                     lock (_firewallGate)
                     {
-                        ReassertPersistedLocked();
+                        if (!ct.IsCancellationRequested)
+                        {
+                            ReassertPersistedLocked();
+                        }
                     }
                 }
+            }
+            catch (OperationCanceledException)
+            {
+                break;
             }
             catch
             {

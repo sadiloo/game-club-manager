@@ -378,14 +378,27 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
             var applyBody = await new GuardInternetClient().ApplyAsync(onCommand);
             Assert.Contains("applied", applyBody, StringComparison.OrdinalIgnoreCase);
 
+            hangRelease.Set();
+            var settleDeadline = DateTime.UtcNow.AddSeconds(5);
+            while (DateTime.UtcNow < settleDeadline)
+            {
+                var postStatus = await new GuardInternetClient().GetStatusAsync(default);
+                if (!postStatus.Contains("reconcile_timeout", StringComparison.OrdinalIgnoreCase))
+                {
+                    break;
+                }
+
+                await Task.Delay(100);
+            }
+
             Assert.Equal(callsAtAbandon, InternetPowerShellRunner.ReconcileRunCallCount);
             Console.WriteLine(
                 $"reconcile_abandon_runner_calls_stable at_abandon={callsAtAbandon} final={InternetPowerShellRunner.ReconcileRunCallCount}");
         }
         finally
         {
-            InternetGuardReconcileTestSeams.HangBeforeLocalhostCleanup = null;
             hangRelease.Set();
+            InternetGuardReconcileTestSeams.HangBeforeLocalhostCleanup = null;
             StopInternetPipeServer(cts, pipeThread, TimeSpan.FromSeconds(5));
             hangRelease.Dispose();
             Environment.SetEnvironmentVariable("CHECKPOINT_INTERNET_RECONCILE_TIMEOUT_MS", priorBudget);

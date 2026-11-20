@@ -74,6 +74,10 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
         };
     }
 
+    private const string TamperOpenEgressScript =
+        "Set-NetFirewallProfile -Name Domain,Private,Public -DefaultOutboundAction NotConfigured; "
+        + "Get-NetFirewallRule -Group 'Checkpoint Internet Off' | Select-Object -First 1 | Remove-NetFirewallRule -ErrorAction SilentlyContinue";
+
     [Fact(Timeout = 120_000)]
     public async Task internet_off_guard_process_restart_reasserts_before_pipe_ready()
     {
@@ -82,22 +86,36 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
         var pub = ExportPublicKeyPem(rsa);
         var config = BuildConfig(pub);
         var applier = new InternetFirewallApplier();
+        Process guard = null;
+        Process guard2 = null;
         try
         {
             Assert.Equal("applied", applier.Apply(config, on: false));
             Assert.False(TryTcp("1.1.1.1", 443, 2_000));
 
+            var offPayload = new InternetCommandPayload
+            {
+                StationId = config.StationId,
+                Epoch = Guid.NewGuid(),
+                Version = 1,
+                On = false,
+                IssuedAtUtc = DateTime.UtcNow,
+            };
+            InternetVerifiedStateFile.Save(InternetGuardPaths.StatePath, offPayload);
+
             WriteInternetConfig(config);
-            using var guard = GuardProcessStart.StartGuard();
+            guard = GuardProcessStart.StartGuard();
             await Task.Delay(2_000);
 
             Assert.False(TryTcp("1.1.1.1", 443, 2_000), "OFF must persist while Guard is running.");
             guard.Kill();
-            RunPowerShell(
-                "Get-NetFirewallRule -PolicyStore localhost -Group 'Checkpoint Internet Off' | Select-Object -First 1 | Remove-NetFirewallRule -PolicyStore localhost");
-            Assert.True(TryTcp("1.1.1.1", 443, 3_000), "Sanity: rule removal must temporarily open egress.");
+            guard.Dispose();
+            guard = null;
 
-            using var guard2 = GuardProcessStart.StartGuard();
+            RunPowerShell(TamperOpenEgressScript);
+            Assert.True(TryTcp("1.1.1.1", 443, 3_000), "Sanity: profile tamper must temporarily open egress.");
+
+            guard2 = GuardProcessStart.StartGuard();
             var restored = DateTime.UtcNow.AddSeconds(10);
             while (DateTime.UtcNow < restored)
             {
@@ -113,6 +131,40 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
         }
         finally
         {
+            if (guard2 is not null)
+            {
+                try
+                {
+                    if (!guard2.HasExited)
+                    {
+                        guard2.Kill();
+                    }
+                }
+                catch
+                {
+                    /* teardown */
+                }
+
+                guard2.Dispose();
+            }
+
+            if (guard is not null)
+            {
+                try
+                {
+                    if (!guard.HasExited)
+                    {
+                        guard.Kill();
+                    }
+                }
+                catch
+                {
+                    /* teardown */
+                }
+
+                guard.Dispose();
+            }
+
             applier.RunResetScript();
             TryDelete(InternetGuardPaths.ConfigPath);
             TryDelete(InternetGuardPaths.StatePath);
@@ -149,9 +201,8 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
             pipeThread = new Thread(() => server.Run(cts.Token)) { IsBackground = true, Name = "TestInternetPipe" };
             pipeThread.Start();
 
-            RunPowerShell(
-                "Get-NetFirewallRule -PolicyStore localhost -Group 'Checkpoint Internet Off' | Select-Object -First 1 | Remove-NetFirewallRule -PolicyStore localhost");
-            Assert.True(TryTcp("1.1.1.1", 443, 2_000), "Deleted rule must temporarily allow egress.");
+            RunPowerShell(TamperOpenEgressScript);
+            Assert.True(TryTcp("1.1.1.1", 443, 2_000), "Profile tamper must temporarily allow egress.");
 
             var deadline = DateTime.UtcNow.AddSeconds(15);
             while (DateTime.UtcNow < deadline)

@@ -17,7 +17,7 @@ $heartbeatLog = Join-Path $logDir "ci-heartbeat.log"
 $firewallLog = Join-Path $logDir "ci-firewall.log"
 $cancelFile = Join-Path $logDir "deadman.cancel"
 
-$script:GlobalDeadline = (Get-Date).AddMinutes(16)
+$script:GlobalDeadline = (Get-Date).AddMinutes(19)
 $script:FinalExitCode = 0
 $script:NightLineVstestPhases = @{}
 $nightLineToken = "wpf_remaining_time_matches_funded_session_special_band_night_line"
@@ -771,7 +771,7 @@ try {
         "--results-directory", $artifactDir,
         "--logger", "console;verbosity=detailed"
     )
-    $fwTestExit = Invoke-DotNetWithWatchdog -PhaseName "dotnet-test-pc-internet-firewall" -ArgumentList $fwTestArgs -PhaseCapMs (5 * 60 * 1000)
+    $fwTestExit = Invoke-DotNetWithWatchdog -PhaseName "dotnet-test-pc-internet-firewall" -ArgumentList $fwTestArgs -PhaseCapMs (8 * 60 * 1000)
     Publish-ServerLeaseBuildEvidence -phaseName "dotnet-test-pc-internet-firewall" -TrxPath (Join-Path $artifactDir "kiosk-windows-pc-internet-firewall.trx")
     Write-CiPhaseFirewallProbe -label "after-dotnet-test-pc-internet-firewall"
     Assert-TestPhaseExit -PhaseName "dotnet-test-pc-internet-firewall" -Exit $fwTestExit

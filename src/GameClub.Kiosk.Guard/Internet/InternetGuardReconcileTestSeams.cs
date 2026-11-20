@@ -16,12 +16,6 @@ internal static class InternetGuardReconcileTestSeams
             return;
         }
 
-        while (!hang.Wait(50))
-        {
-            if (!shouldContinue())
-            {
-                return;
-            }
-        }
+        hang.Wait();
     }
 }

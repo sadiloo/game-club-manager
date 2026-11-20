@@ -128,7 +128,7 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
     private static void AssertLocalhostProfilesNotBlock()
     {
         var profileJson = RunPowerShell(
-            "Get-NetFirewallProfile -PolicyStore localhost | Select-Object Name,DefaultOutboundAction | ConvertTo-Json");
+            "Get-NetFirewallProfile -PolicyStore localhost | Select-Object Name,@{N='DefaultOutboundAction';E={$_.DefaultOutboundAction.ToString()}} | ConvertTo-Json");
         Assert.DoesNotContain("Block", profileJson, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -179,7 +179,8 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
         {
             Assert.Equal("applied", applier.Apply(config, on: false));
             Thread.Sleep(1_500);
-            var script = "Get-NetFirewallProfile -PolicyStore ActiveStore | Select-Object Name,DefaultOutboundAction,AllowLocalFirewallRules | ConvertTo-Json";
+            var script =
+                "Get-NetFirewallProfile -PolicyStore ActiveStore | Select-Object Name,@{N='DefaultOutboundAction';E={$_.DefaultOutboundAction.ToString()}},@{N='AllowLocalFirewallRules';E={$_.AllowLocalFirewallRules.ToString()}} | ConvertTo-Json";
             var json = RunPowerShell(script);
             AssertLocalhostOffStoreActive(json);
             Assert.True(TryTcp("127.0.0.1", 80, 1_000), "loopback must remain reachable while OFF.");
@@ -220,7 +221,7 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
         {
             Assert.Equal("applied", applier.Apply(config, on: false));
             var profileJson = RunPowerShell(
-                "Get-NetFirewallProfile -PolicyStore localhost | Select-Object Name,DefaultOutboundAction | ConvertTo-Json");
+                "Get-NetFirewallProfile -PolicyStore localhost | Select-Object Name,@{N='DefaultOutboundAction';E={$_.DefaultOutboundAction.ToString()}} | ConvertTo-Json");
             Assert.Contains("Block", profileJson, StringComparison.OrdinalIgnoreCase);
             AssertCheckpointOffRuleGroupPresent();
             if (hadIpv6Egress)
@@ -500,7 +501,7 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
             Assert.Equal("applied", result);
             Assert.False(TryTcp("1.1.1.1", 443, 2_000));
             var profileJson = RunPowerShell(
-                "Get-NetFirewallProfile -PolicyStore ActiveStore | Select-Object Name,DefaultOutboundAction | ConvertTo-Json");
+                "Get-NetFirewallProfile -PolicyStore ActiveStore | Select-Object Name,@{N='DefaultOutboundAction';E={$_.DefaultOutboundAction.ToString()}} | ConvertTo-Json");
             AssertLocalhostOffStoreActive(profileJson);
             AssertCheckpointOffRuleGroupPresent();
         }
@@ -534,7 +535,7 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
                 "(Get-NetFirewallRule -Group 'Checkpoint Internet Off' -ErrorAction SilentlyContinue | Measure-Object).Count").Trim());
             Assert.Equal(0, activeRuleCount);
             var profileJson = RunPowerShell(
-                "Get-NetFirewallProfile | Select-Object Name,DefaultOutboundAction | ConvertTo-Json");
+                "Get-NetFirewallProfile | Select-Object Name,@{N='DefaultOutboundAction';E={$_.DefaultOutboundAction.ToString()}} | ConvertTo-Json");
             Assert.DoesNotContain("Block", profileJson, StringComparison.OrdinalIgnoreCase);
         }
         finally
@@ -617,7 +618,7 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
 
             Assert.True(TryTcp("1.1.1.1", 443, 3_000), "startup must unblock partial Block without verified state");
             var profileJson = RunPowerShell(
-                "Get-NetFirewallProfile | Select-Object Name,DefaultOutboundAction | ConvertTo-Json");
+                "Get-NetFirewallProfile | Select-Object Name,@{N='DefaultOutboundAction';E={$_.DefaultOutboundAction.ToString()}} | ConvertTo-Json");
             Assert.DoesNotContain("Block", profileJson, StringComparison.OrdinalIgnoreCase);
             var activeRules = int.Parse(RunPowerShell(
                 "(Get-NetFirewallRule -Group 'Checkpoint Internet Off' -ErrorAction SilentlyContinue | Measure-Object).Count").Trim());

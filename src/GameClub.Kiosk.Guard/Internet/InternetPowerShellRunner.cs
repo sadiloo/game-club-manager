@@ -15,9 +15,22 @@ internal static class InternetPowerShellRunner
     internal static int RunCallCount;
     internal static int ReconcileRunCallCount;
     internal static int ReconcileRunCallCountAtAbandon = -1;
-    internal static long LastPsStartMs;
-    internal static long LastRunWallMs;
-    internal static string LastRunStderr = "";
+
+    internal readonly struct RunTelemetry
+    {
+        internal RunTelemetry(string output, long psStartMs, long wallMs, string stderr)
+        {
+            Output = output;
+            PsStartMs = psStartMs;
+            WallMs = wallMs;
+            Stderr = stderr ?? "";
+        }
+
+        public string Output { get; }
+        public long PsStartMs { get; }
+        public long WallMs { get; }
+        public string Stderr { get; }
+    }
 
     internal static void SetReconcilePathThread(bool active) => ReconcilePathThread = active;
 
@@ -34,6 +47,9 @@ internal static class InternetPowerShellRunner
     }
 
     public static string Run(string script, int timeoutMs = 120_000, string? stepName = null)
+        => RunWithTelemetry(script, timeoutMs, stepName).Output;
+
+    internal static RunTelemetry RunWithTelemetry(string script, int timeoutMs = 120_000, string? stepName = null)
     {
         var stepSw = Stopwatch.StartNew();
         var psStartSw = Stopwatch.StartNew();
@@ -42,7 +58,10 @@ internal static class InternetPowerShellRunner
         {
             Interlocked.Increment(ref ReconcileRunCallCount);
         }
+
         Process? proc = null;
+        long psStartMs = 0;
+        var stderr = "";
         try
         {
             var encoded = Convert.ToBase64String(Encoding.Unicode.GetBytes(script));
@@ -56,7 +75,7 @@ internal static class InternetPowerShellRunner
                 CreateNoWindow = true,
             };
             proc = Process.Start(psi) ?? throw new InvalidOperationException("powershell start failed");
-            LastPsStartMs = psStartSw.ElapsedMilliseconds;
+            psStartMs = psStartSw.ElapsedMilliseconds;
             var pid = proc.Id;
             var stdoutTask = Task.Run(() => proc.StandardOutput.ReadToEnd());
             var stderrTask = Task.Run(() => proc.StandardError.ReadToEnd());
@@ -67,38 +86,42 @@ internal static class InternetPowerShellRunner
                 GuardWatchdogLog.Append(
                     $"powershell_timeout step={step} pid={pid} budget_ms={timeoutMs}");
                 InternetPowerShellProcessTree.KillTree(pid);
-                return "apply_failed:powershell_timeout";
+                return new RunTelemetry("apply_failed:powershell_timeout", psStartMs, stepSw.ElapsedMilliseconds, stderr);
             }
 
             var stdout = stdoutTask.GetAwaiter().GetResult();
-            var stderr = stderrTask.GetAwaiter().GetResult();
-            LastRunStderr = stderr ?? "";
+            stderr = stderrTask.GetAwaiter().GetResult() ?? "";
             if (proc.ExitCode != 0)
             {
-                var detail = string.IsNullOrWhiteSpace(LastRunStderr) ? stdout.Trim() : LastRunStderr.Trim();
+                var detail = string.IsNullOrWhiteSpace(stderr) ? stdout.Trim() : stderr.Trim();
                 if (string.IsNullOrWhiteSpace(detail))
                 {
                     detail = $"exit_{proc.ExitCode}";
                 }
 
-                return detail.StartsWith("apply_failed", StringComparison.Ordinal)
+                var output = detail.StartsWith("apply_failed", StringComparison.Ordinal)
                     ? detail
                     : $"apply_failed:powershell_error:{detail}";
+                return new RunTelemetry(output, psStartMs, stepSw.ElapsedMilliseconds, stderr);
             }
 
             var tail = stdout.Trim().Split('\n').LastOrDefault()?.Trim();
             var stepLabel = string.IsNullOrWhiteSpace(stepName) ? "powershell" : stepName;
             GuardWatchdogLog.Append(
                 $"powershell_step step={stepLabel} outcome=ok elapsed_ms={stepSw.ElapsedMilliseconds} budget_ms={timeoutMs}");
-            return string.IsNullOrEmpty(tail) ? "" : tail!;
+            var successOutput = string.IsNullOrEmpty(tail) ? "" : tail!;
+            return new RunTelemetry(successOutput, psStartMs, stepSw.ElapsedMilliseconds, stderr);
         }
         catch (Exception ex)
         {
-            return $"apply_failed:powershell_error:{ex.Message}";
+            return new RunTelemetry(
+                $"apply_failed:powershell_error:{ex.Message}",
+                psStartMs,
+                stepSw.ElapsedMilliseconds,
+                stderr);
         }
         finally
         {
-            LastRunWallMs = stepSw.ElapsedMilliseconds;
             proc?.Dispose();
         }
     }
