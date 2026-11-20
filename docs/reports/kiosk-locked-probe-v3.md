@@ -6,8 +6,8 @@ Branches (pushed, no PR):
 
 | Phase | Branch | Base | Head (`git rev-parse`) |
 |-------|--------|------|-------------------------|
-| A | `cursor/kiosk-locked-probe-v3-pr42` | `cursor/kiosk-locked-probe-v2-pr42` @ `b718edd` | `45b5825` |
-| B | `cursor/kiosk-locked-probe-v3` | `cursor/kiosk-locked-probe-v2` @ `10f7d6c` | `7c880a7` |
+| A | `cursor/kiosk-locked-probe-v3-pr42` | `cursor/kiosk-locked-probe-v2-pr42` @ `b718edd` | `e203184` |
+| B | `cursor/kiosk-locked-probe-v3` | `cursor/kiosk-locked-probe-v2` @ `10f7d6c` | `b2a1ccb` |
 
 ## Instrumentation added (logging only)
 
@@ -72,12 +72,28 @@ _Not applicable for attempt 3 (no stability failures, only pre-test DB reset fai
 
 v2 run global **25** on PR42 base: `sessions` **0 rows** for station; harness fund HTTP **200/204**; kiosk **`hostSessionId` all-zero** with `lockedReason=other:empty_host_session` (`KioskShellOrchestrator.cs` ~108). That pattern points to **product**: kiosk login/session bind race or ordering (`KioskHostService` / `KioskShellOrchestrator`), not missing harness session start — harness never calls `/api/kiosk/auth/login`; WPF kiosk does.
 
-v3 logging will show whether **`POST /api/kiosk/auth/login`** is absent, 4xx/409, or succeeds without a persisted session (case-normalization mismatch on `StationId` is an explicit check in evidence block 4) **once a CI run completes with Postgres up and all 100 stability iterations**.
+v3 logging will show whether **`POST /api/kiosk/auth/login`** is absent, 4xx/409, or succeeds without a persisted session (case-normalization mismatch on `StationId` is an explicit check in evidence block 4) when stability **fails** and `PROBE_V3_FAILURE_EVIDENCE` is emitted.
 
-## Next step (manual)
+## CI attempt 4 (Postgres healthy; full stability)
 
-Re-run workflow on both v3 branch heads after Postgres install is healthy on `windows-2022` (Actions → run → Re-run failed jobs, or empty push). Cloud agent token could not `gh run rerun` (integration permission).
+| Phase | Head | Run | Outcome |
+|-------|------|-----|---------|
+| B | `b2a1ccb` | [44639255965](https://github.com/sadiloo/game-club-manager/actions/runs/44639255965) | **success** (~37m integration job) |
+| A | `e203184` | [44639252221](https://github.com/sadiloo/game-club-manager/actions/runs/44639252221) | _in progress at last update_ |
+
+### Pass/fail counts (5 batches × 20) — attempt 4
+
+| Phase | Batch 1 | Batch 2 | Batch 3 | Batch 4 | Batch 5 | Total | Failure evidence |
+|-------|---------|---------|---------|---------|---------|-------|------------------|
+| B | 20/20 | 20/20 | 20/20 | 20/20 | 20/20 | **100/100 pass** | none (`failures=0` each batch; no `wpf-stability-failure-evidence-*.log`) |
+| A | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ |
+
+Phase **B** (trunk-line v2 base @ `10f7d6c`): v3 instrumentation ran end-to-end; **did not reproduce** the v2 locked / empty-`hostSessionId` / zero-`sessions` pattern in 100 consecutive WPF stability iterations. ~10s per pass (real polls, not harness instant-fail).
+
+### Per-failure timelines (attempt 4)
+
+_None on phase B (all green). Phase A pending — this is the branch stack where v2 captured global-25 locked evidence on PR42._
 
 ## STOP
 
-Probe branches pushed; report current through attempt 3. **No PR.** A successful attempt 4 should populate batch tables and per-failure `PROBE_V3_*` timelines in this file.
+Probe branches pushed; **no PR.** Phase B attempt 4 complete with no locked flake. Phase A attempt 4 determines whether PR42-line product delta is required to reproduce v2 failure; update this file when [44639252221](https://github.com/sadiloo/game-club-manager/actions/runs/44639252221) finishes.
