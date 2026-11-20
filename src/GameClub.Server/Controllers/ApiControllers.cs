@@ -93,7 +93,7 @@ public sealed class SessionsController(SessionService sessions, IDeadPcMonitor d
     {
         if (!Enum.TryParse<GameClub.Billing.PlayMode>(body.Mode, true, out var parsed))
         {
-            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_mode", $"Unknown play mode '{body.Mode}'.");
+            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_mode", $"حالت بازی «{body.Mode}» ناشناخته است.");
         }
 
         var session = await sessions.StartAsync(body.StationId, body.PlayerCount, parsed, body.StartedAt, null, ct);

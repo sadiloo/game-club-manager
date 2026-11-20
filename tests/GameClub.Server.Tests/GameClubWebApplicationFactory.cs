@@ -121,9 +121,9 @@ public class GameClubWebApplicationFactory : WebApplicationFactory<Program>
                 cmd.CommandText = $"DROP DATABASE IF EXISTS \"{_generatedDatabaseName}\" WITH (FORCE)";
                 cmd.ExecuteNonQuery();
             }
-            catch
+            catch (Exception ex)
             {
-                // Best-effort teardown for locally generated test databases.
+                Console.Error.WriteLine($"TEST_DB_DROP_FAILED {_generatedDatabaseName} {ex.Message}");
             }
         }
 

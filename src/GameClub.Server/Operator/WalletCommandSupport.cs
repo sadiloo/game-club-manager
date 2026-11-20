@@ -70,7 +70,7 @@ public static class WalletCommandSupport
             throw new ApiException(
                 StatusCodes.Status409Conflict,
                 "command_id_reused",
-                "commandId was already used with a different request.");
+                "شناسهٔ دستور قبلاً با درخواست دیگری استفاده شده است.");
         }
 
         if (row.ResultJson is not { } json)

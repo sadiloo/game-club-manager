@@ -117,7 +117,7 @@ public sealed class OperatorPrepaidService(
         }
         catch (BillingException ex)
         {
-            throw new ApiException(StatusCodes.Status400BadRequest, "billing_error", ex.Message);
+            throw new ApiException(StatusCodes.Status400BadRequest, "billing_error", BillingExceptionUserMessages.ForCode(ex.Code));
         }
 
         var seg0 = openSeg;

@@ -37,6 +37,7 @@ if (ctx.window.cpTranslateApiError("invalid_opening", "") !== "مانده افت
 const invalidAmountGift = ctx.window.cpTranslateApiError("invalid_amount", "", { scope: "member_gift" });
 if (invalidAmountGift !== "هدیه نمی‌تواند منفی باشد.") throw new Error("invalid_amount gift scope");
 if (ctx.window.cpTranslateApiError("invalid_amount", "") !== "مبلغ نامعتبر است.") throw new Error("invalid_amount default");
+if (ctx.window.cpTranslateApiError("invalid_money", "x") !== "مبلغ درست نیست.") throw new Error("invalid_money text");
 if (ctx.window.cpTranslateApiError("no_open_shift", "x") !== "شیفتی باز نیست. اول شیفت را باز کنید.") {
   throw new Error("missing no_open_shift code");
 }

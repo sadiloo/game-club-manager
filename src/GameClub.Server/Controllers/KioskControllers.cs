@@ -251,7 +251,7 @@ public sealed class KioskOperatorController(
 
         if (op.Role is not UserRole.Manager and not UserRole.Owner)
         {
-            throw new ApiException(StatusCodes.Status403Forbidden, "forbidden", "Manager permission required.");
+            throw new ApiException(StatusCodes.Status403Forbidden, "forbidden", "دسترسی مدیر لازم است.");
         }
     }
 }

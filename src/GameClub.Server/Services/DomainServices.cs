@@ -49,7 +49,7 @@ public sealed class StationService(AppDbContext db, AuditService audit)
     {
         var id = StationIdNormalizer.Normalize(stationId);
         return await db.Stations.AsNoTracking().Include(s => s.Group).FirstOrDefaultAsync(s => s.Id == id, ct)
-            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Station not found.");
+            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "ایستگاه یافت نشد.");
     }
 
     public async Task<StationEntity> RegisterAsync(string rawId, string name, string groupId, CancellationToken ct)
@@ -57,18 +57,18 @@ public sealed class StationService(AppDbContext db, AuditService audit)
         var id = StationIdNormalizer.Normalize(rawId);
         if (string.IsNullOrEmpty(id))
         {
-            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_station", "Station id is required.");
+            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_station", "شناسهٔ ایستگاه الزامی است.");
         }
 
         var group = await db.StationGroups.AsNoTracking().FirstOrDefaultAsync(g => g.Id == groupId, ct);
         if (group is null)
         {
-            throw new ApiException(StatusCodes.Status400BadRequest, "unknown_group", $"Unknown group '{groupId}'.");
+            throw new ApiException(StatusCodes.Status400BadRequest, "unknown_group", $"گروه «{groupId}» ناشناخته است.");
         }
 
         if (await db.Stations.AnyAsync(s => s.Id == id, ct))
         {
-            throw new ApiException(StatusCodes.Status409Conflict, "duplicate_station", $"Station '{id}' already exists.");
+            throw new ApiException(StatusCodes.Status409Conflict, "duplicate_station", $"ایستگاه «{id}» از قبل وجود دارد.");
         }
 
         try
@@ -80,7 +80,7 @@ public sealed class StationService(AppDbContext db, AuditService audit)
         }
         catch (DbUpdateException ex) when (PostgresErrors.IsStationIdUniqueViolation(ex))
         {
-            throw new ApiException(StatusCodes.Status409Conflict, "duplicate_station", $"Station '{id}' already exists.");
+            throw new ApiException(StatusCodes.Status409Conflict, "duplicate_station", $"ایستگاه «{id}» از قبل وجود دارد.");
         }
     }
 
@@ -95,10 +95,10 @@ public sealed class StationService(AppDbContext db, AuditService audit)
                 """SELECT 1 FROM stations WHERE "Id" = {0} FOR UPDATE""",
                 id);
             var station = await db.Stations.FirstOrDefaultAsync(s => s.Id == id, ct)
-                ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Station not found.");
+                ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "ایستگاه یافت نشد.");
             if (!station.IsActive)
             {
-                throw new ApiException(StatusCodes.Status409Conflict, "inactive", "Station is deactivated.");
+                throw new ApiException(StatusCodes.Status409Conflict, "inactive", "ایستگاه غیرفعال است.");
             }
 
             if (name is not null)
@@ -109,14 +109,14 @@ public sealed class StationService(AppDbContext db, AuditService audit)
             if (groupId is not null)
             {
                 _ = await db.StationGroups.AsNoTracking().FirstOrDefaultAsync(g => g.Id == groupId, ct)
-                    ?? throw new ApiException(StatusCodes.Status400BadRequest, "unknown_group", $"Unknown group '{groupId}'.");
+                    ?? throw new ApiException(StatusCodes.Status400BadRequest, "unknown_group", $"گروه «{groupId}» ناشناخته است.");
             }
 
             if (groupId is not null && !string.Equals(groupId, station.GroupId, StringComparison.Ordinal))
             {
                 if (await db.Sessions.AnyAsync(s => s.StationId == id && s.Status != SessionStatus.Closed, ct))
                 {
-                    throw new ApiException(StatusCodes.Status409Conflict, "station_busy", "Station has an active session; group cannot change.");
+                    throw new ApiException(StatusCodes.Status409Conflict, "station_busy", "ایستگاه جلسهٔ فعال دارد؛ گروه عوض نمی‌شود.");
                 }
 
                 station.GroupId = groupId;
@@ -132,7 +132,7 @@ public sealed class StationService(AppDbContext db, AuditService audit)
     {
         var id = StationIdNormalizer.Normalize(stationId);
         var station = await db.Stations.FirstOrDefaultAsync(s => s.Id == id, ct)
-            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Station not found.");
+            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "ایستگاه یافت نشد.");
         if (!station.IsActive)
         {
             return station;
@@ -531,7 +531,7 @@ public sealed class SessionService(
             throw new ApiException(
                 StatusCodes.Status400BadRequest,
                 "client_start_time",
-                "Session start time is set by the server; do not send startedAt.");
+                "زمان شروع جلسه را سرور تعیین می‌کند؛ startedAt نفرستید.");
         }
 
         await shiftGate.EnsureMoneyRecordingAllowedAsync(ct);
@@ -546,20 +546,20 @@ public sealed class SessionService(
                 """SELECT 1 FROM stations WHERE "Id" = {0} FOR UPDATE""",
                 normalizedId);
             var station = await db.Stations.Include(s => s.Group).FirstOrDefaultAsync(s => s.Id == normalizedId, ct)
-                ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Station not found.");
+                ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "ایستگاه یافت نشد.");
             if (station.Group is null || string.IsNullOrWhiteSpace(station.GroupId))
             {
-                throw new ApiException(StatusCodes.Status409Conflict, "no_group", "Station has no group.");
+                throw new ApiException(StatusCodes.Status409Conflict, "no_group", "ایستگاه گروه ندارد.");
             }
 
             if (!station.IsActive)
             {
-                throw new ApiException(StatusCodes.Status409Conflict, "inactive", "Station is deactivated.");
+                throw new ApiException(StatusCodes.Status409Conflict, "inactive", "ایستگاه غیرفعال است.");
             }
 
             if (station.OperationalState != StationOperationalState.Available)
             {
-                throw new ApiException(StatusCodes.Status409Conflict, "target_unavailable", "Station cannot accept a new session.");
+                throw new ApiException(StatusCodes.Status409Conflict, "target_unavailable", "ایستگاه جلسهٔ جدید نمی‌پذیرد.");
             }
 
             if (station.Group.Kind == StationKind.Pc)
@@ -568,7 +568,7 @@ public sealed class SessionService(
                     .FirstOrDefaultAsync(p => p.StationId == station.Id, ct);
                 if (kioskProfile?.IsTestMode == true)
                 {
-                    throw new ApiException(StatusCodes.Status409Conflict, "test_mode", "Station is in test mode.");
+                    throw new ApiException(StatusCodes.Status409Conflict, "test_mode", "ایستگاه در حالت آزمایش است.");
                 }
             }
 
@@ -580,12 +580,12 @@ public sealed class SessionService(
                             || s.Status == SessionStatus.AwaitingPayment),
                     ct))
             {
-                throw new ApiException(StatusCodes.Status409Conflict, "station_busy", "Station already has an open session.");
+                throw new ApiException(StatusCodes.Status409Conflict, "station_busy", "ایستگاه از قبل جلسهٔ باز دارد.");
             }
 
             if (playerCount is < 1 or > 4)
             {
-                throw new ApiException(StatusCodes.Status400BadRequest, "invalid_players", "Player count must be 1–4.");
+                throw new ApiException(StatusCodes.Status400BadRequest, "invalid_players", "تعداد بازیکن باید بین ۱ تا ۴ باشد.");
             }
 
             var startUtc = clock.UtcNow.UtcDateTime;
@@ -619,7 +619,7 @@ public sealed class SessionService(
             {
                 if (station.Group.Kind != StationKind.Console)
                 {
-                    throw new ApiException(StatusCodes.Status400BadRequest, "not_console", "Game selection applies to consoles only.");
+                    throw new ApiException(StatusCodes.Status400BadRequest, "not_console", "انتخاب بازی فقط برای کنسول است.");
                 }
 
                 var title = await gameTariff.EnsureGameForSessionAsync(gameTitleId, mode, playerCount, ct);
@@ -638,7 +638,7 @@ public sealed class SessionService(
             }
             catch (DbUpdateException ex) when (PostgresErrors.IsActiveSessionUniqueViolation(ex))
             {
-                throw new ApiException(StatusCodes.Status409Conflict, "station_busy", "Station already has an open session.");
+                throw new ApiException(StatusCodes.Status409Conflict, "station_busy", "ایستگاه از قبل جلسهٔ باز دارد.");
             }
 
             await tx.CommitAsync(ct);
@@ -651,22 +651,22 @@ public sealed class SessionService(
         {
             if (session.Station!.Group!.Kind == StationKind.Pc)
             {
-                throw new ApiException(StatusCodes.Status409Conflict, "pc_pause", "Pause is not allowed on a PC station.");
+                throw new ApiException(StatusCodes.Status409Conflict, "pc_pause", "توقف برای ایستگاه کامپیوتر مجاز نیست.");
             }
 
             if (session.Status == SessionStatus.ManualSettle)
             {
-                throw new ApiException(StatusCodes.Status409Conflict, "manual_settle", "Session awaits manual settlement.");
+                throw new ApiException(StatusCodes.Status409Conflict, "manual_settle", "جلسه در انتظار تسویهٔ دستی است.");
             }
 
             if (session.Status is SessionStatus.BillOpen or SessionStatus.AwaitingPayment)
             {
-                throw new ApiException(StatusCodes.Status409Conflict, "awaiting_payment", "Session already has an open bill.");
+                throw new ApiException(StatusCodes.Status409Conflict, "awaiting_payment", "جلسه از قبل صورتحساب باز دارد.");
             }
 
             if (session.Status == SessionStatus.Paused)
             {
-                throw new ApiException(StatusCodes.Status409Conflict, "already_paused", "Session is already paused.");
+                throw new ApiException(StatusCodes.Status409Conflict, "already_paused", "جلسه از قبل متوقف شده است.");
             }
 
             var now = clock.UtcNow.UtcDateTime;
@@ -678,7 +678,7 @@ public sealed class SessionService(
             }
             catch (DbUpdateException ex) when (PostgresErrors.IsOpenPauseUniqueViolation(ex))
             {
-                throw new ApiException(StatusCodes.Status409Conflict, "already_paused", "Session is already paused.");
+                throw new ApiException(StatusCodes.Status409Conflict, "already_paused", "جلسه از قبل متوقف شده است.");
             }
         }, ct);
 
@@ -687,21 +687,21 @@ public sealed class SessionService(
         {
             if (session.Status == SessionStatus.ManualSettle)
             {
-                throw new ApiException(StatusCodes.Status409Conflict, "manual_settle", "Session awaits manual settlement.");
+                throw new ApiException(StatusCodes.Status409Conflict, "manual_settle", "جلسه در انتظار تسویهٔ دستی است.");
             }
 
             if (session.Status is SessionStatus.BillOpen or SessionStatus.AwaitingPayment)
             {
-                throw new ApiException(StatusCodes.Status409Conflict, "awaiting_payment", "Session already has an open bill.");
+                throw new ApiException(StatusCodes.Status409Conflict, "awaiting_payment", "جلسه از قبل صورتحساب باز دارد.");
             }
 
             if (session.Status != SessionStatus.Paused)
             {
-                throw new ApiException(StatusCodes.Status409Conflict, "not_paused", "Session is not paused.");
+                throw new ApiException(StatusCodes.Status409Conflict, "not_paused", "جلسه متوقف نیست.");
             }
 
             var openPause = session.Pauses.LastOrDefault(p => p.EndUtc is null)
-                ?? throw new ApiException(StatusCodes.Status409Conflict, "not_paused", "No open pause.");
+                ?? throw new ApiException(StatusCodes.Status409Conflict, "not_paused", "توقفی باز نیست.");
             openPause.EndUtc = clock.UtcNow.UtcDateTime;
             session.Status = SessionStatus.Open;
             await audit.AppendAsync("session.resume", new { sessionId }, innerCt);
@@ -715,12 +715,12 @@ public sealed class SessionService(
         {
             if (session.Status == SessionStatus.ManualSettle)
             {
-                throw new ApiException(StatusCodes.Status409Conflict, "manual_settle", "Session awaits manual settlement.");
+                throw new ApiException(StatusCodes.Status409Conflict, "manual_settle", "جلسه در انتظار تسویهٔ دستی است.");
             }
 
             if (session.Status is SessionStatus.AwaitingPayment or SessionStatus.BillOpen)
             {
-                throw new ApiException(StatusCodes.Status409Conflict, "awaiting_payment", "Session already has an open bill.");
+                throw new ApiException(StatusCodes.Status409Conflict, "awaiting_payment", "جلسه از قبل صورتحساب باز دارد.");
             }
 
             if (session.Station!.Group!.Kind == StationKind.Pc)
@@ -742,17 +742,17 @@ public sealed class SessionService(
         {
             if (session.Station!.Group!.Kind != StationKind.Pc)
             {
-                throw new ApiException(StatusCodes.Status400BadRequest, "not_pc", "Checkpoints are for PC sessions only.");
+                throw new ApiException(StatusCodes.Status400BadRequest, "not_pc", "نقطهٔ کنترل فقط برای جلسهٔ کامپیوتر است.");
             }
 
             if (session.Status is not SessionStatus.Open and not SessionStatus.Paused)
             {
                 if (session.Status == SessionStatus.ManualSettle)
                 {
-                    throw new ApiException(StatusCodes.Status409Conflict, "manual_settle", "Session awaits manual settlement.");
+                    throw new ApiException(StatusCodes.Status409Conflict, "manual_settle", "جلسه در انتظار تسویهٔ دستی است.");
                 }
 
-                throw new ApiException(StatusCodes.Status409Conflict, "closed", "Session is closed.");
+                throw new ApiException(StatusCodes.Status409Conflict, "closed", "جلسه بسته شده است.");
             }
 
             var serverNow = clock.UtcNow.UtcDateTime;
@@ -767,7 +767,7 @@ public sealed class SessionService(
                     throw new ApiException(
                         StatusCodes.Status400BadRequest,
                         "checkpoint_in_future",
-                        "Checkpoint time cannot be more than 60 seconds ahead of server time.");
+                        "زمان نقطهٔ کنترل نمی‌تواند بیشتر از ۶۰ ثانیه جلوتر از زمان سرور باشد.");
                 }
 
                 if (reportedUtc < previous)
@@ -802,17 +802,17 @@ public sealed class SessionService(
         {
             if (session.Station!.Group!.Kind != StationKind.Pc)
             {
-                throw new ApiException(StatusCodes.Status400BadRequest, "not_pc", "Checkpoints are for PC sessions only.");
+                throw new ApiException(StatusCodes.Status400BadRequest, "not_pc", "نقطهٔ کنترل فقط برای جلسهٔ کامپیوتر است.");
             }
 
             if (session.Status is not SessionStatus.Open and not SessionStatus.Paused)
             {
                 if (session.Status == SessionStatus.ManualSettle)
                 {
-                    throw new ApiException(StatusCodes.Status409Conflict, "manual_settle", "Session awaits manual settlement.");
+                    throw new ApiException(StatusCodes.Status409Conflict, "manual_settle", "جلسه در انتظار تسویهٔ دستی است.");
                 }
 
-                throw new ApiException(StatusCodes.Status409Conflict, "closed", "Session is closed.");
+                throw new ApiException(StatusCodes.Status409Conflict, "closed", "جلسه بسته شده است.");
             }
 
             if (acceptedUtc.Count == 0)
@@ -845,22 +845,22 @@ public sealed class SessionService(
         {
             if (session.Station!.Group!.Kind != StationKind.Console)
             {
-                throw new ApiException(StatusCodes.Status400BadRequest, "not_console", "Controller count changes apply to consoles only.");
+                throw new ApiException(StatusCodes.Status400BadRequest, "not_console", "تغییر تعداد دسته فقط برای کنسول است.");
             }
 
             if (session.Status == SessionStatus.ManualSettle)
             {
-                throw new ApiException(StatusCodes.Status409Conflict, "manual_settle", "Session awaits manual settlement.");
+                throw new ApiException(StatusCodes.Status409Conflict, "manual_settle", "جلسه در انتظار تسویهٔ دستی است.");
             }
 
             if (session.Status is SessionStatus.BillOpen or SessionStatus.AwaitingPayment)
             {
-                throw new ApiException(StatusCodes.Status409Conflict, "awaiting_payment", "Session already has an open bill.");
+                throw new ApiException(StatusCodes.Status409Conflict, "awaiting_payment", "جلسه از قبل صورتحساب باز دارد.");
             }
 
             if (playerCount is < 1 or > 4)
             {
-                throw new ApiException(StatusCodes.Status400BadRequest, "invalid_players", "Player count must be 1–4.");
+                throw new ApiException(StatusCodes.Status400BadRequest, "invalid_players", "تعداد بازیکن باید بین ۱ تا ۴ باشد.");
             }
 
             if (session.PlayerCount == playerCount)
@@ -870,7 +870,7 @@ public sealed class SessionService(
 
             var now = clock.UtcNow.UtcDateTime;
             var openSegment = session.Segments.SingleOrDefault(s => s.EndUtc is null)
-                ?? throw new ApiException(StatusCodes.Status409Conflict, "awaiting_payment", "Session already has an open bill.");
+                ?? throw new ApiException(StatusCodes.Status409Conflict, "awaiting_payment", "جلسه از قبل صورتحساب باز دارد.");
             if (session.CurrentGameTitleId is int gameId)
             {
                 _ = await gameTariff.ResolveSnapshotsAsync(gameId, session.Mode, playerCount, innerCt);
@@ -912,7 +912,7 @@ public sealed class SessionService(
     {
         if (session.Status == SessionStatus.ManualSettle)
         {
-            throw new ApiException(StatusCodes.Status409Conflict, "manual_settle", "Session awaits manual settlement.");
+            throw new ApiException(StatusCodes.Status409Conflict, "manual_settle", "جلسه در انتظار تسویهٔ دستی است.");
         }
 
         if (session.Status is SessionStatus.BillOpen or SessionStatus.AwaitingPayment)
@@ -937,7 +937,7 @@ public sealed class SessionService(
             if (session.Status != SessionStatus.ManualSettle
                 && !(session.Status == SessionStatus.AwaitingPayment && session.ManualSettleReason != null))
             {
-                throw new ApiException(StatusCodes.Status409Conflict, "not_manual_settle", "Session is not awaiting manual settlement.");
+                throw new ApiException(StatusCodes.Status409Conflict, "not_manual_settle", "جلسه در انتظار تسویهٔ دستی نیست.");
             }
 
             var now = clock.UtcNow.UtcDateTime;
@@ -952,12 +952,12 @@ public sealed class SessionService(
                 endUtc = TimeMapping.ToUtc(TehranTime.Ensure(endAt.Value));
                 if (endUtc > now)
                 {
-                    throw new ApiException(StatusCodes.Status400BadRequest, "future_end", "End time cannot be in the future.");
+                    throw new ApiException(StatusCodes.Status400BadRequest, "future_end", "زمان پایان نمی‌تواند در آینده باشد.");
                 }
 
                 if (endUtc < lastAccepted)
                 {
-                    throw new ApiException(StatusCodes.Status400BadRequest, "before_checkpoint", "End time must be at or after the last accepted checkpoint.");
+                    throw new ApiException(StatusCodes.Status400BadRequest, "before_checkpoint", "زمان پایان باید از آخرین نقطهٔ کنترل پذیرفته‌شده به بعد باشد.");
                 }
             }
 
@@ -988,10 +988,10 @@ public sealed class SessionService(
             .Include(s => s.Segments)
             .Include(s => s.Pauses)
             .FirstOrDefaultAsync(s => s.Id == id, ct)
-            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Session not found.");
+            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "جلسه یافت نشد.");
         if (session.Status is SessionStatus.Closed)
         {
-            throw new ApiException(StatusCodes.Status409Conflict, "closed", "Session is closed.");
+            throw new ApiException(StatusCodes.Status409Conflict, "closed", "جلسه بسته شده است.");
         }
 
         return session;
@@ -1019,7 +1019,7 @@ public sealed class SessionService(
         }
         catch (Exception ex) when (PostgresErrors.IsLockNotAvailable(ex))
         {
-            throw new ApiException(StatusCodes.Status409Conflict, "session_busy", "Session is being updated.");
+            throw new ApiException(StatusCodes.Status409Conflict, "session_busy", "جلسه در حال به‌روزرسانی است.");
         }
     }
 
@@ -1039,10 +1039,10 @@ public sealed class SessionService(
                 .Include(s => s.Segments)
                 .Include(s => s.Pauses)
                 .FirstOrDefaultAsync(s => s.Id == sessionId, ct)
-                ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Session not found.");
+                ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "جلسه یافت نشد.");
             if (session.Status == SessionStatus.Closed)
             {
-                throw new ApiException(StatusCodes.Status409Conflict, "closed", "Session is closed.");
+                throw new ApiException(StatusCodes.Status409Conflict, "closed", "جلسه بسته شده است.");
             }
 
             var result = await action(session, ct);

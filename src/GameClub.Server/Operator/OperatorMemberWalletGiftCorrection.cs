@@ -46,7 +46,7 @@ public static class WalletGiftCapMath
             throw new ApiException(
                 StatusCodes.Status400BadRequest,
                 "gift_cap_exceeded",
-                $"Gift exceeds operator cap (max {maxGift} toman for this amount).")
+                $"هدیه از سقف اپراتور بیشتر است (حداکثر {maxGift} تومان برای این مبلغ).")
             {
                 Extras = new Dictionary<string, object> { ["maxAllowedGiftToman"] = maxGift },
             };

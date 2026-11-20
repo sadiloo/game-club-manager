@@ -50,26 +50,26 @@ public sealed class RateConfigService(AppDbContext db, AuditService audit)
     {
         if (request.RoundingStepToman <= 0)
         {
-            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_rounding", "Rounding step must be positive.");
+            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_rounding", "گام گرد کردن باید بیشتر از صفر باشد.");
         }
 
         if (!request.RoundingDirection.Equals("Up", StringComparison.OrdinalIgnoreCase)
             && !request.RoundingDirection.Equals("Down", StringComparison.OrdinalIgnoreCase))
         {
-            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_rounding", "Rounding direction must be Up or Down.");
+            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_rounding", "جهت گرد کردن باید بالا یا پایین باشد.");
         }
 
         foreach (var line in request.Lines)
         {
             if (line.HourlyToman < 0)
             {
-                throw new ApiException(StatusCodes.Status400BadRequest, "invalid_rate", "Hourly rate cannot be negative.");
+                throw new ApiException(StatusCodes.Status400BadRequest, "invalid_rate", "نرخ ساعتی نمی‌تواند منفی باشد.");
             }
         }
 
         if (request.PcSpecialBandSurchargeToman is { } requestedSurcharge && requestedSurcharge < 0)
         {
-            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_rate", "PC special-band surcharge cannot be negative.");
+            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_rate", "افزایش باند ویژهٔ کامپیوتر نمی‌تواند منفی باشد.");
         }
 
         var rounding = await db.BranchRounding.SingleAsync(ct);
@@ -93,7 +93,7 @@ public sealed class RateConfigService(AppDbContext db, AuditService audit)
                 throw new ApiException(
                     StatusCodes.Status400BadRequest,
                     "unknown_rate_line",
-                    $"No rate line for group={line.GroupId} mode={line.PlayMode} players={line.PlayerCount} special={line.IsSpecialBand}.");
+                    $"برای group={line.GroupId} mode={line.PlayMode} players={line.PlayerCount} special={line.IsSpecialBand} خط نرخی نیست.");
             }
 
             row.HourlyToman = line.HourlyToman;
