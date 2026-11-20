@@ -72,7 +72,7 @@ jobs:
 
   windows-kiosk-integration:
     name: windows-2022 kiosk integration
-    timeout-minutes: 185
+    timeout-minutes: 360
     runs-on: windows-2022
     env:
       GAMECLUB_DATABASE: Host=localhost;Port=5432;Database=gameclub_test;Username=postgres;Password=postgres;SSL Mode=Disable
@@ -125,18 +125,14 @@ jobs:
         timeout-minutes: 2
         shell: pwsh
         run: ./scripts/windows/ci-orphan-check.ps1
-      - name: wpf remaining time stability (5 batches x 20 runs)
+      - name: wpf remaining time stability (10 batches x 20 runs)
         if: always()
-        timeout-minutes: 150
+        timeout-minutes: 330
         shell: pwsh
         env:
-          WPF_STABILITY_BATCHES: "5"
+          WPF_STABILITY_BATCHES: "10"
           WPF_STABILITY_RUNS: "20"
         run: ./scripts/windows/ci-integration-wpf-stability-batches.ps1
-      - name: wpf stability failure evidence
-        if: failure()
-        shell: pwsh
-        run: ./scripts/windows/ci-wpf-stability-failure-evidence.ps1
       - name: upload wpf stability logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
@@ -147,6 +143,8 @@ jobs:
             artifacts/kiosk-windows-logs/wpf-stability-server-err.log
             artifacts/kiosk-windows-logs/wpf-stability-server-out.log
             artifacts/kiosk-windows-logs/wpf-stability-*.log
+            artifacts/kiosk-windows-logs/wpf-stability-red-runs.jsonl
+            artifacts/kiosk-windows-logs/wpf-stability-run-*.trx
       - name: reset kiosk ci firewall and probe egress
         if: always()
         timeout-minutes: 3
