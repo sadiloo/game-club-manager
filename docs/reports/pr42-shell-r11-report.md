@@ -6,7 +6,7 @@
 |-------|-------|
 | **Branch** | `cursor/pr42-r11-staging` |
 | **Parent** | `11223994a82f03c5c00c48d5c3f52866b87f9dc2` |
-| **Staging SHA** | `666ed20b0e6259d41c2e88c272d9baf2cd48a59a` |
+| **Staging SHA** | `237a08d225a20ed193a8018ef97259ccd6e2ac89` |
 
 ## Diff stat
 
