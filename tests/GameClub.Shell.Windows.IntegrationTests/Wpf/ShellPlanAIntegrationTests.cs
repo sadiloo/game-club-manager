@@ -881,6 +881,7 @@ public sealed class ShellPlanAIntegrationTests
                     }
 
                     Assert.NotNull(wv?.CoreWebView2);
+                    ShellFileLog.Write("shell-failing-panel-measure-baseline");
                     var offlineSamples = 0;
                     var panelUnavailableSamples = 0;
                     var runningVisualSamples = 0;
