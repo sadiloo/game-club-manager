@@ -120,7 +120,20 @@ if (-not $SkipBaselineFailCheck) {
     $baselineScript = Join-Path ([System.IO.Path]::GetTempPath()) ("ci-integration-$baselineSha.ps1")
     Push-Location $repoRoot
     try {
-        git show "${baselineSha}:scripts/windows/ci-integration.ps1" | Set-Content -LiteralPath $baselineScript -Encoding UTF8
+        $gitShowOutput = @(git show "${baselineSha}:scripts/windows/ci-integration.ps1" 2>&1)
+        $gitShowExit = $LASTEXITCODE
+        if ($gitShowExit -ne 0) {
+            $joined = ($gitShowOutput | ForEach-Object { "$_" }) -join '; '
+            throw "CI_ENTRY_SMOKE baseline git show failed sha=$baselineSha exit=$gitShowExit detail=$joined"
+        }
+        $scriptBody = ($gitShowOutput | ForEach-Object { "$_" }) -join "`n"
+        if ([string]::IsNullOrWhiteSpace($scriptBody)) {
+            throw "CI_ENTRY_SMOKE baseline git show produced empty script sha=$baselineSha (shallow clone? fetch-depth=1?)"
+        }
+        Set-Content -LiteralPath $baselineScript -Value $scriptBody -Encoding UTF8
+        if (-not (Test-Path -LiteralPath $baselineScript) -or (Get-Item -LiteralPath $baselineScript).Length -lt 64) {
+            throw "CI_ENTRY_SMOKE baseline script file missing or too small path=$baselineScript"
+        }
     }
     finally {
         Pop-Location

@@ -33,7 +33,7 @@ jobs:
         run: ./scripts/ci/ps-parse-check.ps1
       - name: ci integration entry smoke
         shell: pwsh
-        run: ./scripts/ci/ps-entry-smoke.ps1
+        run: ./scripts/ci/ps-entry-smoke.ps1 -SkipBaselineFailCheck
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.403
