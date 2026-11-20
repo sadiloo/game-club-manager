@@ -41,7 +41,10 @@ internal static class ShellRendererCrashHarness
                     {
                         await KillRendererForCoreAsync(core);
                         ShellFileLog.Write("SHELL-CRASH-TRIGGER path=kill-renderer");
-                        await AwaitRendererFailureAsync(rendererFailed, TimeSpan.FromSeconds(5));
+                        await AwaitRendererFailureOrThrowAsync(
+                            rendererFailed,
+                            TimeSpan.FromSeconds(5),
+                            "RenderProcessExited did not arrive within 5s after kill-renderer (Page.crash exception path).");
                         return;
                     }
                 }
@@ -50,7 +53,10 @@ internal static class ShellRendererCrashHarness
                 {
                     await KillRendererForCoreAsync(core);
                     ShellFileLog.Write("SHELL-CRASH-TRIGGER path=kill-renderer");
-                    await AwaitRendererFailureAsync(rendererFailed, TimeSpan.FromSeconds(5));
+                    await AwaitRendererFailureOrThrowAsync(
+                        rendererFailed,
+                        TimeSpan.FromSeconds(5),
+                        "RenderProcessExited did not arrive within 5s after kill-renderer (no renderer failure after Page.crash).");
                     return;
                 }
 
@@ -68,15 +74,24 @@ internal static class ShellRendererCrashHarness
     }
 
     private static bool IsRendererProcessFailure(CoreWebView2ProcessFailedKind kind) =>
-        kind is CoreWebView2ProcessFailedKind.RenderProcessExited
-            or CoreWebView2ProcessFailedKind.RenderProcessUnresponsive
-            or CoreWebView2ProcessFailedKind.FrameRenderProcessExited;
+        kind == CoreWebView2ProcessFailedKind.RenderProcessExited;
 
     private static async Task<bool> AwaitRendererFailureAsync(
         TaskCompletionSource<CoreWebView2ProcessFailedKind> tcs,
         TimeSpan timeout)
     {
         return await Task.WhenAny(tcs.Task, Task.Delay(timeout)) == tcs.Task;
+    }
+
+    private static async Task AwaitRendererFailureOrThrowAsync(
+        TaskCompletionSource<CoreWebView2ProcessFailedKind> tcs,
+        TimeSpan timeout,
+        string timeoutMessage)
+    {
+        if (!await AwaitRendererFailureAsync(tcs, timeout))
+        {
+            throw new InvalidOperationException(timeoutMessage);
+        }
     }
 
     private static async Task KillRendererForCoreAsync(CoreWebView2 core)
