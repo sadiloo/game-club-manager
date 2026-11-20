@@ -1,3 +1,8 @@
+param(
+    [int]$GlobalRun = 0,
+    [string]$LoginName = ""
+)
+
 $ErrorActionPreference = "Continue"
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "../..")).Path
 $artifactDir = Join-Path $env:GITHUB_WORKSPACE "artifacts"
@@ -6,15 +11,22 @@ if ([string]::IsNullOrWhiteSpace($env:GITHUB_WORKSPACE)) {
 }
 $logDir = Join-Path $artifactDir "kiosk-windows-logs"
 
-Write-Host "=== WPF stability failure evidence (post-failure only) ==="
+if ($GlobalRun -le 0 -and $env:WPF_STABILITY_RED_GLOBAL_RUN -match '^\d+$') {
+    $GlobalRun = [int]$env:WPF_STABILITY_RED_GLOBAL_RUN
+}
+if ([string]::IsNullOrWhiteSpace($LoginName) -and $env:WPF_STABILITY_RED_LOGIN) {
+    $LoginName = $env:WPF_STABILITY_RED_LOGIN.Trim()
+}
+
+Write-Host "=== WPF stability evidence (global_run=$GlobalRun login=$LoginName) ==="
 
 $psql = 'C:\Program Files\PostgreSQL\16\bin\psql.exe'
 if (Test-Path $psql) {
     $env:PGPASSWORD = 'postgres'
     Write-Host "--- stations (all columns) ---"
     & $psql -h 127.0.0.1 -U postgres -d gameclub_test -c 'SELECT * FROM stations ORDER BY "Id";' 2>&1 | ForEach-Object { Write-Host $_ }
-    Write-Host "--- last 20 sessions with station join (all session + station columns) ---"
-    $sessionJoinSql = @'
+
+  $sessionJoinSql = @'
 SELECT s.*, st."Id" AS "StationJoin_Id", st."Name" AS "StationJoin_Name", st."GroupId" AS "StationJoin_GroupId",
        st."DefaultPlayMode" AS "StationJoin_DefaultPlayMode", st."DefaultPlayerCount" AS "StationJoin_DefaultPlayerCount",
        st."IsActive" AS "StationJoin_IsActive", st."OperationalState" AS "StationJoin_OperationalState"
@@ -23,31 +35,46 @@ LEFT JOIN stations st ON st."Id" = s."StationId"
 ORDER BY s."StartedAtUtc" DESC NULLS LAST
 LIMIT 20;
 '@
+    Write-Host "--- last 20 sessions with station join ---"
     & $psql -h 127.0.0.1 -U postgres -d gameclub_test -c $sessionJoinSql 2>&1 | ForEach-Object { Write-Host $_ }
+
+    if (-not [string]::IsNullOrWhiteSpace($LoginName)) {
+        $loginEsc = $LoginName.Replace("'", "''")
+        Write-Host "--- session-start/bind: customer + credential for login ---"
+        $credSql = "SELECT * FROM customer_credentials WHERE `"LoginName`" = '$loginEsc';"
+        & $psql -h 127.0.0.1 -U postgres -d gameclub_test -c $credSql 2>&1 | ForEach-Object { Write-Host $_ }
+        $memberSql = @"
+SELECT m.*
+FROM customer_members m
+INNER JOIN customer_credentials c ON c."CustomerId" = m."CustomerId"
+WHERE c."LoginName" = '$loginEsc';
+"@
+        Write-Host "--- wallet (customer_members) for login ---"
+        & $psql -h 127.0.0.1 -U postgres -d gameclub_test -c $memberSql 2>&1 | ForEach-Object { Write-Host $_ }
+        $sessionsForLogin = @"
+SELECT s.*, st."OperationalState" AS "StationOperationalState"
+FROM sessions s
+LEFT JOIN stations st ON st."Id" = s."StationId"
+WHERE s."CustomerId" = (SELECT "CustomerId" FROM customer_credentials WHERE "LoginName" = '$loginEsc' LIMIT 1)
+ORDER BY s."StartedAtUtc" DESC NULLS LAST
+LIMIT 20;
+"@
+        Write-Host "--- sessions for funded login ---"
+        & $psql -h 127.0.0.1 -U postgres -d gameclub_test -c $sessionsForLogin 2>&1 | ForEach-Object { Write-Host $_ }
+        Write-Host "--- PC-WPF stations (recent) ---"
+        $wpfStationSql = 'SELECT * FROM stations WHERE "Id" LIKE ''PC-WPF-%'' ORDER BY "Id" DESC LIMIT 10;'
+        & $psql -h 127.0.0.1 -U postgres -d gameclub_test -c $wpfStationSql 2>&1 | ForEach-Object { Write-Host $_ }
+    }
 } else {
     Write-Host "psql not found; skipping DB snapshot"
 }
 
-foreach ($name in @("wpf-stability-server-out.log", "wpf-stability-server-err.log")) {
-    $p = Join-Path $logDir $name
-    if (Test-Path $p) {
-        Write-Host "--- $name (full) ---"
-        Get-Content $p -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
-    }
-}
-
-Get-ChildItem -Path $logDir -Filter "wpf-stability-*.log" -File -ErrorAction SilentlyContinue | ForEach-Object {
-    Write-Host ("--- {0} (last 300 lines) ---" -f $_.Name)
-    Get-Content $_.FullName -Tail 300 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
-}
-
-Get-ChildItem -Path $artifactDir -Recurse -Filter "*.trx" -File -ErrorAction SilentlyContinue | ForEach-Object {
-    if ($_.Name -notmatch "wpf|Wpf|remaining_time") { return }
-    Write-Host ("--- failed output: {0} ---" -f $_.FullName)
+$trxPath = Join-Path $logDir "wpf-stability-run-$GlobalRun.trx"
+if (Test-Path $trxPath) {
+    Write-Host "--- trx for run $GlobalRun (kiosk fund/login diagnostics) ---"
     try {
-        [xml]$trx = Get-Content $_.FullName
+        [xml]$trx = Get-Content $trxPath
         foreach ($unit in $trx.TestRun.Results.UnitTestResult) {
-            if ($unit.outcome -ne "Failed") { continue }
             $msg = $unit.Output.ErrorInfo.Message
             if ($msg) { Write-Host $msg }
             $std = $unit.Output.StdOut
@@ -56,12 +83,19 @@ Get-ChildItem -Path $artifactDir -Recurse -Filter "*.trx" -File -ErrorAction Sil
     } catch { }
 }
 
-Write-Host "--- timeline hints (server ready vs funding; existing logs only) ---"
-$outLog = Join-Path $logDir "wpf-stability-server-out.log"
-if (Test-Path $outLog) {
-    Select-String -Path $outLog -Pattern "Now listening|Application started|started" -ErrorAction SilentlyContinue | Select-Object -First 15 | ForEach-Object { Write-Host $_.Line }
+foreach ($name in @("wpf-stability-server-out.log", "wpf-stability-server-err.log")) {
+    $p = Join-Path $logDir $name
+    if (Test-Path $p) {
+        Write-Host "--- $name (session/kiosk/login tail, filtered) ---"
+        Select-String -Path $p -Pattern "kiosk|Kiosk|login|Login|session|Session|credential|Credential|bind|conflict|reject|warn|error|fail" -CaseSensitive:$false -ErrorAction SilentlyContinue |
+            Select-Object -Last 80 |
+            ForEach-Object { Write-Host $_.Line }
+    }
 }
-Select-String -Path (Join-Path $artifactDir "**/*.trx") -Pattern "Diagnostics:|SetupFunded|LastTopUp|locked|shellPhase" -ErrorAction SilentlyContinue |
-    Select-Object -First 20 | ForEach-Object { Write-Host $_.Line }
+
+$evidenceOut = Join-Path $logDir "wpf-stability-red-evidence-$GlobalRun.log"
+if ($GlobalRun -gt 0) {
+    Write-Host "--- evidence also written to $evidenceOut (via CI log capture) ---"
+}
 
 exit 0
