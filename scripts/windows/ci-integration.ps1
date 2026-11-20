@@ -1,3 +1,7 @@
+param(
+    [switch]$PcInternetFirewallOnly
+)
+
 $ErrorActionPreference = "Stop"
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "../..")).Path
 Set-Location $repoRoot
@@ -276,8 +280,32 @@ function Stop-LeftoverCiProcesses() {
 
 function Write-CiPhaseFirewallProbe([string]$label) {
     Write-PhaseLog "PHASE boundary $label"
+    Write-CiFirewallStoreEcho -Label $label
     Write-CiFirewallEvidence -Path $firewallLog -Label $label
     Write-CiEgressToLogs -FirewallLog $firewallLog -WritePhase { param($line) Write-PhaseLog $line }
+}
+
+function Assert-CiPipeAndProcessLeakFromLogs {
+    $patterns = @(
+        @{ Token = "pipe_background_join_timeout"; Path = $phaseLog },
+        @{ Token = "pipe_background_join_timeout"; Path = (Join-Path $env:ProgramData "Checkpoint\guard\watchdog.log") }
+    )
+    $joinCount = 0
+    foreach ($entry in $patterns) {
+        if (-not (Test-Path $entry.Path)) { continue }
+        $joinCount += @(Select-String -Path $entry.Path -Pattern $entry.Token -SimpleMatch -ErrorAction SilentlyContinue).Count
+    }
+    Write-Host "CI_PIPE_BACKGROUND_JOIN_TIMEOUT count=$joinCount"
+    Write-PhaseLog "CI_PIPE_BACKGROUND_JOIN_TIMEOUT count=$joinCount"
+    if ($joinCount -gt 0 -and $script:FinalExitCode -eq 0) {
+        $script:FinalExitCode = 1
+    }
+
+    $leakKiosk = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -eq "GameClub.Kiosk" })
+    Write-Host "CI_PROCESS_LEAK_KIOSK count=$($leakKiosk.Count)"
+    if ($leakKiosk.Count -gt 0 -and $script:FinalExitCode -eq 0) {
+        $script:FinalExitCode = 1
+    }
 }
 
 function Write-VstestPhaseList([string]$phaseName, [string]$framework, [string]$filterExpr) {
@@ -512,6 +540,52 @@ Write-PhaseLog "START deadman pid=$($supervisorProc.Id) deadline=$deadmanDeadlin
 
 Write-CiPhaseFirewallProbe -label "pre-integration"
 
+function Invoke-PcInternetFirewallIntegrationPhase {
+    Write-Host "Running PC internet off verification unit tests (Category=PcInternetFirewall, Core)..."
+    $coreFwFilter = "Category=PcInternetFirewall&FullyQualifiedName~PcInternetFirewallOffVerificationTests"
+    Write-VstestPhaseList -phaseName "dotnet-test-pc-internet-firewall-core" -framework "net10.0" -filterExpr $coreFwFilter | Out-Null
+    $coreFwArgs = @(
+        "test", "tests/GameClub.Kiosk.Core.Tests/GameClub.Kiosk.Core.Tests.csproj",
+        "-c", "Release", "-f", "net10.0", "--no-build", "--nologo",
+        "--filter", $coreFwFilter,
+        "--logger", "console;verbosity=detailed"
+    )
+    $coreFwExit = Invoke-DotNetWithWatchdog -PhaseName "dotnet-test-pc-internet-firewall-core" -ArgumentList $coreFwArgs -PhaseCapMs (2 * 60 * 1000)
+    Assert-TestPhaseExit -PhaseName "dotnet-test-pc-internet-firewall-core" -Exit $coreFwExit
+
+    Write-Host "Running PC internet firewall integration (Category=PcInternetFirewall)..."
+    Write-CiPhaseFirewallProbe -label "before-dotnet-test-pc-internet-firewall"
+    $fwFilter = "Category=PcInternetFirewall"
+    $fwDiscoveredNames = @(Write-VstestPhaseList -phaseName "dotnet-test-pc-internet-firewall" -framework "net48" -filterExpr $fwFilter)
+    foreach ($fwName in $fwDiscoveredNames) {
+        $trim = $fwName.Trim()
+        Write-Host "FW_PHASE_DISCOVERED $trim"
+        Write-PhaseLog "FW_PHASE_DISCOVERED $trim"
+    }
+    Write-Host "FW_PHASE_DISCOVERED count=$($fwDiscoveredNames.Count)"
+    Write-PhaseLog "FW_PHASE_DISCOVERED count=$($fwDiscoveredNames.Count)"
+    if ($fwDiscoveredNames.Count -lt 38) {
+        throw "FW_PHASE_DISCOVERED count=$($fwDiscoveredNames.Count) below_minimum=38"
+    }
+    $fwTestArgs = @(
+        "test", "tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj",
+        "-c", "Release", "-f", "net48", "--no-build", "--nologo",
+        "--filter", $fwFilter,
+        "--logger", "trx;LogFileName=kiosk-windows-pc-internet-firewall.trx",
+        "--results-directory", $artifactDir,
+        "--logger", "console;verbosity=detailed"
+    )
+    $fwTrxPath = Join-Path $artifactDir "kiosk-windows-pc-internet-firewall.trx"
+    $fwPhaseCapMs = 13 * 60 * 1000
+    Write-Host "FW_PHASE_BUDGET cap_ms=$fwPhaseCapMs basis_measured_ms=368000 sizing=2x_measured"
+    Write-PhaseLog "FW_PHASE_BUDGET cap_ms=$fwPhaseCapMs basis_measured_ms=368000 sizing=2x_measured"
+    $fwTestExit = Invoke-DotNetWithWatchdog -PhaseName "dotnet-test-pc-internet-firewall" -ArgumentList $fwTestArgs -PhaseCapMs $fwPhaseCapMs
+    Publish-ServerLeaseBuildEvidence -phaseName "dotnet-test-pc-internet-firewall" -TrxPath $fwTrxPath
+    Write-CiPhaseFirewallProbe -label "after-dotnet-test-pc-internet-firewall"
+    Assert-TestPhaseExit -PhaseName "dotnet-test-pc-internet-firewall" -Exit $fwTestExit
+    Assert-FirewallPhaseTestsExecuted -TrxPath $fwTrxPath -DiscoveredCount $fwDiscoveredNames.Count
+}
+
 try {
     try {
         Ensure-LocalUser -name $kioskAccountName -password $kioskPassword
@@ -545,6 +619,23 @@ try {
     }
 
     $env:PGPASSWORD = "postgres"
+
+    if ($PcInternetFirewallOnly) {
+        Write-PhaseLog "START mode=pc-internet-firewall-only"
+        $fwOnlyBuilds = @(
+            @("build", "GameClub.slnx", "-c", "Release", "-warnaserror", "--nologo"),
+            @("build", "src/GameClub.Kiosk/GameClub.Kiosk.csproj", "-c", "Release", "-f", "net48", "--nologo"),
+            @("build", "src/GameClub.Kiosk.Guard/GameClub.Kiosk.Guard.csproj", "-c", "Release", "-f", "net48", "--nologo"),
+            @("build", "tests/GameClub.Kiosk.Core.Tests/GameClub.Kiosk.Core.Tests.csproj", "-c", "Release", "-f", "net10.0", "--nologo"),
+            @("build", "tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj", "-c", "Release", "-f", "net48", "--nologo"),
+            @("build", "tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj", "-c", "Release", "-f", "net10.0", "--nologo")
+        )
+        foreach ($buildArgs in $fwOnlyBuilds) {
+            & dotnet @buildArgs
+            if ($LASTEXITCODE -ne 0) { throw "pc-internet-firewall-only build failed" }
+        }
+        Invoke-PcInternetFirewallIntegrationPhase
+    } else {
 
     $buildCapMs = 8 * 60 * 1000
     $buildDeadline = (Get-Date).AddMilliseconds([double](Get-EffectiveTimeoutMs -phaseCapMs $buildCapMs))
@@ -780,47 +871,6 @@ try {
     $oracleExit = Invoke-DotNetWithWatchdog -PhaseName "dotnet-test-pc-special-band-oracle" -ArgumentList $oracleArgs -PhaseCapMs (3 * 60 * 1000)
     Assert-TestPhaseExit -PhaseName "dotnet-test-pc-special-band-oracle" -Exit $oracleExit
 
-    Write-Host "Running PC internet off verification unit tests (Category=PcInternetFirewall, Core)..."
-    $coreFwFilter = "Category=PcInternetFirewall&FullyQualifiedName~PcInternetFirewallOffVerificationTests"
-    Write-VstestPhaseList -phaseName "dotnet-test-pc-internet-firewall-core" -framework "net10.0" -filterExpr $coreFwFilter | Out-Null
-    $coreFwArgs = @(
-        "test", "tests/GameClub.Kiosk.Core.Tests/GameClub.Kiosk.Core.Tests.csproj",
-        "-c", "Release", "-f", "net10.0", "--no-build", "--nologo",
-        "--filter", $coreFwFilter,
-        "--logger", "console;verbosity=detailed"
-    )
-    $coreFwExit = Invoke-DotNetWithWatchdog -PhaseName "dotnet-test-pc-internet-firewall-core" -ArgumentList $coreFwArgs -PhaseCapMs (2 * 60 * 1000)
-    Assert-TestPhaseExit -PhaseName "dotnet-test-pc-internet-firewall-core" -Exit $coreFwExit
-
-    Write-Host "Running PC internet firewall integration (Category=PcInternetFirewall)..."
-    Write-CiPhaseFirewallProbe -label "before-dotnet-test-pc-internet-firewall"
-    $fwFilter = "Category=PcInternetFirewall"
-    $fwDiscoveredNames = @(Write-VstestPhaseList -phaseName "dotnet-test-pc-internet-firewall" -framework "net48" -filterExpr $fwFilter)
-    foreach ($fwName in $fwDiscoveredNames) {
-        $trim = $fwName.Trim()
-        Write-Host "FW_PHASE_DISCOVERED $trim"
-        Write-PhaseLog "FW_PHASE_DISCOVERED $trim"
-    }
-    Write-Host "FW_PHASE_DISCOVERED count=$($fwDiscoveredNames.Count)"
-    Write-PhaseLog "FW_PHASE_DISCOVERED count=$($fwDiscoveredNames.Count)"
-    if ($fwDiscoveredNames.Count -lt 38) {
-        throw "FW_PHASE_DISCOVERED count=$($fwDiscoveredNames.Count) below_minimum=38"
-    }
-    $fwTestArgs = @(
-        "test", "tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj",
-        "-c", "Release", "-f", "net48", "--no-build", "--nologo",
-        "--filter", $fwFilter,
-        "--logger", "trx;LogFileName=kiosk-windows-pc-internet-firewall.trx",
-        "--results-directory", $artifactDir,
-        "--logger", "console;verbosity=detailed"
-    )
-    $fwTrxPath = Join-Path $artifactDir "kiosk-windows-pc-internet-firewall.trx"
-    $fwTestExit = Invoke-DotNetWithWatchdog -PhaseName "dotnet-test-pc-internet-firewall" -ArgumentList $fwTestArgs -PhaseCapMs (8 * 60 * 1000)
-    Publish-ServerLeaseBuildEvidence -phaseName "dotnet-test-pc-internet-firewall" -TrxPath $fwTrxPath
-    Write-CiPhaseFirewallProbe -label "after-dotnet-test-pc-internet-firewall"
-    Assert-TestPhaseExit -PhaseName "dotnet-test-pc-internet-firewall" -Exit $fwTestExit
-    Assert-FirewallPhaseTestsExecuted -TrxPath $fwTrxPath -DiscoveredCount $fwDiscoveredNames.Count
-
     $wpfStabilityRuns = 0
     if ($env:WPF_STABILITY_RUNS -match '^\d+$') {
         $wpfStabilityRuns = [int]$env:WPF_STABILITY_RUNS
@@ -829,6 +879,8 @@ try {
     if ($wpfStabilityRuns -gt 0) {
         Write-Host "WPF stability runs=$wpfStabilityRuns execute in scripts/windows/ci-integration-wpf-stability.ps1 (not in this step)."
     }
+
+    } # end full kiosk integration (not PcInternetFirewallOnly)
 } catch {
     $errMsg = $_.Exception.Message
     $stack = $_.ScriptStackTrace
@@ -859,6 +911,7 @@ try {
     }
 
     Stop-CiManagedGameClubServerPids
+    Assert-CiPipeAndProcessLeakFromLogs
 
     $watchdog = Join-Path $env:ProgramData "Checkpoint\guard\watchdog.log"
     if (Test-Path $watchdog) {

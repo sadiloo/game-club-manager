@@ -21,7 +21,7 @@ public sealed class WindowsPcInternetProductionGuardTests
                 ServerIps = Array.Empty<string>(),
                 ServerPort = 443,
             };
-            var result = applier.Apply(config, on: false);
+            var result = applier.ApplyWithStoreEcho(config, on: false);
             Assert.NotEqual("apply_failed:harness_injected", result);
             Assert.Equal("firewall_not_configured", result);
         }

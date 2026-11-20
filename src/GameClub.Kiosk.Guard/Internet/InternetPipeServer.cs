@@ -59,12 +59,28 @@ internal sealed class InternetPipeServer
         _firewall.Apply(_config, _on);
     }
 
+    private void RunWithFirewallGate(string role, Action work)
+    {
+        var waitSw = Stopwatch.StartNew();
+        var threadLabel = Thread.CurrentThread.Name ?? $"tid_{Thread.CurrentThread.ManagedThreadId}";
+        AppendPipeTimeline($"pipe_gate_wait role={role} owner={threadLabel}");
+        Monitor.Enter(_firewallGate);
+        try
+        {
+            AppendPipeTimeline(
+                $"pipe_gate_acquire role={role} owner={threadLabel} wait_ms={waitSw.ElapsedMilliseconds}");
+            work();
+        }
+        finally
+        {
+            Monitor.Exit(_firewallGate);
+            AppendPipeTimeline($"pipe_gate_release role={role} owner={threadLabel}");
+        }
+    }
+
     public void ReassertPersisted()
     {
-        lock (_firewallGate)
-        {
-            ReassertPersistedLocked();
-        }
+        RunWithFirewallGate("reassert", ReassertPersistedLocked);
     }
 
     private void AppendPipeTimeline(string eventName)
@@ -83,12 +99,12 @@ internal sealed class InternetPipeServer
         {
             var earlyReassert = Stopwatch.StartNew();
             AppendPipeTimeline("early_reassert_off_lock_wait");
-            lock (_firewallGate)
+            RunWithFirewallGate("early_reassert", () =>
             {
                 AppendPipeTimeline("early_reassert_off_lock_enter");
                 ReassertPersistedLocked();
                 AppendPipeTimeline($"early_reassert_off_lock_exit elapsed_ms={earlyReassert.ElapsedMilliseconds}");
-            }
+            });
 
             GuardWatchdogLog.Append(
                 $"GUARD_TIMELINE event=early_reassert_off elapsed_ms={earlyReassert.ElapsedMilliseconds}");
@@ -158,6 +174,7 @@ internal sealed class InternetPipeServer
                 _reconcilePhase = 2;
                 _reconcileWorkFinished.Set();
                 InternetPowerShellRunner.MarkAbandonBoundary();
+                InternetPowerShellRunner.RequestKillInFlight("pipe_shutdown");
             }
 
             var cancelled = ct.IsCancellationRequested;
@@ -303,11 +320,7 @@ internal sealed class InternetPipeServer
                 if (!_reconcileAbandoned && !ct.IsCancellationRequested)
                 {
                     var reassert = Stopwatch.StartNew();
-                    lock (_firewallGate)
-                    {
-                        ReassertPersistedLocked();
-                    }
-
+                    RunWithFirewallGate("reconcile_work", ReassertPersistedLocked);
                     GuardWatchdogLog.Append($"reconcile_step reassert elapsed_ms={reassert.ElapsedMilliseconds}");
                 }
                 else
@@ -419,12 +432,9 @@ internal sealed class InternetPipeServer
 
                 if (!_on)
                 {
-                    lock (_firewallGate)
+                    if (!ct.IsCancellationRequested)
                     {
-                        if (!ct.IsCancellationRequested)
-                        {
-                            ReassertPersistedLocked();
-                        }
+                        RunWithFirewallGate("drift", ReassertPersistedLocked);
                     }
                 }
             }
@@ -511,9 +521,10 @@ internal sealed class InternetPipeServer
             }
             finally
             {
+                var threadLabel = Thread.CurrentThread.Name ?? $"tid_{Thread.CurrentThread.ManagedThreadId}";
                 Monitor.Exit(_firewallGate);
                 GuardWatchdogLog.Append("pipe_gate_exit");
-                AppendPipeTimeline("pipe_gate_exit");
+                AppendPipeTimeline($"pipe_gate_release role=handler owner={threadLabel}");
             }
         }
         catch (Exception ex)
@@ -544,10 +555,12 @@ internal sealed class InternetPipeServer
 
         GuardWatchdogLog.Append("pipe_gate_wait_exit entered=true");
         AppendPipeTimeline("pipe_gate_wait_exit entered=true");
-        if (TryEnterFirewallGate(totalWaitMs))
+        var handlerLabel = Thread.CurrentThread.Name ?? $"tid_{Thread.CurrentThread.ManagedThreadId}";
+        if (TryEnterFirewallGate(totalWaitMs, out var gateWaitMs))
         {
             GuardWatchdogLog.Append("pipe_gate_enter ok=true");
-            AppendPipeTimeline("pipe_gate_enter ok=true");
+            AppendPipeTimeline(
+                $"pipe_gate_acquire role=handler owner={handlerLabel} wait_ms={gateWaitMs} ok=true");
             return true;
         }
 
@@ -557,13 +570,15 @@ internal sealed class InternetPipeServer
         return false;
     }
 
-    private bool TryEnterFirewallGate(int totalWaitMs)
+    private bool TryEnterFirewallGate(int totalWaitMs, out int waitMs)
     {
+        var waitSw = Stopwatch.StartNew();
         var deadline = Environment.TickCount + totalWaitMs;
         while (Environment.TickCount < deadline)
         {
             if (_shutdownCt.IsCancellationRequested)
             {
+                waitMs = (int)waitSw.ElapsedMilliseconds;
                 return false;
             }
 
@@ -575,10 +590,12 @@ internal sealed class InternetPipeServer
 
             if (Monitor.TryEnter(_firewallGate, sliceMs))
             {
+                waitMs = (int)waitSw.ElapsedMilliseconds;
                 return true;
             }
         }
 
+        waitMs = (int)waitSw.ElapsedMilliseconds;
         return false;
     }
 

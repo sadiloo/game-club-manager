@@ -79,7 +79,7 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
         Thread pipeThread = null;
         try
         {
-            Assert.Equal("applied", applier.Apply(config, on: false));
+            Assert.Equal("applied", applier.ApplyWithStoreEcho(config, on: false));
             TryDeleteState();
             cts = new CancellationTokenSource();
             var server = new InternetPipeServer(config, applier);
@@ -129,7 +129,7 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
         Thread pipeThread = null;
         try
         {
-            Assert.Equal("applied", applier.Apply(config, on: false));
+            Assert.Equal("applied", applier.ApplyWithStoreEcho(config, on: false));
             TryDeleteState();
             cts = new CancellationTokenSource();
             pipeThread = new Thread(() => new InternetPipeServer(config, applier).Run(cts.Token))
@@ -290,7 +290,7 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
         Thread pipeThread = null;
         try
         {
-            Assert.Equal("applied", hung.Apply(config, on: false));
+            Assert.Equal("applied", hung.ApplyWithStoreEcho(config, on: false));
             TryDeleteState();
             cts = new CancellationTokenSource();
             pipeThread = new Thread(() => new InternetPipeServer(config, hung).Run(cts.Token)) { IsBackground = true };
@@ -350,7 +350,7 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
         Thread pipeThread = null;
         try
         {
-            Assert.Equal("applied", new InternetFirewallApplier().Apply(config, on: false));
+            Assert.Equal("applied", new InternetFirewallApplier().ApplyWithStoreEcho(config, on: false));
             TryDeleteState();
             cts = new CancellationTokenSource();
             pipeThread = new Thread(() => new InternetPipeServer(config).Run(cts.Token)) { IsBackground = true };
@@ -430,7 +430,7 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
         try
         {
             var prep = new InternetFirewallApplier();
-            Assert.Equal("applied", prep.Apply(config, on: false));
+            Assert.Equal("applied", prep.ApplyWithStoreEcho(config, on: false));
             var offPayload = new InternetCommandPayload
             {
                 StationId = config.StationId,
@@ -505,7 +505,7 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
         Thread pipeThread = null;
         try
         {
-            Assert.Equal("applied", hung.Apply(config, on: false));
+            Assert.Equal("applied", hung.ApplyWithStoreEcho(config, on: false));
             TryDeleteState();
             cts = new CancellationTokenSource();
             pipeThread = new Thread(() => new InternetPipeServer(config, hung).Run(cts.Token)) { IsBackground = true };

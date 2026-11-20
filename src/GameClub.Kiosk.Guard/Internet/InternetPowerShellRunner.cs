@@ -40,11 +40,32 @@ internal static class InternetPowerShellRunner
         Interlocked.Exchange(ref ReconcileRunCallCountAtAbandon, -1);
     }
 
+    private static int _inFlightRootPid;
+    private static int _killInFlightGeneration;
+
     internal static void MarkAbandonBoundary()
     {
         ReconcileRunCallCountAtAbandon = Volatile.Read(ref ReconcileRunCallCount);
         GuardWatchdogLog.Append($"reconcile_abandon_runner_calls={ReconcileRunCallCountAtAbandon}");
+        RequestKillInFlight("abandon_boundary");
     }
+
+    internal static void RequestKillInFlight(string reason)
+    {
+        Interlocked.Increment(ref _killInFlightGeneration);
+        var pid = Volatile.Read(ref _inFlightRootPid);
+        if (pid <= 0)
+        {
+            return;
+        }
+
+        GuardWatchdogLog.Append($"powershell_kill_inflight reason={reason} pid={pid}");
+        InternetPowerShellProcessTree.KillTree(pid);
+    }
+
+    private static bool ShouldCancelInFlight(int generationAtStart)
+        => generationAtStart != Volatile.Read(ref _killInFlightGeneration)
+           || (ReconcilePathThread && IsReconcileAbandoned());
 
     internal static bool IsReconcileAbandoned()
         => Volatile.Read(ref ReconcileRunCallCountAtAbandon) >= 0;
@@ -80,10 +101,36 @@ internal static class InternetPowerShellRunner
             proc = Process.Start(psi) ?? throw new InvalidOperationException("powershell start failed");
             psStartMs = psStartSw.ElapsedMilliseconds;
             var pid = proc.Id;
+            Volatile.Write(ref _inFlightRootPid, pid);
+            var killGenAtStart = Volatile.Read(ref _killInFlightGeneration);
             var stdoutTask = Task.Run(() => proc.StandardOutput.ReadToEnd());
             var stderrTask = Task.Run(() => proc.StandardError.ReadToEnd());
 
-            if (!proc.WaitForExit(timeoutMs))
+            var waitDeadline = Environment.TickCount + timeoutMs;
+            var exited = false;
+            while (Environment.TickCount < waitDeadline)
+            {
+                if (ShouldCancelInFlight(killGenAtStart))
+                {
+                    var step = string.IsNullOrWhiteSpace(stepName) ? "powershell" : stepName;
+                    GuardWatchdogLog.Append(
+                        $"powershell_cancelled step={step} pid={pid} reason=inflight_kill");
+                    InternetPowerShellProcessTree.KillTree(pid);
+                    return new RunTelemetry(
+                        "apply_failed:powershell_cancelled",
+                        psStartMs,
+                        stepSw.ElapsedMilliseconds,
+                        stderr);
+                }
+
+                if (proc.WaitForExit(50))
+                {
+                    exited = true;
+                    break;
+                }
+            }
+
+            if (!exited && !proc.HasExited)
             {
                 var step = string.IsNullOrWhiteSpace(stepName) ? "powershell" : stepName;
                 GuardWatchdogLog.Append(
@@ -125,6 +172,12 @@ internal static class InternetPowerShellRunner
         }
         finally
         {
+            if (proc is not null
+                && Volatile.Read(ref _inFlightRootPid) == proc.Id)
+            {
+                Interlocked.Exchange(ref _inFlightRootPid, 0);
+            }
+
             proc?.Dispose();
         }
     }

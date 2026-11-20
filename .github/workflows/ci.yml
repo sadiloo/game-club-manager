@@ -136,6 +136,10 @@ jobs:
         timeout-minutes: 22
         shell: pwsh
         run: ./scripts/windows/ci-integration.ps1
+      - name: pc internet firewall integration
+        timeout-minutes: 13
+        shell: pwsh
+        run: ./scripts/windows/ci-integration.ps1 -PcInternetFirewallOnly
       - name: kiosk host reconnect mutations (net48 D7 and status tick)
         if: always()
         shell: pwsh

@@ -10,6 +10,7 @@ public sealed class WindowsGuardIntegrationFixture : IDisposable
     public WindowsGuardIntegrationFixture()
     {
         InternetPipeOwnerDiagnostics.WriteCollectionPhase("fixture_begin");
+        FirewallStoreEcho.EchoAllStores("fixture_begin");
         InternetPipeOwnerDiagnostics.AssertNoStrayGuardOrPipeOwnerAtCollectionStart();
     }
 

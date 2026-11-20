@@ -233,6 +233,35 @@ function Add-CiCheckpointPublicEgressEvidence {
     Write-Host $serverLine
 }
 
+function Write-CiFirewallStoreEcho([string]$Label) {
+    $stores = @("ActiveStore", "PersistentStore")
+  foreach ($store in $stores) {
+        try {
+            $lines = Get-NetFirewallProfile -PolicyStore $store -ErrorAction Stop | ForEach-Object {
+                "FW_STORE_ECHO store=$store profile=$($_.Name) DefaultOutboundAction=$($_.DefaultOutboundAction) AllowLocalFirewallRules=$($_.AllowLocalFirewallRules) label=$Label"
+            }
+            foreach ($line in $lines) {
+                Write-Host $line
+            }
+        } catch {
+            Write-Host "FW_STORE_ECHO store=$store read_failed=$($_.Exception.Message) label=$Label"
+        }
+    }
+
+    foreach ($store in @("RSOP", "GroupPolicy")) {
+        try {
+            $lines = Get-NetFirewallProfile -PolicyStore $store -ErrorAction SilentlyContinue | ForEach-Object {
+                "FW_STORE_ECHO_RSOP store=$store profile=$($_.Name) DefaultOutboundAction=$($_.DefaultOutboundAction) AllowLocalFirewallRules=$($_.AllowLocalFirewallRules) label=$Label"
+            }
+            foreach ($line in $lines) {
+                Write-Host $line
+            }
+        } catch {
+            Write-Host "FW_STORE_ECHO_RSOP store=$store read_failed=$($_.Exception.Message) label=$Label"
+        }
+    }
+}
+
 function Write-CiFirewallEvidence {
     param(
         [string]$Path,

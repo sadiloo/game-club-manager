@@ -236,7 +236,7 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
         };
         try
         {
-            Assert.Equal("applied", applier.Apply(config, on: false));
+            Assert.Equal("applied", applier.ApplyWithStoreEcho(config, on: false));
             Thread.Sleep(1_500);
             AssertOffFirewallStoresAfterApply();
             Assert.True(TryTcp("127.0.0.1", 80, 1_000), "loopback must remain reachable while OFF.");
@@ -275,7 +275,7 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
         };
         try
         {
-            Assert.Equal("applied", applier.Apply(config, on: false));
+            Assert.Equal("applied", applier.ApplyWithStoreEcho(config, on: false));
             AssertOffFirewallStoresAfterApply();
             AssertCheckpointOffRuleGroupPresent();
             if (hadIpv6Egress)
@@ -308,7 +308,7 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
 
         try
         {
-            Assert.Equal("applied", applier.Apply(config, on: false));
+            Assert.Equal("applied", applier.ApplyWithStoreEcho(config, on: false));
             Thread.Sleep(2_000);
             Assert.True(TryTcp("api.github.com", 443, 5_000), "OFF must still allow configured server host.");
             Assert.False(TryTcp("1.1.1.1", 443, 2_000), "OFF must block arbitrary public egress.");
@@ -370,7 +370,7 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
         try
         {
             var addBypass = $"New-NetFirewallRule -DisplayName '{bypassRuleName}' -Direction Outbound -Action Allow -Program (Get-Command pwsh).Source";
-            applier.Apply(config, on: false);
+            applier.ApplyWithStoreEcho(config, on: false);
             System.Threading.Thread.Sleep(1_500);
             _ = WindowsIntegrationRunPowerShell.Run(addBypass);
             Assert.False(TryTcp("1.1.1.1", 443, 2_000), "Default-store allow rule must not bypass localhost OFF.");
@@ -400,9 +400,9 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
         };
         try
         {
-            Assert.Equal("applied", applier.Apply(config, on: false));
+            Assert.Equal("applied", applier.ApplyWithStoreEcho(config, on: false));
             Assert.False(TryTcp("1.1.1.1", 443, 2_000));
-            Assert.Equal("applied", applier.Apply(config, on: true));
+            Assert.Equal("applied", applier.ApplyWithStoreEcho(config, on: true));
             Assert.True(TryTcp("1.1.1.1", 443, 5_000));
         }
         finally
@@ -441,7 +441,7 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
                 "(Get-NetFirewallRule -PolicyStore localhost -Group 'Checkpoint Internet Off' -ErrorAction SilentlyContinue | Measure-Object).Count").Trim();
             Assert.True(int.TryParse(preCount, out var count) && count == 0, "precondition: Checkpoint Internet Off group must be empty.");
 
-            var result = applier.Apply(config, on: false);
+            var result = applier.ApplyWithStoreEcho(config, on: false);
             Assert.Equal("applied", result);
             AssertCheckpointOffRuleGroupPresent();
             Assert.True(TryTcp("api.github.com", 443, 5_000), "first apply must leave server host reachable.");
@@ -470,7 +470,7 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
         };
         try
         {
-            Assert.Equal("applied", applier.Apply(config, on: false));
+            Assert.Equal("applied", applier.ApplyWithStoreEcho(config, on: false));
             WindowsIntegrationRunPowerShell.Run(
                 "Get-NetFirewallRule -Group 'Checkpoint Internet Off' | Remove-NetFirewallRule");
             var groupCountText = WindowsIntegrationRunPowerShell.Run(
@@ -479,7 +479,7 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
                 "precondition: Checkpoint Internet Off rule group must be empty after removal.");
             Assert.False(TryTcp("api.github.com", 443, 3_000), "precondition: blocked profiles without allow rules must drop server egress.");
 
-            var result = applier.Apply(config, on: false);
+            var result = applier.ApplyWithStoreEcho(config, on: false);
             Assert.Equal("applied", result);
             Assert.True(TryTcp("api.github.com", 443, 5_000), "re-apply must recreate allow rules before verification.");
         }
@@ -511,7 +511,7 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
             applier.RunResetScript();
             Thread.Sleep(500);
             InternetFirewallApplierTestSeams.ThrowAfterProfilesBeforeVerify = true;
-            var result = applier.Apply(config, on: false);
+            var result = applier.ApplyWithStoreEcho(config, on: false);
             Assert.StartsWith("apply_failed", result, StringComparison.Ordinal);
             AssertLocalhostProfilesNotBlock();
             Assert.True(TryTcp(config.ServerHost, 443, 5_000), "server host must stay reachable when OFF apply fails after profiles.");
@@ -534,7 +534,7 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
             ServerPort = 0,
             ServerIps = Array.Empty<string>(),
         };
-        Assert.Equal("firewall_not_configured", applier.Apply(config, on: false));
+        Assert.Equal("firewall_not_configured", applier.ApplyWithStoreEcho(config, on: false));
     }
 
     [Fact]
@@ -555,7 +555,7 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
         };
         try
         {
-            var result = applier.Apply(config, on: false);
+            var result = applier.ApplyWithStoreEcho(config, on: false);
             Assert.Equal("applied", result);
             Assert.False(TryTcp("1.1.1.1", 443, 2_000));
             AssertOffFirewallStoresAfterApply();
@@ -585,8 +585,8 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
         };
         try
         {
-            Assert.Equal("applied", applier.Apply(config, on: false));
-            Assert.Equal("applied", applier.Apply(config, on: true));
+            Assert.Equal("applied", applier.ApplyWithStoreEcho(config, on: false));
+            Assert.Equal("applied", applier.ApplyWithStoreEcho(config, on: true));
             var activeRuleCount = int.Parse(WindowsIntegrationRunPowerShell.Run(
                 "(Get-NetFirewallRule -Group 'Checkpoint Internet Off' -ErrorAction SilentlyContinue | Measure-Object).Count").Trim());
             Assert.Equal(0, activeRuleCount);
@@ -596,7 +596,7 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
         }
         finally
         {
-            applier.Apply(config, on: true);
+            applier.ApplyWithStoreEcho(config, on: true);
         }
     }
 
@@ -628,7 +628,7 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
                 "(Get-NetFirewallRule -PolicyStore localhost -Group 'Checkpoint Internet Off' -ErrorAction SilentlyContinue | Measure-Object).Count").Trim());
             Assert.True(preLocal >= 1, "precondition: localhost legacy rules seeded");
 
-            Assert.Equal("applied", applier.Apply(config, on: false));
+            Assert.Equal("applied", applier.ApplyWithStoreEcho(config, on: false));
             var postLocal = int.Parse(WindowsIntegrationRunPowerShell.Run(
                 "(Get-NetFirewallRule -PolicyStore localhost -Group 'Checkpoint Internet Off' -ErrorAction SilentlyContinue | Measure-Object).Count").Trim());
             Assert.Equal(0, postLocal);
@@ -638,7 +638,7 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
         }
         finally
         {
-            applier.Apply(config, on: true);
+            applier.ApplyWithStoreEcho(config, on: true);
         }
     }
 
@@ -687,7 +687,7 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
         }
         finally
         {
-            applier.Apply(config, on: true);
+            applier.ApplyWithStoreEcho(config, on: true);
             TryDeleteState();
         }
     }
@@ -710,7 +710,7 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
         };
         try
         {
-            Assert.Equal("applied", applier.Apply(config, on: false));
+            Assert.Equal("applied", applier.ApplyWithStoreEcho(config, on: false));
             if (File.Exists(InternetGuardPaths.StatePath))
             {
                 File.Delete(InternetGuardPaths.StatePath);
@@ -724,7 +724,7 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
         }
         finally
         {
-            applier.Apply(config, on: true);
+            applier.ApplyWithStoreEcho(config, on: true);
             TryDeleteState();
         }
     }

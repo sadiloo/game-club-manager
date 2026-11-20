@@ -94,7 +94,7 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
         Process guard2 = null;
         try
         {
-            Assert.Equal("applied", applier.Apply(config, on: false));
+            Assert.Equal("applied", applier.ApplyWithStoreEcho(config, on: false));
             Assert.False(TryTcp("1.1.1.1", 443, 2_000));
             GuardTimeline("initial_off_applied");
 
@@ -210,7 +210,7 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
         Thread pipeThread = null;
         try
         {
-            Assert.Equal("applied", applier.Apply(config, on: false));
+            Assert.Equal("applied", applier.ApplyWithStoreEcho(config, on: false));
             var offPayload = new InternetCommandPayload
             {
                 StationId = config.StationId,
@@ -265,7 +265,7 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
         Process relaunched = null;
         try
         {
-            Assert.Equal("applied", applier.Apply(config, on: false));
+            Assert.Equal("applied", applier.ApplyWithStoreEcho(config, on: false));
             Assert.False(TryTcp("1.1.1.1", 443, 2_000));
             var server = Process.GetProcessById(serverPid);
             server.Kill();
@@ -331,7 +331,7 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
                 On = false,
                 IssuedAtUtc = DateTime.UtcNow,
             });
-            Assert.Equal("applied", applier.Apply(config, on: false));
+            Assert.Equal("applied", applier.ApplyWithStoreEcho(config, on: false));
             InternetVerifiedStateFile.Save(InternetGuardPaths.StatePath, off.Payload);
             WriteInternetConfig(config);
 
