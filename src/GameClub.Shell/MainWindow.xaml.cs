@@ -24,6 +24,9 @@ public partial class MainWindow : Window
     private string _pendingOfflineState = "stopped";
     private string? _lastNavigationUri;
     private bool _offlineShown;
+    private string? _currentOfflineState;
+    private bool _allowOfflineDataNav;
+    private bool _panelNavigated;
     private bool _closed;
     private Task? _ensureWebViewTask;
     private Action<ServerStateSnapshot>? _onPollerChanged;
@@ -70,6 +73,8 @@ public partial class MainWindow : Window
                 if (_offlineShown)
                 {
                     _offlineShown = false;
+                    _currentOfflineState = null;
+                    _allowOfflineDataNav = false;
                     var recoverUri = new Uri(ShellPaths.PanelUrl);
                     LogPanelNavigate("RunningRecover", recoverUri);
                     LogRaceNav("RunningRecover.Source");
@@ -78,6 +83,7 @@ public partial class MainWindow : Window
                         return;
                     }
 
+                    _panelNavigated = true;
                     PanelWebView.Source = recoverUri;
                 }
                 else
@@ -115,6 +121,13 @@ public partial class MainWindow : Window
             {
                 _lastNavigationUri = args.Uri;
                 _navigationStartingCount++;
+                if (_allowOfflineDataNav
+                    && args.Uri.StartsWith("data:text/html", StringComparison.OrdinalIgnoreCase))
+                {
+                    _allowOfflineDataNav = false;
+                    return;
+                }
+
                 if (!args.Uri.StartsWith(ShellPaths.PanelOrigin, StringComparison.OrdinalIgnoreCase))
                 {
                     args.Cancel = true;
@@ -211,7 +224,14 @@ public partial class MainWindow : Window
         LogOfflineTrace(
             "nav-completed-fallback",
             $"IsSuccess={e.IsSuccess} webError={e.WebErrorStatus} offlineState={state} lastUri={FormatUriForLog(_lastNavigationUri)}");
+        _panelNavigated = false;
         _ = PresentOfflinePageAsync(state);
+    }
+
+    private bool IsActiveOnPanelOrigin()
+    {
+        var uri = CurrentPanelUriForTrace();
+        return uri.StartsWith(ShellPaths.PanelOrigin, StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsLoopbackPanelTarget(string uriString)
@@ -363,9 +383,15 @@ public partial class MainWindow : Window
             return Task.CompletedTask;
         }
 
+        if (_panelNavigated && IsActiveOnPanelOrigin())
+        {
+            return Task.CompletedTask;
+        }
+
         var uri = new Uri(ShellPaths.PanelUrl);
         LogPanelNavigate("NavigatePanel", uri);
         LogRaceNav("NavigatePanel.Source");
+        _panelNavigated = true;
         PanelWebView.Source = uri;
         return Task.CompletedTask;
     }
@@ -420,12 +446,30 @@ public partial class MainWindow : Window
             return Task.CompletedTask;
         }
 
+        if (_offlineShown && string.Equals(_currentOfflineState, state, StringComparison.Ordinal))
+        {
+            LogOfflineTrace("present-offline-skip", $"offlineState={state} alreadyShown=true");
+            return Task.CompletedTask;
+        }
+
         LogOfflineTrace("present-offline-enter", $"offlineState={state}");
+        _panelNavigated = false;
         _offlineShown = true;
+        _currentOfflineState = state;
         var html = LoadOfflineHtml(state);
         LogNavigateToString("PresentOffline");
         LogRaceNav("PresentOffline.NavigateToString");
-        PanelWebView.NavigateToString(html);
+        _allowOfflineDataNav = true;
+        try
+        {
+            PanelWebView.NavigateToString(html);
+        }
+        catch
+        {
+            _allowOfflineDataNav = false;
+            throw;
+        }
+
         LogOfflineTrace("present-offline-navigated", $"offlineState={state}");
         return Task.CompletedTask;
     }
