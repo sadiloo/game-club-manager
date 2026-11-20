@@ -11,6 +11,8 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using GameClub.Billing;
+using GameClub.Kiosk.Core.Runtime;
+using GameClub.Kiosk.Services;
 using Xunit;
 
 namespace GameClub.Kiosk.Windows.IntegrationTests.Wpf;
@@ -141,9 +143,9 @@ public sealed class WindowsKioskWpfSmokeTests
                     while (DateTime.UtcNow < deadline)
                     {
                         window.Dispatcher.Invoke(() => { }, DispatcherPriority.Background);
-                        var text = status.Text ?? "";
+                        var text = KioskStatusInlineApplicator.ReadCombinedText(status);
                         lastPollStatusText = text;
-                        if (text.IndexOf("left", StringComparison.OrdinalIgnoreCase) >= 0)
+                        if (text.Contains("مانده", StringComparison.Ordinal))
                         {
                             capturedStatus = text;
                             break;
@@ -184,12 +186,17 @@ public sealed class WindowsKioskWpfSmokeTests
         }
 
         Assert.False(string.IsNullOrWhiteSpace(capturedStatus), statusAssertMessage);
-        var match = Regex.Match(capturedStatus, @"~(\d{2}):(\d{2}):(\d{2})\s+left", RegexOptions.IgnoreCase);
-        Assert.True(match.Success, $"StatusText must match hh:mm:ss left pattern; got '{capturedStatus}'.");
+        Assert.Contains("مانده", capturedStatus, StringComparison.Ordinal);
+        var match = Regex.Match(
+            capturedStatus,
+            @"([\u06F0-\u06F9]{2}):([\u06F0-\u06F9]{2}):([\u06F0-\u06F9]{2})",
+            RegexOptions.CultureInvariant);
+        Assert.True(match.Success, $"StatusText must match Persian hh:mm:ss in time-left line; got '{capturedStatus}'.");
+        static int PersianDigitToInt(char c) => c - '\u06F0';
         var displayedSeconds = (int)new TimeSpan(
-            int.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture),
-            int.Parse(match.Groups[2].Value, CultureInfo.InvariantCulture),
-            int.Parse(match.Groups[3].Value, CultureInfo.InvariantCulture)).TotalSeconds;
+            PersianDigitToInt(match.Groups[1].Value[0]) * 10 + PersianDigitToInt(match.Groups[1].Value[1]),
+            PersianDigitToInt(match.Groups[2].Value[0]) * 10 + PersianDigitToInt(match.Groups[2].Value[1]),
+            PersianDigitToInt(match.Groups[3].Value[0]) * 10 + PersianDigitToInt(match.Groups[3].Value[1])).TotalSeconds;
         Assert.InRange(displayedSeconds, expectedSeconds - 1, expectedSeconds + 1);
     }
 

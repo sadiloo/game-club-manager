@@ -5,22 +5,41 @@ namespace GameClub.Kiosk.Core.Tests;
 /// <summary>DEF-4: lock-line login error formatter and credential hygiene.</summary>
 public sealed class KioskLoginLockLineFormatterTests
 {
-    private const string LockBase = "Locked — PC-1 · no server response";
+    private static readonly KioskStatusLineState LockBaseState = KioskStationStatus.FormatLocalLockScreenState(
+        "PC-1",
+        leaseExpired: false,
+        KioskTransportPhase.Connected,
+        hubTransportConnected: true,
+        signalRAutoReconnecting: false,
+        pairingJustFailed: false,
+        consecutiveHeartbeatFailures: 2,
+        lastHeartbeatAckUtc: DateTime.UtcNow,
+        utcNow: DateTime.UtcNow,
+        lastErrorDetail: null);
+
+    private static string WithLoginError(string errorKey)
+    {
+        var error = KioskLoginUserMessages.DisplayText(errorKey);
+        return KioskStatusPresentationBuilder.Build(LockBaseState, error, null).ToCombinedText();
+    }
 
     [Fact]
     public void lock_line_appends_http_generic_login_error_text()
     {
         var error = KioskLoginUserMessages.DisplayText(KioskLoginUserMessages.Keys.HttpGeneric);
-        var line = KioskLoginUserMessages.AppendToLockLine(LockBase, error);
+        var line = WithLoginError(KioskLoginUserMessages.Keys.HttpGeneric);
         Assert.Contains(error, line, StringComparison.Ordinal);
-        Assert.StartsWith(LockBase, line, StringComparison.Ordinal);
+        Assert.StartsWith(
+            KioskStatusPresentationBuilder.Build(LockBaseState, null, null).ToCombinedText(),
+            line,
+            StringComparison.Ordinal);
     }
 
     [Fact]
     public void lock_line_appends_unreachable_login_error_text()
     {
         var error = KioskLoginUserMessages.DisplayText(KioskLoginUserMessages.Keys.Unreachable);
-        var line = KioskLoginUserMessages.AppendToLockLine(LockBase, error);
+        var line = WithLoginError(KioskLoginUserMessages.Keys.Unreachable);
         Assert.Contains(error, line, StringComparison.Ordinal);
     }
 
@@ -28,7 +47,7 @@ public sealed class KioskLoginLockLineFormatterTests
     public void lock_line_appends_timeout_login_error_text()
     {
         var error = KioskLoginUserMessages.DisplayText(KioskLoginUserMessages.Keys.Timeout);
-        var line = KioskLoginUserMessages.AppendToLockLine(LockBase, error);
+        var line = WithLoginError(KioskLoginUserMessages.Keys.Timeout);
         Assert.Contains(error, line, StringComparison.Ordinal);
     }
 
@@ -36,8 +55,8 @@ public sealed class KioskLoginLockLineFormatterTests
     public void login_error_survives_lock_line_refresh_cycle()
     {
         var error = KioskLoginUserMessages.DisplayText(KioskLoginUserMessages.Keys.StationBusy);
-        var first = KioskLoginUserMessages.AppendToLockLine(LockBase, error);
-        var second = KioskLoginUserMessages.AppendToLockLine(LockBase, error);
+        var first = WithLoginError(KioskLoginUserMessages.Keys.StationBusy);
+        var second = WithLoginError(KioskLoginUserMessages.Keys.StationBusy);
         Assert.Equal(first, second);
     }
 
@@ -53,8 +72,7 @@ public sealed class KioskLoginLockLineFormatterTests
                      KioskLoginUserMessages.Keys.StationBusy,
                  })
         {
-            var error = KioskLoginUserMessages.DisplayText(key);
-            var line = KioskLoginUserMessages.AppendToLockLine(LockBase, error);
+            var line = WithLoginError(key);
             Assert.False(KioskLoginUserMessages.ExposesCredential(line, password, deviceKey));
         }
     }

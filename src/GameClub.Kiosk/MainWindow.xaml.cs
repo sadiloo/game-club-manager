@@ -13,7 +13,9 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
-        StatusText.Text = KioskStatusMessages.DisplayText(KioskStatusMessages.Keys.UnpairedEnterPairingCode);
+        KioskStatusInlineApplicator.Apply(
+            StatusText,
+            KioskStatusPresentationBuilder.Build(KioskStatusLineState.Unpaired(), null, null));
         _host = new KioskHostService(
             this,
             StatusText,

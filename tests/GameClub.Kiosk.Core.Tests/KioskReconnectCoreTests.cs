@@ -10,6 +10,13 @@ namespace GameClub.Kiosk.Core.Tests;
 
 public sealed class KioskReconnectCoreTests
 {
+    private static readonly string ConnConnected = KioskStatusMessages.DisplayText(KioskStatusMessages.Keys.ConnConnected);
+    private static readonly string ConnReconnecting = KioskStatusMessages.DisplayText(KioskStatusMessages.Keys.ConnReconnecting);
+    private static readonly string ConnNotConnected = KioskStatusMessages.DisplayText(KioskStatusMessages.Keys.ConnNotConnected);
+    private static readonly string ConnNoResponse = KioskStatusMessages.DisplayText(KioskStatusMessages.Keys.ConnNoResponse);
+    private static readonly string TimeLeftSuffix = KioskStatusMessages.DisplayText(KioskStatusMessages.Keys.TimeLeft);
+    private static readonly string StatusSep = KioskStatusMessages.DisplayText(KioskStatusMessages.Keys.Sep);
+
     private sealed class RecordingQueue : IOfflineEventQueue
     {
         public List<string> Types { get; } = new();
@@ -490,8 +497,8 @@ public sealed class KioskReconnectCoreTests
             utcNow: DateTime.UtcNow,
             estimatedRemainingSeconds: null,
             lastErrorDetail: null);
-        Assert.DoesNotContain("connected", text, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("reconnecting", text, StringComparison.OrdinalIgnoreCase);
+        Assert.False(KioskStationStatus.ContainsConnectedWording(text));
+        Assert.Contains(ConnReconnecting, text, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -509,7 +516,7 @@ public sealed class KioskReconnectCoreTests
             utcNow: DateTime.UtcNow,
             estimatedRemainingSeconds: null,
             lastErrorDetail: null);
-        Assert.Contains("no server response", byFailures, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(ConnNoResponse, byFailures, StringComparison.Ordinal);
         Assert.False(KioskStationStatus.ContainsConnectedWording(byFailures));
 
         var byStaleAck = KioskStationStatus.Resolve(
@@ -524,7 +531,7 @@ public sealed class KioskReconnectCoreTests
             utcNow: DateTime.UtcNow,
             estimatedRemainingSeconds: null,
             lastErrorDetail: null);
-        Assert.Contains("no server response", byStaleAck, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(ConnNoResponse, byStaleAck, StringComparison.Ordinal);
         Assert.False(KioskStationStatus.ContainsConnectedWording(byStaleAck));
     }
 
@@ -576,7 +583,7 @@ public sealed class KioskReconnectCoreTests
             DateTime.UtcNow,
             600L,
             null);
-        Assert.Contains("no server response", status, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(ConnNoResponse, status, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -621,7 +628,7 @@ public sealed class KioskReconnectCoreTests
             DateTime.UtcNow,
             600L,
             null);
-        Assert.DoesNotContain("no server response", status, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(ConnNoResponse, status, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -674,8 +681,8 @@ public sealed class KioskReconnectCoreTests
             utcNow: DateTime.UtcNow,
             estimatedRemainingSeconds: 3600L,
             lastErrorDetail: null);
-        Assert.Contains("no server response", failed, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("left", failed, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(ConnNoResponse, failed, StringComparison.Ordinal);
+        Assert.DoesNotContain("مانده", failed, StringComparison.Ordinal);
 
         var recovered = KioskStationStatus.Resolve(
             "PC-B",
@@ -689,7 +696,7 @@ public sealed class KioskReconnectCoreTests
             utcNow: DateTime.UtcNow,
             estimatedRemainingSeconds: 3500L,
             lastErrorDetail: null);
-        Assert.Contains("left", recovered, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("مانده", recovered, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -707,7 +714,7 @@ public sealed class KioskReconnectCoreTests
             utcNow: DateTime.UtcNow,
             estimatedRemainingSeconds: null,
             lastErrorDetail: null);
-        Assert.Contains("not connected", text, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(ConnNotConnected, text, StringComparison.Ordinal);
         Assert.False(KioskStationStatus.ContainsConnectedWording(text));
     }
 
@@ -726,7 +733,7 @@ public sealed class KioskReconnectCoreTests
             utcNow: DateTime.UtcNow,
             estimatedRemainingSeconds: null,
             lastErrorDetail: null);
-        Assert.Contains("no server response", text, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(ConnNoResponse, text, StringComparison.Ordinal);
         Assert.DoesNotContain("connecting", text, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -792,8 +799,10 @@ public sealed class KioskReconnectCoreTests
             lastHeartbeatAckUtc: DateTime.UtcNow,
             utcNow: DateTime.UtcNow,
             lastErrorDetail: null);
-        Assert.StartsWith("Locked — lease expired (PC-1) · ", text);
-        Assert.Contains("connected", text, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("PC-1", text, StringComparison.Ordinal);
+        Assert.Contains(KioskStatusMessages.FormatStationTemplate(KioskStatusMessages.Keys.LockedLeaseExpired, "PC-1"), text, StringComparison.Ordinal);
+        Assert.Contains(KioskStatusMessages.DisplayText(KioskStatusMessages.Keys.Join), text, StringComparison.Ordinal);
+        Assert.Contains(ConnConnected, text, StringComparison.Ordinal);
 
         var stopped = KioskStationStatus.FormatLocalLockScreen(
             "PC-2",
@@ -806,8 +815,10 @@ public sealed class KioskReconnectCoreTests
             lastHeartbeatAckUtc: DateTime.UtcNow,
             utcNow: DateTime.UtcNow,
             lastErrorDetail: null);
-        Assert.StartsWith("Locked — PC-2 · ", stopped);
-        Assert.Contains("no server response", stopped, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("PC-2", stopped, StringComparison.Ordinal);
+        Assert.Contains(KioskStatusMessages.FormatStationTemplate(KioskStatusMessages.Keys.Locked, "PC-2"), stopped, StringComparison.Ordinal);
+        Assert.Contains(KioskStatusMessages.DisplayText(KioskStatusMessages.Keys.Join), stopped, StringComparison.Ordinal);
+        Assert.Contains(ConnNoResponse, stopped, StringComparison.Ordinal);
     }
 
     [Fact]

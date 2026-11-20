@@ -65,6 +65,7 @@ public sealed class KioskHostService : IAsyncDisposable
     private KioskAdminRole _lastAdminRole = KioskAdminRole.Operator;
     private readonly KioskHostTestSeam? _testSeam;
     private readonly KioskLoginErrorDisplayState _loginErrorState = new();
+    private string? _transientStatusErrorKey;
 
     internal int? LastLoginHttpStatus { get; private set; }
 
@@ -190,7 +191,7 @@ public sealed class KioskHostService : IAsyncDisposable
         await EnsureRuntimeAsync();
         await ApplyStationProfileAsync();
         await RefreshCatalogAsync();
-        _status.Text = KioskStatusMessages.FormatTemplate(KioskStatusMessages.Keys.PairedTo, _stationId);
+        PresentStatusLine(KioskStatusLineState.Paired(_stationId));
         EnsureStatusUiTickRunning();
     }
 
@@ -218,7 +219,7 @@ public sealed class KioskHostService : IAsyncDisposable
         {
             LastLoginFailureKey = KioskLoginUserMessages.Keys.PairBefore;
             PresentLoginFailure(LastLoginFailureKey);
-            _status.Text = _loginErrorState.ApplyUnpairedDirect();
+            PresentStatusLine(KioskStatusLineState.Unpaired());
             return;
         }
 
@@ -309,7 +310,7 @@ public sealed class KioskHostService : IAsyncDisposable
         ShowPlayingLayout();
         _uiTick.Start();
         _replayTick.Start();
-        _status.Text = KioskStatusMessages.FormatTemplate(KioskStatusMessages.Keys.PlayingOn, _stationId);
+        PresentStatusLine(KioskStatusLineState.Playing(_stationId));
         await RefreshCatalogAsync();
     }
 
@@ -349,7 +350,9 @@ public sealed class KioskHostService : IAsyncDisposable
         }
         catch (Exception ex)
         {
-            _status.Text = KioskStatusMessages.FormatTemplate(KioskStatusMessages.Keys.LaunchFailed, ex.Message);
+            Trace.TraceWarning($"Kiosk launch failed: {ex.Message}");
+            _transientStatusErrorKey = KioskStatusMessages.Keys.ErrLaunch;
+            RefreshStationStatusText();
         }
     }
 
@@ -651,13 +654,32 @@ public sealed class KioskHostService : IAsyncDisposable
         }
     }
 
+    private void PresentStatusLine(KioskStatusLineState state)
+    {
+        var transient = _transientStatusErrorKey;
+        _transientStatusErrorKey = null;
+        string? loginError = null;
+        if (state.Root == KioskStatusRootKind.Unpaired)
+        {
+            loginError = _loginErrorState.ActiveLoginError;
+        }
+        else if (_sessionId == Guid.Empty
+                 && (state.Root is KioskStatusRootKind.Locked or KioskStatusRootKind.LockedLeaseExpired))
+        {
+            loginError = _loginErrorState.ActiveLoginError;
+        }
+
+        var presentation = KioskStatusPresentationBuilder.Build(state, loginError, transient);
+        KioskStatusInlineApplicator.Apply(_status, presentation);
+    }
+
     private void RefreshStationStatusText()
     {
         if (string.IsNullOrEmpty(_stationId))
         {
             if (!string.IsNullOrEmpty(_loginErrorState.ActiveLoginError))
             {
-                _status.Text = _loginErrorState.ApplyUnpairedDirect();
+                PresentStatusLine(KioskStatusLineState.Unpaired());
             }
 
             return;
@@ -671,7 +693,7 @@ public sealed class KioskHostService : IAsyncDisposable
         if (_locallyLockedSessionId != Guid.Empty
             || (_sessionId == Guid.Empty && _lockPanel.Visibility == Visibility.Visible))
         {
-            var lockLine = KioskStationStatus.FormatLocalLockScreen(
+            var lockState = KioskStationStatus.FormatLocalLockScreenState(
                 _stationId,
                 _locallyLockedSessionId != Guid.Empty && _localLockLeaseExpired,
                 _runtime.TransportPhase,
@@ -682,14 +704,11 @@ public sealed class KioskHostService : IAsyncDisposable
                 _lastHeartbeatAckUtc,
                 DateTime.UtcNow,
                 _runtime.LastTransportErrorDetail);
-            _status.Text = _sessionId == Guid.Empty
-                ? _loginErrorState.ApplyToLockLine(lockLine)
-                : lockLine;
-
+            PresentStatusLine(lockState);
             return;
         }
 
-        _status.Text = KioskStationStatus.Resolve(
+        var resolveState = KioskStationStatus.ResolveState(
             _stationId,
             _runtime.TransportPhase,
             _runtime.IsTransportConnected,
@@ -701,6 +720,7 @@ public sealed class KioskHostService : IAsyncDisposable
             DateTime.UtcNow,
             _lastDisplay?.EstimatedRemainingSeconds,
             _runtime.LastTransportErrorDetail);
+        PresentStatusLine(resolveState);
     }
 
     private void EnterLocalLock(bool leaseExpired)
@@ -733,11 +753,12 @@ public sealed class KioskHostService : IAsyncDisposable
         }
         catch (Exception ex)
         {
+            Trace.TraceWarning($"Kiosk catalog refresh failed: {ex.Message}");
             _shell.Dispatcher.Invoke(() =>
-                _status.Text = KioskStatusMessages.FormatTemplate(
-                    KioskStatusMessages.Keys.CatalogRefreshFailed,
-                    _stationId,
-                    ex.Message));
+            {
+                _transientStatusErrorKey = KioskStatusMessages.Keys.ErrCatalog;
+                RefreshStationStatusText();
+            });
         }
     }
 
@@ -1130,7 +1151,7 @@ public sealed class KioskHostService : IAsyncDisposable
     {
         if (string.IsNullOrEmpty(_stationId))
         {
-            _status.Text = KioskStatusMessages.DisplayText(KioskStatusMessages.Keys.UnpairedUseOperatorPairing);
+            PresentStatusLine(KioskStatusLineState.Unpaired());
             return;
         }
 
@@ -1154,7 +1175,9 @@ public sealed class KioskHostService : IAsyncDisposable
         }
         catch (Exception ex)
         {
-            _status.Text = KioskStatusMessages.FormatStationWithDetail(_stationId, ex.Message);
+            Trace.TraceWarning($"Kiosk refresh failed: {ex.Message}");
+            _transientStatusErrorKey = KioskStatusMessages.Keys.ErrGeneric;
+            RefreshStationStatusText();
         }
     }
 

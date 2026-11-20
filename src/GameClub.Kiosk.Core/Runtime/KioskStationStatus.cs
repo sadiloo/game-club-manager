@@ -8,12 +8,7 @@ public static class KioskStationStatus
     /// <summary>Two heartbeat intervals (5 s) plus margin — no ack while transport is up.</summary>
     public const int NoServerResponseAfterSeconds = 12;
 
-    private const char Fsi = '\u2068';
-    private const char Pdi = '\u2069';
-
-    public static string IsolateStationId(string stationId) => $"{Fsi}{stationId}{Pdi}";
-
-    public static string Resolve(
+    public static KioskStatusLineState ResolveState(
         string stationId,
         KioskTransportPhase transportPhase,
         bool hubTransportConnected,
@@ -26,10 +21,13 @@ public static class KioskStationStatus
         long? estimatedRemainingSeconds,
         string? lastErrorDetail)
     {
-        var pc = IsolateStationId(stationId);
         if (pairingJustFailed)
         {
-            return KioskStatusMessages.FormatStationLine(KioskStatusMessages.Keys.StationLineNotConnected, pc);
+            return new KioskStatusLineState(
+                KioskStatusRootKind.StationWithConnection,
+                stationId,
+                KioskStatusConnectionKind.NotConnected,
+                null);
         }
 
         var offline = !hubTransportConnected
@@ -48,30 +46,30 @@ public static class KioskStationStatus
             {
                 if (hubTransportConnected && noResponse)
                 {
-                    return KioskStatusMessages.FormatStationLine(
-                        KioskStatusMessages.Keys.StationLineNoServerResponse,
-                        pc);
+                    return StationConn(stationId, KioskStatusConnectionKind.NoResponse);
                 }
 
-                return KioskStatusMessages.FormatTimeRemaining(pc, TimeSpan.FromSeconds(seconds));
+                return new KioskStatusLineState(
+                    KioskStatusRootKind.StationWithConnection,
+                    stationId,
+                    KioskStatusConnectionKind.TimeRemaining,
+                    TimeSpan.FromSeconds(seconds));
             }
 
             if (hubTransportConnected && noResponse)
             {
-                return KioskStatusMessages.FormatStationLine(
-                    KioskStatusMessages.Keys.StationLineNoServerResponse,
-                    pc);
+                return StationConn(stationId, KioskStatusConnectionKind.NoResponse);
             }
         }
 
         if (offline)
         {
-            if (transportPhase == KioskTransportPhase.LastError && !string.IsNullOrWhiteSpace(lastErrorDetail))
+            if (transportPhase == KioskTransportPhase.LastError)
             {
-                return KioskStatusMessages.FormatStationTransportError(pc, lastErrorDetail!);
+                return StationConn(stationId, KioskStatusConnectionKind.NotConnected);
             }
 
-            return KioskStatusMessages.FormatStationLine(KioskStatusMessages.Keys.StationLineReconnecting, pc);
+            return StationConn(stationId, KioskStatusConnectionKind.Reconnecting);
         }
 
         if (!hasOpenSession && hubTransportConnected && transportPhase == KioskTransportPhase.Connected)
@@ -81,24 +79,16 @@ public static class KioskStationStatus
                     && utcNow - lastHeartbeatAckUtc.Value > TimeSpan.FromSeconds(NoServerResponseAfterSeconds));
             if (noResponse)
             {
-                return KioskStatusMessages.FormatStationLine(
-                    KioskStatusMessages.Keys.StationLineNoServerResponse,
-                    pc);
+                return StationConn(stationId, KioskStatusConnectionKind.NoResponse);
             }
 
-            return KioskStatusMessages.FormatStationLine(KioskStatusMessages.Keys.StationLineConnected, pc);
+            return StationConn(stationId, KioskStatusConnectionKind.Connected);
         }
 
-        return KioskStatusMessages.FormatStationLine(KioskStatusMessages.Keys.StationLineConnecting, pc);
+        return StationConn(stationId, KioskStatusConnectionKind.Connecting);
     }
 
-    public static bool ContainsConnectedWording(string statusText)
-        => statusText.IndexOf("connected", StringComparison.OrdinalIgnoreCase) >= 0
-            && statusText.IndexOf("not connected", StringComparison.OrdinalIgnoreCase) < 0
-            && statusText.IndexOf("reconnecting", StringComparison.OrdinalIgnoreCase) < 0;
-
-    /// <summary>Main lock prefix plus O4-d connection suffix (never bare session countdown while locked).</summary>
-    public static string FormatLocalLockScreen(
+    public static KioskStatusLineState FormatLocalLockScreenState(
         string stationId,
         bool leaseExpired,
         KioskTransportPhase transportPhase,
@@ -110,7 +100,7 @@ public static class KioskStationStatus
         DateTime utcNow,
         string? lastErrorDetail)
     {
-        var connection = Resolve(
+        var inner = ResolveState(
             stationId,
             transportPhase,
             hubTransportConnected,
@@ -122,14 +112,72 @@ public static class KioskStationStatus
             utcNow,
             estimatedRemainingSeconds: null,
             lastErrorDetail);
-        var pc = IsolateStationId(stationId);
-        var prefix = KioskStatusMessages.StationLinePrefixFor(pc);
-        var suffix = connection.StartsWith(prefix, StringComparison.Ordinal)
-            ? connection.Substring(prefix.Length)
-            : connection;
-        var lockKey = leaseExpired
-            ? KioskStatusMessages.Keys.LockedLeaseExpired
-            : KioskStatusMessages.Keys.LockedActive;
-        return KioskStatusMessages.FormatLockedLine(lockKey, pc, suffix);
+        var root = leaseExpired ? KioskStatusRootKind.LockedLeaseExpired : KioskStatusRootKind.Locked;
+        return inner with { Root = root };
     }
+
+    public static bool ImpliesBareConnected(KioskStatusLineState state)
+        => KioskStatusMessages.IsBareConnectedConnection(state.Connection);
+
+    public static bool ContainsConnectedWording(string statusText)
+        => statusText.Contains(
+            KioskStatusMessages.DisplayText(KioskStatusMessages.Keys.ConnConnected),
+            StringComparison.Ordinal);
+
+    public static string Resolve(
+        string stationId,
+        KioskTransportPhase transportPhase,
+        bool hubTransportConnected,
+        bool signalRAutoReconnecting,
+        bool pairingJustFailed,
+        bool hasOpenSession,
+        int consecutiveHeartbeatFailures,
+        DateTime? lastHeartbeatAckUtc,
+        DateTime utcNow,
+        long? estimatedRemainingSeconds,
+        string? lastErrorDetail)
+        => KioskStatusPresentationBuilder.Build(
+            ResolveState(
+                stationId,
+                transportPhase,
+                hubTransportConnected,
+                signalRAutoReconnecting,
+                pairingJustFailed,
+                hasOpenSession,
+                consecutiveHeartbeatFailures,
+                lastHeartbeatAckUtc,
+                utcNow,
+                estimatedRemainingSeconds,
+                lastErrorDetail),
+            loginErrorText: null,
+            transientErrorKey: null).ToCombinedText();
+
+    public static string FormatLocalLockScreen(
+        string stationId,
+        bool leaseExpired,
+        KioskTransportPhase transportPhase,
+        bool hubTransportConnected,
+        bool signalRAutoReconnecting,
+        bool pairingJustFailed,
+        int consecutiveHeartbeatFailures,
+        DateTime? lastHeartbeatAckUtc,
+        DateTime utcNow,
+        string? lastErrorDetail)
+        => KioskStatusPresentationBuilder.Build(
+            FormatLocalLockScreenState(
+                stationId,
+                leaseExpired,
+                transportPhase,
+                hubTransportConnected,
+                signalRAutoReconnecting,
+                pairingJustFailed,
+                consecutiveHeartbeatFailures,
+                lastHeartbeatAckUtc,
+                utcNow,
+                lastErrorDetail),
+            loginErrorText: null,
+            transientErrorKey: null).ToCombinedText();
+
+    private static KioskStatusLineState StationConn(string stationId, KioskStatusConnectionKind conn)
+        => new(KioskStatusRootKind.StationWithConnection, stationId, conn, null);
 }

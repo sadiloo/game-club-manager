@@ -28,6 +28,17 @@ public sealed class KioskHostStatusTimerTests
 
     public KioskHostStatusTimerTests(WpfStaApplicationFixture wpf) => _wpf = wpf;
 
+    private static readonly string ConnNoResponse =
+        KioskStatusMessages.DisplayText(KioskStatusMessages.Keys.ConnNoResponse);
+
+    private static readonly string ConnConnected =
+        KioskStatusMessages.DisplayText(KioskStatusMessages.Keys.ConnConnected);
+
+    private static readonly string StatusSep = KioskStatusMessages.DisplayText(KioskStatusMessages.Keys.Sep);
+
+    private static string StatusCombined(TextBlock status)
+        => KioskStatusInlineApplicator.ReadCombinedText(status);
+
     [Fact]
     public void host_boot_path_shows_no_server_response_when_heartbeats_fail()
         => RunScenario(lateConnect: true, operatorStopLock: false);
@@ -287,7 +298,7 @@ public sealed class KioskHostStatusTimerTests
                 typeof(KioskHostService).GetMethod("OnHeartbeatAcknowledged", BindingFlags.Instance | BindingFlags.NonPublic)!
                     .Invoke(host, new object[] { ack });
                 Assert.True(IsUiTickEnabled(host), "status UI tick must stay on after operator-stop lock");
-                Assert.Contains("Locked —", status.Text ?? "", StringComparison.Ordinal);
+                Assert.Contains("قفل", StatusCombined(status), StringComparison.Ordinal);
             }
 
             if (lateConnect)
@@ -304,8 +315,8 @@ public sealed class KioskHostStatusTimerTests
             while (DateTime.UtcNow < deadline)
             {
                 await Task.Delay(500);
-                var text = status.Text ?? "";
-                if (text.IndexOf("no server response", StringComparison.OrdinalIgnoreCase) >= 0)
+                var text = StatusCombined(status);
+                if (text.Contains(ConnNoResponse, StringComparison.Ordinal))
                 {
                     sawNoResponse = true;
                     if (operatorStopLock)
@@ -342,9 +353,9 @@ public sealed class KioskHostStatusTimerTests
                 }
             }
 
-            Assert.True(sawNoResponse, $"expected 'no server response' within timer window; last status={status.Text}");
-            var finalText = status.Text ?? "";
-            Assert.Contains("no server response", finalText, StringComparison.OrdinalIgnoreCase);
+            Assert.True(sawNoResponse, $"expected ConnNoResponse within timer window; last status={StatusCombined(status)}");
+            var finalText = StatusCombined(status);
+            Assert.Contains(ConnNoResponse, finalText, StringComparison.Ordinal);
             Assert.False(sawBareConnected, $"must not show bare connected while heartbeats fail; last status={finalText}");
         }
         finally
@@ -415,7 +426,7 @@ public sealed class KioskHostStatusTimerTests
             Assert.Equal(Visibility.Collapsed, playingPanel.Visibility);
             Assert.Equal(sessionId, GetField(host, "_sessionId"));
             Assert.Equal(sessionId, runtime.GetType().GetField("_sessionId", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(runtime));
-            Assert.Contains("Locked —", status.Text ?? "", StringComparison.Ordinal);
+            Assert.Contains("قفل", StatusCombined(status), StringComparison.Ordinal);
         }
         finally
         {
@@ -751,8 +762,10 @@ public sealed class KioskHostStatusTimerTests
             Assert.Equal(Visibility.Visible, lockPanel.Visibility);
             Assert.Equal(Visibility.Collapsed, playingPanel.Visibility);
             Assert.Equal(Guid.Empty, GetField(host, "_sessionId"));
-            var text = status.Text ?? "";
-            Assert.StartsWith("Locked — PC-HOST-LOGOUT-RACE · ", text, StringComparison.Ordinal);
+            var text = StatusCombined(status);
+            Assert.Contains("PC-HOST-LOGOUT-RACE", text, StringComparison.Ordinal);
+            Assert.Contains("قفل", text, StringComparison.Ordinal);
+            Assert.Contains(KioskStatusMessages.DisplayText(KioskStatusMessages.Keys.Join), text, StringComparison.Ordinal);
         }
         finally
         {
@@ -821,9 +834,10 @@ public sealed class KioskHostStatusTimerTests
             Assert.Equal(Guid.Empty, GetField(host, "_sessionId"));
             Assert.Equal(Guid.Empty, GetField(host, "_locallyLockedSessionId"));
             Assert.False((bool)GetField(host, "_logoutInProgress")!);
-            var text = status.Text ?? "";
-            Assert.StartsWith($"Locked — {stationId} · ", text, StringComparison.Ordinal);
-            Assert.DoesNotContain("no server response", text, StringComparison.OrdinalIgnoreCase);
+            var text = StatusCombined(status);
+            Assert.Contains(stationId, text, StringComparison.Ordinal);
+            Assert.Contains("قفل", text, StringComparison.Ordinal);
+            Assert.DoesNotContain(ConnNoResponse, text, StringComparison.Ordinal);
 
             var settleEnd = DateTime.UtcNow.AddSeconds(2);
             while (DateTime.UtcNow < settleEnd)
@@ -831,8 +845,9 @@ public sealed class KioskHostStatusTimerTests
                 await Task.Delay(250);
                 Assert.Equal(Visibility.Visible, lockPanel.Visibility);
                 Assert.Equal(Visibility.Collapsed, playingPanel.Visibility);
-                var refreshed = status.Text ?? "";
-                Assert.StartsWith($"Locked — {stationId} · ", refreshed, StringComparison.Ordinal);
+                var refreshed = StatusCombined(status);
+                Assert.Contains(stationId, refreshed, StringComparison.Ordinal);
+                Assert.Contains("قفل", refreshed, StringComparison.Ordinal);
             }
         }
         finally
@@ -1240,8 +1255,9 @@ public sealed class KioskHostStatusTimerTests
         {
             SetField(host, "_sessionId", Guid.NewGuid());
             await host.LogoutAsync();
-            var text = status.Text ?? "";
-            Assert.StartsWith("Locked — PC-HOST-LOGOUT · ", text, StringComparison.Ordinal);
+            var text = StatusCombined(status);
+            Assert.Contains("PC-HOST-LOGOUT", text, StringComparison.Ordinal);
+            Assert.Contains("قفل", text, StringComparison.Ordinal);
         }
         finally
         {
@@ -1352,8 +1368,8 @@ public sealed class KioskHostStatusTimerTests
                 .Invoke(host, new object[] { KioskTransportPhase.Connected, "" });
 
             typeof(KioskHostService).GetMethod("RefreshStationStatusText", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(host, null);
-            var text = status.Text ?? "";
-            Assert.Contains("no server response", text, StringComparison.OrdinalIgnoreCase);
+            var text = StatusCombined(status);
+            Assert.Contains(ConnNoResponse, text, StringComparison.Ordinal);
             Assert.DoesNotContain("connecting", text, StringComparison.OrdinalIgnoreCase);
         }
         finally
@@ -1385,20 +1401,22 @@ public sealed class KioskHostStatusTimerTests
                         },
                     },
                 });
-                var text = status.Text ?? "";
-                Assert.Contains("Locked — lease expired (PC-HOST-D6)", text, StringComparison.Ordinal);
-                Assert.Contains(" · ", text, StringComparison.Ordinal);
+                var text = StatusCombined(status);
+                Assert.Contains("PC-HOST-D6", text, StringComparison.Ordinal);
+                Assert.Contains(KioskStatusMessages.FormatStationTemplate(KioskStatusMessages.Keys.LockedLeaseExpired, "PC-HOST-D6"), text, StringComparison.Ordinal);
+                Assert.Contains(KioskStatusMessages.DisplayText(KioskStatusMessages.Keys.Join), text, StringComparison.Ordinal);
             }
             else
             {
                 onAck.Invoke(host, new object[] { new KioskHeartbeatAck { SessionStatus = "AwaitingPayment" } });
-                var text = status.Text ?? "";
-                Assert.Contains("Locked — PC-HOST-D6", text, StringComparison.Ordinal);
-                Assert.DoesNotContain("lease expired", text, StringComparison.OrdinalIgnoreCase);
-                Assert.Contains(" · ", text, StringComparison.Ordinal);
+                var text = StatusCombined(status);
+                Assert.Contains("PC-HOST-D6", text, StringComparison.Ordinal);
+                Assert.Contains(KioskStatusMessages.FormatStationTemplate(KioskStatusMessages.Keys.Locked, "PC-HOST-D6"), text, StringComparison.Ordinal);
+                Assert.DoesNotContain(KioskStatusMessages.FormatStationTemplate(KioskStatusMessages.Keys.LockedLeaseExpired, "PC-HOST-D6"), text, StringComparison.Ordinal);
+                Assert.Contains(KioskStatusMessages.DisplayText(KioskStatusMessages.Keys.Join), text, StringComparison.Ordinal);
             }
 
-            Assert.False(KioskStationStatus.ContainsConnectedWording(status.Text ?? ""));
+            Assert.False(KioskStationStatus.ContainsConnectedWording(StatusCombined(status)));
         }
         finally
         {
@@ -1624,7 +1642,7 @@ public sealed class KioskHostStatusTimerTests
             typeof(KioskHostService).GetMethod("ShowLockLayout", BindingFlags.Instance | BindingFlags.NonPublic)!
                 .Invoke(host, null);
             await host.LoginAsync("timeout-user", "s3cret-pass");
-            var text = status.Text ?? "";
+            var text = StatusCombined(status);
             var timeoutPlaceholder = KioskLoginUserMessages.DisplayText(KioskLoginUserMessages.Keys.Timeout);
             Assert.Contains(timeoutPlaceholder, text, StringComparison.Ordinal);
             Assert.Contains(" · ", text, StringComparison.Ordinal);
@@ -1632,7 +1650,7 @@ public sealed class KioskHostStatusTimerTests
 
             typeof(KioskHostService).GetMethod("RefreshStationStatusText", BindingFlags.Instance | BindingFlags.NonPublic)!
                 .Invoke(host, null);
-            var refreshed = status.Text ?? "";
+            var refreshed = StatusCombined(status);
             Assert.Contains(timeoutPlaceholder, refreshed, StringComparison.Ordinal);
         }
         finally
