@@ -240,6 +240,18 @@ public partial class MainWindow : Window
             return;
         }
 
+        if (ShellSeams.AllowInternalCrashNavigationDepth > 0
+            && args.Uri.StartsWith("edge://", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        if (ShellSeams.AllowInternalCrashNavigationDepth > 0
+            && args.Uri.StartsWith("chrome://", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
         if (!PanelNavigationOrigin.IsAllowedPanelNavigationUri(args.Uri))
         {
             args.Cancel = true;
@@ -276,20 +288,32 @@ public partial class MainWindow : Window
         var lastUri = _lastNavigationUri ?? "";
         var loopbackPanel = IsLoopbackPanelTarget(lastUri);
 
-        if (e.IsSuccess && loopbackPanel && PanelNavigationOrigin.IsAllowedPanelNavigationUri(lastUri))
+        if (loopbackPanel && PanelNavigationOrigin.IsAllowedPanelNavigationUri(lastUri))
         {
-            _panelNavRetryPolicy.Reset();
-            _runningPanelLoadFailing = false;
-            if (_offlineShown)
+            if (IsSuccessfulPanelHttpNavigation(e) && !_runningPanelLoadFailing)
             {
-                _offlineShown = false;
-                _currentOfflineState = null;
+                _panelNavRetryPolicy.Reset();
+                _runningPanelLoadFailing = false;
+                if (_offlineShown)
+                {
+                    _offlineShown = false;
+                    _currentOfflineState = null;
+                }
+
+                LogOfflineTrace(
+                    "nav-completed-panel-ok",
+                    $"webError={e.WebErrorStatus} http={e.HttpStatusCode} lastUri={FormatUriForLog(lastUri)}");
+                return;
             }
 
-            LogOfflineTrace(
-                "nav-completed-panel-ok",
-                $"webError={e.WebErrorStatus} lastUri={FormatUriForLog(lastUri)}");
-            return;
+            if (_poller?.Current.VisualState == ShellServerVisualState.Running)
+            {
+                LogOfflineTrace(
+                    "nav-completed-panel-fail",
+                    $"IsSuccess={e.IsSuccess} webError={e.WebErrorStatus} http={e.HttpStatusCode} lastUri={FormatUriForLog(lastUri)}");
+                HandleRunningPanelNavigationFailure();
+                return;
+            }
         }
 
         if (_offlineShown && !_runningPanelLoadFailing)
@@ -519,7 +543,24 @@ public partial class MainWindow : Window
             return;
         }
 
-        var core = sender as CoreWebView2 ?? PanelWebView.CoreWebView2;
+        CoreWebView2? core = sender as CoreWebView2;
+        if (core is null)
+        {
+            try
+            {
+                core = PanelWebView.CoreWebView2;
+            }
+            catch (InvalidOperationException)
+            {
+                core = null;
+            }
+        }
+
+        if (e.ProcessFailedKind == CoreWebView2ProcessFailedKind.BrowserProcessExited)
+        {
+            _webViewReady = false;
+        }
+
         if (!ShouldRecoverFromProcessFailure(e, core))
         {
             ShellFileLog.Write($"webview-process-failed kind={e.ProcessFailedKind} outcome=log-only");
@@ -771,6 +812,22 @@ public partial class MainWindow : Window
         }
     }
 
+    private static bool IsSuccessfulPanelHttpNavigation(CoreWebView2NavigationCompletedEventArgs e)
+    {
+        if (!e.IsSuccess)
+        {
+            return false;
+        }
+
+        if (e.WebErrorStatus != CoreWebView2WebErrorStatus.Unknown)
+        {
+            return false;
+        }
+
+        var http = e.HttpStatusCode;
+        return http == 0 || (http >= 200 && http < 300);
+    }
+
     private static bool IsLoopbackPanelTarget(string uriString)
     {
         if (!Uri.TryCreate(uriString, UriKind.Absolute, out var uri))
@@ -925,20 +982,68 @@ public partial class MainWindow : Window
             return Task.CompletedTask;
         }
 
-        var uri = new Uri(ShellSeams.ResolvePanelUrl());
-        LogPanelNavigate("NavigatePanel", uri);
-        LogRaceNav("NavigatePanel.Source");
-        _panelNavigated = true;
-        PanelWebView.Source = uri;
-        return Task.CompletedTask;
+        if (_runningPanelLoadFailing)
+        {
+            return Task.CompletedTask;
+        }
+
+        return TryProbeThenNavigatePanelAsync();
     }
 
     public void ReloadPanel()
     {
-        if (_webViewReady)
+        if (!_webViewReady)
+        {
+            return;
+        }
+
+        try
         {
             LogRaceNav("ReloadPanel");
             PanelWebView.CoreWebView2?.Reload();
+        }
+        catch (InvalidOperationException)
+        {
+        }
+    }
+
+    internal async Task TriggerRendererCrashForHarnessAsync()
+    {
+        if (!_webViewReady)
+        {
+            throw new InvalidOperationException("Panel WebView2 is not ready");
+        }
+
+        var core = PanelWebView.CoreWebView2
+            ?? throw new InvalidOperationException("Panel WebView2 core is null");
+
+        var devtoolsWereEnabled = core.Settings.AreDevToolsEnabled;
+        core.Settings.AreDevToolsEnabled = true;
+        try
+        {
+            try
+            {
+                await core.CallDevToolsProtocolMethodAsync("Page.enable", "{}");
+                await core.CallDevToolsProtocolMethodAsync("Page.crash", "{}");
+                return;
+            }
+            catch (ArgumentException)
+            {
+            }
+
+            ShellSeams.AllowInternalCrashNavigationDepth++;
+            try
+            {
+                core.Navigate("edge://kill");
+            }
+            finally
+            {
+                ShellSeams.AllowInternalCrashNavigationDepth--;
+            }
+        }
+        finally
+        {
+            core.Settings.AreDevToolsEnabled = devtoolsWereEnabled;
         }
     }
 

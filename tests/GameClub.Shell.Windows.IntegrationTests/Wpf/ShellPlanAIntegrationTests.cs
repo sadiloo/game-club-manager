@@ -615,14 +615,25 @@ public sealed class ShellPlanAIntegrationTests
                 var spoofed = new (string Uri, string ExpectedHost)[]
                 {
                     ("http://127.0.0.1:50001/operator/", "127.0.0.1"),
-                    ("http://127.0.0.1:5000.evil.com/operator/", "127.0.0.1"),
-                    ("http://127.0.0.1:5000@evil.com/operator/", "evil.com"),
                     ("https://127.0.0.1:5000/operator/", "127.0.0.1"),
+                    ("http://127.0.0.1.evil.test:5000/operator/", "127.0.0.1.evil.test"),
+                    ("http://127.0.0.1:5000@evil.com/operator/", "evil.com"),
+                    ("http://localhost:5000/operator/", "localhost"),
                 };
+                var handlerBlockedCount = 0;
                 foreach (var (uri, expectedHost) in spoofed)
                 {
                     var beforeAttempt = logCursor;
-                    wv.CoreWebView2.Navigate(uri);
+                    var navigateRejected = false;
+                    try
+                    {
+                        wv.CoreWebView2.Navigate(uri);
+                    }
+                    catch (ArgumentException)
+                    {
+                        navigateRejected = true;
+                    }
+
                     var blockedLineDeadline = DateTime.UtcNow.AddSeconds(5);
                     var hash8 = MainWindow.HostHash8ForTests(expectedHost);
                     var blockedLine = "";
@@ -637,21 +648,29 @@ public sealed class ShellPlanAIntegrationTests
                             ?? "";
                         if (!string.IsNullOrEmpty(blockedLine))
                         {
+                            handlerBlockedCount++;
                             break;
                         }
                     }
 
-                    Assert.False(
-                        string.IsNullOrEmpty(blockedLine),
-                        $"Expected navigation-blocked log with host_hash8={hash8} for {uri}");
-                    await Task.Delay(300);
-                    var href = UnquoteWebViewScriptString(await wv.CoreWebView2.ExecuteScriptAsync("location.href"));
-                    Assert.DoesNotContain("evil.com", href, StringComparison.OrdinalIgnoreCase);
-                    Assert.DoesNotContain(":50001", href, StringComparison.Ordinal);
-                    Assert.False(
-                        href.StartsWith("https://", StringComparison.OrdinalIgnoreCase),
-                        $"WebView committed blocked URI {uri}");
+                    Assert.True(
+                        navigateRejected || !string.IsNullOrEmpty(blockedLine),
+                        $"Expected Navigate rejection or navigation-blocked log with host_hash8={hash8} for {uri}");
+                    if (!navigateRejected)
+                    {
+                        await Task.Delay(300);
+                        var href = UnquoteWebViewScriptString(await wv.CoreWebView2.ExecuteScriptAsync("location.href"));
+                        Assert.DoesNotContain("evil.com", href, StringComparison.OrdinalIgnoreCase);
+                        Assert.DoesNotContain(":50001", href, StringComparison.Ordinal);
+                        Assert.DoesNotContain("127.0.0.1.evil.test", href, StringComparison.OrdinalIgnoreCase);
+                        Assert.DoesNotContain("localhost:5000", href, StringComparison.OrdinalIgnoreCase);
+                        Assert.False(
+                            href.StartsWith("https://", StringComparison.OrdinalIgnoreCase),
+                            $"WebView committed blocked URI {uri}");
+                    }
                 }
+
+                Assert.True(handlerBlockedCount >= 1, "Expected at least one spoofed URI blocked by NavigationStarting handler");
 
                 await window.NavigatePanelAsync();
                 await Task.Delay(1000);
@@ -784,18 +803,28 @@ public sealed class ShellPlanAIntegrationTests
                     {
                         await Task.Delay(500);
                         webViewAfter = window.FindName("PanelWebView") as Microsoft.Web.WebView2.Wpf.WebView2;
-                        if (webViewAfter?.CoreWebView2 is null)
+                        if (webViewAfter is null || ReferenceEquals(webViewBeforeKill, webViewAfter))
                         {
                             continue;
                         }
 
-                        if (ReferenceEquals(webViewBeforeKill, webViewAfter))
+                        CoreWebView2? liveCore;
+                        try
+                        {
+                            liveCore = webViewAfter.CoreWebView2;
+                        }
+                        catch (InvalidOperationException)
+                        {
+                            continue;
+                        }
+
+                        if (liveCore is null)
                         {
                             continue;
                         }
 
                         var loc = UnquoteWebViewScriptString(
-                            await webViewAfter.CoreWebView2.ExecuteScriptAsync(
+                            await liveCore.ExecuteScriptAsync(
                                 "location.pathname + '|' + document.readyState"));
                         if (loc.StartsWith("/operator/", StringComparison.OrdinalIgnoreCase)
                             && loc.EndsWith("|complete", StringComparison.Ordinal))
@@ -985,8 +1014,7 @@ public sealed class ShellPlanAIntegrationTests
                     Assert.NotNull(wv?.CoreWebView2);
                     Assert.Contains("/operator/", wv.Source?.ToString() ?? "", StringComparison.OrdinalIgnoreCase);
                     var before = Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log").Select(File.ReadAllText).Aggregate("", string.Concat);
-                    await wv.CoreWebView2.CallDevToolsProtocolMethodAsync("Page.enable", "{}");
-                    await wv.CoreWebView2.CallDevToolsProtocolMethodAsync("Page.crash", "{}");
+                    await window.TriggerRendererCrashForHarnessAsync();
                     var recoverDeadline = DateTime.UtcNow.AddSeconds(45);
                     var recovered = false;
                     while (DateTime.UtcNow < recoverDeadline)
@@ -1012,6 +1040,8 @@ public sealed class ShellPlanAIntegrationTests
                     var after = Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log").Select(File.ReadAllText).Aggregate("", string.Concat);
                     var delta = after.Replace(before, "");
                     Assert.Contains("webview-process-failed", delta);
+                    Assert.Contains("kind=RenderProcessExited", delta, StringComparison.Ordinal);
+                    Assert.Contains("outcome=reload", delta, StringComparison.Ordinal);
                     Assert.True(recovered, "Operator panel did not reload after renderer crash");
                 }
                 finally
