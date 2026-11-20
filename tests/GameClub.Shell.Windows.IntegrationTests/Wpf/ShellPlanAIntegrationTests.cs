@@ -596,6 +596,182 @@ public sealed class ShellPlanAIntegrationTests
     }
 
     [Fact]
+    public void shell_panel_navigation_origin_blocks_spoofed_loopback_urls()
+    {
+        FakeShellSeams.RestoreProduction();
+        if (!WebView2RuntimePresent()) throw new InvalidOperationException("WebView2 runtime required");
+        EnsureServiceRunning();
+        var root = AllocateShellDataRoot();
+        try
+        {
+            _fixture.RunAsync(async () =>
+            {
+                var window = new MainWindow();
+                window.Show();
+                await Task.Delay(4000);
+                var wv = window.FindName("PanelWebView") as Microsoft.Web.WebView2.Wpf.WebView2;
+                Assert.NotNull(wv?.CoreWebView2);
+                var before = Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log").Select(File.ReadAllText).Aggregate("", string.Concat);
+                var spoofed = new[]
+                {
+                    "http://127.0.0.1:50001/operator/",
+                    "http://127.0.0.1:5000.evil.com/operator/",
+                    "http://127.0.0.1:5000@evil.com/operator/",
+                    "https://127.0.0.1:5000/operator/",
+                };
+                foreach (var uri in spoofed)
+                {
+                    wv.CoreWebView2.Navigate(uri);
+                    await Task.Delay(400);
+                }
+
+                await window.NavigatePanelAsync();
+                await Task.Delay(1000);
+                var after = Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log").Select(File.ReadAllText).Aggregate("", string.Concat);
+                var delta = after.Replace(before, "");
+                Assert.Contains("navigation-blocked", delta);
+                Assert.Contains("/operator/", wv.Source?.ToString() ?? "", StringComparison.OrdinalIgnoreCase);
+                window.Close();
+            }, TimeSpan.FromSeconds(45));
+        }
+        finally
+        {
+            CleanupShellDataRoot(root);
+        }
+    }
+
+    [Fact]
+    public void shell_offline_data_navigation_permission_cleared_after_interrupted_load()
+    {
+        FakeShellSeams.RestoreProduction();
+        if (!WebView2RuntimePresent()) throw new InvalidOperationException("WebView2 runtime required");
+        StopServiceIfRunning();
+        var root = AllocateShellDataRoot();
+        try
+        {
+            _fixture.RunAsync(async () =>
+            {
+                MainWindow? window = null;
+                try
+                {
+                    window = new MainWindow();
+                    window.Show();
+                    Microsoft.Web.WebView2.Wpf.WebView2? wv = null;
+                    var readyDeadline = DateTime.UtcNow.AddSeconds(45);
+                    while (DateTime.UtcNow < readyDeadline)
+                    {
+                        await Task.Delay(100);
+                        wv = window.FindName("PanelWebView") as Microsoft.Web.WebView2.Wpf.WebView2;
+                        if (wv?.CoreWebView2 is not null)
+                        {
+                            break;
+                        }
+                    }
+
+                    Assert.NotNull(wv?.CoreWebView2);
+                    for (var i = 0; i < 30; i++)
+                    {
+                        await Task.Delay(20);
+                        wv!.CoreWebView2.Stop();
+                    }
+
+                    await Task.Delay(1500);
+                    var before = Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log").Select(File.ReadAllText).Aggregate("", string.Concat);
+                    wv.CoreWebView2.NavigateToString("<html><body>INJECTED-OFFLINE-DATA</body></html>");
+                    await Task.Delay(1000);
+                    var html = await wv.CoreWebView2.ExecuteScriptAsync("document.body?.innerText ?? ''");
+                    var text = UnquoteWebViewScriptString(html);
+                    Assert.DoesNotContain("INJECTED-OFFLINE-DATA", text, StringComparison.Ordinal);
+                    var after = Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log").Select(File.ReadAllText).Aggregate("", string.Concat);
+                    Assert.Contains("navigation-blocked", after.Replace(before, ""));
+                }
+                finally
+                {
+                    window?.Close();
+                }
+            }, TimeSpan.FromSeconds(60));
+        }
+        finally
+        {
+            CleanupShellDataRoot(root);
+            EnsureServiceRunning();
+        }
+    }
+
+    [Fact]
+    public void shell_renderer_process_crash_reloads_operator_panel()
+    {
+        FakeShellSeams.RestoreProduction();
+        if (!WebView2RuntimePresent()) throw new InvalidOperationException("WebView2 runtime required");
+        EnsureServiceRunning();
+        var root = AllocateShellDataRoot();
+        try
+        {
+            _fixture.RunAsync(async () =>
+            {
+                MainWindow? window = null;
+                try
+                {
+                    window = new MainWindow();
+                    window.Show();
+                    var wv = window.FindName("PanelWebView") as Microsoft.Web.WebView2.Wpf.WebView2;
+                    var deadline = DateTime.UtcNow.AddSeconds(30);
+                    while (DateTime.UtcNow < deadline)
+                    {
+                        await Task.Delay(300);
+                        wv = window.FindName("PanelWebView") as Microsoft.Web.WebView2.Wpf.WebView2;
+                        if (wv?.CoreWebView2 is not null
+                            && (wv.Source?.ToString() ?? "").Contains("/operator/", StringComparison.OrdinalIgnoreCase))
+                        {
+                            break;
+                        }
+                    }
+
+                    Assert.NotNull(wv?.CoreWebView2);
+                    Assert.Contains("/operator/", wv.Source?.ToString() ?? "", StringComparison.OrdinalIgnoreCase);
+                    var before = Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log").Select(File.ReadAllText).Aggregate("", string.Concat);
+                    await wv.CoreWebView2.CallDevToolsProtocolMethodAsync("Page.enable", "{}");
+                    await wv.CoreWebView2.CallDevToolsProtocolMethodAsync("Page.crash", "{}");
+                    var recoverDeadline = DateTime.UtcNow.AddSeconds(45);
+                    var recovered = false;
+                    while (DateTime.UtcNow < recoverDeadline)
+                    {
+                        await Task.Delay(500);
+                        wv = window.FindName("PanelWebView") as Microsoft.Web.WebView2.Wpf.WebView2;
+                        if (wv?.CoreWebView2 is null)
+                        {
+                            continue;
+                        }
+
+                        var loc = UnquoteWebViewScriptString(
+                            await wv.CoreWebView2.ExecuteScriptAsync(
+                                "location.pathname + '|' + document.readyState"));
+                        if (loc.StartsWith("/operator/", StringComparison.OrdinalIgnoreCase)
+                            && loc.EndsWith("|complete", StringComparison.Ordinal))
+                        {
+                            recovered = true;
+                            break;
+                        }
+                    }
+
+                    var after = Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log").Select(File.ReadAllText).Aggregate("", string.Concat);
+                    var delta = after.Replace(before, "");
+                    Assert.Contains("webview-process-failed", delta);
+                    Assert.True(recovered, "Operator panel did not reload after renderer crash");
+                }
+                finally
+                {
+                    window?.Close();
+                }
+            }, TimeSpan.FromSeconds(90));
+        }
+        finally
+        {
+            CleanupShellDataRoot(root);
+        }
+    }
+
+    [Fact]
     public void shell_new_window_blocked_log_redacts_host_in_shell_log()
     {
         FakeShellSeams.RestoreProduction();
@@ -812,6 +988,10 @@ public sealed class ShellPlanAIntegrationTests
                             rootEl.TryGetProperty("message", out var messageEl)
                             && messageEl.GetString() == "سلام",
                             "CDP javascriptDialogOpening message must be سلام");
+                        Assert.True(
+                            rootEl.TryGetProperty("hasBrowserHandler", out var hasBrowserHandlerEl)
+                            && hasBrowserHandlerEl.ValueKind == JsonValueKind.True,
+                            "CDP javascriptDialogOpening hasBrowserHandler must be true");
                     }
 
                     Assert.False(scriptTask.IsCompleted, "ExecuteScriptAsync must still be blocked while the alert dialog is open");
@@ -823,7 +1003,8 @@ public sealed class ShellPlanAIntegrationTests
                     Assert.True(
                         scriptDone,
                         "ExecuteScriptAsync did not complete within 5s after Page.handleJavaScriptDialog accept");
-                    await scriptTask;
+                    var scriptResult = await scriptTask;
+                    Assert.Equal("null", scriptResult);
                     Assert.False(
                         scriptDialogOpeningFired,
                         "CoreWebView2.ScriptDialogOpening must not fire when observing the dialog via DevTools Protocol only");

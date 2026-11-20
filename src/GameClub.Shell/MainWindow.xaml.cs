@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Threading;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
@@ -30,6 +31,9 @@ public partial class MainWindow : Window
     private bool _closed;
     private Task? _ensureWebViewTask;
     private Action<ServerStateSnapshot>? _onPollerChanged;
+    private CoreWebView2Environment? _webViewEnvironment;
+    private readonly WebViewProcessRecoveryPolicy _processRecoveryPolicy = new();
+    private int _processRecoveryInFlight;
 
     public int NavigationStartingCount => _navigationStartingCount;
     public double CurrentZoomFactor => PanelWebView?.ZoomFactor ?? 1.0;
@@ -108,57 +112,14 @@ public partial class MainWindow : Window
         try
         {
             Directory.CreateDirectory(ShellPaths.WebView2UserData);
-            var env = await CoreWebView2Environment.CreateAsync(userDataFolder: ShellPaths.WebView2UserData);
-            await PanelWebView.EnsureCoreWebView2Async(env);
-            var settings = PanelWebView.CoreWebView2.Settings;
-            settings.AreDefaultContextMenusEnabled = false;
-            settings.AreDevToolsEnabled = false;
-            settings.AreBrowserAcceleratorKeysEnabled = false;
-            settings.IsZoomControlEnabled = true;
-            settings.IsStatusBarEnabled = false;
-
-            PanelWebView.CoreWebView2.NavigationStarting += (_, args) =>
+            _webViewEnvironment ??= await CoreWebView2Environment.CreateAsync(userDataFolder: ShellPaths.WebView2UserData);
+            await PanelWebView.EnsureCoreWebView2Async(_webViewEnvironment);
+            if (PanelWebView.CoreWebView2 is null)
             {
-                _lastNavigationUri = args.Uri;
-                _navigationStartingCount++;
-                if (_allowOfflineDataNav
-                    && args.Uri.StartsWith("data:text/html", StringComparison.OrdinalIgnoreCase))
-                {
-                    _allowOfflineDataNav = false;
-                    return;
-                }
+                throw new InvalidOperationException("Panel WebView2 core is null after EnsureCoreWebView2Async");
+            }
 
-                if (!args.Uri.StartsWith(ShellPaths.PanelOrigin, StringComparison.OrdinalIgnoreCase))
-                {
-                    args.Cancel = true;
-                    if (Uri.TryCreate(args.Uri, UriKind.Absolute, out var blocked))
-                    {
-                        var host = (blocked.Host ?? "").ToLowerInvariant();
-                        var hash8 = Sha256Hex8(host);
-                        ShellFileLog.Write($"navigation-blocked scheme={blocked.Scheme} host_hash8={hash8}");
-                    }
-                    else
-                    {
-                        ShellFileLog.Write("navigation-blocked scheme=unknown host_hash8=00000000");
-                    }
-                }
-            };
-
-            PanelWebView.CoreWebView2.NewWindowRequested += (_, args) =>
-            {
-                args.Handled = true;
-                if (Uri.TryCreate(args.Uri, UriKind.Absolute, out var blocked))
-                {
-                    var host = (blocked.Host ?? "").ToLowerInvariant();
-                    ShellFileLog.Write($"new-window-blocked scheme={blocked.Scheme} host_hash8={Sha256Hex8(host)}");
-                }
-                else
-                {
-                    ShellFileLog.Write("new-window-blocked scheme=unknown host_hash8=00000000");
-                }
-            };
-
-            PanelWebView.CoreWebView2.NavigationCompleted += OnNavigationCompleted;
+            WirePanelWebView(PanelWebView.CoreWebView2);
 
             _webViewReady = true;
             PanelWebView.Visibility = Visibility.Visible;
@@ -198,8 +159,65 @@ public partial class MainWindow : Window
         }
     }
 
+    private void WirePanelWebView(CoreWebView2 core)
+    {
+        var settings = core.Settings;
+        settings.AreDefaultContextMenusEnabled = false;
+        settings.AreDevToolsEnabled = false;
+        settings.AreBrowserAcceleratorKeysEnabled = false;
+        settings.IsZoomControlEnabled = true;
+        settings.IsStatusBarEnabled = false;
+
+        core.NavigationStarting += OnPanelNavigationStarting;
+        core.NewWindowRequested += OnPanelNewWindowRequested;
+        core.NavigationCompleted += OnNavigationCompleted;
+        core.ProcessFailed += OnWebViewProcessFailed;
+    }
+
+    private void OnPanelNavigationStarting(object? sender, CoreWebView2NavigationStartingEventArgs args)
+    {
+        _lastNavigationUri = args.Uri;
+        _navigationStartingCount++;
+        if (_allowOfflineDataNav
+            && args.Uri.StartsWith("data:text/html", StringComparison.OrdinalIgnoreCase))
+        {
+            _allowOfflineDataNav = false;
+            return;
+        }
+
+        if (!PanelNavigationOrigin.IsAllowedPanelNavigationUri(args.Uri))
+        {
+            args.Cancel = true;
+            if (Uri.TryCreate(args.Uri, UriKind.Absolute, out var blocked))
+            {
+                var host = (blocked.Host ?? "").ToLowerInvariant();
+                var hash8 = Sha256Hex8(host);
+                ShellFileLog.Write($"navigation-blocked scheme={blocked.Scheme} host_hash8={hash8}");
+            }
+            else
+            {
+                ShellFileLog.Write("navigation-blocked scheme=unknown host_hash8=00000000");
+            }
+        }
+    }
+
+    private static void OnPanelNewWindowRequested(object? sender, CoreWebView2NewWindowRequestedEventArgs args)
+    {
+        args.Handled = true;
+        if (Uri.TryCreate(args.Uri, UriKind.Absolute, out var blocked))
+        {
+            var host = (blocked.Host ?? "").ToLowerInvariant();
+            ShellFileLog.Write($"new-window-blocked scheme={blocked.Scheme} host_hash8={Sha256Hex8(host)}");
+        }
+        else
+        {
+            ShellFileLog.Write("new-window-blocked scheme=unknown host_hash8=00000000");
+        }
+    }
+
     private void OnNavigationCompleted(object? sender, CoreWebView2NavigationCompletedEventArgs e)
     {
+        _allowOfflineDataNav = false;
         if (_offlineShown)
         {
             LogOfflineTrace(
@@ -231,7 +249,138 @@ public partial class MainWindow : Window
     private bool IsActiveOnPanelOrigin()
     {
         var uri = CurrentPanelUriForTrace();
-        return uri.StartsWith(ShellPaths.PanelOrigin, StringComparison.OrdinalIgnoreCase);
+        return PanelNavigationOrigin.IsAllowedPanelNavigationUri(uri);
+    }
+
+    private async void OnWebViewProcessFailed(object? sender, CoreWebView2ProcessFailedEventArgs e)
+    {
+        if (_closed)
+        {
+            return;
+        }
+
+        if (Interlocked.CompareExchange(ref _processRecoveryInFlight, 1, 0) != 0)
+        {
+            ShellFileLog.Write(
+                $"webview-process-failed kind={e.ProcessFailedKind} attempt=skipped reason=recovery-in-flight");
+            return;
+        }
+
+        try
+        {
+            var utcNow = DateTime.UtcNow;
+            if (!_processRecoveryPolicy.CanRetry(utcNow))
+            {
+                ShellFileLog.Write(
+                    $"webview-process-failed kind={e.ProcessFailedKind} attempt=exhausted outcome=offline-page");
+                await Dispatcher.InvokeAsync(new Action(ShowOfflineAfterProcessRecoveryExhausted));
+                return;
+            }
+
+            var attempt = _processRecoveryPolicy.RecordAttemptAndGetIndex(utcNow);
+            var delay = _processRecoveryPolicy.GetBackoffForAttempt(attempt);
+            if (delay is null)
+            {
+                ShellFileLog.Write(
+                    $"webview-process-failed kind={e.ProcessFailedKind} attempt={attempt} outcome=offline-page reason=no-backoff");
+                await Dispatcher.InvokeAsync(new Action(ShowOfflineAfterProcessRecoveryExhausted));
+                return;
+            }
+
+            ShellFileLog.Write(
+                $"webview-process-failed kind={e.ProcessFailedKind} attempt={attempt} delaySec={delay.Value.TotalSeconds:F0} outcome=pending");
+
+            await Task.Delay(delay.Value);
+            if (_closed)
+            {
+                ShellFileLog.Write(
+                    $"webview-process-failed kind={e.ProcessFailedKind} attempt={attempt} outcome=cancelled reason=window-closed");
+                return;
+            }
+
+            if (e.ProcessFailedKind == CoreWebView2ProcessFailedKind.BrowserProcessExited)
+            {
+                ShellFileLog.Write(
+                    $"webview-process-failed kind={e.ProcessFailedKind} attempt={attempt} outcome=recreate-browser");
+                await RecreatePanelWebViewAsync();
+            }
+            else
+            {
+                ShellFileLog.Write(
+                    $"webview-process-failed kind={e.ProcessFailedKind} attempt={attempt} outcome=reload");
+                await Dispatcher.InvokeAsync(() =>
+                {
+                    if (!_closed && PanelWebView.CoreWebView2 is not null)
+                    {
+                        PanelWebView.CoreWebView2.Reload();
+                    }
+                });
+            }
+        }
+        catch (Exception ex)
+        {
+            ShellFileLog.Write($"webview-process-failed kind={e.ProcessFailedKind} outcome=error detail={ex.GetType().Name}");
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _processRecoveryInFlight, 0);
+        }
+    }
+
+    private void ShowOfflineAfterProcessRecoveryExhausted()
+    {
+        if (_closed)
+        {
+            return;
+        }
+
+        var state = _poller?.Current.VisualState == ShellServerVisualState.Starting ? "starting" : "stopped";
+        _panelNavigated = false;
+        _ = PresentOfflinePageAsync(state);
+    }
+
+    private async Task RecreatePanelWebViewAsync()
+    {
+        if (_closed)
+        {
+            return;
+        }
+
+        _webViewReady = false;
+        _ensureWebViewTask = null;
+        if (PanelWebView.CoreWebView2 is not null)
+        {
+            PanelWebView.CoreWebView2.ProcessFailed -= OnWebViewProcessFailed;
+            PanelWebView.CoreWebView2.NavigationStarting -= OnPanelNavigationStarting;
+            PanelWebView.CoreWebView2.NewWindowRequested -= OnPanelNewWindowRequested;
+            PanelWebView.CoreWebView2.NavigationCompleted -= OnNavigationCompleted;
+        }
+
+        _webViewEnvironment ??= await CoreWebView2Environment.CreateAsync(userDataFolder: ShellPaths.WebView2UserData);
+        await PanelWebView.EnsureCoreWebView2Async(_webViewEnvironment);
+        if (PanelWebView.CoreWebView2 is null)
+        {
+            ShellFileLog.Write("webview-recreate failed reason=null-core");
+            return;
+        }
+
+        WirePanelWebView(PanelWebView.CoreWebView2);
+        _webViewReady = true;
+        _panelNavigated = false;
+
+        if (_offlineShown)
+        {
+            var state = _currentOfflineState ?? "stopped";
+            await PresentOfflinePageAsync(state);
+        }
+        else if (_poller?.Current.VisualState == ShellServerVisualState.Running)
+        {
+            await NavigatePanelAsync();
+        }
+        else if (_poller?.Current is { } snap && !snap.OperatorAnswers)
+        {
+            await ShowOfflineAsync(snap);
+        }
     }
 
     private static bool IsLoopbackPanelTarget(string uriString)
@@ -469,9 +618,23 @@ public partial class MainWindow : Window
             _allowOfflineDataNav = false;
             throw;
         }
+        finally
+        {
+            _ = Dispatcher.BeginInvoke(
+                new Action(ClearArmedOfflineDataNavPermissionIfStillSet),
+                System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+        }
 
         LogOfflineTrace("present-offline-navigated", $"offlineState={state}");
         return Task.CompletedTask;
+    }
+
+    private void ClearArmedOfflineDataNavPermissionIfStillSet()
+    {
+        if (_allowOfflineDataNav)
+        {
+            _allowOfflineDataNav = false;
+        }
     }
 
     private bool ShouldPresentPendingOffline()
