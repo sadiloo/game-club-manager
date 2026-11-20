@@ -33,7 +33,6 @@ public partial class MainWindow : Window
         var setupStore = new KioskSetupStore();
         if (setupStore.ShouldShowFirstRun())
         {
-            LockPanel.Visibility = Visibility.Collapsed;
             LauncherPanel.Visibility = Visibility.Collapsed;
             PlayingPanel.Visibility = Visibility.Collapsed;
             FooterText.Visibility = Visibility.Collapsed;

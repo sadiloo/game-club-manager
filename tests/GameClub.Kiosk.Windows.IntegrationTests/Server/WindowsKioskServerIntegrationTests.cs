@@ -67,8 +67,7 @@ public sealed class WindowsKioskServerIntegrationTests
             testHubHandler: _backend.TestHubHandler);
         runtime.BindSession(sessionId);
         await runtime.StartAsync(default);
-        await WaitUntilTransportConnectedAsync(runtime, TimeSpan.FromSeconds(45));
-        await WaitForHeartbeatAdvanceAsync(_backend, deviceId, heartbeatBefore, lastSeenBefore);
+        await WaitForHeartbeatAdvanceAsync(_backend, runtime, deviceId, heartbeatBefore, lastSeenBefore);
         await runtime.DisposeAsync();
     }
 
@@ -412,9 +411,8 @@ public sealed class WindowsKioskServerIntegrationTests
             }, leaseCts.Token);
 
             await runtime.StartAsync(default);
-            await WaitUntilTransportConnectedAsync(runtime, TimeSpan.FromSeconds(45));
             var heartbeatBefore = await backend.CountHeartbeatsAsync();
-            await WaitForHeartbeatAdvanceAsync(backend, deviceId, heartbeatBefore, await backend.DeviceLastSeenUtcAsync(deviceId));
+            await WaitForHeartbeatAdvanceAsync(backend, runtime, deviceId, heartbeatBefore, await backend.DeviceLastSeenUtcAsync(deviceId));
 
             if (usesCiServer)
             {
@@ -790,9 +788,26 @@ public sealed class WindowsKioskServerIntegrationTests
         Assert.Fail("Kiosk runtime transport did not connect before timeout.");
     }
 
-    private static async Task WaitForHeartbeatAdvanceAsync(KioskIntegrationBackend backend, Guid deviceId, int heartbeatBefore, DateTime? lastSeenBefore)
+    private static async Task WaitForHeartbeatAdvanceAsync(
+        KioskIntegrationBackend backend,
+        KioskRuntime runtime,
+        Guid deviceId,
+        int heartbeatBefore,
+        DateTime? lastSeenBefore)
     {
-        var deadline = DateTime.UtcNow.Add(TimeSpan.FromSeconds(90));
+        // Same 72s wall clock as the former 12×6s sleep loop (f6 failed at ~74s on CI run 44782009168).
+        // Heartbeats are only sent when hub transport is Connected (see KioskRuntime.RunHeartbeatAsync).
+        var deadline = DateTime.UtcNow.Add(TimeSpan.FromSeconds(72));
+        while (DateTime.UtcNow < deadline && !runtime.IsTransportConnected)
+        {
+            await Task.Delay(200);
+        }
+
+        if (!runtime.IsTransportConnected)
+        {
+            Assert.Fail("Kiosk runtime transport did not connect within the 72s heartbeat wait budget.");
+        }
+
         while (DateTime.UtcNow < deadline)
         {
             var count = await backend.CountHeartbeatsAsync();
@@ -805,7 +820,7 @@ public sealed class WindowsKioskServerIntegrationTests
                 return;
             }
 
-            await Task.Delay(TimeSpan.FromMilliseconds(500));
+            await Task.Delay(500);
         }
 
         Assert.Fail("Expected at least 3 advancing kiosk heartbeats on the server.");

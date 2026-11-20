@@ -13,14 +13,7 @@ public sealed class KioskOpFreeIdleUiSelftestTests
     public async Task kiosk_op_free_idle_ui_selftest_shows_persian_without_mgr_keys()
     {
         var script = ScriptPath();
-        var scriptDir = Path.GetDirectoryName(script)!;
         Assert.True(File.Exists(script), $"Missing script: {script}");
-        var nodeModules = Path.Combine(scriptDir, "node_modules", "jsdom", "package.json");
-        if (!File.Exists(nodeModules))
-        {
-            await ScriptsNodeTestHelper.RunNpmCiAsync(scriptDir);
-        }
-
         using var proc = Process.Start(new ProcessStartInfo
         {
             FileName = "node",

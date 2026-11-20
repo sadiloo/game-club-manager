@@ -13,8 +13,8 @@ public static class KioskStatusInlineApplicator
 
     public static void Apply(TextBlock status, KioskStatusPresentation presentation)
     {
-        var combined = presentation.ToCombinedText();
-        status.Text = combined;
+        // WPF renders Inlines when present and ignores Text; mirror combined text for tests/automation.
+        status.Text = presentation.ToCombinedText();
         status.Inlines.Clear();
         foreach (var seg in presentation.StatusSegments)
         {

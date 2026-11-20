@@ -499,12 +499,6 @@ public sealed class KioskHostService : IAsyncDisposable
                 {
                     _locallyLockedSessionId = Guid.Empty;
                 }
-                else if (sameLockedSession && phase != KioskShellPhase.Playing)
-                {
-                    _localLockLeaseExpired = false;
-                    ShowLockLayout();
-                    RefreshStationStatusText();
-                }
                 else if (_locallyLockedSessionId != Guid.Empty
                     && ackLeaseSession is Guid differentSession
                     && differentSession != Guid.Empty
