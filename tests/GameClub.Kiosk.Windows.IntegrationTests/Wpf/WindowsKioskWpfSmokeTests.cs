@@ -12,6 +12,7 @@ using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using GameClub.Billing;
 using GameClub.Kiosk.Core.Runtime;
+using GameClub.Kiosk.Core.Setup;
 using GameClub.Kiosk.Services;
 using Xunit;
 
@@ -28,6 +29,7 @@ public sealed class WindowsKioskWpfSmokeTests
     [Fact]
     public void wpf_lock_screen_and_remaining_time_visible()
     {
+        using var isolated = WpfKioskSetupTestIsolation.CreateWithCompleteSetup();
         var artifactDir = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
             "Checkpoint",
@@ -50,7 +52,6 @@ public sealed class WindowsKioskWpfSmokeTests
                     window.UpdateLayout();
                     var lockPanel = (FrameworkElement)GetField(window, "LockPanel");
                     var status = (System.Windows.Controls.TextBlock)GetField(window, "StatusText");
-                    var playingPanel = (FrameworkElement)GetField(window, "PlayingPanel");
                     lockVisible = lockPanel.Visibility;
                     statusText = status.Text;
                     var width = (int)Math.Max(window.ActualWidth, 800);
@@ -85,6 +86,47 @@ public sealed class WindowsKioskWpfSmokeTests
         Assert.Equal(Visibility.Visible, lockVisible);
         Assert.False(string.IsNullOrWhiteSpace(statusText));
         Assert.True(new FileInfo(screenshotPath).Length > 0);
+    }
+
+    [Fact]
+    public void wpf_first_run_shows_setup_and_hides_lock_panel()
+    {
+        using var isolated = WpfKioskSetupTestIsolation.CreateWithoutSetup();
+        Visibility lockVisible = Visibility.Visible;
+        Visibility firstRunVisible = Visibility.Collapsed;
+        Exception inProcessError = null;
+
+        _wpf.RunAsync(async () =>
+        {
+            try
+            {
+                var window = new GameClub.Kiosk.MainWindow();
+                try
+                {
+                    window.Show();
+                    window.UpdateLayout();
+                    lockVisible = ((FrameworkElement)GetField(window, "LockPanel")).Visibility;
+                    firstRunVisible = ((FrameworkElement)GetField(window, "FirstRunSetup")).Visibility;
+                    await Task.CompletedTask;
+                }
+                finally
+                {
+                    window.Close();
+                }
+            }
+            catch (Exception ex)
+            {
+                inProcessError = ex;
+            }
+        }, TimeSpan.FromMinutes(1));
+
+        if (inProcessError is not null)
+        {
+            Assert.Fail(inProcessError.Message);
+        }
+
+        Assert.Equal(Visibility.Collapsed, lockVisible);
+        Assert.Equal(Visibility.Visible, firstRunVisible);
     }
 
     [Fact]
