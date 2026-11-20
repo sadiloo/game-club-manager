@@ -20,6 +20,7 @@
     .buffet-icon { position: absolute; left: 6px; top: 6px; font-size: 1.1rem; border: none; background: #fff; border-radius: 6px; cursor: pointer; padding: 0.15rem 0.35rem; }
     .hidden { display: none; }
     #error { color: #b00020; white-space: pre-wrap; }
+    #mgrFreeIdleErr { color: #b00020; }
     #billDetail { font-size: 0.9rem; white-space: pre-wrap; }
     .pay-line { display: flex; gap: 0.5rem; flex-wrap: wrap; margin: 0.25rem 0; }
     label { display: block; margin: 0.25rem 0; }
@@ -182,6 +183,8 @@
           <p id="mgrFreeIdleHelp" class="muted">پیش‌فرض ۵ دقیقه. عدد کامل از ۱ تا ۲۴۰.</p>
           <p id="mgrFreeIdleApplyNote" class="muted">مقدار تازه با تماس بعدی هر کیوسک با سرور اعمال می‌شود، حتی روی استفاده‌های رایگانِ باز.</p>
           <button id="mgrFreeIdleSaveBtn" type="button">ذخیره</button>
+          <p id="mgrFreeIdleErr" class="hidden" role="alert"></p>
+          <p id="mgrFreeIdleSaved" class="muted hidden"></p>
         </div>
         <button id="saveCafeSettingsBtn" type="button">ذخیره تنظیمات</button>
       </div>

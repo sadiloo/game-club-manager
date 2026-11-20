@@ -1402,21 +1402,96 @@ public sealed class KioskHostStatusTimerTests
         }
     }
 
+    [Fact]
+    public void host_login_pair_before_is_no_send()
+    {
+        _wpf.RunAsync(async () =>
+        {
+            var seam = new KioskHostTestSeam();
+            var host = CreateHost(out _, out _, out _, seam, out var loginError);
+            try
+            {
+                SetField(host, "_deviceId", Guid.Empty);
+                const string secret = "host-test-secret-42";
+                await host.LoginAsync("cust", secret);
+                Assert.Equal(0, seam.LoginPostCount);
+                Assert.Empty(seam.LoginPostBodies);
+                foreach (var body in seam.LoginPostBodies)
+                {
+                    Assert.DoesNotContain(secret, body, StringComparison.Ordinal);
+                }
+
+                Assert.Equal(GameClub.Kiosk.Core.Login.KioskLoginStrings.PairBefore, loginError.Text);
+                Assert.DoesNotContain(secret, loginError.Text ?? "", StringComparison.Ordinal);
+            }
+            finally
+            {
+                await host.DisposeAsync();
+            }
+        }, TimeSpan.FromSeconds(30));
+    }
+
+    [Fact]
+    public void host_device_key_change_clears_pair_before_login_error()
+    {
+        _wpf.RunAsync(async () =>
+        {
+            var host = CreateHost(out _, out _, out _, null, out var loginError);
+            try
+            {
+                SetField(host, "_deviceId", Guid.Empty);
+                SetField(host, "_loadedDeviceKey", "device-key-a");
+                await host.LoginAsync("cust", "pass");
+                Assert.Equal(GameClub.Kiosk.Core.Login.KioskLoginStrings.PairBefore, loginError.Text);
+                Assert.Equal(Visibility.Visible, loginError.Visibility);
+                var onChange = typeof(KioskHostService).GetMethod(
+                    "OnDeviceCredentialsChanged",
+                    BindingFlags.Instance | BindingFlags.NonPublic)!;
+                onChange.Invoke(host, new object[] { "device-key-b" });
+                Assert.Equal("", loginError.Text);
+                Assert.Equal(Visibility.Collapsed, loginError.Visibility);
+            }
+            finally
+            {
+                await host.DisposeAsync();
+            }
+        }, TimeSpan.FromSeconds(30));
+    }
+
     private static KioskHostService CreateHost(
         out TextBlock status,
         out UIElement lockPanel,
         out UIElement playingPanel,
         KioskHostTestSeam testSeam = null)
+        => CreateHost(out status, out lockPanel, out playingPanel, testSeam, out _);
+
+    private static KioskHostService CreateHost(
+        out TextBlock status,
+        out UIElement lockPanel,
+        out UIElement playingPanel,
+        KioskHostTestSeam? testSeam,
+        out TextBlock loginError)
     {
         var window = new Window { Width = 400, Height = 300 };
         status = new TextBlock();
+        loginError = new TextBlock();
         var balance = new TextBlock();
         var elapsed = new TextBlock();
         var freeBand = new TextBlock();
         lockPanel = new Border();
         var launcher = new Border();
         playingPanel = new Border();
-        return new KioskHostService(window, status, balance, elapsed, freeBand, lockPanel, launcher, playingPanel, testSeam: testSeam);
+        return new KioskHostService(
+            window,
+            status,
+            loginError,
+            balance,
+            elapsed,
+            freeBand,
+            lockPanel,
+            launcher,
+            playingPanel,
+            testSeam: testSeam);
     }
 
     private static KioskRuntime GetRuntime(KioskHostService host)

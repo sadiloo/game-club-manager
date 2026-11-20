@@ -1,6 +1,7 @@
 using System.Text.Json;
 using GameClub.Billing;
 using GameClub.Server.Data;
+using GameClub.Kiosk.Core.Admin;
 using GameClub.Server.Kiosk;
 using GameClub.Server.Data.Entities;
 using GameClub.Server.Services;
@@ -56,15 +57,11 @@ public sealed class OperatorShiftCloseService(
         };
     }
 
-    public async Task<object> UpdateSettingsAsync(
-        bool? shiftsEnabled,
-        bool? multiOperatorEnabled,
-        int? kioskFreeUseIdleMinutes,
-        CancellationToken ct)
+    public async Task<object> UpdateSettingsAsync(bool? shiftsEnabled, bool? multiOperatorEnabled, CancellationToken ct)
     {
         if (op.Role is not UserRole.Manager and not UserRole.Owner)
         {
-            throw new ApiException(StatusCodes.Status403Forbidden, "forbidden", "mgr.freeIdle.err.forbidden");
+            throw new ApiException(StatusCodes.Status403Forbidden, "forbidden", "Only a manager may change cafe settings.");
         }
 
         var row = await db.BranchCafeSettings.FirstOrDefaultAsync(ct);
@@ -85,14 +82,38 @@ public sealed class OperatorShiftCloseService(
             row.MultiOperatorEnabled = mo;
         }
 
-        if (kioskFreeUseIdleMinutes is int idle)
-        {
-            row.KioskFreeUseIdleMinutes = KioskOperatorLockService.ClampIdleMinutes(idle);
-        }
-
         await audit.AppendAsync(
             "cafe.settings",
             new { before, after = new { row.ShiftsEnabled, row.MultiOperatorEnabled, row.KioskFreeUseIdleMinutes } },
+            ct);
+        await db.SaveChangesAsync(ct);
+        return new { row.ShiftsEnabled, row.MultiOperatorEnabled, row.KioskFreeUseIdleMinutes };
+    }
+
+    public async Task<object> UpdateKioskFreeUseIdleMinutesAsync(int kioskFreeUseIdleMinutes, CancellationToken ct)
+    {
+        if (op.Role is not UserRole.Manager and not UserRole.Owner)
+        {
+            throw new ApiException(
+                StatusCodes.Status403Forbidden,
+                KioskFreeIdleSettingCodes.Forbidden,
+                KioskOpStrings.MgrFreeIdleErrForbidden);
+        }
+
+        var validated = KioskOperatorLockService.ValidateIdleMinutes(kioskFreeUseIdleMinutes);
+
+        var row = await db.BranchCafeSettings.FirstOrDefaultAsync(ct);
+        if (row is null)
+        {
+            row = new BranchCafeSettingsEntity();
+            db.BranchCafeSettings.Add(row);
+        }
+
+        var before = row.KioskFreeUseIdleMinutes;
+        row.KioskFreeUseIdleMinutes = validated;
+        await audit.AppendAsync(
+            "cafe.settings.kiosk_free_idle",
+            new { before, after = row.KioskFreeUseIdleMinutes },
             ct);
         await db.SaveChangesAsync(ct);
         return new { row.ShiftsEnabled, row.MultiOperatorEnabled, row.KioskFreeUseIdleMinutes };

@@ -8,6 +8,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Threading;
 using GameClub.Kiosk.Core.Admin;
+using GameClub.Kiosk.Core.Login;
 using GameClub.Kiosk.Core.Catalog;
 using GameClub.Kiosk.Core.Protocol;
 using GameClub.Kiosk.Core.Runtime;
@@ -23,6 +24,7 @@ public sealed class KioskHostService : IAsyncDisposable
 
     private readonly Window _shell;
     private readonly TextBlock _status;
+    private readonly TextBlock? _loginError;
     private readonly TextBlock _balance;
     private readonly TextBlock _elapsed;
     private readonly TextBlock _freeBand;
@@ -46,6 +48,7 @@ public sealed class KioskHostService : IAsyncDisposable
     private string _leaseVerifyPublicKeyPem = "";
     private Guid _deviceId;
     private string _deviceKey = "";
+    private string _loadedDeviceKey = "";
     private string _stationId = "";
     private Guid _sessionId;
     private Guid _locallyLockedSessionId;
@@ -68,6 +71,7 @@ public sealed class KioskHostService : IAsyncDisposable
     public KioskHostService(
         Window shell,
         TextBlock status,
+        TextBlock? loginError,
         TextBlock balance,
         TextBlock elapsed,
         TextBlock freeBand,
@@ -82,6 +86,7 @@ public sealed class KioskHostService : IAsyncDisposable
         _testSeam = testSeam;
         _shell = shell;
         _status = status;
+        _loginError = loginError;
         _balance = balance;
         _elapsed = elapsed;
         _freeBand = freeBand;
@@ -164,7 +169,9 @@ public sealed class KioskHostService : IAsyncDisposable
 
         var doc = JsonDocument.Parse(await pair.Content.ReadAsStringAsync());
         _deviceId = doc.RootElement.GetProperty("deviceId").GetGuid();
-        _deviceKey = doc.RootElement.GetProperty("deviceKey").GetString()!;
+        var newKey = doc.RootElement.GetProperty("deviceKey").GetString()!;
+        OnDeviceCredentialsChanged(newKey);
+        _deviceKey = newKey;
         _stationId = doc.RootElement.GetProperty("stationId").GetString()!;
         if (doc.RootElement.TryGetProperty("leaseVerifyPublicKeyPem", out var pem))
         {
@@ -182,23 +189,51 @@ public sealed class KioskHostService : IAsyncDisposable
 
     public async Task LoginAsync(string loginName, string password)
     {
-        if (_deviceId == Guid.Empty)
+        var precheck = KioskCustomerLoginGate.Precheck(_deviceId, loginName, password);
+        if (precheck != KioskCustomerLoginPrecheck.Ok)
         {
-            _status.Text = "Pair before login";
+            ShowCustomerLoginError(KioskCustomerLoginGate.MessageFor(precheck));
             return;
         }
 
+        _testSeam?.ResetLoginMetrics();
+        var payload = JsonSerializer.Serialize(new { loginName, password, stationId = _stationId });
         var response = await _http.PostAsync(
             $"{_serverBase}/api/kiosk/auth/login",
-            new StringContent(JsonSerializer.Serialize(new { loginName, password, stationId = _stationId }), Encoding.UTF8, "application/json"));
+            new StringContent(payload, Encoding.UTF8, "application/json"));
+        _testSeam?.RecordLoginPostBody(payload);
         if (!response.IsSuccessStatusCode)
         {
-            _status.Text = "Login failed";
+            var body = await response.Content.ReadAsStringAsync();
+            string? code = null;
+            try
+            {
+                using var doc = JsonDocument.Parse(body);
+                if (doc.RootElement.TryGetProperty("code", out var c))
+                {
+                    code = c.GetString();
+                }
+            }
+            catch
+            {
+                // ignore parse errors
+            }
+
+            ShowCustomerLoginError(code switch
+            {
+                null or "" when response.StatusCode == System.Net.HttpStatusCode.RequestTimeout
+                    => KioskLoginStrings.Timeout,
+                null or "" when (int)response.StatusCode >= 500 || (int)response.StatusCode == 0
+                    => KioskLoginStrings.Unreachable,
+                _ => KioskLoginStrings.ForServerCode(code),
+            });
             return;
         }
 
-        var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
-        _sessionId = doc.RootElement.GetProperty("sessionId").GetGuid();
+        ClearCustomerLoginError();
+
+        var loginDoc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        _sessionId = loginDoc.RootElement.GetProperty("sessionId").GetGuid();
         _locallyLockedSessionId = Guid.Empty;
         _runtime.BindSession(_sessionId);
         await ApplyStationProfileAsync();
@@ -931,7 +966,9 @@ public sealed class KioskHostService : IAsyncDisposable
         var json = File.ReadAllText(path);
         var doc = JsonDocument.Parse(json);
         _deviceId = doc.RootElement.GetProperty("deviceId").GetGuid();
-        _deviceKey = doc.RootElement.GetProperty("deviceKey").GetString()!;
+        var loadedKey = doc.RootElement.GetProperty("deviceKey").GetString()!;
+        OnDeviceCredentialsChanged(loadedKey);
+        _deviceKey = loadedKey;
         _stationId = doc.RootElement.GetProperty("stationId").GetString()!;
         if (doc.RootElement.TryGetProperty("serverBase", out var savedBase))
         {
@@ -1155,6 +1192,46 @@ public sealed class KioskHostService : IAsyncDisposable
     }
 
     public void NotifyAdminRole(KioskAdminRole role) => _lastAdminRole = role;
+
+    private void OnDeviceCredentialsChanged(string deviceKey)
+    {
+        if (string.Equals(_loadedDeviceKey, deviceKey, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _loadedDeviceKey = deviceKey;
+        _pairingJustFailed = false;
+        ClearCustomerLoginError();
+    }
+
+    private void ShowCustomerLoginError(string message)
+    {
+        _shell.Dispatcher.Invoke(() =>
+        {
+            if (_loginError is null)
+            {
+                return;
+            }
+
+            _loginError.Text = message;
+            _loginError.Visibility = Visibility.Visible;
+        });
+    }
+
+    private void ClearCustomerLoginError()
+    {
+        _shell.Dispatcher.Invoke(() =>
+        {
+            if (_loginError is null)
+            {
+                return;
+            }
+
+            _loginError.Text = "";
+            _loginError.Visibility = Visibility.Collapsed;
+        });
+    }
 
     private static string EventsQueuePath()
         => Path.Combine(

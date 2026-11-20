@@ -2528,6 +2528,72 @@ async function ss14RefreshManagerGameUi(isMgr) {
 // --- end SS-14 ---
 
 // --- K-OP (MVP installer B) ---
+const KIOSK_OP_FREE_IDLE_ERR_FORBIDDEN = "فقط مدیر یا مالک می‌تواند این را عوض کند.";
+const KIOSK_OP_FREE_IDLE_ERR_INVALID = "یک عدد کامل از ۱ تا ۲۴۰ وارد کنید.";
+
+function kioskOpFreeIdleErrorMessage(code, message) {
+  if (code === "free_idle_forbidden") return KIOSK_OP_FREE_IDLE_ERR_FORBIDDEN;
+  if (code === "free_idle_invalid") return KIOSK_OP_FREE_IDLE_ERR_INVALID;
+  if (typeof message === "string" && message.length > 0 && !message.startsWith("mgr.")) return message;
+  return "ذخیره نشد. دوباره امتحان کنید.";
+}
+
+function kioskOpShowMgrFreeIdleErr(text) {
+  const el = document.getElementById("mgrFreeIdleErr");
+  if (!el) return;
+  if (!text) {
+    el.textContent = "";
+    el.classList.add("hidden");
+    return;
+  }
+  el.textContent = text;
+  el.classList.remove("hidden");
+}
+
+async function kioskOpSaveFreeIdleMinutes() {
+  kioskOpShowMgrFreeIdleErr("");
+  const raw = (document.getElementById("mgrFreeIdleMinutes").value || "").replace(/[۰-۹]/g, (c) =>
+    String("۰۱۲۳۴۵۶۷۸۹".indexOf(c))
+  );
+  if (!raw.trim()) {
+    kioskOpShowMgrFreeIdleErr("تعداد دقیقه را وارد کنید.");
+    return;
+  }
+  const minutes = Number(raw);
+  if (!Number.isInteger(minutes) || minutes < 1 || minutes > 240) {
+    kioskOpShowMgrFreeIdleErr(KIOSK_OP_FREE_IDLE_ERR_INVALID);
+    return;
+  }
+  try {
+    const res = await fetch("/api/operator/shift/settings/kiosk-free-idle", {
+      method: "PUT",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kioskFreeUseIdleMinutes: minutes }),
+    });
+    const text = await res.text();
+    if (!res.ok) {
+      let code;
+      let message;
+      try {
+        const j = JSON.parse(text);
+        code = j.code;
+        message = j.message;
+      } catch (_) {}
+      kioskOpShowMgrFreeIdleErr(kioskOpFreeIdleErrorMessage(code, message));
+      return;
+    }
+    kioskOpShowMgrFreeIdleErr("");
+    const saved = document.getElementById("mgrFreeIdleSaved");
+    if (saved) {
+      saved.textContent = "ذخیره شد.";
+      saved.classList.remove("hidden");
+      window.setTimeout(() => saved.classList.add("hidden"), 3000);
+    }
+  } catch (_) {
+    kioskOpShowMgrFreeIdleErr("ذخیره نشد. دوباره امتحان کنید.");
+  }
+}
 function kioskOpFormatElapsed(startedAtUtc) {
   const start = new Date(startedAtUtc).getTime();
   const sec = Math.max(0, Math.floor((Date.now() - start) / 1000));
@@ -2630,13 +2696,11 @@ bindClick("freeUseReportBtn", async () => {
 });
 
 bindClick("mgrFreeIdleSaveBtn", async () => {
-  const raw = (document.getElementById("mgrFreeIdleMinutes").value || "").replace(/[۰-۹]/g, (c) =>
-    String("۰۱۲۳۴۵۶۷۸۹".indexOf(c))
-  );
-  const minutes = Number(raw);
-  await api("/api/operator/shift/settings", {
-    method: "PUT",
-    body: JSON.stringify({ kioskFreeUseIdleMinutes: minutes }),
-  });
+  await kioskOpSaveFreeIdleMinutes();
 });
+
+const mgrFreeIdleInput = document.getElementById("mgrFreeIdleMinutes");
+if (mgrFreeIdleInput) {
+  mgrFreeIdleInput.addEventListener("input", () => kioskOpShowMgrFreeIdleErr(""));
+}
 // --- end K-OP ---

@@ -88,6 +88,7 @@ public sealed class KioskOperatorLockService(
         => db.KioskFreeUses.AsNoTracking()
             .FirstOrDefaultAsync(r => r.StationId == stationId && r.EndedAtUtc == null, ct);
 
+    /// <summary>Read path only: normalize corrupt stored N (spec v2.9 §13.9 و-۴).</summary>
     public async Task<int> GetIdleMinutesAsync(CancellationToken ct)
     {
         var row = await db.BranchCafeSettings.AsNoTracking().FirstOrDefaultAsync(ct);
@@ -100,16 +101,15 @@ public sealed class KioskOperatorLockService(
         return Math.Min(minutes, MaxIdleMinutes);
     }
 
-    public static int ClampIdleMinutes(int minutes)
+  /// <summary>Write path: reject out-of-range N (spec v2.9 §13.5); no clamping on save.</summary>
+    public static int ValidateIdleMinutes(int minutes)
     {
-        if (minutes < 1)
+        if (minutes < 1 || minutes > MaxIdleMinutes)
         {
-            throw new ApiException(StatusCodes.Status400BadRequest, "invalid", "mgr.freeIdle.err.invalid");
-        }
-
-        if (minutes > MaxIdleMinutes)
-        {
-            throw new ApiException(StatusCodes.Status400BadRequest, "too_high", "mgr.freeIdle.err.invalid");
+            throw new ApiException(
+                StatusCodes.Status400BadRequest,
+                KioskFreeIdleSettingCodes.Invalid,
+                KioskOpStrings.MgrFreeIdleErrInvalid);
         }
 
         return minutes;

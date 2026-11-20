@@ -2,6 +2,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using GameClub.Billing;
 using Microsoft.AspNetCore.Http;
+using GameClub.Kiosk.Core.Admin;
 using GameClub.Kiosk.Core.Protocol;
 using GameClub.Server.Data;
 using GameClub.Server.Data.Entities;
@@ -89,8 +90,10 @@ public sealed class KioskOperatorLockServiceTests(GameClubWebApplicationFactory 
     [Fact]
     public void idle_minutes_rejects_above_240()
     {
-        var ex = Assert.Throws<ApiException>(() => KioskOperatorLockService.ClampIdleMinutes(241));
+        var ex = Assert.Throws<ApiException>(() => KioskOperatorLockService.ValidateIdleMinutes(241));
         Assert.Equal(StatusCodes.Status400BadRequest, ex.Status);
+        Assert.Equal(KioskFreeIdleSettingCodes.Invalid, ex.Code);
+        Assert.Equal(KioskOpStrings.MgrFreeIdleErrInvalid, ex.Message);
     }
 
     [Fact]

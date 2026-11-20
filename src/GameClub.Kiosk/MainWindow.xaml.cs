@@ -15,6 +15,7 @@ public partial class MainWindow : Window
         _host = new KioskHostService(
             this,
             StatusText,
+            LoginError,
             DisplayBalance,
             DisplayElapsed,
             DisplayFreeBand,

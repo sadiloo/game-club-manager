@@ -8,6 +8,11 @@ public static class KioskStationStatus
     /// <summary>Two heartbeat intervals (5 s) plus margin — no ack while transport is up.</summary>
     public const int NoServerResponseAfterSeconds = 12;
 
+    private const char Fsi = '\u2068';
+    private const char Pdi = '\u2069';
+
+    public static string IsolateStationId(string stationId) => $"{Fsi}{stationId}{Pdi}";
+
     public static string Resolve(
         string stationId,
         KioskTransportPhase transportPhase,
@@ -21,9 +26,10 @@ public static class KioskStationStatus
         long? estimatedRemainingSeconds,
         string? lastErrorDetail)
     {
+        var pc = IsolateStationId(stationId);
         if (pairingJustFailed)
         {
-            return $"Station {stationId} — not connected";
+            return $"Station {pc} — not connected";
         }
 
         var offline = !hubTransportConnected
@@ -42,15 +48,15 @@ public static class KioskStationStatus
             {
                 if (hubTransportConnected && noResponse)
                 {
-                    return $"Station {stationId} — no server response";
+                    return $"Station {pc} — no server response";
                 }
 
-                return $"Station {stationId} — ~{TimeSpan.FromSeconds(seconds):hh\\:mm\\:ss} left";
+                return $"Station {pc} — ~{TimeSpan.FromSeconds(seconds):hh\\:mm\\:ss} left";
             }
 
             if (hubTransportConnected && noResponse)
             {
-                return $"Station {stationId} — no server response";
+                return $"Station {pc} — no server response";
             }
         }
 
@@ -58,10 +64,10 @@ public static class KioskStationStatus
         {
             if (transportPhase == KioskTransportPhase.LastError && !string.IsNullOrWhiteSpace(lastErrorDetail))
             {
-                return $"Station {stationId} — {lastErrorDetail}";
+                return $"Station {pc} — {lastErrorDetail}";
             }
 
-            return $"Station {stationId} — reconnecting…";
+            return $"Station {pc} — reconnecting…";
         }
 
         if (!hasOpenSession && hubTransportConnected && transportPhase == KioskTransportPhase.Connected)
@@ -71,16 +77,16 @@ public static class KioskStationStatus
                     && utcNow - lastHeartbeatAckUtc.Value > TimeSpan.FromSeconds(NoServerResponseAfterSeconds));
             if (noResponse)
             {
-                return $"Station {stationId} — no server response";
+                return $"Station {pc} — no server response";
             }
 
-            return $"Station {stationId} — connected";
+            return $"Station {pc} — connected";
         }
 
         return transportPhase switch
         {
-            KioskTransportPhase.Connecting => $"Station {stationId} — connecting…",
-            _ => $"Station {stationId} — connecting…",
+            KioskTransportPhase.Connecting => $"Station {pc} — connecting…",
+            _ => $"Station {pc} — connecting…",
         };
     }
 
@@ -114,13 +120,14 @@ public static class KioskStationStatus
             utcNow,
             estimatedRemainingSeconds: null,
             lastErrorDetail);
-        var prefix = $"Station {stationId} — ";
+        var pc = IsolateStationId(stationId);
+        var prefix = $"Station {pc} — ";
         var suffix = connection.StartsWith(prefix, StringComparison.Ordinal)
             ? connection.Substring(prefix.Length)
             : connection;
         var locked = leaseExpired
-            ? $"Locked — lease expired ({stationId})"
-            : $"Locked — {stationId}";
+            ? $"Locked — lease expired ({pc})"
+            : $"Locked — {pc}";
         return $"{locked} · {suffix}";
     }
 }
