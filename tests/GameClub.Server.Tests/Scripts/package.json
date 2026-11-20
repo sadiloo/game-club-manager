@@ -4,7 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test:cp": "node cp-parse-money-selftest.mjs && node cp-layer-selftest.mjs && node cp-error-map-selftest.mjs && node cp-flows-f01-f17-selftest.mjs"
   },
   "keywords": [],
   "author": "",

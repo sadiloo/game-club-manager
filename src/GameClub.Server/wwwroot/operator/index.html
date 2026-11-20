@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <title>چک‌پوینت — اپراتور</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content" />
   <script src="/operator/lib/signalr.min.js"></script>
   <style>
     body { font-family: system-ui, Tahoma, sans-serif; margin: 1rem; max-width: 1040px; }
@@ -36,6 +36,47 @@
     #customerSearchResults { max-height: 10rem; overflow: auto; border: 1px solid #ddd; padding: 0.35rem; margin: 0.25rem 0; border-radius: 6px; }
     .alert { background: #fff3e0; border: 1px solid #e65100; color: #bf360c; padding: 0.5rem 0.75rem; border-radius: 8px; font-weight: 600; }
     #prepaidGlobalAlert { margin: 0.5rem 0; }
+    #cpBgStatus { color: #b5410e; font-size: 0.85rem; margin: 0.25rem 0; }
+    #cpBgStatus.hidden { display: none; }
+    #cpLayer.hidden { display: none !important; pointer-events: none !important; }
+    #cpLayer.cp-phone .cp-sheet, #cpLayer.cp-desktop .cp-sheet { background: #fff; border-radius: 16px 16px 0 0; max-height: min(760px, 100dvh - 24px); overflow: auto; padding: 12px 16px; box-sizing: border-box; }
+    #cpLayer.cp-desktop { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; z-index: 10000; }
+    #cpLayer.cp-desktop .cp-scrim { position: fixed; inset: 0; background: rgba(14, 21, 36, 0.4); }
+    #cpLayer.cp-desktop .cp-sheet { border-radius: 16px; width: min(440px, calc(100vw - 32px)); max-height: min(760px, calc(100vh - 64px)); box-shadow: 0 8px 24px rgba(13, 20, 36, 0.16); position: relative; z-index: 1; }
+    #cpLayer.cp-desktop.cp-wide .cp-sheet { width: min(560px, calc(100vw - 32px)); }
+    #cpLayer.cp-phone { position: fixed; inset: 0; z-index: 10000; display: flex; flex-direction: column; justify-content: flex-end; }
+    #cpLayer.cp-phone .cp-scrim { position: fixed; inset: 0; background: rgba(14, 21, 36, 0.4); }
+    #cpLayer.cp-phone .cp-sheet { position: relative; z-index: 1; width: 100%; }
+    .cp-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+    .cp-title { flex: 1; margin: 0; font-size: 1.1rem; }
+    .cp-close, .cp-back { min-width: 44px; min-height: 44px; border: none; background: transparent; font-size: 1.25rem; cursor: pointer; }
+    .cp-field { display: block; margin: 12px 0; }
+    .cp-field-error { display: block; color: #c41b40; font-size: 0.85rem; }
+    .cp-field-error.hidden, .cp-server-error.hidden { display: none; }
+    .cp-server-error { color: #c41b40; margin: 8px 0; }
+    .cp-warning { color: #b5410e; margin: 8px 0; }
+    .cp-foot { display: flex; gap: 12px; margin-top: 12px; position: sticky; bottom: 0; background: #fff; padding-top: 8px; }
+    .cp-btn { min-height: 48px; flex: 1; border-radius: 12px; border: 1px solid #c5cedc; cursor: pointer; font-size: 1rem; }
+    .cp-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+    .cp-primary { background: #4e32c2; color: #fff; border-color: #4e32c2; }
+    .cp-danger { background: #c41b40; color: #fff; border-color: #c41b40; }
+    .cp-secondary { background: #fff; }
+    .cp-money-row { display: flex; align-items: center; border: 1px solid #78859a; border-radius: 12px; padding: 0 12px; }
+    .cp-money-row input { flex: 1; border: none; min-height: 46px; font-size: 1rem; }
+    .cp-suffix { color: #556173; margin-inline-start: 8px; }
+    .cp-radio-row { display: flex; align-items: center; gap: 8px; min-height: 48px; padding: 4px 8px; border-radius: 8px; }
+    .cp-pick-row { display: block; width: 100%; text-align: right; min-height: 48px; margin: 4px 0; border: 1px solid #c5cedc; border-radius: 8px; background: #e8eef8; padding: 8px; cursor: pointer; }
+    .cp-pick-list { max-height: 50vh; overflow: auto; }
+    .cp-ladder-card { border: 1px solid #c5cedc; border-radius: 12px; padding: 8px; margin: 8px 0; }
+    .cp-ladder-card input { width: 100%; box-sizing: border-box; margin: 4px 0; min-height: 44px; }
+    .cp-code-display { font-size: 1.75rem; font-weight: 700; text-align: center; padding: 16px; user-select: all; }
+    #cpToastHost { position: fixed; bottom: 16px; left: 16px; right: 16px; z-index: 10001; pointer-events: none; }
+    .cp-toast { pointer-events: auto; padding: 12px 16px; border-radius: 12px; background: #e3eeeb; border: 1px solid #187556; margin-top: 8px; }
+    .cp-toast-info { background: #fff; border-color: #c5cedc; }
+    .cp-toast-error { background: #f8e4e8; border-color: #c41b40; }
+    @media (min-width: 768px) {
+      #cpToastHost { left: auto; width: 360px; right: 32px; }
+    }
   </style>
 </head>
 <body>
@@ -49,6 +90,7 @@
   <section id="app" class="hidden">
     <h1>سالن</h1>
     <p id="prepaidGlobalAlert" class="hidden" role="alert"></p>
+    <p id="cpBgStatus" class="hidden" role="status"></p>
     <p id="error" role="alert"></p>
     <p id="lowStockList"></p>
     <div id="grid"></div>
@@ -70,7 +112,7 @@
         <button type="button" id="walletTopUpCash">شارژ نقدی کیف پول</button>
         <button type="button" id="walletTopUpCard">شارژ کارتخوان</button>
         <button type="button" id="walletTopUpC2c">شارژ کارت‌به‌کارت</button>
-        <button type="button" id="walletCorrectBtn">اصلاح شارژ (موقت)</button>
+        <button type="button" id="walletCorrectBtn">اصلاح شارژ</button>
       </div>
       <label>جستجو (موبایل، نام، کارت)
         <input id="customerSearch" type="search" autocomplete="off" placeholder="0912… یا نام یا کد عضویت" />
@@ -147,11 +189,11 @@
       <button id="mgrGiftBtn" type="button">اعتبار هدیه</button>
       <button id="mgrOpeningBtn" type="button">مانده افتتاحیه</button>
       <button id="mgrFloorBtn" type="button">سقف نسیه</button>
-      <button id="mgrLadderBtn" type="button">جدول سطح‌ها (JSON)</button>
+      <button id="mgrLadderBtn" type="button">جدول سطح‌ها</button>
       <button id="mgrBirthdayBtn" type="button">تنظیم تولد</button>
       <button id="mgrCustBirthdayBtn" type="button">تاریخ تولد عضو</button>
-      <button id="mgrGiftCapBtn" type="button">سقف هدیه اپراتور (موقت)</button>
-      <button id="mgrCorrectionsBtn" type="button">اصلاح‌های شارژ (موقت)</button>
+      <button id="mgrGiftCapBtn" type="button">سقف هدیه اپراتور</button>
+      <button id="mgrCorrectionsBtn" type="button">اصلاح‌های شارژ</button>
     </section>
 
     <section id="bill" class="panel hidden">
@@ -224,6 +266,7 @@
       <pre id="invoiceDetail"></pre>
     </section>
   </section>
+  <script src="/operator/cp-layer.js"></script>
   <script src="/operator/app.js"></script>
 </body>
 </html>

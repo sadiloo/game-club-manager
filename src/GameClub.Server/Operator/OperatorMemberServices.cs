@@ -673,6 +673,11 @@ public sealed partial class OperatorMemberWalletService(
     public async Task UpdateBirthdaySettingsAsync(int percent, string windowKind, int windowDays, string anchor, CancellationToken ct)
     {
         EnsureManager();
+        if (string.Equals(windowKind, "day_window", StringComparison.Ordinal) && windowDays < 1)
+        {
+            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_window_days", "Birthday window days must be at least 1.");
+        }
+
         var settings = await db.BranchMemberSettings.FirstAsync(ct);
         settings.BirthdayPercent = percent;
         settings.BirthdayWindowKind = windowKind;

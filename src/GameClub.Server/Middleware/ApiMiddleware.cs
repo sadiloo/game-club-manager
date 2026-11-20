@@ -1,3 +1,4 @@
+using GameClub.Billing;
 using GameClub.Server.Services;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -63,23 +64,11 @@ public sealed class ApiExceptionMiddleware(RequestDelegate next)
         }
         catch (ApiException ex)
         {
-            context.Response.StatusCode = ex.Status;
-            context.Response.ContentType = "application/json";
-            var payload = new Dictionary<string, object?>
-            {
-                ["error"] = ex.Code,
-                ["code"] = ex.Code,
-                ["message"] = ex.Message,
-            };
-            if (ex.Extras is not null)
-            {
-                foreach (var (key, value) in ex.Extras)
-                {
-                    payload[key] = value;
-                }
-            }
-
-            await context.Response.WriteAsync(JsonSerializer.Serialize(payload));
+            await WriteJsonErrorAsync(context, ex.Status, ex.Code, ex.Message, ex.Extras);
+        }
+        catch (BillingException ex)
+        {
+            await WriteJsonErrorAsync(context, StatusCodes.Status400BadRequest, ex.Code, ex.Message, null);
         }
         catch (DbUpdateException ex) when (PostgresErrors.IsActiveSessionUniqueViolation(ex))
         {
@@ -97,8 +86,32 @@ public sealed class ApiExceptionMiddleware(RequestDelegate next)
 
     private static async Task WriteConflictAsync(HttpContext context, string code, string message)
     {
-        context.Response.StatusCode = StatusCodes.Status409Conflict;
+        await WriteJsonErrorAsync(context, StatusCodes.Status409Conflict, code, message, null);
+    }
+
+    private static async Task WriteJsonErrorAsync(
+        HttpContext context,
+        int status,
+        string code,
+        string message,
+        IReadOnlyDictionary<string, object>? extras)
+    {
+        context.Response.StatusCode = status;
         context.Response.ContentType = "application/json";
-        await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = code, code, message }));
+        var payload = new Dictionary<string, object?>
+        {
+            ["error"] = code,
+            ["code"] = code,
+            ["message"] = message,
+        };
+        if (extras is not null)
+        {
+            foreach (var (key, value) in extras)
+            {
+                payload[key] = value;
+            }
+        }
+
+        await context.Response.WriteAsync(JsonSerializer.Serialize(payload));
     }
 }
