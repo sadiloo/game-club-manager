@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.IO;
 using GameClub.Kiosk.Core.Security;
+using GameClub.Kiosk.Guard.Internet;
 
 namespace GameClub.Kiosk.Guard;
 
@@ -53,6 +54,12 @@ internal sealed class KioskShellSupervisor
             if (_supervised is { HasExited: false } && _supervisedSessionId == sessionId)
             {
                 Wait(ct, TimeSpan.FromSeconds(5));
+                continue;
+            }
+
+            if (!InternetGuardShellLaunchGate.IsReady)
+            {
+                Wait(ct, TimeSpan.FromMilliseconds(250));
                 continue;
             }
 

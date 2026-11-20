@@ -519,7 +519,7 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
             {
                 if (File.Exists(logPath))
                 {
-                    var text = File.ReadAllText(logPath);
+                    var text = GuardWatchdogTimelineReader.ReadAllTextWithShare();
                     if (text.Contains("drift_watchdog_start", StringComparison.Ordinal))
                     {
                         sawDrift = true;
@@ -839,8 +839,9 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
             }
 
             Assert.True(File.Exists(logPath));
-            Assert.Contains($"pipe_read_ok", File.ReadAllText(logPath), StringComparison.Ordinal);
-            Assert.Contains($"bytes={expectedBytes}", File.ReadAllText(logPath), StringComparison.Ordinal);
+            var utf8Log = GuardWatchdogTimelineReader.ReadAllTextWithShare();
+            Assert.Contains($"pipe_read_ok", utf8Log, StringComparison.Ordinal);
+            Assert.Contains($"bytes={expectedBytes}", utf8Log, StringComparison.Ordinal);
 
             var cmd = Sign(rsa, new InternetCommandPayload
             {
@@ -956,7 +957,7 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
             client.Flush();
             await Task.Delay(2_000);
             Assert.True(File.Exists(logPath));
-            Assert.Contains("pipe_read_timeout", File.ReadAllText(logPath), StringComparison.Ordinal);
+            Assert.Contains("pipe_read_timeout", GuardWatchdogTimelineReader.ReadAllTextWithShare(), StringComparison.Ordinal);
         }
         finally
         {
@@ -1002,7 +1003,7 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
 
             await Task.Delay(1_000);
             Assert.True(File.Exists(logPath));
-            var logText = File.ReadAllText(logPath);
+            var logText = GuardWatchdogTimelineReader.ReadAllTextWithShare();
             Assert.Contains("pipe_line_oversize", logText, StringComparison.Ordinal);
 
             var replyRead = 0;

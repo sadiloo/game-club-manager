@@ -16,10 +16,12 @@ internal static class GuardWatchdog
         }
 
         Thread? internetThread = null;
+        var internetConfigPresent = false;
         try
         {
             if (File.Exists(InternetGuardPaths.ConfigPath))
             {
+                internetConfigPresent = true;
                 var config = JsonSerializer.Deserialize<InternetGuardConfig>(File.ReadAllText(InternetGuardPaths.ConfigPath))
                     ?? new InternetGuardConfig();
                 var pipe = new InternetPipeServer(config);
@@ -29,6 +31,11 @@ internal static class GuardWatchdog
         }
         catch
         {
+        }
+
+        if (!internetConfigPresent)
+        {
+            InternetGuardShellLaunchGate.MarkReady();
         }
 
         new KioskShellSupervisor(identity).Run(ct);

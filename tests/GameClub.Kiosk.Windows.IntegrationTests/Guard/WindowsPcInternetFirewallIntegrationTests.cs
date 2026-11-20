@@ -681,7 +681,7 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
             Assert.Equal(0, activeRules);
             if (File.Exists(watchdogPath))
             {
-                var tail = File.ReadAllText(watchdogPath);
+                var tail = GuardWatchdogTimelineReader.ReadAllTextWithShare();
                 Assert.Contains("reconcile_reset=applied", tail, StringComparison.Ordinal);
             }
         }

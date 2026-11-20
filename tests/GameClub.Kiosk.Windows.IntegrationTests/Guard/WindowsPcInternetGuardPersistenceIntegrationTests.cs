@@ -119,20 +119,25 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
             guard.Dispose();
             guard = null;
             GuardTimeline("guard1_stop_end");
+            GuardProcessLifecycle.StopOrphanedInternetPowerShell(TimeSpan.FromSeconds(5));
+            await Task.Delay(500);
 
             WindowsIntegrationRunPowerShell.Run(TamperOpenEgressScript);
             Assert.True(TryTcp("1.1.1.1", 443, 3_000), "Sanity: profile tamper must temporarily open egress.");
             GuardTimeline("tamper_egress_open");
 
-            var guard2LogOffset = GuardWatchdogTimelineReader.CurrentLogLength();
             guard2 = GuardProcessStart.StartGuard();
+            var guard2LogOffset = GuardWatchdogTimelineReader.CurrentLogLength();
             GuardTimeline($"guard2_start pid={guard2.Id}");
-            var restored = DateTime.UtcNow.AddSeconds(10);
+            var restored = DateTime.UtcNow.AddSeconds(15);
             while (DateTime.UtcNow < restored)
             {
-                if (!TryTcp("1.1.1.1", 443, 500))
+                var logText = GuardWatchdogTimelineReader.ReadAllTextWithShare();
+                if (logText.Contains("GUARD_TIMELINE event=early_reassert_off", StringComparison.Ordinal)
+                    && !TryTcp("1.1.1.1", 443, 500))
                 {
                     GuardTimeline($"first_egress_blocked ms={timeline.ElapsedMilliseconds}");
+                    GuardWatchdogTimelineReader.AssertExactlyOneGuardRestart(guard2LogOffset);
                     GuardWatchdogTimelineReader.AssertEarlyOffReassertBeforePipeReady(
                         guard2LogOffset,
                         line => GuardTimeline($"watchdog {line}"));

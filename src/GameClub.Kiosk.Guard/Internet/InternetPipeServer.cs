@@ -27,6 +27,7 @@ internal sealed class InternetPipeServer
     private volatile int _reconcilePhase;
     private volatile bool _reconcileTimedOutWithWorkAlive;
     private volatile bool _reconcileAbandoned;
+    private volatile string? _postAbandonReconcileStatus;
     private Thread? _reconcileWorkThread;
     private readonly object _pipeHandlerThreadsLock = new();
     private readonly List<Thread> _pipeHandlerThreads = new();
@@ -94,6 +95,7 @@ internal sealed class InternetPipeServer
     {
         _shutdownCt = ct;
         _runTimelineOriginTicks = Stopwatch.GetTimestamp();
+        InternetGuardShellLaunchGate.ResetReady();
         AppendPipeTimeline("run_begin");
         if (!_on)
         {
@@ -109,6 +111,10 @@ internal sealed class InternetPipeServer
             GuardWatchdogLog.Append(
                 $"GUARD_TIMELINE event=early_reassert_off elapsed_ms={earlyReassert.ElapsedMilliseconds}");
         }
+        else
+        {
+            InternetGuardShellLaunchGate.MarkReady();
+        }
 
         var reconcileThread = new Thread(() => RunReconcileBackground(ct))
         {
@@ -116,6 +122,10 @@ internal sealed class InternetPipeServer
             Name = "CheckpointInternetReconcile",
         };
         reconcileThread.Start();
+        if (!_on)
+        {
+            InternetGuardShellLaunchGate.MarkReady();
+        }
 
         var drift = new Thread(() => RunDriftWatchdog(ct))
         {
@@ -397,6 +407,7 @@ internal sealed class InternetPipeServer
             $"reconcile_timeout elapsed_ms={sw.ElapsedMilliseconds} budget_ms={timeoutMs}");
         GuardWatchdogLog.Append("reconcile_gate_released abandoned=true");
         InternetPowerShellRunner.MarkAbandonBoundary();
+        _postAbandonReconcileStatus = "reconcile_timeout";
         _reconcileWorkFinished.Set();
     }
 
@@ -451,6 +462,12 @@ internal sealed class InternetPipeServer
 
     private string? ResolveStatusState()
     {
+        var abandoned = _postAbandonReconcileStatus;
+        if (abandoned is not null)
+        {
+            return abandoned;
+        }
+
         if (ReconcileWorkStillAliveAfterTimeout())
         {
             return "reconcile_timeout";
@@ -694,8 +711,27 @@ internal sealed class InternetPipeServer
             });
         }
 
+        var reconcileReason = _postAbandonReconcileStatus;
+        if (string.Equals(code, "applied", StringComparison.Ordinal))
+        {
+            _postAbandonReconcileStatus = null;
+        }
+
+        if (reconcileReason is null)
+        {
+            return JsonSerializer.Serialize(new
+            {
+                epoch = _epoch,
+                version = _appliedVersion,
+                on = _on,
+                appliedAtUtc = DateTime.UtcNow,
+                result = code,
+            });
+        }
+
         return JsonSerializer.Serialize(new
         {
+            state = reconcileReason,
             epoch = _epoch,
             version = _appliedVersion,
             on = _on,

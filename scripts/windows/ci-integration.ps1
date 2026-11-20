@@ -382,6 +382,12 @@ function Ensure-PcInternetFirewallBuildOutputs {
         @{
             Path = Join-Path $repoRoot "src/GameClub.Kiosk.Guard/bin/Release/net48/GameClub.Kiosk.Guard.exe"
             Args = @("build", "src/GameClub.Kiosk.Guard/GameClub.Kiosk.Guard.csproj", "-c", "Release", "-f", "net48", "--nologo")
+        },
+        @{
+            Path = Join-Path $repoRoot "tests/GameClub.Server.TestHost/bin/Release/net10.0/GameClub.Server.TestHost.dll"
+            Args = @(
+                "build", "tests/GameClub.Server.TestHost/GameClub.Server.TestHost.csproj",
+                "-c", "Release", "--nologo")
         }
     )
     foreach ($pair in $pairs) {
@@ -634,7 +640,42 @@ Write-PhaseLog "START deadman pid=$($supervisorProc.Id) deadline=$deadmanDeadlin
 
 Write-CiPhaseFirewallProbe -label "pre-integration"
 
+function Assert-GameClubServerCiEnv {
+    $errors = New-Object System.Collections.Generic.List[string]
+    $dll = $env:GAMECLUB_SERVER_DLL
+    if ([string]::IsNullOrWhiteSpace($dll)) {
+        $errors.Add("GAMECLUB_SERVER_DLL is not set")
+    }
+    elseif (-not (Test-Path -LiteralPath $dll)) {
+        $errors.Add("GAMECLUB_SERVER_DLL not found at $dll")
+    }
+
+    if ($env:GAMECLUB_SERVER_PID -notmatch '^\d+$') {
+        $errors.Add("GAMECLUB_SERVER_PID is not set")
+    }
+    else {
+        $serverPid = [int]$env:GAMECLUB_SERVER_PID
+        try {
+            $proc = Get-Process -Id $serverPid -ErrorAction Stop
+            if ($proc.HasExited) {
+                $errors.Add("GAMECLUB_SERVER_PID=$serverPid has exited")
+            }
+        }
+        catch {
+            $errors.Add("GAMECLUB_SERVER_PID=$serverPid is not running")
+        }
+    }
+
+    if ($errors.Count -gt 0) {
+        throw "GAMECLUB_SERVER_PID and GAMECLUB_SERVER_DLL must be set on windows-2022 integration. $($errors -join '; ')"
+    }
+
+    Write-Host "CI_GAMECLUB_SERVER env ok pid=$($env:GAMECLUB_SERVER_PID) dll=$dll"
+    Write-PhaseLog "CI_GAMECLUB_SERVER env ok pid=$($env:GAMECLUB_SERVER_PID) dll=$dll"
+}
+
 function Invoke-PcInternetFirewallIntegrationPhase {
+    Assert-GameClubServerCiEnv
     Write-Host "Running PC internet off verification unit tests (Category=PcInternetFirewall, Core)..."
     $coreFwFilter = "Category=PcInternetFirewall&FullyQualifiedName~PcInternetFirewallOffVerificationTests"
     Write-VstestPhaseList -phaseName "dotnet-test-pc-internet-firewall-core" -framework "net10.0" -filterExpr $coreFwFilter | Out-Null
@@ -726,6 +767,13 @@ try {
         }
 
         Ensure-PcInternetFirewallBuildOutputs
+        $serverDll = Join-Path $repoRoot "tests/GameClub.Server.TestHost/bin/Release/net10.0/GameClub.Server.TestHost.dll"
+        if (-not (Test-Path $serverDll)) {
+            throw "GameClub.Server.TestHost.dll not found at $serverDll after FW_ONLY_BUILD"
+        }
+        $serverLog = Join-Path $logDir "server-firewall-only-out.log"
+        $serverErr = Join-Path $logDir "server-firewall-only-err.log"
+        Start-CiGameClubTestHost -ServerDll $serverDll -BandArgs $script:ServerPcBandArgs -StdoutLog $serverLog -StderrLog $serverErr -ExpectedBand day -PhaseLabel "firewall-only"
         Invoke-PcInternetFirewallIntegrationPhase
     } else {
 

@@ -84,5 +84,27 @@ internal static class GuardProcessLifecycle
 
         L17StepLog.Write("process_tree_kill_end", $"rootPid={rootPid} exited={guard.HasExited}");
     }
+
+    internal static void StopOrphanedInternetPowerShell(TimeSpan timeout)
+    {
+        try
+        {
+            using var killer = Process.Start(
+                new ProcessStartInfo(
+                    "powershell.exe",
+                    "-NoProfile -NonInteractive -Command \"Get-CimInstance Win32_Process -Filter \\\"Name='powershell.exe'\\\" | "
+                    + "Where-Object { $_.CommandLine -match 'Checkpoint|EncodedCommand' } | "
+                    + "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }\"")
+                {
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                });
+            killer?.WaitForExit((int)Math.Max(1, timeout.TotalMilliseconds));
+        }
+        catch
+        {
+            /* best-effort */
+        }
+    }
 }
 #endif

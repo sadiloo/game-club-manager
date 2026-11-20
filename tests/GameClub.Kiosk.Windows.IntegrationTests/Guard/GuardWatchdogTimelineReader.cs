@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using Xunit;
 
 namespace GameClub.Kiosk.Windows.IntegrationTests.Guard;
@@ -27,6 +28,35 @@ internal static class GuardWatchdogTimelineReader
         {
             return 0;
         }
+    }
+
+    internal static string ReadAllTextWithShare(int maxAttempts = 5)
+    {
+        for (var attempt = 0; attempt < maxAttempts; attempt++)
+        {
+            try
+            {
+                using var stream = new FileStream(
+                    WatchdogLogPath,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.ReadWrite | FileShare.Delete);
+                using var reader = new StreamReader(stream);
+                return reader.ReadToEnd();
+            }
+            catch (IOException) when (attempt + 1 < maxAttempts)
+            {
+                Thread.Sleep(50 << attempt);
+            }
+        }
+
+        using var lastTry = new FileStream(
+            WatchdogLogPath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete);
+        using var lastReader = new StreamReader(lastTry);
+        return lastReader.ReadToEnd();
     }
 
     internal static IReadOnlyList<string> ReadLinesSince(long byteOffset)
@@ -54,6 +84,14 @@ internal static class GuardWatchdogTimelineReader
         {
             return Array.Empty<string>();
         }
+    }
+
+    internal static void AssertExactlyOneGuardRestart(long logStartOffset)
+    {
+        var launched = ReadLinesSince(logStartOffset)
+            .Count(l => l.Contains("guard.restart", StringComparison.Ordinal)
+                && l.Contains("launched_pid_", StringComparison.Ordinal));
+        Assert.Equal(1, launched);
     }
 
     internal static void AssertEarlyOffReassertBeforePipeReady(long logStartOffset, Action<string> trace)

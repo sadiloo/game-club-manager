@@ -31,7 +31,12 @@ internal static class Program
         ServiceBase.Run(new GuardService());
     }
 
-    internal static void RunWatchdogLoop() => GuardWatchdog.Run(CancellationToken.None);
+    internal static void RunWatchdogLoop()
+    {
+        AppDomain.CurrentDomain.ProcessExit += (_, _) =>
+            Internet.InternetPowerShellRunner.RequestKillInFlight("process_exit");
+        GuardWatchdog.Run(CancellationToken.None);
+    }
 }
 
 internal sealed class GuardService : ServiceBase
