@@ -304,6 +304,15 @@ public sealed class PcInternetKioskCoreTests
     }
 
     [Fact]
+    public void PcInternet_guard_server_pipe_read_timeout_default_is_independent_of_client_io()
+    {
+        Assert.Equal(55_000, GuardInternetClient.DefaultIoTimeoutMs);
+        Assert.Equal(30_000, GuardInternetClient.DefaultPipeServerReadTimeoutMs);
+        Assert.True(GuardInternetBudgetDefaults.ApplyGateWaitFitsClientIo());
+        Assert.True(GuardInternetBudgetDefaults.ApplyPathWorstCaseFitsClientIo());
+    }
+
+    [Fact]
     public void PcInternet_guard_client_error_mapper_maps_io_and_generic_errors()
     {
         Assert.Equal("pipe_connect_timeout", GuardInternetClientErrorCodes.MapException(new TimeoutException("pipe_connect_timeout")));

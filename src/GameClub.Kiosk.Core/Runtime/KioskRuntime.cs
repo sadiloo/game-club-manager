@@ -1,4 +1,6 @@
+using System.Collections.Generic;
 using System.Diagnostics;
+using System.Threading;
 using GameClub.Kiosk.Core.Connection;
 using GameClub.Kiosk.Core.Guard;
 using GameClub.Kiosk.Core.Offline;
@@ -34,6 +36,12 @@ public sealed class KioskRuntime : IAsyncDisposable
     private bool _disposed;
     private int _consecutiveHeartbeatFailures;
     private readonly GuardInternetClient _guardInternet = new();
+    private readonly object _internetApplyGate = new();
+    private readonly Queue<SignedInternetCommand> _internetApplyQueue = new();
+    private (Guid Epoch, long Version)? _internetApplyInFlightKey;
+    private CancellationTokenSource? _internetApplyCts;
+    private Task? _internetApplyWorker;
+    private int _internetApplyInvocationCount;
     private KioskInternetAppliedReport? _lastInternetReport;
     private bool _internetOffApplied;
 
@@ -81,6 +89,12 @@ public sealed class KioskRuntime : IAsyncDisposable
     internal int HeartbeatLoopStartCount { get; private set; }
 
     internal TimeSpan TestHeartbeatInterval { get; set; } = TimeSpan.FromSeconds(5);
+
+    internal Func<SignedInternetCommand, CancellationToken, Task<string>>? TestGuardInternetApplyAsync { get; set; }
+
+    internal KioskInternetAppliedReport? LastInternetReportForTests => Volatile.Read(ref _lastInternetReport);
+
+    internal int InternetApplyInvocationCountForTests => Volatile.Read(ref _internetApplyInvocationCount);
 
     public KioskRuntime(Func<HttpClient> httpFactory) => _httpFactory = httpFactory;
 
@@ -206,6 +220,16 @@ public sealed class KioskRuntime : IAsyncDisposable
         _heartbeatCts?.Cancel();
         _heartbeatCts?.Dispose();
         _heartbeatCts = new CancellationTokenSource();
+        _internetApplyCts?.Cancel();
+        _internetApplyCts?.Dispose();
+        _internetApplyCts = null;
+        lock (_internetApplyGate)
+        {
+            _internetApplyQueue.Clear();
+            _internetApplyInFlightKey = null;
+            _internetApplyWorker = null;
+        }
+
         _heartbeatSupervisor = RunHeartbeatSupervisorAsync(_heartbeatCts.Token);
         State = _sessionId == Guid.Empty ? KioskRuntimeState.Locked : KioskRuntimeState.Playing;
     }
@@ -300,10 +324,10 @@ public sealed class KioskRuntime : IAsyncDisposable
                         {
                             SessionId = _sessionId == Guid.Empty ? null : _sessionId,
                             ClientMonotonicMs = _monotonic.ElapsedMilliseconds,
-                            InternetApplied = _lastInternetReport,
+                            InternetApplied = Volatile.Read(ref _lastInternetReport),
                         },
                         ct);
-                    await ApplyInternetCommandAsync(ack.Internet, ct).ConfigureAwait(false);
+                    OfferInternetCommand(ack.Internet);
                     ApplyAcknowledgement(ack);
                     _consecutiveHeartbeatFailures = 0;
                     LastSuccessfulHeartbeatAckUtc = DateTime.UtcNow;
@@ -355,34 +379,126 @@ public sealed class KioskRuntime : IAsyncDisposable
         _lastTransportFailedSignalMs = ms;
     }
 
-    private async Task ApplyInternetCommandAsync(SignedInternetCommand? command, CancellationToken ct)
+    private void OfferInternetCommand(SignedInternetCommand? command)
     {
-        if (command is null)
+        if (command is null || _heartbeatCts is null)
         {
             return;
         }
 
+        var key = (command.Payload.Epoch, command.Payload.Version);
+        lock (_internetApplyGate)
+        {
+            var inflight = _internetApplyInFlightKey;
+            if (inflight == key)
+            {
+                return;
+            }
+
+            var prior = Volatile.Read(ref _lastInternetReport);
+            if (prior is not null
+                && prior.Epoch == key.Epoch
+                && prior.Version == key.Version
+                && string.IsNullOrEmpty(prior.Error))
+            {
+                return;
+            }
+
+            foreach (var queued in _internetApplyQueue)
+            {
+                if (queued.Payload.Epoch == key.Epoch && queued.Payload.Version == key.Version)
+                {
+                    return;
+                }
+            }
+
+            _internetApplyQueue.Enqueue(command);
+            EnsureInternetApplyWorkerLocked(_heartbeatCts.Token);
+        }
+    }
+
+    private void EnsureInternetApplyWorkerLocked(CancellationToken heartbeatCt)
+    {
+        if (_internetApplyWorker is { IsCompleted: false })
+        {
+            return;
+        }
+
+        _internetApplyCts?.Cancel();
+        _internetApplyCts?.Dispose();
+        _internetApplyCts = CancellationTokenSource.CreateLinkedTokenSource(heartbeatCt);
+        _internetApplyWorker = RunInternetApplyWorkerAsync(_internetApplyCts.Token);
+    }
+
+    private async Task RunInternetApplyWorkerAsync(CancellationToken ct)
+    {
         try
         {
-            var raw = await _guardInternet.ApplyAsync(command, ct).ConfigureAwait(false);
+            while (!ct.IsCancellationRequested)
+            {
+                SignedInternetCommand? command;
+                lock (_internetApplyGate)
+                {
+                    if (_internetApplyQueue.Count == 0)
+                    {
+                        break;
+                    }
+
+                    command = _internetApplyQueue.Dequeue();
+                    _internetApplyInFlightKey = (command.Payload.Epoch, command.Payload.Version);
+                }
+
+                try
+                {
+                    await ApplyInternetCommandAsync(command, ct).ConfigureAwait(false);
+                }
+                finally
+                {
+                    lock (_internetApplyGate)
+                    {
+                        _internetApplyInFlightKey = null;
+                    }
+                }
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+        }
+        finally
+        {
+            lock (_internetApplyGate)
+            {
+                _internetApplyWorker = null;
+            }
+        }
+    }
+
+    private async Task ApplyInternetCommandAsync(SignedInternetCommand command, CancellationToken ct)
+    {
+        Interlocked.Increment(ref _internetApplyInvocationCount);
+        try
+        {
+            var raw = TestGuardInternetApplyAsync is not null
+                ? await TestGuardInternetApplyAsync(command, ct).ConfigureAwait(false)
+                : await _guardInternet.ApplyAsync(command, ct).ConfigureAwait(false);
             using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(raw) ? "{}" : raw);
             var root = doc.RootElement;
             if (root.TryGetProperty("error", out var err))
             {
-                _lastInternetReport = new KioskInternetAppliedReport
+                PublishInternetReport(new KioskInternetAppliedReport
                 {
                     Epoch = command.Payload.Epoch,
                     Version = command.Payload.Version,
                     On = command.Payload.On,
                     AppliedAtUtc = DateTime.UtcNow,
                     Error = err.GetString(),
-                };
+                });
                 return;
             }
 
             var on = root.TryGetProperty("on", out var onEl) && onEl.GetBoolean();
             _internetOffApplied = !on;
-            _lastInternetReport = new KioskInternetAppliedReport
+            PublishInternetReport(new KioskInternetAppliedReport
             {
                 Epoch = command.Payload.Epoch,
                 Version = command.Payload.Version,
@@ -390,21 +506,24 @@ public sealed class KioskRuntime : IAsyncDisposable
                 AppliedAtUtc = root.TryGetProperty("appliedAtUtc", out var at) && at.ValueKind == JsonValueKind.String
                     ? DateTime.Parse(at.GetString()!).ToUniversalTime()
                     : DateTime.UtcNow,
-            };
+            });
         }
         catch (Exception ex)
         {
             var code = GuardInternetClientErrorCodes.MapException(ex);
-            _lastInternetReport = new KioskInternetAppliedReport
+            PublishInternetReport(new KioskInternetAppliedReport
             {
                 Epoch = command.Payload.Epoch,
                 Version = command.Payload.Version,
                 On = command.Payload.On,
                 AppliedAtUtc = DateTime.UtcNow,
                 Error = code,
-            };
+            });
         }
     }
+
+    private void PublishInternetReport(KioskInternetAppliedReport report)
+        => Volatile.Write(ref _lastInternetReport, report);
 
     private void ApplyAcknowledgement(KioskHeartbeatAck ack)
     {
@@ -463,6 +582,18 @@ public sealed class KioskRuntime : IAsyncDisposable
         _disposed = true;
         _lifecycleCts?.Cancel();
         _heartbeatCts?.Cancel();
+        _internetApplyCts?.Cancel();
+        if (_internetApplyWorker is not null)
+        {
+            try
+            {
+                await _internetApplyWorker.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        }
+
         if (_heartbeatSupervisor is not null)
         {
             try
@@ -490,6 +621,7 @@ public sealed class KioskRuntime : IAsyncDisposable
             await _hub.DisposeAsync();
         }
 
+        _internetApplyCts?.Dispose();
         _heartbeatCts?.Dispose();
         _lifecycleCts?.Dispose();
     }

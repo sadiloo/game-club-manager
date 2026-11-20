@@ -13,6 +13,8 @@ public sealed class GuardInternetClient
     public const string PipeName = "CheckpointGuardInternet";
     public const string PipeNameEnvironmentVariable = "CHECKPOINT_INTERNET_PIPE_NAME";
     public const int DefaultConnectTimeoutMs = 5_000;
+    /// <summary>Guard server read line budget for a small framed request (not client response IO).</summary>
+    public const int DefaultPipeServerReadTimeoutMs = 30_000;
     /// <summary>
     /// Must cover <see cref="GuardInternetBudgetDefaults.MutatingApplyFifoQueueDepthWorstCase"/> serial
     /// apply paths during early-reassert hold (see <see cref="GuardInternetBudgetDefaults.MutatingApplyFifoClientIoBudgetMs"/>).

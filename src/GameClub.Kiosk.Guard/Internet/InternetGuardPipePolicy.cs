@@ -5,7 +5,7 @@ namespace GameClub.Kiosk.Guard.Internet;
 
 internal static class InternetGuardPipePolicy
 {
-    internal const int DefaultReadTimeoutMs = GuardInternetClient.DefaultIoTimeoutMs;
+    internal const int DefaultReadTimeoutMs = GuardInternetClient.DefaultPipeServerReadTimeoutMs;
 
     internal static int ResolveReadTimeoutMs()
     {
