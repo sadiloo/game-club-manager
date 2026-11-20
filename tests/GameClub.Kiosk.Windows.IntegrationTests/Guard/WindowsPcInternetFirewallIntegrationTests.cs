@@ -573,8 +573,16 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
         RequireWindowsAdmin();
         RunInternetOffFirstApplySucceedsWhenCheckpointRuleGroupIsEmpty();
         RunInternetOffApplyFailureAfterProfilesSetRollsBackLocalhostProfiles();
+        StabilizeFirewallBetweenIsolationScenarios();
         RunInternetOffApplyFailureAfterProfilesSetRollsBackLocalhostProfiles();
+        StabilizeFirewallBetweenIsolationScenarios();
         RunInternetOffFirstApplySucceedsWhenCheckpointRuleGroupIsEmpty();
+    }
+
+    private static void StabilizeFirewallBetweenIsolationScenarios()
+    {
+        new InternetFirewallApplier().RunResetScript();
+        Thread.Sleep(1_000);
     }
 
     [Fact]

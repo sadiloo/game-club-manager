@@ -190,6 +190,11 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
                 "GUARD_TIMELINE event=pipe_listening",
                 TimeSpan.FromSeconds(20));
             GuardTimeline("pipe_listening_seen");
+            await GuardWatchdogTimelineReader.WaitForTimelineMarkerAsync(
+                guard2LogOffset,
+                "early_reassert_off_lock_exit",
+                TimeSpan.FromSeconds(45));
+            GuardTimeline("early_reassert_off_lock_exit_seen");
 
             var pipeClient = new GuardInternetClient();
             await pipeClient.GetStatusAsync();
