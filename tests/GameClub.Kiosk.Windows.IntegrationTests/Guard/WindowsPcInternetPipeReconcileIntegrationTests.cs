@@ -204,6 +204,7 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
         NamedPipeServerStream acceptPipe = null;
         Thread acceptThread = null;
         var ready = new ManualResetEventSlim(false);
+        var stopStub = new ManualResetEventSlim(false);
         try
         {
             acceptThread = new Thread(() =>
@@ -218,7 +219,7 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
                         PipeOptions.Asynchronous);
                     ready.Set();
                     acceptPipe.WaitForConnection();
-                    Thread.Sleep(Timeout.Infinite);
+                    stopStub.Wait();
                 }
                 catch (IOException)
                 {
@@ -246,6 +247,8 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
         finally
         {
             Environment.SetEnvironmentVariable("CHECKPOINT_INTERNET_PIPE_IO_MS", priorIo);
+            stopStub.Set();
+            InternetPipeServerTestTeardown.TryUnblock();
             try
             {
                 acceptPipe?.Dispose();
@@ -259,6 +262,9 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
             {
                 Assert.True(acceptThread.Join(TimeSpan.FromSeconds(5)), "acceptThread did not stop");
             }
+
+            stopStub.Dispose();
+            ready.Dispose();
         }
     }
 
