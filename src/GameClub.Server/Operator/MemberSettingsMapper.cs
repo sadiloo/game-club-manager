@@ -77,8 +77,7 @@ public static class MemberSettingsMapper
         var birth = LoadBirthDate(member);
         var levelPercent = level?.DiscountPercent ?? 0;
         var levelName = level?.Name;
-        var rawBirthdayPercent = birth is { IsEmpty: false } ? settings.BirthdayPercent : 0;
-        var birthdayPercent = Math.Clamp(rawBirthdayPercent, 0, 100);
+        var birthdayPercent = birth is { IsEmpty: false } ? settings.BirthdayPercent : 0;
         return new CustomerPricing(levelName, levelPercent, birth, birthdayPercent);
     }
 }
