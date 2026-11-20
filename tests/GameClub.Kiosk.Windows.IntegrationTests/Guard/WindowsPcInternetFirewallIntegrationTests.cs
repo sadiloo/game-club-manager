@@ -54,24 +54,7 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
         }
     }
 
-    private static string[] CiExtraPrograms()
-    {
-        var fromEnv = Environment.GetEnvironmentVariable("CHECKPOINT_INTERNET_EXTRA_ALLOW");
-        if (!string.IsNullOrWhiteSpace(fromEnv))
-        {
-            return fromEnv.Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries);
-        }
-
-        var listener = Environment.GetEnvironmentVariable("RUNNER_ROOT") is { } root
-            ? Path.Combine(root, "bin", "Runner.Listener.exe")
-            : null;
-        if (listener is not null && File.Exists(listener))
-        {
-            return [listener];
-        }
-
-        return [];
-    }
+    private static string[] CiExtraPrograms() => CiInternetFirewallTestHarness.ExtraAllowPrograms();
 
     private static bool TryTcp(string host, int port, int timeoutMs)
     {
@@ -576,46 +559,7 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
 
             var result = applier.ApplyWithStoreEcho(config, on: false);
             Assert.Equal("applied", result);
-            if (!TryTcp("api.github.com", 443, 5_000))
-            {
-                try
-                {
-                    var resolved = Dns.GetHostAddresses("api.github.com")
-                        .Where(a => a.AddressFamily == AddressFamily.InterNetwork)
-                        .Select(a => a.ToString());
-                    Console.WriteLine(
-                        "REAPPLY_TCP_FAIL resolved_ipv4="
-                        + string.Join(",", resolved)
-                        + " config_ips="
-                        + string.Join(",", config.ServerIps));
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine("REAPPLY_TCP_FAIL dns_error=" + ex.Message);
-                }
-
-                foreach (var ip in config.ServerIps)
-                {
-                    var direct = TryTcp(ip, 443, 2_000);
-                    Console.WriteLine(
-                        "REAPPLY_TCP_FAIL direct_ip_probe ip="
-                        + ip
-                        + " port=443 connected="
-                        + direct);
-                }
-
-                FirewallStoreEcho.EchoAllStores("reapply_tcp_fail");
-                var guardLog = GuardWatchdogTimelineReader.ReadAllTextWithShare();
-                foreach (var line in guardLog.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
-                {
-                    if (line.Contains("GUARD_OFF_PROBE", StringComparison.Ordinal))
-                    {
-                        Console.WriteLine(line);
-                    }
-                }
-
-                Assert.Fail("re-apply must recreate allow rules before verification.");
-            }
+            AssertServerReachableViaConfiguredAllowList(config, "reapply_after_rules_removed");
         }
         finally
         {

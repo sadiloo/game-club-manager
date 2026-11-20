@@ -70,7 +70,7 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
             ServerPort = 443,
             ServerIps = ips,
             ServerPublicKeyPem = publicKeyPem,
-            ExtraAllowPrograms = Array.Empty<string>(),
+            ExtraAllowPrograms = CiInternetFirewallTestHarness.ExtraAllowPrograms(),
         };
     }
 
@@ -163,9 +163,14 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
             InternetVerifiedStateFile.Save(InternetGuardPaths.StatePath, offPayload);
 
             WriteInternetConfig(config);
+            var guard1LogOffset = GuardWatchdogTimelineReader.CurrentLogLength();
             guard = GuardProcessStart.StartGuard();
             GuardTimeline($"guard1_start pid={guard.Id}");
-            await Task.Delay(2_000);
+            // Early reassert OFF apply measured 4.0–6.0 s in CI; 30 s is ~5× margin for deterministic wait.
+            await GuardWatchdogTimelineReader.WaitForTimelineMarkerAsync(
+                guard1LogOffset,
+                "early_reassert_off_lock_exit",
+                TimeSpan.FromSeconds(30));
 
             Assert.False(TryTcp("1.1.1.1", 443, 2_000), "OFF must persist while Guard is running.");
             GuardTimeline("guard1_stop_begin");
@@ -177,6 +182,12 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
             await Task.Delay(500);
             CiGuardKioskProcessCleanup.KillOrphanedGuardAndKiosk(nameof(internet_off_guard_process_restart_reasserts_before_pipe_ready));
             AssertNoKioskShellRunning();
+
+            var offGroupCountText = WindowsIntegrationRunPowerShell.Run(
+                "(Get-NetFirewallRule -Group 'Checkpoint Internet Off' -ErrorAction SilentlyContinue | Measure-Object).Count").Trim();
+            Assert.True(
+                int.TryParse(offGroupCountText, out var offGroupCount) && offGroupCount > 0,
+                "precondition: Checkpoint Internet Off rule group must be non-empty before tamper.");
 
             WindowsIntegrationRunPowerShell.Run(TamperOpenEgressScript);
             Assert.True(TryTcp("1.1.1.1", 443, 3_000), "Sanity: profile tamper must temporarily open egress.");
@@ -255,37 +266,17 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
         {
             if (guard2 is not null)
             {
-                try
-                {
-                    if (!guard2.HasExited)
-                    {
-                        guard2.Kill();
-                    }
-                }
-                catch
-                {
-                    /* teardown */
-                }
-
+                GuardProcessLifecycle.StopGuardProcessTree(guard2, TimeSpan.FromSeconds(8));
                 guard2.Dispose();
             }
 
             if (guard is not null)
             {
-                try
-                {
-                    if (!guard.HasExited)
-                    {
-                        guard.Kill();
-                    }
-                }
-                catch
-                {
-                    /* teardown */
-                }
-
+                GuardProcessLifecycle.StopGuardProcessTree(guard, TimeSpan.FromSeconds(8));
                 guard.Dispose();
             }
+
+            CiGuardKioskProcessCleanup.KillOrphanedGuardAndKiosk(nameof(internet_off_guard_process_restart_reasserts_before_pipe_ready));
 
             applier.RunResetScript();
             TryDelete(InternetGuardPaths.ConfigPath);
@@ -351,6 +342,8 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
     public async Task internet_pipe_ready_logged_when_early_reassert_completes_without_pipe_client()
     {
         RequireWindowsAdmin();
+        CiGuardKioskProcessCleanup.KillOrphanedGuardAndKiosk(nameof(internet_pipe_ready_logged_when_early_reassert_completes_without_pipe_client));
+        AssertNoKioskShellRunning();
         using var rsa = RSA.Create(2048);
         var pub = ExportPublicKeyPem(rsa);
         var config = BuildConfig(pub);
@@ -384,6 +377,11 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
                 logOffset,
                 "GUARD_TIMELINE event=pipe_ready",
                 TimeSpan.FromSeconds(5));
+
+            var sinceStart = GuardWatchdogTimelineReader.ReadLinesSince(logOffset);
+            Assert.False(
+                sinceStart.Any(l => l.Contains("pipe_read_ok", StringComparison.Ordinal)),
+                "no foreign pipe request (pipe_read_ok) must appear during no-client pipe_ready test");
         }
         finally
         {

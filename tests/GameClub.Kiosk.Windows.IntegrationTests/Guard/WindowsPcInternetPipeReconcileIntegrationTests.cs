@@ -62,7 +62,7 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
             ServerPort = 443,
             ServerIps = ips,
             ServerPublicKeyPem = publicKeyPem,
-            ExtraAllowPrograms = Array.Empty<string>(),
+            ExtraAllowPrograms = CiInternetFirewallTestHarness.ExtraAllowPrograms(),
         };
     }
 

@@ -21,6 +21,15 @@ $heartbeatLog = Join-Path $logDir "ci-heartbeat.log"
 $firewallLog = Join-Path $logDir "ci-firewall.log"
 $cancelFile = Join-Path $logDir "deadman.cancel"
 
+function Remove-StaleDeadmanCancelFile([string]$Reason) {
+    if (-not (Test-Path -LiteralPath $cancelFile)) { return }
+    Remove-Item -Force -LiteralPath $cancelFile
+    Write-Host "CI_DEADMAN removed stale deadman.cancel reason=$Reason"
+    Write-PhaseLog "CI_DEADMAN removed stale deadman.cancel reason=$Reason"
+}
+
+Remove-StaleDeadmanCancelFile -Reason "script-entry"
+
 if ($PcInternetFirewallOnly) {
     $script:GlobalDeadline = (Get-Date).AddHours(2)
     $script:CiIntegrationStepLabel = "firewall"
@@ -66,6 +75,131 @@ function Get-VstestConsoleResultCounts {
     $passed = @(Select-String -Path $ConsoleLogPath -Pattern '(?m)^\s*Passed\s+' -ErrorAction SilentlyContinue).Count
     $failed = @(Select-String -Path $ConsoleLogPath -Pattern '(?m)^\s*Failed\s+' -ErrorAction SilentlyContinue).Count
     return @{ Executed = $passed + $failed; Failed = $failed }
+}
+
+function Test-CiGitHubRunnerReachable([string]$label) {
+    $ts = (Get-Date).ToUniversalTime().ToString("o")
+    $ok = $false
+    $detail = "error=unattempted"
+    try {
+        $client = New-Object System.Net.Sockets.TcpClient
+        $task = $client.ConnectAsync("github.com", 443)
+        if ($task.Wait(5000)) {
+            $ok = $client.Connected
+            $detail = "tcp=github.com:443 connected=$ok"
+        } else {
+            $detail = "tcp=github.com:443 timeout_ms=5000"
+        }
+        $client.Close()
+    } catch {
+        $detail = "tcp=github.com:443 error=$($_.Exception.Message)"
+    }
+
+    $line = "CI_RUNNER_CONNECTIVITY label=$label utc=$ts reachable=$ok $detail"
+    Write-Host $line
+    Write-PhaseLog $line
+}
+
+function Get-CiRunnerProgramAllowList {
+    $paths = New-Object System.Collections.Generic.List[string]
+
+    foreach ($runnerName in @("Runner.Listener", "Runner.Worker")) {
+        $procs = @(Get-Process -Name $runnerName -ErrorAction SilentlyContinue)
+        foreach ($p in $procs) {
+            if (-not [string]::IsNullOrWhiteSpace($p.Path)) {
+                [void]$paths.Add($p.Path)
+                $binDir = Split-Path -Parent $p.Path
+                if (Test-Path -LiteralPath $binDir) {
+                    Get-ChildItem -Path $binDir -Filter "*.exe" -File -ErrorAction SilentlyContinue | ForEach-Object {
+                        if (-not $paths.Contains($_.FullName)) { [void]$paths.Add($_.FullName) }
+                    }
+                }
+            }
+        }
+    }
+
+    if ($paths.Count -eq 0 -and $env:RUNNER_ROOT) {
+        $listener = Join-Path $env:RUNNER_ROOT "bin\Runner.Listener.exe"
+        $worker = Join-Path $env:RUNNER_ROOT "bin\Runner.Worker.exe"
+        if ((Test-Path -LiteralPath $listener) -and (Test-Path -LiteralPath $worker)) {
+            [void]$paths.Add($listener)
+            [void]$paths.Add($worker)
+        }
+    }
+
+    if ($paths.Count -eq 0) {
+        throw "CI_RUNNER_ALLOW failed: Runner.Listener and Runner.Worker not found on running processes or RUNNER_ROOT"
+    }
+
+    return @($paths | Select-Object -Unique)
+}
+
+function Set-CiRunnerInternetExtraAllow {
+    $paths = Get-CiRunnerProgramAllowList
+    $joined = ($paths -join ";")
+    $env:CHECKPOINT_INTERNET_EXTRA_ALLOW = $joined
+  Write-Host "CI_RUNNER_ALLOW programs=$joined"
+    Write-PhaseLog "CI_RUNNER_ALLOW programs=$joined"
+    foreach ($path in $paths) {
+        Write-Host "CI_RUNNER_ALLOW path=$path"
+        Write-PhaseLog "CI_RUNNER_ALLOW path=$path"
+    }
+}
+
+function Write-FirewallPartialTrxFromConsole {
+    param(
+        [string]$ConsoleLogPath,
+        [string]$TrxPath
+    )
+
+    if ((Test-Path -LiteralPath $TrxPath) -or -not (Test-Path -LiteralPath $ConsoleLogPath)) {
+        return
+    }
+
+    $failPattern = '\s+(\S+)\s+\[FAIL\]\s*$'
+    $results = New-Object System.Collections.Generic.List[object]
+    $lines = Get-Content -LiteralPath $ConsoleLogPath -ErrorAction SilentlyContinue
+    foreach ($line in $lines) {
+        if ($line -notmatch $failPattern) { continue }
+        $name = $Matches[1].Trim()
+        if ([string]::IsNullOrWhiteSpace($name)) { continue }
+        $results.Add([pscustomobject]@{ Name = $name; Outcome = "Failed" })
+    }
+
+    $passedPattern = '^\s+Passed\s+(.+?)(?:\s+\[\d+ ms\])?\s*$'
+    foreach ($line in $lines) {
+        if ($line -notmatch $passedPattern) { continue }
+        $name = $Matches[1].Trim()
+        if ([string]::IsNullOrWhiteSpace($name)) { continue }
+        if ($results.Name -contains $name) { continue }
+        $results.Add([pscustomobject]@{ Name = $name; Outcome = "Passed" })
+    }
+
+    if ($results.Count -eq 0) {
+        Write-Host "FW_PARTIAL_TRX skipped reason=no_console_results path=$ConsoleLogPath"
+        Write-PhaseLog "FW_PARTIAL_TRX skipped reason=no_console_results path=$ConsoleLogPath"
+        return
+    }
+
+    $esc = [System.Security.SecurityElement]::Escape
+    $utc = (Get-Date).ToUniversalTime().ToString("o")
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.AppendLine('<?xml version="1.0" encoding="utf-8"?>')
+    [void]$sb.AppendLine("<TestRun xmlns=`"http://microsoft.com/schemas/VisualStudio/TeamTest/2010`">")
+    [void]$sb.AppendLine("  <Results>")
+    foreach ($row in $results) {
+        $testName = $esc($row.Name)
+        $outcome = $esc($row.Outcome)
+        [void]$sb.AppendLine("    <UnitTestResult testName=`"$testName`" outcome=`"$outcome`" />")
+    }
+    [void]$sb.AppendLine("  </Results>")
+    [void]$sb.AppendLine("  <ResultSummary>")
+    [void]$sb.AppendLine("    <Counters total=`"$($results.Count)`" executed=`"$($results.Count)`" passed=`"$($results | Where-Object Outcome -eq 'Passed' | Measure-Object | Select-Object -ExpandProperty Count)`" failed=`"$($results | Where-Object Outcome -eq 'Failed' | Measure-Object | Select-Object -ExpandProperty Count)`" />")
+    [void]$sb.AppendLine("  </ResultSummary>")
+    [void]$sb.AppendLine("</TestRun>")
+    Set-Content -LiteralPath $TrxPath -Value $sb.ToString() -Encoding UTF8
+    Write-Host "FW_PARTIAL_TRX written path=$TrxPath rows=$($results.Count) utc=$utc source=$ConsoleLogPath"
+    Write-PhaseLog "FW_PARTIAL_TRX written path=$TrxPath rows=$($results.Count) utc=$utc source=$ConsoleLogPath"
 }
 
 function Write-FirewallPhaseExecutedSummary {
@@ -358,10 +492,12 @@ function Stop-LeftoverCiProcesses() {
 }
 
 function Write-CiPhaseFirewallProbe([string]$label) {
+    Test-CiGitHubRunnerReachable -label $label
     Write-PhaseLog "PHASE boundary $label"
     Write-CiFirewallStoreEcho -Label $label
     Write-CiFirewallEvidence -Path $firewallLog -Label $label
     Write-CiEgressToLogs -FirewallLog $firewallLog -WritePhase { param($line) Write-PhaseLog $line }
+    Test-CiGitHubRunnerReachable -label "$label-post"
 }
 
 function Assert-CiPipeAndProcessLeakFromLogs {
@@ -656,6 +792,7 @@ Write-PhaseLog "START phase=script-entry"
 $scriptStartUtc = (Get-Date).ToUniversalTime()
 $deadmanDeadlineUtc = $scriptStartUtc.AddMinutes(18).ToString("o")
 $deadmanLog = Join-Path $logDir "deadman.supervisor.log"
+Remove-StaleDeadmanCancelFile -Reason "before-deadman-arm"
 $deadmanScript = Join-Path $PSScriptRoot "ci-integration-deadman.ps1"
 $deadmanArgs = @(
     "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $deadmanScript,
@@ -670,7 +807,9 @@ $deadmanArgs = @(
 )
 $supervisorProc = Start-Process -FilePath "pwsh" -ArgumentList $deadmanArgs -PassThru -NoNewWindow -WorkingDirectory $repoRoot
 $null = $supervisorProc.Handle
-Write-PhaseLog "START deadman pid=$($supervisorProc.Id) deadline=$deadmanDeadlineUtc"
+$deadmanLabel = if ($PcInternetFirewallOnly) { "firewall-step" } else { "main-integration" }
+Write-PhaseLog "CI_DEADMAN armed step=$deadmanLabel pid=$($supervisorProc.Id) deadline=$deadmanDeadlineUtc cancelFile=$cancelFile"
+Write-Host "CI_DEADMAN armed step=$deadmanLabel pid=$($supervisorProc.Id) deadline=$deadmanDeadlineUtc"
 
 Write-CiPhaseFirewallProbe -label "pre-integration"
 
@@ -759,6 +898,7 @@ function Invoke-PcInternetFirewallIntegrationPhase {
         Assert-FirewallPhaseTestsExecuted -TrxPath $fwTrxPath -DiscoveredCount $fwDiscoveredNames.Count
     }
     finally {
+        Write-FirewallPartialTrxFromConsole -ConsoleLogPath $fwConsoleLog -TrxPath $fwTrxPath
         if ($fwTestExit -eq 124) {
             $watchdogRestoreLog = Join-Path $logDir "ci-firewall-watchdog-restore.log"
             try {
@@ -800,25 +940,13 @@ try {
     $env:CHECKPOINT_SECOND_USER = $guestUser
     $env:CHECKPOINT_SECOND_PASSWORD = $guestPassword
     $env:CHECKPOINT_GUARD_CI_RUNNER_LAUNCH = "1"
-    if ($env:RUNNER_ROOT) {
-        $listener = Join-Path $env:RUNNER_ROOT "bin\Runner.Listener.exe"
-        $worker = Join-Path $env:RUNNER_ROOT "bin\Runner.Worker.exe"
-        if ((Test-Path $listener) -and (Test-Path $worker)) {
-            $env:CHECKPOINT_INTERNET_EXTRA_ALLOW = "$listener;$worker"
-        }
-    }
+    Set-CiRunnerInternetExtraAllow
 
     $env:PGPASSWORD = "postgres"
 
     if ($PcInternetFirewallOnly) {
         Write-PhaseLog "START mode=pc-internet-firewall-only"
-        if ($env:RUNNER_ROOT) {
-            $listener = Join-Path $env:RUNNER_ROOT "bin\Runner.Listener.exe"
-            $worker = Join-Path $env:RUNNER_ROOT "bin\Runner.Worker.exe"
-            if ((Test-Path $listener) -and (Test-Path $worker)) {
-                $env:CHECKPOINT_INTERNET_EXTRA_ALLOW = "$listener;$worker"
-            }
-        }
+        Set-CiRunnerInternetExtraAllow
 
         Ensure-PcInternetFirewallBuildOutputs
         $serverDll = Join-Path $repoRoot "tests/GameClub.Server.TestHost/bin/Release/net10.0/GameClub.Server.TestHost.dll"

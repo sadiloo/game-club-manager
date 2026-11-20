@@ -208,6 +208,8 @@ jobs:
           path: |
             artifacts/kiosk-windows-server.trx
             artifacts/kiosk-windows-guard.trx
+            artifacts/kiosk-windows-pc-internet-firewall.trx
+            artifacts/kiosk-windows-pc-internet-firewall-console.log
             artifacts/watchdog.log
             artifacts/evidence/**
             artifacts/kiosk-windows-logs/**

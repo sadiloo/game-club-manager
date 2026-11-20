@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
@@ -12,6 +13,29 @@ namespace GameClub.Kiosk.Windows.IntegrationTests.Guard;
 
 internal static class GuardWatchdogTimelineReader
 {
+    private static readonly Regex PipeRequestHandledTicketMinusOne = new(
+        @"^.*GUARD_TIMELINE event=pipe_request_handled thread=\d+ ticket=-1(\s|$)",
+        RegexOptions.Compiled);
+
+    private static readonly Regex PipeRequestHandledTicketZero = new(
+        @"^.*GUARD_TIMELINE event=pipe_request_handled thread=\d+ ticket=0(\s|$)",
+        RegexOptions.Compiled);
+
+    internal static bool MatchesPipeRequestHandledTicket(string line, int ticket)
+    {
+        if (string.IsNullOrEmpty(line))
+        {
+            return false;
+        }
+
+        return ticket switch
+        {
+            -1 => PipeRequestHandledTicketMinusOne.IsMatch(line),
+            0 => PipeRequestHandledTicketZero.IsMatch(line),
+            _ => false,
+        };
+    }
+
     private static string WatchdogLogPath =>
         Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
@@ -130,25 +154,29 @@ internal static class GuardWatchdogTimelineReader
 
         int IndexOf(string fragment) =>
             Array.FindIndex(lines, l => l.Contains(fragment, StringComparison.Ordinal));
+        int IndexOfTicket(int ticket) =>
+            Array.FindIndex(lines, l => MatchesPipeRequestHandledTicket(l, ticket));
+
+        var timelineJoined = string.Join(" | ", timeline);
 
         var listeningIdx = IndexOf("GUARD_TIMELINE event=pipe_listening");
         var lockExitIdx = IndexOf("early_reassert_off_lock_exit");
-        var statusHandledIdx = IndexOf("GUARD_TIMELINE event=pipe_request_handled ticket=-1");
+        var statusHandledIdx = IndexOfTicket(-1);
         var holdReleaseIdx = IndexOf("pipe_request_hold_release ticket=0");
-        var mutatingHandledIdx = IndexOf("GUARD_TIMELINE event=pipe_request_handled ticket=0");
+        var mutatingHandledIdx = IndexOfTicket(0);
         var pipeReadyIdx = IndexOf("GUARD_TIMELINE event=pipe_ready");
 
-        Assert.True(listeningIdx >= 0, "watchdog must log GUARD_TIMELINE event=pipe_listening");
-        Assert.True(lockExitIdx >= 0, "watchdog must log PIPE_TIMELINE early_reassert_off_lock_exit");
-        Assert.True(statusHandledIdx >= 0, "watchdog must log GUARD_TIMELINE event=pipe_request_handled ticket=-1 for status request");
-        Assert.True(holdReleaseIdx >= 0, "watchdog must log pipe_request_hold_release ticket=0 for held OFF apply");
-        Assert.True(mutatingHandledIdx >= 0, "watchdog must log GUARD_TIMELINE event=pipe_request_handled ticket=0 for held OFF apply");
-        Assert.True(pipeReadyIdx >= 0, "watchdog must log GUARD_TIMELINE event=pipe_ready for guard2 run");
-        Assert.True(listeningIdx < lockExitIdx, "pipe_listening must precede early_reassert_off_lock_exit");
-        Assert.True(statusHandledIdx < lockExitIdx, "status pipe_request_handled ticket=-1 must precede early_reassert_off_lock_exit");
-        Assert.True(lockExitIdx < holdReleaseIdx, "early_reassert_off_lock_exit must precede pipe_request_hold_release ticket=0");
-        Assert.True(holdReleaseIdx < mutatingHandledIdx, "pipe_request_hold_release ticket=0 must precede pipe_request_handled ticket=0");
-        Assert.True(mutatingHandledIdx < pipeReadyIdx, "pipe_request_handled ticket=0 must precede pipe_ready");
+        Assert.True(listeningIdx >= 0, "watchdog must log GUARD_TIMELINE event=pipe_listening; full_timeline=" + timelineJoined);
+        Assert.True(lockExitIdx >= 0, "watchdog must log PIPE_TIMELINE early_reassert_off_lock_exit; full_timeline=" + timelineJoined);
+        Assert.True(statusHandledIdx >= 0, "watchdog must log GUARD_TIMELINE event=pipe_request_handled thread=N ticket=-1 for status request; full_timeline=" + timelineJoined);
+        Assert.True(holdReleaseIdx >= 0, "watchdog must log pipe_request_hold_release ticket=0 for held OFF apply; full_timeline=" + timelineJoined);
+        Assert.True(mutatingHandledIdx >= 0, "watchdog must log GUARD_TIMELINE event=pipe_request_handled thread=N ticket=0 for held OFF apply; full_timeline=" + timelineJoined);
+        Assert.True(pipeReadyIdx >= 0, "watchdog must log GUARD_TIMELINE event=pipe_ready for guard2 run; full_timeline=" + timelineJoined);
+        Assert.True(listeningIdx < lockExitIdx, "pipe_listening must precede early_reassert_off_lock_exit; full_timeline=" + timelineJoined);
+        Assert.True(statusHandledIdx < lockExitIdx, "status pipe_request_handled ticket=-1 must precede early_reassert_off_lock_exit; full_timeline=" + timelineJoined);
+        Assert.True(lockExitIdx < holdReleaseIdx, "early_reassert_off_lock_exit must precede pipe_request_hold_release ticket=0; full_timeline=" + timelineJoined);
+        Assert.True(holdReleaseIdx < mutatingHandledIdx, "pipe_request_hold_release ticket=0 must precede pipe_request_handled ticket=0; full_timeline=" + timelineJoined);
+        Assert.True(mutatingHandledIdx < pipeReadyIdx, "pipe_request_handled ticket=0 must precede pipe_ready; full_timeline=" + timelineJoined);
     }
 
     internal static void AssertEarlyOffReassertBeforePipeReady(long logStartOffset, Action<string> trace)
