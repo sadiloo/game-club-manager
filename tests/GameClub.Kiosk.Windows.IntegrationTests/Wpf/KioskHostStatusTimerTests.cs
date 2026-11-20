@@ -1547,14 +1547,15 @@ public sealed class KioskHostStatusTimerTests
                 .Invoke(host, null);
             await host.LoginAsync("timeout-user", "s3cret-pass");
             var text = status.Text ?? "";
-            Assert.Contains(KioskLoginUserMessages.Timeout, text, StringComparison.Ordinal);
+            var timeoutPlaceholder = KioskLoginUserMessages.DisplayText(KioskLoginUserMessages.Keys.Timeout);
+            Assert.Contains(timeoutPlaceholder, text, StringComparison.Ordinal);
             Assert.Contains(" · ", text, StringComparison.Ordinal);
             Assert.DoesNotContain("s3cret-pass", text, StringComparison.Ordinal);
 
             typeof(KioskHostService).GetMethod("RefreshStationStatusText", BindingFlags.Instance | BindingFlags.NonPublic)!
                 .Invoke(host, null);
             var refreshed = status.Text ?? "";
-            Assert.Contains(KioskLoginUserMessages.Timeout, refreshed, StringComparison.Ordinal);
+            Assert.Contains(timeoutPlaceholder, refreshed, StringComparison.Ordinal);
         }
         finally
         {

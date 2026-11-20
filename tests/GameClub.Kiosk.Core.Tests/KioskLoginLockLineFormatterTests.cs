@@ -8,32 +8,36 @@ public sealed class KioskLoginLockLineFormatterTests
     private const string LockBase = "Locked — PC-1 · no server response";
 
     [Fact]
-    public void lock_line_appends_http_status_login_error()
+    public void lock_line_appends_http_generic_login_error_placeholder()
     {
-        var line = KioskLoginUserMessages.AppendToLockLine(LockBase, KioskLoginUserMessages.HttpStatus(409));
-        Assert.Contains("Login failed (HTTP 409)", line, StringComparison.Ordinal);
+        var error = KioskLoginUserMessages.DisplayText(KioskLoginUserMessages.Keys.HttpGeneric);
+        var line = KioskLoginUserMessages.AppendToLockLine(LockBase, error);
+        Assert.Contains(error, line, StringComparison.Ordinal);
         Assert.StartsWith(LockBase, line, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void lock_line_appends_unreachable_login_error()
+    public void lock_line_appends_unreachable_login_error_placeholder()
     {
-        var line = KioskLoginUserMessages.AppendToLockLine(LockBase, KioskLoginUserMessages.Unreachable);
-        Assert.Contains(KioskLoginUserMessages.Unreachable, line, StringComparison.Ordinal);
+        var error = KioskLoginUserMessages.DisplayText(KioskLoginUserMessages.Keys.Unreachable);
+        var line = KioskLoginUserMessages.AppendToLockLine(LockBase, error);
+        Assert.Contains(error, line, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void lock_line_appends_timeout_login_error()
+    public void lock_line_appends_timeout_login_error_placeholder()
     {
-        var line = KioskLoginUserMessages.AppendToLockLine(LockBase, KioskLoginUserMessages.Timeout);
-        Assert.Contains(KioskLoginUserMessages.Timeout, line, StringComparison.Ordinal);
+        var error = KioskLoginUserMessages.DisplayText(KioskLoginUserMessages.Keys.Timeout);
+        var line = KioskLoginUserMessages.AppendToLockLine(LockBase, error);
+        Assert.Contains(error, line, StringComparison.Ordinal);
     }
 
     [Fact]
     public void login_error_survives_lock_line_refresh_cycle()
     {
-        var first = KioskLoginUserMessages.AppendToLockLine(LockBase, KioskLoginUserMessages.HttpStatus(503));
-        var second = KioskLoginUserMessages.AppendToLockLine(LockBase, KioskLoginUserMessages.HttpStatus(503));
+        var error = KioskLoginUserMessages.DisplayText(KioskLoginUserMessages.Keys.StationBusy);
+        var first = KioskLoginUserMessages.AppendToLockLine(LockBase, error);
+        var second = KioskLoginUserMessages.AppendToLockLine(LockBase, error);
         Assert.Equal(first, second);
     }
 
@@ -42,15 +46,24 @@ public sealed class KioskLoginLockLineFormatterTests
     {
         const string password = "s3cret-pass";
         const string deviceKey = "device-key-abcdef";
-        foreach (var error in new[]
+        foreach (var key in new[]
                  {
-                     KioskLoginUserMessages.Unreachable,
-                     KioskLoginUserMessages.Timeout,
-                     KioskLoginUserMessages.HttpStatus(409),
+                     KioskLoginUserMessages.Keys.Unreachable,
+                     KioskLoginUserMessages.Keys.Timeout,
+                     KioskLoginUserMessages.Keys.StationBusy,
                  })
         {
+            var error = KioskLoginUserMessages.DisplayText(key);
             var line = KioskLoginUserMessages.AppendToLockLine(LockBase, error);
             Assert.False(KioskLoginUserMessages.ExposesCredential(line, password, deviceKey));
         }
+    }
+
+    [Fact]
+    public void empty_fields_gate_means_login_http_is_not_sent()
+    {
+        Assert.False(KioskLoginUserMessages.LoginHttpWouldBeSent(isPaired: true, loginName: "", password: "x"));
+        Assert.False(KioskLoginUserMessages.LoginHttpWouldBeSent(isPaired: true, loginName: "u", password: "  "));
+        Assert.True(KioskLoginUserMessages.LoginHttpWouldBeSent(isPaired: true, loginName: "u", password: "p"));
     }
 }
