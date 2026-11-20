@@ -56,20 +56,37 @@ function Assert-TestPhaseExit([string]$PhaseName, [int]$Exit) {
     }
 }
 
+function Get-VstestConsoleResultCounts {
+    param([string]$ConsoleLogPath)
+
+    if ([string]::IsNullOrWhiteSpace($ConsoleLogPath) -or -not (Test-Path -LiteralPath $ConsoleLogPath)) {
+        return @{ Executed = 0; Failed = 0 }
+    }
+
+    $passed = @(Select-String -Path $ConsoleLogPath -Pattern '(?m)^\s*Passed\s+' -ErrorAction SilentlyContinue).Count
+    $failed = @(Select-String -Path $ConsoleLogPath -Pattern '(?m)^\s*Failed\s+' -ErrorAction SilentlyContinue).Count
+    return @{ Executed = $passed + $failed; Failed = $failed }
+}
+
 function Write-FirewallPhaseExecutedSummary {
     param(
         [string]$TrxPath,
-        [int]$DiscoveredCount
+        [int]$DiscoveredCount,
+        [string]$ConsoleLogPath = ""
     )
 
     $count = 0
+    $trxState = "missing"
     if ($TrxPath -and (Test-Path -LiteralPath $TrxPath)) {
+        $trxState = "present"
         $results = @(Select-Xml -Path $TrxPath -XPath "//*[local-name()='UnitTestResult']" -ErrorAction SilentlyContinue)
         $count = @($results | Where-Object { -not [string]::IsNullOrWhiteSpace($_.Node.testName) }).Count
     }
 
-    Write-Host "FW_EXECUTED count=$count discovered=$DiscoveredCount"
-    Write-PhaseLog "FW_EXECUTED count=$count discovered=$DiscoveredCount"
+    $consoleCounts = Get-VstestConsoleResultCounts -ConsoleLogPath $ConsoleLogPath
+    $line = "FW_EXECUTED count=$count discovered=$DiscoveredCount trx=$trxState console_executed=$($consoleCounts.Executed) console_failed=$($consoleCounts.Failed)"
+    Write-Host $line
+    Write-PhaseLog $line
 }
 
 function Assert-FirewallPhaseTestsExecuted {
@@ -728,19 +745,34 @@ function Invoke-PcInternetFirewallIntegrationPhase {
         "--logger", "console;verbosity=detailed"
     )
     $fwTrxPath = Join-Path $artifactDir "kiosk-windows-pc-internet-firewall.trx"
-    $fwPhaseCapMs = 13 * 60 * 1000
+    $fwConsoleLog = Join-Path $artifactDir "kiosk-windows-pc-internet-firewall-console.log"
+    $fwPhaseCapMs = 18 * 60 * 1000
     $fwEffectiveCapMs = Get-EffectiveTimeoutMs -phaseCapMs $fwPhaseCapMs
-    Write-Host "FW_PHASE_BUDGET cap_ms=$fwPhaseCapMs effective_ms=$fwEffectiveCapMs basis_measured_ms=368000 step_timeout_min=15"
-    Write-PhaseLog "FW_PHASE_BUDGET cap_ms=$fwPhaseCapMs effective_ms=$fwEffectiveCapMs basis_measured_ms=368000 step_timeout_min=15"
+    Write-Host "FW_PHASE_BUDGET cap_ms=$fwPhaseCapMs effective_ms=$fwEffectiveCapMs basis_measured_ms=695000 step_timeout_min=22"
+    Write-PhaseLog "FW_PHASE_BUDGET cap_ms=$fwPhaseCapMs effective_ms=$fwEffectiveCapMs basis_measured_ms=695000 step_timeout_min=22"
+    $fwTestExit = 0
     try {
-        $fwTestExit = Invoke-DotNetWithWatchdog -PhaseName "dotnet-test-pc-internet-firewall" -ArgumentList $fwTestArgs -PhaseCapMs $fwEffectiveCapMs
+        $fwTestExit = Invoke-DotNetWithWatchdog -PhaseName "dotnet-test-pc-internet-firewall" -ArgumentList $fwTestArgs -PhaseCapMs $fwEffectiveCapMs -StdOutLog $fwConsoleLog
         Publish-ServerLeaseBuildEvidence -phaseName "dotnet-test-pc-internet-firewall" -TrxPath $fwTrxPath
         Write-CiPhaseFirewallProbe -label "after-dotnet-test-pc-internet-firewall"
         Assert-TestPhaseExit -PhaseName "dotnet-test-pc-internet-firewall" -Exit $fwTestExit
         Assert-FirewallPhaseTestsExecuted -TrxPath $fwTrxPath -DiscoveredCount $fwDiscoveredNames.Count
     }
     finally {
-        Write-FirewallPhaseExecutedSummary -TrxPath $fwTrxPath -DiscoveredCount $fwDiscoveredNames.Count
+        if ($fwTestExit -eq 124) {
+            $watchdogRestoreLog = Join-Path $logDir "ci-firewall-watchdog-restore.log"
+            try {
+                Invoke-CiFirewallRestore -LogDir $logDir -FirewallLog $watchdogRestoreLog
+                Write-Host "FW_WATCHDOG_RESTORE completed log=$watchdogRestoreLog"
+                Write-PhaseLog "FW_WATCHDOG_RESTORE completed log=$watchdogRestoreLog"
+            }
+            catch {
+                Write-Host "FW_WATCHDOG_RESTORE failed: $_"
+                Write-PhaseLog "FW_WATCHDOG_RESTORE failed: $_"
+            }
+        }
+
+        Write-FirewallPhaseExecutedSummary -TrxPath $fwTrxPath -DiscoveredCount $fwDiscoveredNames.Count -ConsoleLogPath $fwConsoleLog
     }
 }
 
