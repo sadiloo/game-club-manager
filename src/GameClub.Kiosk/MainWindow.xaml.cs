@@ -29,6 +29,10 @@ public partial class MainWindow : Window
         GameCategoryBox.Items.Add("2");
         GameCategoryBox.SelectedIndex = 0;
         KeyDown += OnKeyDown;
+        LoginNameBox.PreviewKeyDown += (_, _) => _host.DismissLoginErrorMessage();
+        LoginNameBox.TextChanged += (_, _) => _host.DismissLoginErrorMessage();
+        PasswordBox.PreviewKeyDown += (_, _) => _host.DismissLoginErrorMessage();
+        PasswordBox.PasswordChanged += (_, _) => _host.DismissLoginErrorMessage();
     }
 
     private void OnKeyDown(object sender, KeyEventArgs e)
