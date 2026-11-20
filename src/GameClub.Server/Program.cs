@@ -22,7 +22,8 @@ public partial class Program
                 options.InvalidModelStateResponseFactory = context =>
                 {
                     var path = context.HttpContext.Request.Path;
-                    if (path.StartsWithSegments("/api/operator", StringComparison.OrdinalIgnoreCase)
+                    if ((path.StartsWithSegments("/api/operator", StringComparison.OrdinalIgnoreCase)
+                         && !path.StartsWithSegments("/api/operator/auth", StringComparison.OrdinalIgnoreCase))
                         || path.StartsWithSegments("/api/kiosk", StringComparison.OrdinalIgnoreCase))
                     {
                         return new JsonResult(new
