@@ -79,17 +79,20 @@ internal sealed class InternetPipeServer
         _shutdownCt = ct;
         _runTimelineOriginTicks = Stopwatch.GetTimestamp();
         AppendPipeTimeline("run_begin");
-        var earlyReassert = Stopwatch.StartNew();
-        AppendPipeTimeline("early_reassert_lock_wait");
-        lock (_firewallGate)
+        if (!_on)
         {
-            AppendPipeTimeline("early_reassert_lock_enter");
-            ReassertPersistedLocked();
-            AppendPipeTimeline($"early_reassert_lock_exit elapsed_ms={earlyReassert.ElapsedMilliseconds}");
-        }
+            var earlyReassert = Stopwatch.StartNew();
+            AppendPipeTimeline("early_reassert_off_lock_wait");
+            lock (_firewallGate)
+            {
+                AppendPipeTimeline("early_reassert_off_lock_enter");
+                ReassertPersistedLocked();
+                AppendPipeTimeline($"early_reassert_off_lock_exit elapsed_ms={earlyReassert.ElapsedMilliseconds}");
+            }
 
-        GuardWatchdogLog.Append(
-            $"GUARD_TIMELINE event=early_reassert_persisted elapsed_ms={earlyReassert.ElapsedMilliseconds}");
+            GuardWatchdogLog.Append(
+                $"GUARD_TIMELINE event=early_reassert_off elapsed_ms={earlyReassert.ElapsedMilliseconds}");
+        }
 
         var reconcileThread = new Thread(() => RunReconcileBackground(ct))
         {
@@ -152,6 +155,8 @@ internal sealed class InternetPipeServer
             if (ct.IsCancellationRequested)
             {
                 _reconcileAbandoned = true;
+                _reconcilePhase = 2;
+                _reconcileWorkFinished.Set();
                 InternetPowerShellRunner.MarkAbandonBoundary();
             }
 
@@ -219,7 +224,8 @@ internal sealed class InternetPipeServer
 
         if (!thread.Join(TimeSpan.FromMilliseconds(budgetMs)))
         {
-            GuardWatchdogLog.Append($"pipe_shutdown_join_timeout thread={label} budget_ms={budgetMs}");
+            GuardWatchdogLog.Append(
+                $"pipe_background_join_timeout name={label} budget_ms={budgetMs} thread_id={thread.ManagedThreadId}");
         }
     }
 
@@ -230,12 +236,17 @@ internal sealed class InternetPipeServer
         {
             using (server)
             {
+                if (_shutdownCt.IsCancellationRequested)
+                {
+                    return;
+                }
+
                 GuardWatchdogLog.Append($"pipe_client_handler_begin thread={handlerThread}");
                 var readTimeoutMs = InternetGuardPipePolicy.ResolveReadTimeoutMs();
                 GuardWatchdogLog.Append(
                     $"pipe_read_begin thread={handlerThread} budget_ms={readTimeoutMs}");
                 var body = ReadRequestLine(server, readTimeoutMs, handlerThread);
-                if (body is null)
+                if (body is null || _shutdownCt.IsCancellationRequested)
                 {
                     return;
                 }
@@ -318,16 +329,37 @@ internal sealed class InternetPipeServer
             Name = "CheckpointInternetReconcileWork",
         };
         _reconcileWorkThread.Start();
-        var joined = _reconcileWorkThread.Join(TimeSpan.FromMilliseconds(timeoutMs));
+        var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+        var joined = false;
+        while (!joined && DateTime.UtcNow < deadline)
+        {
+            if (ct.IsCancellationRequested || _reconcileAbandoned)
+            {
+                break;
+            }
+
+            joined = _reconcileWorkThread.Join(TimeSpan.FromMilliseconds(50));
+        }
+
         if (joined)
         {
             _reconcilePhase = 2;
+            AppendPipeTimeline($"reconcile_phase_2 completed=true elapsed_ms={sw.ElapsedMilliseconds}");
             GuardWatchdogLog.Append($"reconcile_end completed=true elapsed_ms={sw.ElapsedMilliseconds}");
+            _reconcileWorkFinished.Set();
+        }
+        else if (ct.IsCancellationRequested || _reconcileAbandoned)
+        {
+            _reconcilePhase = 2;
+            AppendPipeTimeline($"reconcile_phase_2 completed=false reason=shutdown elapsed_ms={sw.ElapsedMilliseconds}");
+            GuardWatchdogLog.Append(
+                $"reconcile_end completed=false reason=shutdown elapsed_ms={sw.ElapsedMilliseconds}");
             _reconcileWorkFinished.Set();
         }
         else
         {
             AbandonReconcileAfterTimeout(sw);
+            AppendPipeTimeline($"reconcile_phase_2 completed=false reason=timeout elapsed_ms={sw.ElapsedMilliseconds}");
             var work = _reconcileWorkThread;
             new Thread(() =>
             {

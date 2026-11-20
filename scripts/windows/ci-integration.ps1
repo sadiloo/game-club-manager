@@ -40,11 +40,16 @@ function Assert-TestPhaseExit([string]$PhaseName, [int]$Exit) {
 function Assert-FirewallPhaseTestsExecuted {
     param(
         [string]$TrxPath,
-        [int]$ExpectedCount = 38
+        [int]$DiscoveredCount,
+        [int]$MinimumCount = 38
     )
 
     if (-not (Test-Path $TrxPath)) {
         throw "FW_PHASE_TESTS missing_trx path=$TrxPath"
+    }
+
+    if ($DiscoveredCount -lt $MinimumCount) {
+        throw "FW_PHASE_DISCOVERED count=$DiscoveredCount below_minimum=$MinimumCount"
     }
 
     $results = @(Select-Xml -Path $TrxPath -XPath "//*[local-name()='UnitTestResult']" -ErrorAction SilentlyContinue)
@@ -58,10 +63,10 @@ function Assert-FirewallPhaseTestsExecuted {
     }
 
     $count = $names.Count
-    Write-Host "FW_PHASE_TESTS count=$count expected=$ExpectedCount"
-    Write-PhaseLog "FW_PHASE_TESTS count=$count expected=$ExpectedCount"
-    if ($count -lt $ExpectedCount) {
-        throw "FW_PHASE_TESTS incomplete count=$count expected=$ExpectedCount reason=phase_aborted_before_full_inventory"
+    Write-Host "FW_PHASE_TESTS count=$count discovered=$DiscoveredCount minimum=$MinimumCount"
+    Write-PhaseLog "FW_PHASE_TESTS count=$count discovered=$DiscoveredCount minimum=$MinimumCount"
+    if ($count -lt $DiscoveredCount) {
+        throw "FW_PHASE_TESTS executed=$count discovered=$DiscoveredCount reason=phase_aborted_before_full_inventory"
     }
 }
 
@@ -790,7 +795,17 @@ try {
     Write-Host "Running PC internet firewall integration (Category=PcInternetFirewall)..."
     Write-CiPhaseFirewallProbe -label "before-dotnet-test-pc-internet-firewall"
     $fwFilter = "Category=PcInternetFirewall"
-    Write-VstestPhaseList -phaseName "dotnet-test-pc-internet-firewall" -framework "net48" -filterExpr $fwFilter | Out-Null
+    $fwDiscoveredNames = @(Write-VstestPhaseList -phaseName "dotnet-test-pc-internet-firewall" -framework "net48" -filterExpr $fwFilter)
+    foreach ($fwName in $fwDiscoveredNames) {
+        $trim = $fwName.Trim()
+        Write-Host "FW_PHASE_DISCOVERED $trim"
+        Write-PhaseLog "FW_PHASE_DISCOVERED $trim"
+    }
+    Write-Host "FW_PHASE_DISCOVERED count=$($fwDiscoveredNames.Count)"
+    Write-PhaseLog "FW_PHASE_DISCOVERED count=$($fwDiscoveredNames.Count)"
+    if ($fwDiscoveredNames.Count -lt 38) {
+        throw "FW_PHASE_DISCOVERED count=$($fwDiscoveredNames.Count) below_minimum=38"
+    }
     $fwTestArgs = @(
         "test", "tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj",
         "-c", "Release", "-f", "net48", "--no-build", "--nologo",
@@ -804,7 +819,7 @@ try {
     Publish-ServerLeaseBuildEvidence -phaseName "dotnet-test-pc-internet-firewall" -TrxPath $fwTrxPath
     Write-CiPhaseFirewallProbe -label "after-dotnet-test-pc-internet-firewall"
     Assert-TestPhaseExit -PhaseName "dotnet-test-pc-internet-firewall" -Exit $fwTestExit
-    Assert-FirewallPhaseTestsExecuted -TrxPath $fwTrxPath -ExpectedCount 38
+    Assert-FirewallPhaseTestsExecuted -TrxPath $fwTrxPath -DiscoveredCount $fwDiscoveredNames.Count
 
     $wpfStabilityRuns = 0
     if ($env:WPF_STABILITY_RUNS -match '^\d+$') {

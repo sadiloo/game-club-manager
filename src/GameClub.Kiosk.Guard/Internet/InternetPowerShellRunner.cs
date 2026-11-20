@@ -46,6 +46,9 @@ internal static class InternetPowerShellRunner
         GuardWatchdogLog.Append($"reconcile_abandon_runner_calls={ReconcileRunCallCountAtAbandon}");
     }
 
+    internal static bool IsReconcileAbandoned()
+        => Volatile.Read(ref ReconcileRunCallCountAtAbandon) >= 0;
+
     public static string Run(string script, int timeoutMs = 120_000, string? stepName = null)
         => RunWithTelemetry(script, timeoutMs, stepName).Output;
 

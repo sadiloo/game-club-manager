@@ -148,15 +148,23 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
                 IssuedAtUtc = DateTime.UtcNow,
             });
             var client = new GuardInternetClient();
+            var applySw = Stopwatch.StartNew();
             var response = await client.ApplyAsync(onCommand);
+            applySw.Stop();
             if (response.Contains("reconcile_busy", StringComparison.OrdinalIgnoreCase))
             {
-                Console.WriteLine($"internet_pipe_apply_reconcile_busy body={response}");
+                Console.WriteLine(
+                    $"internet_pipe_apply_reconcile_busy elapsed_ms={applySw.ElapsedMilliseconds} body={response}");
+                Console.WriteLine(
+                    "internet_pipe_apply_rca: server returned reconcile_busy while _reconcilePhase==1 (reconcile_work incl. SlowReconcile RunResetScript delay still running).");
                 return;
             }
 
             Assert.Contains("applied", response, StringComparison.OrdinalIgnoreCase);
-            Console.WriteLine($"internet_pipe_apply_after_reconcile body={response}");
+            Console.WriteLine(
+                $"internet_pipe_apply_after_reconcile elapsed_ms={applySw.ElapsedMilliseconds} body={response}");
+            Console.WriteLine(
+                "internet_pipe_apply_rca: apply handler waited in TryEnterFirewallForApply until _reconcilePhase!=1 and/or acquired _firewallGate after reconcile_work (SlowReconcile reset_delay_ms=8000) finished; see PIPE_TIMELINE pipe_gate_* and reconcile_phase_2 in watchdog.log.");
         }
         finally
         {
@@ -563,7 +571,7 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
                 IssuedAtUtc = DateTime.UtcNow,
             });
 
-            applyTask = Task.Run(async () => await new GuardInternetClient().ApplyAsync(onCommand));
+            applyTask = new GuardInternetClient().ApplyAsync(onCommand);
             await Task.Delay(400);
             var statusSw = Stopwatch.StartNew();
             var status = await new GuardInternetClient().GetStatusAsync(default);
@@ -578,11 +586,11 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
             {
                 try
                 {
-                    applyTask.Wait(TimeSpan.FromSeconds(45));
+                    await applyTask;
                 }
-                catch (AggregateException)
+                catch (Exception ex)
                 {
-                    /* client may fault if pipe stops early */
+                    Console.WriteLine($"internet_pipe_status_during_slow_apply apply_task_end error={ex.Message}");
                 }
             }
 

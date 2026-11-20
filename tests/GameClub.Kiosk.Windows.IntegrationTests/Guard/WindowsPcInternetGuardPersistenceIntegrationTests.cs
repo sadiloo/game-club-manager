@@ -124,28 +124,18 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
             Assert.True(TryTcp("1.1.1.1", 443, 3_000), "Sanity: profile tamper must temporarily open egress.");
             GuardTimeline("tamper_egress_open");
 
+            var guard2LogOffset = GuardWatchdogTimelineReader.CurrentLogLength();
             guard2 = GuardProcessStart.StartGuard();
             GuardTimeline($"guard2_start pid={guard2.Id}");
-            long? pipeReadyMs = null;
             var restored = DateTime.UtcNow.AddSeconds(10);
             while (DateTime.UtcNow < restored)
             {
-                if (pipeReadyMs is null && TryGuardPipeStatus(300))
-                {
-                    pipeReadyMs = timeline.ElapsedMilliseconds;
-                    GuardTimeline($"pipe_ready ms={pipeReadyMs}");
-                }
-
                 if (!TryTcp("1.1.1.1", 443, 500))
                 {
-                    var blockedMs = timeline.ElapsedMilliseconds;
-                    GuardTimeline($"first_egress_blocked ms={blockedMs}");
-                    if (pipeReadyMs is not null && pipeReadyMs < blockedMs)
-                    {
-                        Assert.Fail(
-                            $"Re-assert OFF must complete before pipe is ready (pipe_ready_ms={pipeReadyMs} egress_blocked_ms={blockedMs}).");
-                    }
-
+                    GuardTimeline($"first_egress_blocked ms={timeline.ElapsedMilliseconds}");
+                    GuardWatchdogTimelineReader.AssertEarlyOffReassertBeforePipeReady(
+                        guard2LogOffset,
+                        line => GuardTimeline($"watchdog {line}"));
                     return;
                 }
 
@@ -153,6 +143,15 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
             }
 
             GuardTimeline("timeout egress_still_open");
+            foreach (var line in GuardWatchdogTimelineReader.ReadLinesSince(guard2LogOffset))
+            {
+                if (line.Contains("GUARD_TIMELINE", StringComparison.Ordinal)
+                    || line.Contains("PIPE_TIMELINE", StringComparison.Ordinal))
+                {
+                    GuardTimeline($"watchdog {line}");
+                }
+            }
+
             Assert.Fail("Guard restart must re-assert OFF rules before serving pipe (egress still blocked within 10s).");
         }
         finally
@@ -375,20 +374,6 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
     {
         Directory.CreateDirectory(Path.GetDirectoryName(InternetGuardPaths.ConfigPath));
         File.WriteAllText(InternetGuardPaths.ConfigPath, JsonSerializer.Serialize(config));
-    }
-
-    private static bool TryGuardPipeStatus(int timeoutMs)
-    {
-        try
-        {
-            var client = new GuardInternetClient();
-            var task = client.GetStatusAsync(CancellationToken.None);
-            return task.Wait(timeoutMs) && !string.IsNullOrWhiteSpace(task.Result);
-        }
-        catch
-        {
-            return false;
-        }
     }
 
     private static bool TryTcp(string host, int port, int timeoutMs)

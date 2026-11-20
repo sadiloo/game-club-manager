@@ -22,10 +22,20 @@ internal sealed class SlowReconcileInternetFirewallApplier : IInternetFirewallAp
             var remaining = _resetDelayMs;
             while (remaining > 0)
             {
+                if (InternetPowerShellRunner.IsReconcileAbandoned())
+                {
+                    return "firewall_script_skipped_abandon";
+                }
+
                 var slice = Math.Min(100, remaining);
                 Thread.Sleep(slice);
                 remaining -= slice;
             }
+        }
+
+        if (InternetPowerShellRunner.IsReconcileAbandoned())
+        {
+            return "firewall_script_skipped_abandon";
         }
 
         return _inner.RunResetScript();
