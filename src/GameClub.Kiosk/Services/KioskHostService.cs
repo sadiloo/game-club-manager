@@ -53,6 +53,9 @@ public sealed class KioskHostService : IAsyncDisposable
     private bool _pairingJustFailed;
     private DateTime? _lastHeartbeatAckUtc;
     private readonly KioskHostTestSeam? _testSeam;
+    private string? _loginError;
+
+    internal int? LastLoginHttpStatus { get; private set; }
 
     public string ServerBase => _serverBase;
 
@@ -176,17 +179,40 @@ public sealed class KioskHostService : IAsyncDisposable
             return;
         }
 
-        var response = await _http.PostAsync(
-            $"{_serverBase}/api/kiosk/auth/login",
-            new StringContent(JsonSerializer.Serialize(new { loginName, password, stationId = _stationId }), Encoding.UTF8, "application/json"));
-        if (!response.IsSuccessStatusCode)
+        _loginError = null;
+        HttpResponseMessage response;
+        try
         {
-            _status.Text = "Login failed";
+            response = await _http.PostAsync(
+                $"{_serverBase}/api/kiosk/auth/login",
+                new StringContent(JsonSerializer.Serialize(new { loginName, password, stationId = _stationId }), Encoding.UTF8, "application/json"));
+        }
+        catch (HttpRequestException ex)
+        {
+            LastLoginHttpStatus = null;
+            _loginError = "Login failed (server unreachable)";
+            Trace.TraceWarning($"Kiosk login failed (unreachable): {ex.Message}");
+            RefreshStationStatusText();
             return;
         }
 
-        var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
-        _sessionId = doc.RootElement.GetProperty("sessionId").GetGuid();
+        if (!response.IsSuccessStatusCode)
+        {
+            LastLoginHttpStatus = (int)response.StatusCode;
+            _loginError = $"Login failed (HTTP {(int)response.StatusCode})";
+            Trace.TraceWarning($"Kiosk login failed: HTTP {(int)response.StatusCode}");
+            RefreshStationStatusText();
+            return;
+        }
+
+        LastLoginHttpStatus = (int)response.StatusCode;
+        using (response)
+        {
+            var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            _sessionId = doc.RootElement.GetProperty("sessionId").GetGuid();
+        }
+
+        _loginError = null;
         _locallyLockedSessionId = Guid.Empty;
         _runtime.BindSession(_sessionId);
         await ApplyStationProfileAsync();
@@ -362,6 +388,7 @@ public sealed class KioskHostService : IAsyncDisposable
                 {
                     _locallyLockedSessionId = Guid.Empty;
                     _sessionId = differentSession;
+                    _loginError = null;
                     _runtime.BindSession(differentSession);
                     _ = ApplyStationProfileAsync();
                 }
@@ -371,6 +398,7 @@ public sealed class KioskHostService : IAsyncDisposable
                     && _locallyLockedSessionId == Guid.Empty)
                 {
                     _sessionId = leased;
+                    _loginError = null;
                     _runtime.BindSession(leased);
                     _ = ApplyStationProfileAsync();
                 }
@@ -509,6 +537,11 @@ public sealed class KioskHostService : IAsyncDisposable
             return;
         }
 
+        if (_sessionId != Guid.Empty)
+        {
+            _loginError = null;
+        }
+
         if (_locallyLockedSessionId != Guid.Empty
             || (_sessionId == Guid.Empty && _lockPanel.Visibility == Visibility.Visible))
         {
@@ -523,6 +556,11 @@ public sealed class KioskHostService : IAsyncDisposable
                 _lastHeartbeatAckUtc,
                 DateTime.UtcNow,
                 _runtime.LastTransportErrorDetail);
+            if (_sessionId == Guid.Empty && !string.IsNullOrEmpty(_loginError))
+            {
+                _status.Text += $" · {_loginError}";
+            }
+
             return;
         }
 

@@ -29,6 +29,8 @@ public class GameClubWebApplicationFactory : WebApplicationFactory<Program>
     /// <summary>When set, <see cref="SaveTitleSecondSaveFaultInterceptor"/> faults the second SaveChanges in the request.</summary>
     internal SaveTitleSaveFaultGate? SaveTitleSaveFaultGate { get; set; }
 
+    internal KioskProfileInsertRaceGate? ProfileInsertRaceGate { get; set; }
+
     public HttpClient CreateClientWithKey()
     {
         var client = CreateClient();
@@ -65,6 +67,7 @@ public class GameClubWebApplicationFactory : WebApplicationFactory<Program>
             services.RemoveAll<IHostedService>();
             services.AddHostedService<TestDeadPcSweepBackgroundService>();
             SaveTitleSecondSaveFaultInjectionRegistration.Register(services);
+            KioskProfileInsertRaceInjectionRegistration.Register(services);
         });
     }
 

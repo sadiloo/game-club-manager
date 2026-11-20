@@ -180,16 +180,14 @@ public sealed class KioskProfileService(AppDbContext db)
     public async Task<StationKioskProfileEntity> EnsureProfileAsync(string stationId, CancellationToken ct)
     {
         var id = StationIdNormalizer.Normalize(stationId);
-        var row = await db.StationKioskProfiles.FirstOrDefaultAsync(p => p.StationId == id, ct);
-        if (row is not null)
-        {
-            return row;
-        }
-
-        row = new StationKioskProfileEntity { StationId = id, NearEndMinutesJson = "[10,5,1]" };
-        db.StationKioskProfiles.Add(row);
-        await db.SaveChangesAsync(ct);
-        return row;
+        await db.Database.ExecuteSqlInterpolatedAsync(
+            $"""
+            INSERT INTO station_kiosk_profiles ("StationId", "IsTestMode", "NearEndMinutesJson")
+            VALUES ({id}, FALSE, '[10,5,1]')
+            ON CONFLICT ("StationId") DO NOTHING
+            """,
+            ct);
+        return await db.StationKioskProfiles.FirstAsync(p => p.StationId == id, ct);
     }
 
     public IReadOnlyList<int> LoadNearEndMinutes(StationKioskProfileEntity profile)
