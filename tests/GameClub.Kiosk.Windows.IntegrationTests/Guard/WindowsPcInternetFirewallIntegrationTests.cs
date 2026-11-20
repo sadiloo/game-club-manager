@@ -125,6 +125,41 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
         Assert.Contains("False", json, StringComparison.Ordinal);
     }
 
+    private static readonly string FirewallProfileSelectJsonScript =
+        "Select-Object Name,@{N='DefaultOutboundAction';E={$_.DefaultOutboundAction.ToString()}},@{N='AllowLocalFirewallRules';E={$_.AllowLocalFirewallRules.ToString()}} | ConvertTo-Json";
+
+    private static readonly string FirewallProfileEchoScript = """
+        Get-NetFirewallProfile -PolicyStore $store | ForEach-Object {
+          Write-Output "FW_STORE_ECHO store=$store profile=$($_.Name) DefaultOutboundAction=$($_.DefaultOutboundAction.ToString()) AllowLocalFirewallRules=$($_.AllowLocalFirewallRules.ToString())"
+        }
+        """;
+
+    private void EchoFirewallStoreProfiles(string policyStore)
+    {
+        var script = $"$store = '{policyStore}'; {FirewallProfileEchoScript}";
+        var echo = RunPowerShell(script);
+        Console.WriteLine(echo);
+        _output.WriteLine(echo);
+    }
+
+    private static void AssertPersistentStoreOffProfiles(string persistentJson)
+    {
+        Assert.Contains("Block", persistentJson, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("False", persistentJson, StringComparison.Ordinal);
+    }
+
+    private void AssertOffFirewallStoresAfterApply()
+    {
+        EchoFirewallStoreProfiles("ActiveStore");
+        EchoFirewallStoreProfiles("PersistentStore");
+        var activeJson = RunPowerShell(
+            $"Get-NetFirewallProfile -PolicyStore ActiveStore | {FirewallProfileSelectJsonScript}");
+        AssertLocalhostOffStoreActive(activeJson);
+        var persistentJson = RunPowerShell(
+            $"Get-NetFirewallProfile -PolicyStore PersistentStore | {FirewallProfileSelectJsonScript}");
+        AssertPersistentStoreOffProfiles(persistentJson);
+    }
+
     private static void AssertLocalhostProfilesNotBlock()
     {
         var profileJson = RunPowerShell(
@@ -179,10 +214,7 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
         {
             Assert.Equal("applied", applier.Apply(config, on: false));
             Thread.Sleep(1_500);
-            var script =
-                "Get-NetFirewallProfile -PolicyStore ActiveStore | Select-Object Name,@{N='DefaultOutboundAction';E={$_.DefaultOutboundAction.ToString()}},@{N='AllowLocalFirewallRules';E={$_.AllowLocalFirewallRules.ToString()}} | ConvertTo-Json";
-            var json = RunPowerShell(script);
-            AssertLocalhostOffStoreActive(json);
+            AssertOffFirewallStoresAfterApply();
             Assert.True(TryTcp("127.0.0.1", 80, 1_000), "loopback must remain reachable while OFF.");
             if (secondHostIps is { Length: > 0 })
             {
@@ -220,9 +252,7 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
         try
         {
             Assert.Equal("applied", applier.Apply(config, on: false));
-            var profileJson = RunPowerShell(
-                "Get-NetFirewallProfile -PolicyStore localhost | Select-Object Name,@{N='DefaultOutboundAction';E={$_.DefaultOutboundAction.ToString()}} | ConvertTo-Json");
-            Assert.Contains("Block", profileJson, StringComparison.OrdinalIgnoreCase);
+            AssertOffFirewallStoresAfterApply();
             AssertCheckpointOffRuleGroupPresent();
             if (hadIpv6Egress)
             {
@@ -418,7 +448,11 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
         {
             Assert.Equal("applied", applier.Apply(config, on: false));
             RunPowerShell(
-                "Get-NetFirewallRule -PolicyStore localhost -Group 'Checkpoint Internet Off' | Remove-NetFirewallRule -PolicyStore localhost");
+                "Get-NetFirewallRule -Group 'Checkpoint Internet Off' | Remove-NetFirewallRule");
+            var groupCountText = RunPowerShell(
+                "(Get-NetFirewallRule -Group 'Checkpoint Internet Off' -ErrorAction SilentlyContinue | Measure-Object).Count").Trim();
+            Assert.True(int.TryParse(groupCountText, out var groupCount) && groupCount == 0,
+                "precondition: Checkpoint Internet Off rule group must be empty after removal.");
             Assert.False(TryTcp("api.github.com", 443, 3_000), "precondition: blocked profiles without allow rules must drop server egress.");
 
             var result = applier.Apply(config, on: false);
@@ -500,9 +534,7 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
             var result = applier.Apply(config, on: false);
             Assert.Equal("applied", result);
             Assert.False(TryTcp("1.1.1.1", 443, 2_000));
-            var profileJson = RunPowerShell(
-                "Get-NetFirewallProfile -PolicyStore ActiveStore | Select-Object Name,@{N='DefaultOutboundAction';E={$_.DefaultOutboundAction.ToString()}} | ConvertTo-Json");
-            AssertLocalhostOffStoreActive(profileJson);
+            AssertOffFirewallStoresAfterApply();
             AssertCheckpointOffRuleGroupPresent();
         }
         finally
@@ -687,7 +719,7 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
         }
     }
 
-    private static string RunPowerShell(string script)
+    private static string RunPowerShell(string script, bool tolerateNonZeroExit = false)
     {
         var encoded = Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes(script));
         var psi = new ProcessStartInfo
@@ -696,11 +728,25 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
             Arguments = $"-NoProfile -NonInteractive -EncodedCommand {encoded}",
             UseShellExecute = false,
             RedirectStandardOutput = true,
+            RedirectStandardError = true,
             CreateNoWindow = true,
         };
         using var proc = Process.Start(psi) ?? throw new InvalidOperationException("powershell");
         proc.WaitForExit(60_000);
-        return proc.StandardOutput.ReadToEnd();
+        var stdout = proc.StandardOutput.ReadToEnd();
+        var stderr = proc.StandardError.ReadToEnd();
+        if (!string.IsNullOrWhiteSpace(stderr))
+        {
+            Console.WriteLine($"RunPowerShell stderr exit={proc.ExitCode}: {stderr}");
+        }
+
+        if (proc.ExitCode != 0 && !tolerateNonZeroExit)
+        {
+            throw new InvalidOperationException(
+                $"PowerShell exit {proc.ExitCode}. stderr: {stderr}. script: {script}");
+        }
+
+        return stdout;
     }
 }
 #endif

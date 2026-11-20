@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.IO.Pipes;
@@ -27,6 +28,8 @@ internal sealed class InternetPipeServer
     private volatile bool _reconcileTimedOutWithWorkAlive;
     private volatile bool _reconcileAbandoned;
     private Thread? _reconcileWorkThread;
+    private readonly object _pipeHandlerThreadsLock = new();
+    private readonly List<Thread> _pipeHandlerThreads = new();
 
     public InternetPipeServer(InternetGuardConfig config, IInternetFirewallApplier? firewall = null)
     {
@@ -98,6 +101,11 @@ internal sealed class InternetPipeServer
                         IsBackground = true,
                         Name = "CheckpointInternetPipeClient",
                     };
+                    lock (_pipeHandlerThreadsLock)
+                    {
+                        _pipeHandlerThreads.Add(handler);
+                    }
+
                     handler.Start();
                 }
                 catch
@@ -122,6 +130,40 @@ internal sealed class InternetPipeServer
             if (work is not null)
             {
                 JoinPipeBackgroundThread(work, "reconcile_work", 120_000);
+            }
+
+            JoinPipeClientHandlerThreads(TimeSpan.FromSeconds(10));
+        }
+    }
+
+    private void JoinPipeClientHandlerThreads(TimeSpan totalBudget)
+    {
+        Thread[] snapshot;
+        lock (_pipeHandlerThreadsLock)
+        {
+            snapshot = _pipeHandlerThreads.ToArray();
+        }
+
+        var deadline = DateTime.UtcNow.Add(totalBudget);
+        foreach (var thread in snapshot)
+        {
+            if (thread is null || !thread.IsAlive)
+            {
+                continue;
+            }
+
+            var remaining = deadline - DateTime.UtcNow;
+            if (remaining <= TimeSpan.Zero)
+            {
+                GuardWatchdogLog.Append(
+                    $"pipe_handler_join_timeout thread={thread.ManagedThreadId}");
+                continue;
+            }
+
+            if (!thread.Join(remaining))
+            {
+                GuardWatchdogLog.Append(
+                    $"pipe_handler_join_timeout thread={thread.ManagedThreadId}");
             }
         }
     }

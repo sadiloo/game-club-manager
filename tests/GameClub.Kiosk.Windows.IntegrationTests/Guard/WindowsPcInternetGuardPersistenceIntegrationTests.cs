@@ -379,7 +379,7 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
         }
     }
 
-    private static string RunPowerShell(string script)
+    private static string RunPowerShell(string script, bool tolerateNonZeroExit = false)
     {
         var encoded = Convert.ToBase64String(Encoding.Unicode.GetBytes(script));
         var psi = new ProcessStartInfo
@@ -388,11 +388,25 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
             Arguments = $"-NoProfile -NonInteractive -EncodedCommand {encoded}",
             UseShellExecute = false,
             RedirectStandardOutput = true,
+            RedirectStandardError = true,
             CreateNoWindow = true,
         };
         using var proc = Process.Start(psi) ?? throw new InvalidOperationException("powershell");
         proc.WaitForExit(60_000);
-        return proc.StandardOutput.ReadToEnd();
+        var stdout = proc.StandardOutput.ReadToEnd();
+        var stderr = proc.StandardError.ReadToEnd();
+        if (!string.IsNullOrWhiteSpace(stderr))
+        {
+            Console.WriteLine($"RunPowerShell stderr exit={proc.ExitCode}: {stderr}");
+        }
+
+        if (proc.ExitCode != 0 && !tolerateNonZeroExit)
+        {
+            throw new InvalidOperationException(
+                $"PowerShell exit {proc.ExitCode}. stderr: {stderr}. script: {script}");
+        }
+
+        return stdout;
     }
 }
 #endif

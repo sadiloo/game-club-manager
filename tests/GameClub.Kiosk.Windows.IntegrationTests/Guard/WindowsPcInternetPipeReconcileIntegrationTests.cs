@@ -546,6 +546,7 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
         var applier = new SlowApplyInternetFirewallApplier(applyOnDelayMs: 30_000);
         CancellationTokenSource cts = null;
         Thread pipeThread = null;
+        Task<string> applyTask = null;
         try
         {
             cts = new CancellationTokenSource();
@@ -562,26 +563,29 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
                 IssuedAtUtc = DateTime.UtcNow,
             });
 
-            var applyTask = Task.Run(async () => await new GuardInternetClient().ApplyAsync(onCommand));
+            applyTask = Task.Run(async () => await new GuardInternetClient().ApplyAsync(onCommand));
             await Task.Delay(400);
             var statusSw = Stopwatch.StartNew();
             var status = await new GuardInternetClient().GetStatusAsync(default);
             Assert.True(statusSw.ElapsedMilliseconds < 2_500, $"status blocked {statusSw.ElapsedMilliseconds}ms");
             Assert.False(string.IsNullOrWhiteSpace(status));
             Console.WriteLine($"internet_pipe_status_during_slow_apply elapsed_ms={statusSw.ElapsedMilliseconds} body={status}");
-
-            cts.Cancel();
-            try
-            {
-                applyTask.Wait(TimeSpan.FromSeconds(35));
-            }
-            catch
-            {
-                /* pipe closed */
-            }
         }
         finally
         {
+            applier.ReleaseApplyDelay();
+            if (applyTask != null)
+            {
+                try
+                {
+                    applyTask.Wait(TimeSpan.FromSeconds(45));
+                }
+                catch (AggregateException)
+                {
+                    /* client may fault if pipe stops early */
+                }
+            }
+
             StopInternetPipeServer(cts, pipeThread, TimeSpan.FromSeconds(5));
             new InternetFirewallApplier().RunResetScript();
         }
@@ -1045,7 +1049,7 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
         return writer.ToString();
     }
 
-    private static string RunPowerShell(string script)
+    private static string RunPowerShell(string script, bool tolerateNonZeroExit = false)
     {
         var psi = new ProcessStartInfo
         {
@@ -1053,11 +1057,25 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
             Arguments = $"-NoProfile -NonInteractive -EncodedCommand {Convert.ToBase64String(Encoding.Unicode.GetBytes(script))}",
             UseShellExecute = false,
             RedirectStandardOutput = true,
+            RedirectStandardError = true,
             CreateNoWindow = true,
         };
         using var proc = Process.Start(psi) ?? throw new InvalidOperationException("powershell");
         proc.WaitForExit(60_000);
-        return proc.StandardOutput.ReadToEnd();
+        var stdout = proc.StandardOutput.ReadToEnd();
+        var stderr = proc.StandardError.ReadToEnd();
+        if (!string.IsNullOrWhiteSpace(stderr))
+        {
+            Console.WriteLine($"RunPowerShell stderr exit={proc.ExitCode}: {stderr}");
+        }
+
+        if (proc.ExitCode != 0 && !tolerateNonZeroExit)
+        {
+            throw new InvalidOperationException(
+                $"PowerShell exit {proc.ExitCode}. stderr: {stderr}. script: {script}");
+        }
+
+        return stdout;
     }
 
     private static void TryDeleteState()

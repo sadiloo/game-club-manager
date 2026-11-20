@@ -9,14 +9,17 @@ internal sealed class SlowApplyInternetFirewallApplier : IInternetFirewallApplie
 {
     private readonly InternetFirewallApplier _inner = new();
     private readonly int _applyOnDelayMs;
+    private readonly ManualResetEventSlim _releaseDelay = new(false);
 
     internal SlowApplyInternetFirewallApplier(int applyOnDelayMs) => _applyOnDelayMs = applyOnDelayMs;
+
+    internal void ReleaseApplyDelay() => _releaseDelay.Set();
 
     public string Apply(InternetGuardConfig config, bool on)
     {
         if (on && _applyOnDelayMs > 0)
         {
-            Thread.Sleep(_applyOnDelayMs);
+            _releaseDelay.Wait(_applyOnDelayMs);
         }
 
         return _inner.Apply(config, on);
