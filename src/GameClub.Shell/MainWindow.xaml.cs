@@ -240,18 +240,6 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (ShellSeams.AllowInternalCrashNavigationDepth > 0
-            && args.Uri.StartsWith("edge://", StringComparison.OrdinalIgnoreCase))
-        {
-            return;
-        }
-
-        if (ShellSeams.AllowInternalCrashNavigationDepth > 0
-            && args.Uri.StartsWith("chrome://", StringComparison.OrdinalIgnoreCase))
-        {
-            return;
-        }
-
         if (!PanelNavigationOrigin.IsAllowedPanelNavigationUri(args.Uri))
         {
             args.Cancel = true;
@@ -1004,46 +992,6 @@ public partial class MainWindow : Window
         }
         catch (InvalidOperationException)
         {
-        }
-    }
-
-    internal async Task TriggerRendererCrashForHarnessAsync()
-    {
-        if (!_webViewReady)
-        {
-            throw new InvalidOperationException("Panel WebView2 is not ready");
-        }
-
-        var core = PanelWebView.CoreWebView2
-            ?? throw new InvalidOperationException("Panel WebView2 core is null");
-
-        var devtoolsWereEnabled = core.Settings.AreDevToolsEnabled;
-        core.Settings.AreDevToolsEnabled = true;
-        try
-        {
-            try
-            {
-                await core.CallDevToolsProtocolMethodAsync("Page.enable", "{}");
-                await core.CallDevToolsProtocolMethodAsync("Page.crash", "{}");
-                return;
-            }
-            catch (ArgumentException)
-            {
-            }
-
-            ShellSeams.AllowInternalCrashNavigationDepth++;
-            try
-            {
-                core.Navigate("edge://kill");
-            }
-            finally
-            {
-                ShellSeams.AllowInternalCrashNavigationDepth--;
-            }
-        }
-        finally
-        {
-            core.Settings.AreDevToolsEnabled = devtoolsWereEnabled;
         }
     }
 

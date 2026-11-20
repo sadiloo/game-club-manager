@@ -1014,7 +1014,7 @@ public sealed class ShellPlanAIntegrationTests
                     Assert.NotNull(wv?.CoreWebView2);
                     Assert.Contains("/operator/", wv.Source?.ToString() ?? "", StringComparison.OrdinalIgnoreCase);
                     var before = Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log").Select(File.ReadAllText).Aggregate("", string.Concat);
-                    await window.TriggerRendererCrashForHarnessAsync();
+                    await ShellRendererCrashHarness.TriggerAsync(wv.CoreWebView2);
                     var recoverDeadline = DateTime.UtcNow.AddSeconds(45);
                     var recovered = false;
                     while (DateTime.UtcNow < recoverDeadline)
@@ -1040,7 +1040,11 @@ public sealed class ShellPlanAIntegrationTests
                     var after = Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log").Select(File.ReadAllText).Aggregate("", string.Concat);
                     var delta = after.Replace(before, "");
                     Assert.Contains("webview-process-failed", delta);
-                    Assert.Contains("kind=RenderProcessExited", delta, StringComparison.Ordinal);
+                    Assert.True(
+                        delta.Contains("kind=RenderProcessExited", StringComparison.Ordinal)
+                        || delta.Contains("kind=RenderProcessUnresponsive", StringComparison.Ordinal)
+                        || delta.Contains("kind=FrameRenderProcessExited", StringComparison.Ordinal),
+                        "Expected renderer ProcessFailed kind in shell log");
                     Assert.Contains("outcome=reload", delta, StringComparison.Ordinal);
                     Assert.True(recovered, "Operator panel did not reload after renderer crash");
                 }

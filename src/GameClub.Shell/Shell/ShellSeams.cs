@@ -250,9 +250,6 @@ public static class ShellSeams
 
     public static string? PanelNavigationUrlOverride { get; set; }
 
-    /// <summary>Harness-only: allows one in-flight navigation to edge://kill or chrome://crash for renderer crash tests.</summary>
-    internal static int AllowInternalCrashNavigationDepth { get; set; }
-
     public static string ResolvePanelUrl() => PanelNavigationUrlOverride ?? ShellPaths.PanelUrl;
 
     public static DialogResult ShowMessageBox(
