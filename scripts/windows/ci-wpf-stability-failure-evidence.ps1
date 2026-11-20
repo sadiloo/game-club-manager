@@ -41,13 +41,14 @@ LIMIT 20;
     if (-not [string]::IsNullOrWhiteSpace($LoginName)) {
         $loginEsc = $LoginName.Replace("'", "''")
         Write-Host "--- session-start/bind: customer + credential for login ---"
-        $credSql = "SELECT * FROM customer_credentials WHERE `"LoginName`" = '$loginEsc';"
+        $loginNorm = $LoginName.ToLowerInvariant().Replace("'", "''")
+        $credSql = "SELECT * FROM customer_credentials WHERE `"LoginNameNormalized`" = '$loginNorm' OR `"LoginNameDisplay`" = '$loginEsc';"
         & $psql -h 127.0.0.1 -U postgres -d gameclub_test -c $credSql 2>&1 | ForEach-Object { Write-Host $_ }
         $memberSql = @"
 SELECT m.*
 FROM customer_members m
 INNER JOIN customer_credentials c ON c."CustomerId" = m."CustomerId"
-WHERE c."LoginName" = '$loginEsc';
+WHERE c."LoginNameNormalized" = '$loginNorm' OR c."LoginNameDisplay" = '$loginEsc';
 "@
         Write-Host "--- wallet (customer_members) for login ---"
         & $psql -h 127.0.0.1 -U postgres -d gameclub_test -c $memberSql 2>&1 | ForEach-Object { Write-Host $_ }
@@ -55,7 +56,10 @@ WHERE c."LoginName" = '$loginEsc';
 SELECT s.*, st."OperationalState" AS "StationOperationalState"
 FROM sessions s
 LEFT JOIN stations st ON st."Id" = s."StationId"
-WHERE s."CustomerId" = (SELECT "CustomerId" FROM customer_credentials WHERE "LoginName" = '$loginEsc' LIMIT 1)
+WHERE s."CustomerId" = (
+  SELECT "CustomerId" FROM customer_credentials
+  WHERE "LoginNameNormalized" = '$loginNorm' OR "LoginNameDisplay" = '$loginEsc'
+  LIMIT 1)
 ORDER BY s."StartedAtUtc" DESC NULLS LAST
 LIMIT 20;
 "@
