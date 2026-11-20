@@ -167,8 +167,7 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
         }
         finally
         {
-            cts?.Cancel();
-            pipeThread?.Join(TimeSpan.FromSeconds(5));
+            InternetPipeServerTestTeardown.Stop(cts, pipeThread, TimeSpan.FromSeconds(5));
             applier.RunResetScript();
             TryDelete(InternetGuardPaths.StatePath);
             Environment.SetEnvironmentVariable("CHECKPOINT_INTERNET_DRIFT_INTERVAL_MS", prior);
@@ -281,8 +280,7 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
         }
         finally
         {
-            cts?.Cancel();
-            pipeThread?.Join(TimeSpan.FromSeconds(5));
+            InternetPipeServerTestTeardown.Stop(cts, pipeThread, TimeSpan.FromSeconds(5));
             applier.RunResetScript();
             TryDelete(InternetGuardPaths.ConfigPath);
             TryDelete(InternetGuardPaths.StatePath);

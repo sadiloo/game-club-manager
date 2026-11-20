@@ -274,8 +274,7 @@ public sealed class WindowsPcInternetApplyFailureLiveTests
         }
         finally
         {
-            pipeCts.Cancel();
-            pipe?.Join(5_000);
+            InternetPipeServerTestTeardown.Stop(pipeCts, pipe, TimeSpan.FromSeconds(5));
             if (runtime is not null)
             {
                 await runtime.DisposeAsync();

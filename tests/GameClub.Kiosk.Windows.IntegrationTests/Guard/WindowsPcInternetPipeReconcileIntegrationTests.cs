@@ -203,27 +203,38 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
         Environment.SetEnvironmentVariable("CHECKPOINT_INTERNET_PIPE_IO_MS", "800");
         NamedPipeServerStream acceptPipe = null;
         Thread acceptThread = null;
-        var connected = new ManualResetEventSlim(false);
+        var ready = new ManualResetEventSlim(false);
         try
         {
             acceptThread = new Thread(() =>
             {
-                acceptPipe = new NamedPipeServerStream(
-                    GuardInternetClient.PipeName,
-                    PipeDirection.InOut,
-                    1,
-                    PipeTransmissionMode.Byte,
-                    PipeOptions.Asynchronous);
-                acceptPipe.WaitForConnection();
-                connected.Set();
-                Thread.Sleep(Timeout.Infinite);
+                try
+                {
+                    acceptPipe = new NamedPipeServerStream(
+                        GuardInternetClient.PipeName,
+                        PipeDirection.InOut,
+                        1,
+                        PipeTransmissionMode.Byte,
+                        PipeOptions.Asynchronous);
+                    ready.Set();
+                    acceptPipe.WaitForConnection();
+                    Thread.Sleep(Timeout.Infinite);
+                }
+                catch (IOException)
+                {
+                    /* stub teardown */
+                }
+                catch (ObjectDisposedException)
+                {
+                    /* stub teardown */
+                }
             })
             {
                 IsBackground = true,
                 Name = "StubNeverReadPipeServer",
             };
             acceptThread.Start();
-            Assert.True(connected.Wait(TimeSpan.FromSeconds(5)), "stub pipe never accepted");
+            Assert.True(ready.Wait(TimeSpan.FromSeconds(5)), "stub pipe server did not become ready");
 
             var sw = Stopwatch.StartNew();
             var ex = await Assert.ThrowsAsync<TimeoutException>(async () =>
@@ -244,7 +255,10 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
                 /* stub teardown */
             }
 
-            acceptThread?.Join(TimeSpan.FromSeconds(2));
+            if (acceptThread is not null)
+            {
+                Assert.True(acceptThread.Join(TimeSpan.FromSeconds(5)), "acceptThread did not stop");
+            }
         }
     }
 
@@ -327,9 +341,21 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
             cts = new CancellationTokenSource();
             pipeThread = new Thread(() => new InternetPipeServer(config).Run(cts.Token)) { IsBackground = true };
             pipeThread.Start();
-            await Task.Delay(600);
 
-            var status = await new GuardInternetClient().GetStatusAsync(default);
+            var reconcileDeadline = DateTime.UtcNow.AddSeconds(5);
+            string status = null;
+            while (DateTime.UtcNow < reconcileDeadline)
+            {
+                status = await new GuardInternetClient().GetStatusAsync(default);
+                if (status.Contains("reconcile_timeout", StringComparison.OrdinalIgnoreCase))
+                {
+                    break;
+                }
+
+                await Task.Delay(200);
+            }
+
+            Assert.NotNull(status);
             Assert.Contains("reconcile_timeout", status, StringComparison.OrdinalIgnoreCase);
 
             var callsAtAbandon = InternetPowerShellRunner.ReconcileRunCallCountAtAbandon;
@@ -346,9 +372,6 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
             var applyBody = await new GuardInternetClient().ApplyAsync(onCommand);
             Assert.Contains("applied", applyBody, StringComparison.OrdinalIgnoreCase);
 
-            hangRelease.Set();
-            pipeThread.Join(TimeSpan.FromSeconds(10));
-
             Assert.Equal(callsAtAbandon, InternetPowerShellRunner.ReconcileRunCallCount);
             Console.WriteLine(
                 $"reconcile_abandon_runner_calls_stable at_abandon={callsAtAbandon} final={InternetPowerShellRunner.ReconcileRunCallCount}");
@@ -356,8 +379,9 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
         finally
         {
             InternetGuardReconcileTestSeams.HangBeforeLocalhostCleanup = null;
-            hangRelease.Dispose();
+            hangRelease.Set();
             StopInternetPipeServer(cts, pipeThread, TimeSpan.FromSeconds(5));
+            hangRelease.Dispose();
             Environment.SetEnvironmentVariable("CHECKPOINT_INTERNET_RECONCILE_TIMEOUT_MS", priorBudget);
             new InternetFirewallApplier().RunResetScript();
             TryDeleteState();
@@ -736,28 +760,8 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
         Assert.Fail($"status still reconciling after {budget.TotalSeconds:0}s");
     }
 
-    private static void TryUnblockInternetPipeServer()
-    {
-        try
-        {
-            using var unblock = new NamedPipeClientStream(".", GuardInternetClient.PipeName, PipeDirection.InOut);
-            unblock.Connect(1_000);
-        }
-        catch (Exception)
-        {
-            /* listener already stopped or between accept iterations */
-        }
-    }
-
     private static void StopInternetPipeServer(CancellationTokenSource cts, Thread pipeThread, TimeSpan joinBudget)
-    {
-        cts?.Cancel();
-        TryUnblockInternetPipeServer();
-        if (pipeThread is not null)
-        {
-            Assert.True(pipeThread.Join(joinBudget), "InternetPipeServer thread did not stop");
-        }
-    }
+        => InternetPipeServerTestTeardown.Stop(cts, pipeThread, joinBudget);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool PeekNamedPipe(
