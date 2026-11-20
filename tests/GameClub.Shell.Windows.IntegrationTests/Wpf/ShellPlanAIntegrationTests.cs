@@ -979,6 +979,187 @@ public sealed class ShellPlanAIntegrationTests
     }
 
     [Fact]
+    public void shell_running_panel_recovers_exactly_once_when_probe_turns_healthy()
+    {
+        if (!WebView2RuntimePresent()) throw new InvalidOperationException("WebView2 runtime required");
+        var root = AllocateShellDataRoot();
+        try
+        {
+            _fixture.RunAsync(async () =>
+            {
+                MainWindow? window = null;
+                try
+                {
+                    FakeShellSeams.Install();
+                    FakeShellSeams.Http.Answers = true;
+                    FakeShellSeams.Http.OperatorPageOk = false;
+                    FakeShellSeams.Service.Status = ServiceControllerStatus.Running;
+
+                    window = new MainWindow();
+                    window.Show();
+                    var wv = await WaitForPanelWebViewAsync(window, TimeSpan.FromSeconds(45));
+                    await WaitForPanelUnavailableOfflineAsync(wv, TimeSpan.FromSeconds(60));
+
+                    ShellFileLog.Write("shell-probe-recovery-baseline");
+                    var recoveryBaseline = Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log")
+                        .Select(File.ReadAllText)
+                        .Aggregate("", string.Concat);
+
+                    FakeShellSeams.Http.OperatorPageOk = true;
+                    var panelDeadline = DateTime.UtcNow.AddSeconds(75);
+                    var panelOk = false;
+                    while (DateTime.UtcNow < panelDeadline)
+                    {
+                        await Task.Delay(500);
+                        wv = window.FindName("PanelWebView") as Microsoft.Web.WebView2.Wpf.WebView2;
+                        if (wv?.CoreWebView2 is null)
+                        {
+                            continue;
+                        }
+
+                        var loc = UnquoteWebViewScriptString(
+                            await wv.CoreWebView2.ExecuteScriptAsync(
+                                "location.pathname + '|' + document.readyState"));
+                        if (loc.StartsWith("/operator/", StringComparison.OrdinalIgnoreCase)
+                            && loc.EndsWith("|complete", StringComparison.Ordinal))
+                        {
+                            panelOk = true;
+                            break;
+                        }
+                    }
+
+                    Assert.True(panelOk, "Operator panel did not load after probe turned healthy");
+                    var recoveryLog = Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log")
+                        .Select(File.ReadAllText)
+                        .Aggregate("", string.Concat);
+                    var recoveryDelta = recoveryBaseline.Length == 0
+                        ? recoveryLog
+                        : recoveryLog.Replace(recoveryBaseline, "");
+                    var panelOkCount = recoveryDelta.Split('\n')
+                        .Count(l => l.Contains("nav-completed-panel-ok", StringComparison.Ordinal));
+                    var presentOfflineCount = recoveryDelta.Split('\n')
+                        .Count(l => l.Contains("panel-navigate caller=PresentOffline", StringComparison.Ordinal));
+                    Assert.Equal(1, panelOkCount);
+                    Assert.InRange(presentOfflineCount, 0, 0);
+                }
+                finally
+                {
+                    FakeShellSeams.RestoreProduction();
+                    window?.Close();
+                }
+            }, TimeSpan.FromSeconds(150));
+        }
+        finally
+        {
+            CleanupShellDataRoot(root);
+        }
+    }
+
+    [Fact]
+    public void shell_running_panel_transient_probe_ok_then_fail_avoids_offline_flash_loop()
+    {
+        if (!WebView2RuntimePresent()) throw new InvalidOperationException("WebView2 runtime required");
+        var root = AllocateShellDataRoot();
+        try
+        {
+            _fixture.RunAsync(async () =>
+            {
+                MainWindow? window = null;
+                try
+                {
+                    FakeShellSeams.Install();
+                    FakeShellSeams.Http.Answers = true;
+                    FakeShellSeams.Http.OperatorPageOk = false;
+                    FakeShellSeams.Service.Status = ServiceControllerStatus.Running;
+
+                    window = new MainWindow();
+                    window.Show();
+                    var wv = await WaitForPanelWebViewAsync(window, TimeSpan.FromSeconds(45));
+                    await WaitForPanelUnavailableOfflineAsync(wv, TimeSpan.FromSeconds(60));
+
+                    FakeShellSeams.Http.OperatorPageOk = true;
+                    var recoverDeadline = DateTime.UtcNow.AddSeconds(60);
+                    var recovered = false;
+                    while (DateTime.UtcNow < recoverDeadline)
+                    {
+                        await Task.Delay(300);
+                        wv = window.FindName("PanelWebView") as Microsoft.Web.WebView2.Wpf.WebView2;
+                        if (wv?.CoreWebView2 is null)
+                        {
+                            continue;
+                        }
+
+                        var loc = UnquoteWebViewScriptString(
+                            await wv.CoreWebView2.ExecuteScriptAsync(
+                                "location.pathname + '|' + document.readyState"));
+                        if (loc.StartsWith("/operator/", StringComparison.OrdinalIgnoreCase)
+                            && loc.EndsWith("|complete", StringComparison.Ordinal))
+                        {
+                            recovered = true;
+                            break;
+                        }
+                    }
+
+                    Assert.True(recovered, "Expected one panel recovery before re-failing probe");
+
+                    ShellFileLog.Write("shell-probe-flap-baseline");
+                    var flapBaseline = Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log")
+                        .Select(File.ReadAllText)
+                        .Aggregate("", string.Concat);
+                    FakeShellSeams.Http.OperatorPageOk = false;
+
+                    var offlineSamples = 0;
+                    var totalSamples = 0;
+                    var flapDeadline = DateTime.UtcNow.AddSeconds(45);
+                    while (DateTime.UtcNow < flapDeadline)
+                    {
+                        await Task.Delay(500);
+                        totalSamples++;
+                        Assert.Equal(ShellServerVisualState.Running, window.PollerVisualStateForTests);
+                        wv = window.FindName("PanelWebView") as Microsoft.Web.WebView2.Wpf.WebView2;
+                        if (wv?.CoreWebView2 is null)
+                        {
+                            continue;
+                        }
+
+                        var sample = UnquoteWebViewScriptString(
+                            await wv.CoreWebView2.ExecuteScriptAsync(
+                                "JSON.stringify({protocol: location.protocol, offline: document.documentElement.getAttribute('data-shell-offline-page')})"));
+                        using var doc = JsonDocument.Parse(sample);
+                        if (doc.RootElement.GetProperty("protocol").GetString() == "data:"
+                            && doc.RootElement.GetProperty("offline").GetString() == "1")
+                        {
+                            offlineSamples++;
+                        }
+                    }
+
+                    var flapLog = Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log")
+                        .Select(File.ReadAllText)
+                        .Aggregate("", string.Concat);
+                    var flapDelta = flapBaseline.Length == 0
+                        ? flapLog
+                        : flapLog.Replace(flapBaseline, "");
+                    var presentOfflineAfterFlap = flapDelta.Split('\n')
+                        .Count(l => l.Contains("panel-navigate caller=PresentOffline", StringComparison.Ordinal));
+
+                    Assert.True(totalSamples >= 10, "Not enough UI samples during flap measure window");
+                    Assert.True(offlineSamples >= (int)(totalSamples * 0.95), $"offline visible in {offlineSamples}/{totalSamples} samples");
+                    Assert.InRange(presentOfflineAfterFlap, 0, 1);
+                }
+                finally
+                {
+                    FakeShellSeams.RestoreProduction();
+                    window?.Close();
+                }
+            }, TimeSpan.FromSeconds(180));
+        }
+        finally
+        {
+            CleanupShellDataRoot(root);
+        }
+    }
+
+    [Fact]
     public void shell_renderer_process_crash_reloads_operator_panel()
     {
         FakeShellSeams.RestoreProduction();
@@ -1304,6 +1485,49 @@ public sealed class ShellPlanAIntegrationTests
         {
             CleanupShellDataRoot(root);
         }
+    }
+
+    private static async Task<Microsoft.Web.WebView2.Wpf.WebView2> WaitForPanelWebViewAsync(
+        MainWindow window,
+        TimeSpan timeout)
+    {
+        Microsoft.Web.WebView2.Wpf.WebView2? wv = null;
+        var deadline = DateTime.UtcNow.Add(timeout);
+        while (DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(200);
+            wv = window.FindName("PanelWebView") as Microsoft.Web.WebView2.Wpf.WebView2;
+            if (wv?.CoreWebView2 is not null)
+            {
+                return wv;
+            }
+        }
+
+        throw new InvalidOperationException("Panel WebView2 did not become ready");
+    }
+
+    private static async Task WaitForPanelUnavailableOfflineAsync(
+        Microsoft.Web.WebView2.Wpf.WebView2 wv,
+        TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow.Add(timeout);
+        while (DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(300);
+            var sample = UnquoteWebViewScriptString(
+                await wv.CoreWebView2.ExecuteScriptAsync(
+                    "JSON.stringify({protocol: location.protocol, offline: document.documentElement.getAttribute('data-shell-offline-page'), title: (document.getElementById('title') || {}).innerText || ''})"));
+            using var doc = JsonDocument.Parse(sample);
+            if (doc.RootElement.GetProperty("protocol").GetString() == "data:"
+                && doc.RootElement.GetProperty("offline").GetString() == "1"
+                && (doc.RootElement.GetProperty("title").GetString() ?? "")
+                    .Contains("پنل در دسترس نیست", StringComparison.Ordinal))
+            {
+                return;
+            }
+        }
+
+        throw new InvalidOperationException("panel-unavailable offline page did not appear");
     }
 
     private static bool WebView2RuntimePresent()
