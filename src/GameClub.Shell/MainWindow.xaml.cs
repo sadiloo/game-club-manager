@@ -396,18 +396,11 @@ public partial class MainWindow : Window
             else
             {
                 _offlineShown = false;
-                if (ShouldMaintainPanelUnavailableOffline())
-                {
-                    LogOfflineTrace(
-                        "nav-completed-offline-data-retry",
-                        $"id={e.NavigationId} IsSuccess={e.IsSuccess} webError={e.WebErrorStatus} onPanelOrigin={IsActiveOnPanelOrigin()}");
-                    _ = PresentOfflinePageAsync(_currentOfflineState ?? "panel-unavailable");
-                }
             }
 
             LogOfflineTrace(
                 "nav-completed-offline-data",
-                $"id={e.NavigationId} IsSuccess={e.IsSuccess} webError={e.WebErrorStatus} offlineState={_currentOfflineState} offlineShown={_offlineShown} onPanelOrigin={IsActiveOnPanelOrigin()}");
+                $"id={e.NavigationId} IsSuccess={e.IsSuccess} webError={e.WebErrorStatus} offlineState={_currentOfflineState} offlineShown={_offlineShown} onPanelOrigin={IsActiveOnPanelOrigin()} pending={_panelNavigationPending.PendingCount}");
             return;
         }
 
@@ -488,6 +481,7 @@ public partial class MainWindow : Window
         _panelNavigated = false;
         if (!_offlineShown)
         {
+            TryStopInFlightPanelNavigation();
             _ = PresentOfflinePageAsync("panel-unavailable");
         }
         else
@@ -644,6 +638,7 @@ public partial class MainWindow : Window
         _panelNavigated = false;
         if (!_offlineShown)
         {
+            TryStopInFlightPanelNavigation();
             _ = PresentOfflinePageAsync("panel-unavailable");
         }
     }
@@ -1185,7 +1180,11 @@ public partial class MainWindow : Window
         _lastNavigationUri = dataUri;
         LogNavigateToString(caller);
         LogRaceNav($"{caller}.NavigateData");
-        TryStopInFlightPanelNavigation();
+        if (_panelNavigationPending.PendingCount > 0)
+        {
+            TryStopInFlightPanelNavigation();
+        }
+
         _allowOfflineDataNav = true;
         try
         {
@@ -1219,17 +1218,6 @@ public partial class MainWindow : Window
         }
 
         return !IsActiveOnPanelOrigin();
-    }
-
-    private bool ShouldMaintainPanelUnavailableOffline()
-    {
-        if (_poller?.Current.VisualState != ShellServerVisualState.Running)
-        {
-            return false;
-        }
-
-        return _runningPanelLoadFailing
-            || string.Equals(_currentOfflineState, "panel-unavailable", StringComparison.Ordinal);
     }
 
     private void TryStopInFlightPanelNavigation()
