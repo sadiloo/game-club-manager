@@ -19,18 +19,39 @@ $expectedInno = [Version]"6.7.1"
 if (-not (Get-Command iscc.exe -ErrorAction SilentlyContinue)) {
   throw "ci-installer: iscc.exe not on PATH; Inno Setup required."
 }
-$innoVersionLine = & iscc.exe /? 2>&1 | Select-String -Pattern "Compiler engine version: Inno Setup" | Select-Object -First 1
-if (-not $innoVersionLine) {
-  throw "ci-installer: could not read Inno Setup compiler version from iscc /?"
+$isccPath = (Get-Command iscc.exe).Source
+$rawIsccHelp = & $isccPath /? 2>&1 | Out-String
+$fileVersionText = $null
+$bannerVersionText = $null
+if (Test-Path -LiteralPath $isccPath) {
+  $fileVersionText = (Get-Item -LiteralPath $isccPath).VersionInfo.FileVersion
 }
-if ($innoVersionLine -notmatch "Inno Setup\s+([\d.]+)") {
-  throw "ci-installer: unexpected iscc version line: $innoVersionLine"
+if ($rawIsccHelp -match "(?i)Inno\s+Setup\s+([\d.]+)") {
+  $bannerVersionText = $Matches[1]
 }
-$innoVersion = [Version]$Matches[1]
-if ($innoVersion -ne $expectedInno) {
-  throw "ci-installer: expected Inno Setup $expectedInno on PATH; found $innoVersion"
+$resolvedInno = $null
+foreach ($candidate in @($fileVersionText, $bannerVersionText)) {
+  if ([string]::IsNullOrWhiteSpace($candidate)) {
+    continue
+  }
+
+  try {
+    $parsed = [Version]$candidate
+    $normalized = [Version]"$($parsed.Major).$($parsed.Minor).$($parsed.Build)"
+    $resolvedInno = $normalized
+    break
+  }
+  catch {
+    continue
+  }
 }
-Write-Host "ci-installer: Inno $innoVersion; compile server and kiosk iss"
+if ($null -eq $resolvedInno) {
+  throw "ci-installer: could not read Inno Setup compiler version from iscc (path=$isccPath; FileVersion=$fileVersionText; iscc /? output:$rawIsccHelp)"
+}
+if ($resolvedInno.Major -ne $expectedInno.Major -or $resolvedInno.Minor -ne $expectedInno.Minor -or $resolvedInno.Build -ne $expectedInno.Build) {
+  throw "ci-installer: expected Inno Setup $expectedInno on PATH; resolved $resolvedInno (FileVersion=$fileVersionText; banner=$bannerVersionText; raw iscc /?:$rawIsccHelp)"
+}
+Write-Host "ci-installer: Inno $resolvedInno; compile server and kiosk iss"
 $issTargets = @(
   (Join-Path $root "installer/server/CheckpointServer.iss"),
   (Join-Path $root "installer/kiosk/CheckpointKiosk.iss")

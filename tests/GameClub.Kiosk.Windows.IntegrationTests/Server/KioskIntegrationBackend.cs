@@ -127,6 +127,48 @@ internal sealed class KioskIntegrationBackend
         return (int)(await cmd.ExecuteScalarAsync() ?? 0);
     }
 
+    public async Task<IReadOnlyList<(long Id, DateTime ReceivedUtc)>> ListHeartbeatRowsForDeviceAsync(Guid deviceId, int limit = 12)
+    {
+        if (limit <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(limit));
+        }
+
+        if (_factory is not null)
+        {
+            await using var scope = _factory.Services.CreateAsyncScope();
+            var rows = await scope.ServiceProvider.GetRequiredService<AppDbContext>().KioskHeartbeats
+                .Where(h => h.DeviceId == deviceId)
+                .OrderByDescending(h => h.ReceivedUtc)
+                .Take(limit)
+                .Select(h => new { h.Id, h.ReceivedUtc })
+                .ToListAsync();
+            return rows.Select(r => (r.Id, r.ReceivedUtc)).ToList();
+        }
+
+        await using var conn = new NpgsqlConnection(ResolveConnectionString());
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            """
+            SELECT "Id", "ReceivedUtc"
+            FROM kiosk_heartbeats
+            WHERE "DeviceId" = @id
+            ORDER BY "ReceivedUtc" DESC
+            LIMIT @limit
+            """,
+            conn);
+        cmd.Parameters.AddWithValue("id", deviceId);
+        cmd.Parameters.AddWithValue("limit", limit);
+        await using var reader = await cmd.ExecuteReaderAsync();
+        var results = new List<(long Id, DateTime ReceivedUtc)>();
+        while (await reader.ReadAsync())
+        {
+            results.Add((reader.GetInt64(0), reader.GetDateTime(1)));
+        }
+
+        return results;
+    }
+
     public async Task<DateTime?> DeviceLastSeenUtcAsync(Guid deviceId)
     {
         if (_factory is not null)
