@@ -11,10 +11,19 @@ Write-Host "=== WPF stability failure evidence (post-failure only) ==="
 $psql = 'C:\Program Files\PostgreSQL\16\bin\psql.exe'
 if (Test-Path $psql) {
     $env:PGPASSWORD = 'postgres'
-    Write-Host "--- stations (id, name, group_id) ---"
-    & $psql -h 127.0.0.1 -U postgres -d gameclub_test -c "SELECT id, name, group_id FROM stations ORDER BY id LIMIT 50;" 2>&1 | ForEach-Object { Write-Host $_ }
-    Write-Host "--- sessions (id, station_id, state, customer_id, started_at) ---"
-    & $psql -h 127.0.0.1 -U postgres -d gameclub_test -c "SELECT id, station_id, state, customer_id, started_at FROM sessions ORDER BY started_at DESC NULLS LAST LIMIT 20;" 2>&1 | ForEach-Object { Write-Host $_ }
+    Write-Host "--- stations (all columns) ---"
+    & $psql -h 127.0.0.1 -U postgres -d gameclub_test -c 'SELECT * FROM stations ORDER BY "Id";' 2>&1 | ForEach-Object { Write-Host $_ }
+    Write-Host "--- last 20 sessions with station join (all session + station columns) ---"
+    $sessionJoinSql = @'
+SELECT s.*, st."Id" AS "StationJoin_Id", st."Name" AS "StationJoin_Name", st."GroupId" AS "StationJoin_GroupId",
+       st."DefaultPlayMode" AS "StationJoin_DefaultPlayMode", st."DefaultPlayerCount" AS "StationJoin_DefaultPlayerCount",
+       st."IsActive" AS "StationJoin_IsActive", st."OperationalState" AS "StationJoin_OperationalState"
+FROM sessions s
+LEFT JOIN stations st ON st."Id" = s."StationId"
+ORDER BY s."StartedAtUtc" DESC NULLS LAST
+LIMIT 20;
+'@
+    & $psql -h 127.0.0.1 -U postgres -d gameclub_test -c $sessionJoinSql 2>&1 | ForEach-Object { Write-Host $_ }
 } else {
     Write-Host "psql not found; skipping DB snapshot"
 }
@@ -32,7 +41,6 @@ Get-ChildItem -Path $logDir -Filter "wpf-stability-*.log" -File -ErrorAction Sil
     Get-Content $_.FullName -Tail 300 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
 }
 
-$trxGlob = Join-Path $artifactDir "**/*.trx"
 Get-ChildItem -Path $artifactDir -Recurse -Filter "*.trx" -File -ErrorAction SilentlyContinue | ForEach-Object {
     if ($_.Name -notmatch "wpf|Wpf|remaining_time") { return }
     Write-Host ("--- failed output: {0} ---" -f $_.FullName)
