@@ -87,6 +87,67 @@ public sealed class InpageFormsOperatorMoneyValidationTests(GameClubWebApplicati
     }
 
     [Fact]
+    public async Task opening_balance_rejects_string_real_toman_json()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var mgr = await factory.CreateOperatorClientAsync("manager", "1234");
+        var customerId = await CreateCustomerAsync(mgr);
+        var res = await mgr.PostAsync(
+            $"/api/operator/members/customers/{customerId}/opening-balance",
+            new StringContent("{\"realToman\":\"100\"}", Encoding.UTF8, "application/json"));
+        Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
+        AssertPersianMoney400(await ReadJsonAsync(res), "invalid_body");
+    }
+
+    [Fact]
+    public async Task correct_top_up_rejects_string_amount_json()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var mgr = await factory.CreateOperatorClientAsync("manager", "1234");
+        var customerId = await CreateCustomerAsync(mgr);
+        var topUp = await mgr.PostAsJsonAsync(
+            $"/api/operator/members/customers/{customerId}/wallet/top-up",
+            new { method = "Cash", amountToman = 1000L, giftToman = 0L, commandId = Guid.NewGuid() });
+        topUp.EnsureSuccessStatusCode();
+        var groupId = Guid.NewGuid();
+        // correction endpoint uses topUpGroupId route; use invalid body only — expect invalid_body before not_found
+        var res = await mgr.PostAsync(
+            $"/api/operator/members/wallet/top-ups/{groupId}/correct",
+            new StringContent("{\"newAmountToman\":\"100\",\"newGiftToman\":0,\"description\":\"x\"}", Encoding.UTF8, "application/json"));
+        Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
+        AssertPersianMoney400(await ReadJsonAsync(res), "invalid_body");
+    }
+
+    [Fact]
+    public async Task operator_gift_cap_rejects_string_max_toman_json()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var mgr = await factory.CreateOperatorClientAsync("manager", "1234");
+        var res = await mgr.PutAsync(
+            "/api/operator/members/settings/operator-gift-cap",
+            new StringContent("{\"maxToman\":\"100\",\"maxPercent\":10}", Encoding.UTF8, "application/json"));
+        Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
+        AssertPersianMoney400(await ReadJsonAsync(res), "invalid_body");
+    }
+
+    [Fact]
+    public async Task shift_close_rejects_string_cash_json()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var mgr = await factory.CreateOperatorClientAsync("manager", "1234");
+        await S3TestHelpers.EnableShiftsAsync(mgr);
+        await S3TestHelpers.OpenShiftAsync(mgr);
+        var res = await mgr.PostAsync(
+            "/api/operator/shift/close",
+            new StringContent(
+                "{\"workingDay\":{\"year\":2026,\"month\":6,\"day\":3},\"actualCashToman\":\"1\",\"actualCardReaderToman\":0,\"sessionActions\":[]}",
+                Encoding.UTF8,
+                "application/json"));
+        Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
+        AssertPersianMoney400(await ReadJsonAsync(res), "invalid_body");
+    }
+
+    [Fact]
     public async Task prepaid_amount_rejects_string_json()
     {
         await S3TestHelpers.ResetAsync(factory);
