@@ -93,25 +93,6 @@ internal sealed class KioskShellSupervisor
         }
 
         RegistryPolicyStore.EnsureDefaults();
-        var existing = FindLiveKioskShell();
-        if (existing is not null && _supervised is null)
-        {
-            _lastRelaunchUtc = DateTime.UtcNow;
-            _supervised = existing;
-            _supervisedSessionId = sessionId;
-            try
-            {
-                protection.ProtectShellAfterLaunch(existing.Id);
-            }
-            catch
-            {
-                /* already protected or unreachable */
-            }
-
-            GuardWatchdogLog.Append($"guard.restart launched_pid_{existing.Id}");
-            return true;
-        }
-
         if (!ConsoleSessionLaunch.TryLaunch(path, out var detail))
         {
             GuardWatchdogLog.Append($"guard.launch_failed {detail}");
@@ -137,28 +118,6 @@ internal sealed class KioskShellSupervisor
 
         GuardWatchdogLog.Append($"guard.restart {detail}");
         return true;
-    }
-
-    private static Process? FindLiveKioskShell()
-    {
-        foreach (var proc in Process.GetProcessesByName("GameClub.Kiosk"))
-        {
-            try
-            {
-                if (!proc.HasExited)
-                {
-                    return proc;
-                }
-            }
-            catch
-            {
-                /* exited between enumerate and query */
-            }
-
-            proc.Dispose();
-        }
-
-        return null;
     }
 
     private static void Wait(CancellationToken ct, TimeSpan delay)

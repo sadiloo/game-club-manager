@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using GameClub.Kiosk.Core.Guard;
 using GameClub.Kiosk.Guard;
 
 namespace GameClub.Kiosk.Guard.Internet;
@@ -146,26 +147,16 @@ internal static class InternetPowerShellRunner
 
             var stdout = stdoutTask.GetAwaiter().GetResult();
             stderr = stderrTask.GetAwaiter().GetResult() ?? "";
+            var output = InternetPowerShellCompletedOutcome.ResolveOutput(proc.ExitCode, stdout, stderr);
             if (proc.ExitCode != 0)
             {
-                var detail = InternetPowerShellStderr.FormatFailureDetail(stderr, stdout);
-                if (string.IsNullOrWhiteSpace(detail))
-                {
-                    detail = $"exit_{proc.ExitCode}";
-                }
-
-                var output = detail.StartsWith("apply_failed", StringComparison.Ordinal)
-                    ? detail
-                    : $"apply_failed:powershell_error:{detail}";
                 return new RunTelemetry(output, psStartMs, stepSw.ElapsedMilliseconds, stderr);
             }
 
-            var tail = stdout.Trim().Split('\n').LastOrDefault()?.Trim();
             var stepLabel = string.IsNullOrWhiteSpace(stepName) ? "powershell" : stepName;
             GuardWatchdogLog.Append(
                 $"powershell_step step={stepLabel} outcome=ok elapsed_ms={stepSw.ElapsedMilliseconds} budget_ms={timeoutMs}");
-            var successOutput = string.IsNullOrEmpty(tail) ? "" : tail!;
-            return new RunTelemetry(successOutput, psStartMs, stepSw.ElapsedMilliseconds, stderr);
+            return new RunTelemetry(output, psStartMs, stepSw.ElapsedMilliseconds, stderr);
         }
         catch (Exception ex)
         {

@@ -119,6 +119,8 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
                 guard.Dispose();
             }
 
+            CiGuardKioskProcessCleanup.KillOrphanedGuardAndKiosk(nameof(internet_corrupt_guard_config_still_launches_shell_within_shell_gate));
+
             if (prior is not null)
             {
                 File.WriteAllText(InternetGuardPaths.ConfigPath, prior);
@@ -173,6 +175,8 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
             GuardTimeline("guard1_stop_end");
             GuardProcessLifecycle.StopOrphanedInternetPowerShell(TimeSpan.FromSeconds(5));
             await Task.Delay(500);
+            CiGuardKioskProcessCleanup.KillOrphanedGuardAndKiosk(nameof(internet_off_guard_process_restart_reasserts_before_pipe_ready));
+            AssertNoKioskShellRunning();
 
             WindowsIntegrationRunPowerShell.Run(TamperOpenEgressScript);
             Assert.True(TryTcp("1.1.1.1", 443, 3_000), "Sanity: profile tamper must temporarily open egress.");
@@ -415,7 +419,7 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
             var sw = Stopwatch.StartNew();
             var status = await new GuardInternetClient().GetStatusAsync(default);
             sw.Stop();
-            Assert.True(sw.ElapsedMilliseconds < 2_500, $"status blocked {sw.ElapsedMilliseconds}ms during early reassert");
+            Assert.True(sw.ElapsedMilliseconds < 2_000, $"status blocked {sw.ElapsedMilliseconds}ms during early reassert");
             using var doc = JsonDocument.Parse(status);
             Assert.True(doc.RootElement.TryGetProperty("pending", out var pending) && pending.GetBoolean());
             Assert.Equal("early_reassert", doc.RootElement.GetProperty("phase").GetString());
@@ -431,6 +435,113 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
             var applyTask = new GuardInternetClient().ApplyAsync(onCommand);
             var applyResponse = await applyTask;
             Assert.Contains("applied", applyResponse, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            InternetPipeServerTestTeardown.Stop(cts, pipeThread);
+            new InternetFirewallApplier().RunResetScript();
+            TryDelete(InternetGuardPaths.ConfigPath);
+            TryDelete(InternetGuardPaths.StatePath);
+        }
+    }
+
+    [Fact(Timeout = 120_000)]
+    public async Task internet_pipe_mutating_apply_fifo_during_early_reassert_hold()
+    {
+        RequireWindowsAdmin();
+        using var rsa = RSA.Create(2048);
+        var pub = ExportPublicKeyPem(rsa);
+        var config = BuildConfig(pub);
+        var applier = new DelayedEarlyReassertInternetFirewallApplier(offApplyDelayMs: 5_000);
+        CancellationTokenSource cts = null;
+        Thread pipeThread = null;
+        try
+        {
+            var epoch = Guid.NewGuid();
+            var off = Sign(rsa, new InternetCommandPayload
+            {
+                StationId = config.StationId,
+                Epoch = epoch,
+                Version = 1,
+                On = false,
+                IssuedAtUtc = DateTime.UtcNow,
+            });
+            Assert.Equal("applied", applier.ApplyWithStoreEcho(config, on: false));
+            InternetVerifiedStateFile.Save(InternetGuardPaths.StatePath, off.Payload);
+            WriteInternetConfig(config);
+
+            var logOffset = GuardWatchdogTimelineReader.CurrentLogLength();
+            cts = new CancellationTokenSource();
+            pipeThread = new Thread(() => new InternetPipeServer(config, applier).Run(cts.Token)) { IsBackground = true };
+            pipeThread.Start();
+            await GuardWatchdogTimelineReader.WaitForTimelineMarkerAsync(
+                logOffset,
+                "early_reassert_off_lock_enter",
+                TimeSpan.FromSeconds(20));
+
+            var onCommand = Sign(rsa, new InternetCommandPayload
+            {
+                StationId = config.StationId,
+                Epoch = epoch,
+                Version = 2,
+                On = true,
+                IssuedAtUtc = DateTime.UtcNow,
+            });
+            var offCommand = Sign(rsa, new InternetCommandPayload
+            {
+                StationId = config.StationId,
+                Epoch = epoch,
+                Version = 3,
+                On = false,
+                IssuedAtUtc = DateTime.UtcNow,
+            });
+
+            var client = new GuardInternetClient();
+            var onTask = client.ApplyAsync(onCommand);
+            await Task.Delay(100);
+            var offTask = client.ApplyAsync(offCommand);
+
+            var statusSw = Stopwatch.StartNew();
+            var status = await client.GetStatusAsync(default);
+            statusSw.Stop();
+            Assert.True(statusSw.ElapsedMilliseconds < 2_000, $"status blocked {statusSw.ElapsedMilliseconds}ms");
+            using (var statusDoc = JsonDocument.Parse(status))
+            {
+                Assert.True(statusDoc.RootElement.TryGetProperty("pending", out var pending) && pending.GetBoolean());
+                Assert.True(
+                    statusDoc.RootElement.GetProperty("phase").GetString() is "early_reassert" or "applying",
+                    $"unexpected phase during hold: {status}");
+            }
+
+            var onResponse = await onTask;
+            var offResponse = await offTask;
+            Assert.Contains("applied", onResponse, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("applied", offResponse, StringComparison.OrdinalIgnoreCase);
+
+            var timeline = GuardWatchdogTimelineReader.ReadLinesSince(logOffset);
+            Assert.Contains(timeline, l => l.Contains("pipe_request_status_immediate", StringComparison.Ordinal));
+
+            int TicketFrom(string line)
+            {
+                var marker = "ticket=";
+                var start = line.IndexOf(marker, StringComparison.Ordinal);
+                Assert.True(start >= 0, $"missing ticket= in {line}");
+                start += marker.Length;
+                var end = start;
+                while (end < line.Length && (char.IsDigit(line[end]) || line[end] == '-'))
+                {
+                    end++;
+                }
+
+                return int.Parse(line.Substring(start, end - start));
+            }
+
+            var holdReleases = timeline
+                .Where(l => l.Contains("pipe_request_hold_release ticket=", StringComparison.Ordinal))
+                .Select(l => TicketFrom(l))
+                .ToList();
+            Assert.Equal(2, holdReleases.Count);
+            Assert.True(holdReleases[1] > holdReleases[0], $"apply FIFO order violated tickets={string.Join(",", holdReleases)}");
         }
         finally
         {
@@ -741,6 +852,24 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
         catch
         {
             // best-effort
+        }
+    }
+
+    private static void AssertNoKioskShellRunning()
+    {
+        var shells = Process.GetProcessesByName("GameClub.Kiosk");
+        try
+        {
+            Assert.True(
+                shells.Length == 0,
+                $"precondition: no GameClub.Kiosk process; pids={string.Join(",", shells.Select(p => p.Id.ToString()))}");
+        }
+        finally
+        {
+            foreach (var proc in shells)
+            {
+                proc.Dispose();
+            }
         }
     }
 

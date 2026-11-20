@@ -11,6 +11,7 @@ namespace GameClub.Kiosk.Core.Guard;
 public sealed class GuardInternetClient
 {
     public const string PipeName = "CheckpointGuardInternet";
+    public const string PipeNameEnvironmentVariable = "CHECKPOINT_INTERNET_PIPE_NAME";
     public const int DefaultConnectTimeoutMs = 5_000;
     public const int DefaultIoTimeoutMs = 30_000;
     /// <summary>Guard server default apply gate wait; must remain below <see cref="DefaultIoTimeoutMs"/>.</summary>
@@ -35,7 +36,7 @@ public sealed class GuardInternetClient
             var connectMs = ResolveTimeoutMs("CHECKPOINT_INTERNET_PIPE_CONNECT_MS", DefaultConnectTimeoutMs);
             var ioMs = ResolveTimeoutMs("CHECKPOINT_INTERNET_PIPE_IO_MS", DefaultIoTimeoutMs);
             ObservabilityLogFormats.WriteGuardPipeSubStep(verb, $"config connect_ms={connectMs} io_ms={ioMs}");
-            pipe = new NamedPipeClientStream(".", PipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+            pipe = new NamedPipeClientStream(".", ResolvePipeName(), PipeDirection.InOut, PipeOptions.Asynchronous);
             ObservabilityLogFormats.WriteGuardPipeSubStep(verb, "connect_begin");
 #if NET10_0_OR_GREATER
             using var connectCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -100,6 +101,12 @@ public sealed class GuardInternetClient
     {
         var raw = Environment.GetEnvironmentVariable(envName);
         return int.TryParse(raw, out var ms) && ms > 0 ? ms : fallback;
+    }
+
+    public static string ResolvePipeName()
+    {
+        var raw = Environment.GetEnvironmentVariable(PipeNameEnvironmentVariable)?.Trim();
+        return string.IsNullOrWhiteSpace(raw) ? PipeName : raw;
     }
 
     private static async Task WriteWithTimeoutAsync(

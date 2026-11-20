@@ -203,22 +203,10 @@ public sealed class PcInternetKioskCoreTests
         }
 
         using var pipeDiag = InternetPipeOwnerDiagnostics.BeginTestScope();
-        try
-        {
-            using var probe = new System.IO.Pipes.NamedPipeClientStream(
-                ".",
-                GuardInternetClient.PipeName,
-                System.IO.Pipes.PipeDirection.InOut,
-                System.IO.Pipes.PipeOptions.Asynchronous);
-            probe.Connect(300);
-            Assert.Fail($"{GuardInternetClient.PipeName} must have no listener for connect-timeout test.");
-        }
-        catch (TimeoutException)
-        {
-            /* expected: no guard pipe server */
-        }
-
+        var uniquePipe = $"CheckpointGuardInternet-conn-timeout-{Guid.NewGuid():N}";
+        var priorPipe = Environment.GetEnvironmentVariable(GuardInternetClient.PipeNameEnvironmentVariable);
         var prior = Environment.GetEnvironmentVariable("CHECKPOINT_INTERNET_PIPE_CONNECT_MS");
+        Environment.SetEnvironmentVariable(GuardInternetClient.PipeNameEnvironmentVariable, uniquePipe);
         Environment.SetEnvironmentVariable("CHECKPOINT_INTERNET_PIPE_CONNECT_MS", "200");
         try
         {
@@ -252,6 +240,60 @@ public sealed class PcInternetKioskCoreTests
         finally
         {
             Environment.SetEnvironmentVariable("CHECKPOINT_INTERNET_PIPE_CONNECT_MS", prior);
+            Environment.SetEnvironmentVariable(GuardInternetClient.PipeNameEnvironmentVariable, priorPipe);
+        }
+    }
+
+    [Fact]
+    public async Task PcInternet_guard_client_pipe_io_timeout_when_server_accepts_but_never_reads()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var pipeDiag = InternetPipeOwnerDiagnostics.BeginTestScope();
+        var priorIo = Environment.GetEnvironmentVariable("CHECKPOINT_INTERNET_PIPE_IO_MS");
+        Environment.SetEnvironmentVariable("CHECKPOINT_INTERNET_PIPE_IO_MS", "800");
+        var stopStub = new ManualResetEventSlim(false);
+        var ready = new ManualResetEventSlim(false);
+        Thread? acceptThread = null;
+        try
+        {
+            acceptThread = new Thread(() =>
+            {
+                try
+                {
+                    using var server = new System.IO.Pipes.NamedPipeServerStream(
+                        GuardInternetClient.ResolvePipeName(),
+                        System.IO.Pipes.PipeDirection.InOut,
+                        1,
+                        System.IO.Pipes.PipeTransmissionMode.Byte,
+                        System.IO.Pipes.PipeOptions.Asynchronous);
+                    ready.Set();
+                    server.WaitForConnection();
+                    stopStub.Wait();
+                }
+                catch
+                {
+                    /* stub teardown */
+                }
+            })
+            {
+                IsBackground = true,
+            };
+            acceptThread.Start();
+            Assert.True(ready.Wait(TimeSpan.FromSeconds(5)));
+
+            var ex = await Assert.ThrowsAsync<TimeoutException>(async () =>
+                await new GuardInternetClient().GetStatusAsync(default));
+            Assert.Equal(GuardInternetClientErrorCodes.IoTimeout, ex.Message);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("CHECKPOINT_INTERNET_PIPE_IO_MS", priorIo);
+            stopStub.Set();
+            acceptThread?.Join(TimeSpan.FromSeconds(5));
         }
     }
 

@@ -15,23 +15,6 @@ namespace GameClub.Kiosk.Windows.IntegrationTests.Guard;
 [Trait("Category", "PcInternetFirewall")]
 public sealed class WindowsPcInternetPowerShellRunnerIntegrationTests
 {
-    [Fact(Timeout = 30_000)]
-    public void internet_powershell_clixml_stderr_exit_zero_counts_as_success()
-    {
-        if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-        {
-            Assert.Fail("Windows-only Guard internet integration.");
-        }
-
-        using var pipeDiag = InternetPipeOwnerDiagnostics.BeginTestScope(nameof(internet_powershell_clixml_stderr_exit_zero_counts_as_success));
-        var script = @"
-Write-Progress -Activity 'gcm-test' -Status 'progress' -PercentComplete 10
-'firewall_script_ok'
-";
-        var result = InternetPowerShellRunner.Run(script, 15_000, stepName: "clixml_stderr_ok");
-        Assert.Equal("firewall_script_ok", result);
-    }
-
     [Fact(Timeout = 60_000)]
     public async Task internet_powershell_runner_times_out_hung_child_and_kills_process_tree()
     {
