@@ -182,6 +182,9 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.403
+      - name: pin Inno Setup 6.7.1
+        shell: pwsh
+        run: choco install innosetup --version=6.7.1 -y --no-progress --allow-downgrade
       - name: installer acceptance
         shell: pwsh
         run: ./scripts/windows/ci-installer.ps1

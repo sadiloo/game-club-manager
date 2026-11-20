@@ -67,6 +67,7 @@ public sealed class WindowsKioskServerIntegrationTests
             testHubHandler: _backend.TestHubHandler);
         runtime.BindSession(sessionId);
         await runtime.StartAsync(default);
+        await WaitUntilTransportConnectedAsync(runtime, TimeSpan.FromSeconds(45));
         await WaitForHeartbeatAdvanceAsync(_backend, deviceId, heartbeatBefore, lastSeenBefore);
         await runtime.DisposeAsync();
     }
@@ -791,25 +792,20 @@ public sealed class WindowsKioskServerIntegrationTests
 
     private static async Task WaitForHeartbeatAdvanceAsync(KioskIntegrationBackend backend, Guid deviceId, int heartbeatBefore, DateTime? lastSeenBefore)
     {
-        for (var attempt = 0; attempt < 12; attempt++)
+        var deadline = DateTime.UtcNow.Add(TimeSpan.FromSeconds(90));
+        while (DateTime.UtcNow < deadline)
         {
-            await Task.Delay(TimeSpan.FromSeconds(6));
             var count = await backend.CountHeartbeatsAsync();
             var lastSeen = await backend.DeviceLastSeenUtcAsync(deviceId);
-            if (count < heartbeatBefore + 3)
-            {
-                continue;
-            }
-
-            if (lastSeenBefore is null || !lastSeen.HasValue)
+            if (count >= heartbeatBefore + 3
+                && (lastSeenBefore is null
+                    || !lastSeen.HasValue
+                    || (lastSeen.HasValue && lastSeen > lastSeenBefore)))
             {
                 return;
             }
 
-            if (lastSeen > lastSeenBefore)
-            {
-                return;
-            }
+            await Task.Delay(TimeSpan.FromMilliseconds(500));
         }
 
         Assert.Fail("Expected at least 3 advancing kiosk heartbeats on the server.");

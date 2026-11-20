@@ -13,7 +13,8 @@ public static class KioskStatusInlineApplicator
 
     public static void Apply(TextBlock status, KioskStatusPresentation presentation)
     {
-        status.Text = string.Empty;
+        var combined = presentation.ToCombinedText();
+        status.Text = combined;
         status.Inlines.Clear();
         foreach (var seg in presentation.StatusSegments)
         {

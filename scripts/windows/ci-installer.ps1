@@ -15,15 +15,35 @@ Write-Host "ci-installer: kiosk publish bytes=$kioskSize"
 Write-Host "ci-installer: static installer rules"
 & (Join-Path $root "installer/tests/NoBackupDelete.Tests.ps1")
 
-if (Get-Command iscc.exe -ErrorAction SilentlyContinue) {
-  Write-Host "ci-installer: Inno found; compile server iss"
-  iscc.exe installer/server/CheckpointServer.iss
-  iscc.exe installer/kiosk/CheckpointKiosk.iss
-  Get-ChildItem installer -Recurse -Filter *.exe | ForEach-Object {
-    Write-Host ("ci-installer: artifact {0} bytes={1}" -f $_.Name, $_.Length)
+$expectedInno = [Version]"6.7.1"
+if (-not (Get-Command iscc.exe -ErrorAction SilentlyContinue)) {
+  throw "ci-installer: iscc.exe not on PATH; Inno Setup required."
+}
+$innoVersionLine = & iscc.exe /? 2>&1 | Select-String -Pattern "Compiler engine version: Inno Setup" | Select-Object -First 1
+if (-not $innoVersionLine) {
+  throw "ci-installer: could not read Inno Setup compiler version from iscc /?"
+}
+if ($innoVersionLine -notmatch "Inno Setup\s+([\d.]+)") {
+  throw "ci-installer: unexpected iscc version line: $innoVersionLine"
+}
+$innoVersion = [Version]$Matches[1]
+if ($innoVersion -ne $expectedInno) {
+  throw "ci-installer: expected Inno Setup $expectedInno on PATH; found $innoVersion"
+}
+Write-Host "ci-installer: Inno $innoVersion; compile server and kiosk iss"
+$issTargets = @(
+  (Join-Path $root "installer/server/CheckpointServer.iss"),
+  (Join-Path $root "installer/kiosk/CheckpointKiosk.iss")
+)
+foreach ($iss in $issTargets) {
+  Write-Host "ci-installer: iscc $iss"
+  & iscc.exe $iss
+  if ($LASTEXITCODE -ne 0) {
+    throw "ci-installer: iscc failed for $iss (exit $LASTEXITCODE)"
   }
-} else {
-  Write-Host "ci-installer: iscc.exe not on PATH; iss compile skipped (sizes still reported)"
+}
+Get-ChildItem installer -Recurse -Filter *.exe | ForEach-Object {
+  Write-Host ("ci-installer: artifact {0} bytes={1}" -f $_.Name, $_.Length)
 }
 
 Write-Host "ci-installer: done"

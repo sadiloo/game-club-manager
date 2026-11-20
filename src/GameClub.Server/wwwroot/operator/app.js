@@ -2530,12 +2530,24 @@ async function ss14RefreshManagerGameUi(isMgr) {
 // --- K-OP (MVP installer B) ---
 const KIOSK_OP_FREE_IDLE_ERR_FORBIDDEN = "فقط مدیر یا مالک می‌تواند این را عوض کند.";
 const KIOSK_OP_FREE_IDLE_ERR_INVALID = "یک عدد کامل از ۱ تا ۲۴۰ وارد کنید.";
+const KIOSK_OP_FREE_IDLE_ERR_EMPTY = "تعداد دقیقه را وارد کنید.";
+const KIOSK_OP_FREE_IDLE_ERR_SAVE_FAIL = "ذخیره نشد. دوباره امتحان کنید.";
+
+const KIOSK_OP_FREE_IDLE_MESSAGE_BY_MGR_KEY = {
+  "mgr.freeIdle.err.forbidden": KIOSK_OP_FREE_IDLE_ERR_FORBIDDEN,
+  "mgr.freeIdle.err.invalid": KIOSK_OP_FREE_IDLE_ERR_INVALID,
+  "mgr.freeIdle.err.empty": KIOSK_OP_FREE_IDLE_ERR_EMPTY,
+  "mgr.freeIdle.err.saveFail": KIOSK_OP_FREE_IDLE_ERR_SAVE_FAIL,
+};
 
 function kioskOpFreeIdleErrorMessage(code, message) {
   if (code === "free_idle_forbidden") return KIOSK_OP_FREE_IDLE_ERR_FORBIDDEN;
   if (code === "free_idle_invalid") return KIOSK_OP_FREE_IDLE_ERR_INVALID;
+  if (typeof message === "string" && KIOSK_OP_FREE_IDLE_MESSAGE_BY_MGR_KEY[message]) {
+    return KIOSK_OP_FREE_IDLE_MESSAGE_BY_MGR_KEY[message];
+  }
   if (typeof message === "string" && message.length > 0 && !message.startsWith("mgr.")) return message;
-  return "ذخیره نشد. دوباره امتحان کنید.";
+  return KIOSK_OP_FREE_IDLE_ERR_SAVE_FAIL;
 }
 
 function kioskOpShowMgrFreeIdleErr(text) {

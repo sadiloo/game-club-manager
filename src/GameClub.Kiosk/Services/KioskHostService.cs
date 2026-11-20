@@ -473,7 +473,20 @@ public sealed class KioskHostService : IAsyncDisposable
                 || ack.ManualSettle || string.Equals(ack.SessionStatus, "AwaitingPayment", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(ack.SessionStatus, "Ended", StringComparison.OrdinalIgnoreCase))
             {
-                EnterLocalLock(phase == KioskShellPhase.LeaseExpired);
+                var leaseExpired = phase == KioskShellPhase.LeaseExpired;
+                if (leaseExpired
+                    && _locallyLockedSessionId != Guid.Empty
+                    && _locallyLockedSessionId == _sessionId
+                    && string.Equals(ack.SessionStatus, "Open", StringComparison.OrdinalIgnoreCase))
+                {
+                    _localLockLeaseExpired = false;
+                    ShowLockLayout();
+                    RefreshStationStatusText();
+                }
+                else
+                {
+                    EnterLocalLock(leaseExpired);
+                }
             }
             else if (string.Equals(ack.SessionStatus, "Open", StringComparison.OrdinalIgnoreCase))
             {
@@ -485,6 +498,12 @@ public sealed class KioskHostService : IAsyncDisposable
                 if (sameLockedSession && phase == KioskShellPhase.Playing && !_logoutInProgress)
                 {
                     _locallyLockedSessionId = Guid.Empty;
+                }
+                else if (sameLockedSession && phase != KioskShellPhase.Playing)
+                {
+                    _localLockLeaseExpired = false;
+                    ShowLockLayout();
+                    RefreshStationStatusText();
                 }
                 else if (_locallyLockedSessionId != Guid.Empty
                     && ackLeaseSession is Guid differentSession

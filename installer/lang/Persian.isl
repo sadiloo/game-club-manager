@@ -2,8 +2,8 @@
 ; Source: Inno Setup 6.3.3 Persian.isl (jrsoftware/issrc).
 [LangOptions]
 LanguageName=فارسی
-LanguageID=$29
-LanguageCode=fa
+LanguageID=$0429
+LanguageCodePage=1256
 RightToLeft=yes
 
 [Messages]
