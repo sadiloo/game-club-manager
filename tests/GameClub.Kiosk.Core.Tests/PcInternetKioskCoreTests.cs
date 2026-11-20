@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using GameClub.Kiosk.Core.Guard;
 using GameClub.Kiosk.Core.Lease;
 using GameClub.Kiosk.Core.Protocol;
@@ -10,6 +11,42 @@ namespace GameClub.Kiosk.Core.Tests;
 
 public sealed class PcInternetKioskCoreTests
 {
+    [Fact]
+    public void PcInternet_guard_client_wire_apply_on_is_classified_as_on_request()
+    {
+        using var rsa = RSA.Create(2048);
+        var onPayload = new InternetCommandPayload
+        {
+            StationId = "PC-1",
+            Epoch = Guid.NewGuid(),
+            Version = 2,
+            On = true,
+            IssuedAtUtc = DateTime.UtcNow,
+        };
+        var offPayload = new InternetCommandPayload
+        {
+            StationId = onPayload.StationId,
+            Epoch = onPayload.Epoch,
+            Version = 1,
+            On = false,
+            IssuedAtUtc = onPayload.IssuedAtUtc,
+        };
+        var onCommand = new SignedInternetCommand
+        {
+            Payload = onPayload,
+            SignatureBase64 = Convert.ToBase64String(new byte[32]),
+        };
+        var offCommand = new SignedInternetCommand
+        {
+            Payload = offPayload,
+            SignatureBase64 = Convert.ToBase64String(new byte[32]),
+        };
+        var onWire = JsonSerializer.Serialize(new { verb = "apply", command = onCommand });
+        var offWire = JsonSerializer.Serialize(new { verb = "apply", command = offCommand });
+        Assert.True(GuardInternetPipeApplyJson.IsOnApplyRequest(onWire));
+        Assert.False(GuardInternetPipeApplyJson.IsOnApplyRequest(offWire));
+    }
+
     [Fact]
     public void PcInternet_verify_accepts_valid_signature()
     {

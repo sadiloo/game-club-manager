@@ -444,7 +444,7 @@ internal sealed class InternetPipeServer
 
                 AppendPipeTimeline($"pipe_request_hold_release ticket={holdTicket}");
                 string response;
-                if (_earlyReassertApplyBlocked && IsOnApplyRequest(body))
+                if (_earlyReassertApplyBlocked && GuardInternetPipeApplyJson.IsOnApplyRequest(body))
                 {
                     response = JsonSerializer.Serialize(new { error = "apply_failed:early_reassert_off" });
                 }
@@ -482,34 +482,6 @@ internal sealed class InternetPipeServer
             {
                 ReleaseHeldRequestTurn(holdTicket);
             }
-        }
-    }
-
-    private static bool IsOnApplyRequest(string body)
-    {
-        try
-        {
-            using var doc = JsonDocument.Parse(body);
-            if (!string.Equals(doc.RootElement.GetProperty("verb").GetString(), "apply", StringComparison.OrdinalIgnoreCase))
-            {
-                return false;
-            }
-
-            if (!doc.RootElement.TryGetProperty("command", out var command))
-            {
-                return false;
-            }
-
-            if (!command.TryGetProperty("payload", out var payload))
-            {
-                return false;
-            }
-
-            return payload.TryGetProperty("on", out var on) && on.GetBoolean();
-        }
-        catch
-        {
-            return false;
         }
     }
 
@@ -910,11 +882,6 @@ internal sealed class InternetPipeServer
             return JsonSerializer.Serialize(new { error = code, on = _on, version = _appliedVersion });
         }
 
-        if (!p.On)
-        {
-            TryClearEarlyReassertRefusalAfterVerifiedOffApply();
-        }
-
         _state.SaveVerified(p);
         if (!p.On && !File.Exists(InternetGuardPaths.StatePath))
         {
@@ -925,6 +892,11 @@ internal sealed class InternetPipeServer
                 on = _on,
                 version = _appliedVersion,
             });
+        }
+
+        if (!p.On)
+        {
+            TryClearEarlyReassertRefusalAfterVerifiedOffApply();
         }
 
         var reconcileReason = _postAbandonReconcileStatus;
