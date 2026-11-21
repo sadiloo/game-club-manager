@@ -24,29 +24,106 @@ function NormalizeDir([string]$path) {
   return [System.IO.Path]::GetFullPath($path).TrimEnd('\')
 }
 
-function Test-InnoVersionMatches([string]$fileVersion, [Version]$expected) {
-  if ([string]::IsNullOrWhiteSpace($fileVersion)) {
-    return $false
-  }
-  try {
-    $parsed = [Version]$fileVersion
-    return $parsed.Major -eq $expected.Major `
-      -and $parsed.Minor -eq $expected.Minor `
-      -and $parsed.Build -eq $expected.Build
-  }
-  catch {
-    return $false
-  }
-}
-
-function Get-IsccFileVersion([string]$isccPath) {
-  if (-not (Test-Path -LiteralPath $isccPath)) {
+function Try-ParseInnoVersionString([string]$text) {
+  if ([string]::IsNullOrWhiteSpace($text)) {
     return $null
   }
-  return (Get-Item -LiteralPath $isccPath).VersionInfo.FileVersion
+  if ($text -eq "0.0.0.0") {
+    return $null
+  }
+  try {
+    return [Version]$text
+  }
+  catch {
+    return $null
+  }
 }
 
-function Get-InnoInstallDirFromRegistry {
+function Test-VersionMatchesExpected([Version]$parsed, [Version]$expected) {
+  if ($null -eq $parsed) {
+    return $false
+  }
+  return $parsed.Major -eq $expected.Major `
+    -and $parsed.Minor -eq $expected.Minor `
+    -and $parsed.Build -eq $expected.Build
+}
+
+function Parse-InnoBannerCompilerVersion([string]$bannerText) {
+  if ([string]::IsNullOrWhiteSpace($bannerText)) {
+    return $null
+  }
+  if ($bannerText -match "(?m)Compiler version\s+(\d+\.\d+(?:\.\d+)?)") {
+    return $Matches[1]
+  }
+  return $null
+}
+
+function Resolve-InnoVersionDecision {
+  param(
+    [string]$DisplayVersion,
+    [string]$FileVersion,
+    [string]$ProductVersion,
+    [string]$BannerText,
+    [Version]$Expected
+  )
+
+  $displayParsed = Try-ParseInnoVersionString $DisplayVersion
+  $fileParsed = Try-ParseInnoVersionString $FileVersion
+  $productParsed = Try-ParseInnoVersionString $ProductVersion
+  $bannerVersionText = Parse-InnoBannerCompilerVersion $BannerText
+  $bannerParsed = Try-ParseInnoVersionString $bannerVersionText
+
+  $contradictions = [System.Collections.Generic.List[string]]::new()
+
+  if ($null -eq $displayParsed -or -not (Test-VersionMatchesExpected $displayParsed $Expected)) {
+    return @{
+      Ok               = $false
+      Reason           = "DisplayVersion must be $Expected (registry uninstall key)."
+      DisplayVersion   = $DisplayVersion
+      FileVersion      = $FileVersion
+      ProductVersion   = $ProductVersion
+      BannerVersion    = $bannerVersionText
+      Contradictions   = @()
+    }
+  }
+
+  foreach ($entry in @(
+      @{ Name = "FileVersion"; Parsed = $fileParsed; Raw = $FileVersion }
+      @{ Name = "ProductVersion"; Parsed = $productParsed; Raw = $ProductVersion }
+      @{ Name = "BannerVersion"; Parsed = $bannerParsed; Raw = $bannerVersionText }
+    )) {
+    if ($null -eq $entry.Parsed) {
+      continue
+    }
+    if (-not (Test-VersionMatchesExpected $entry.Parsed $Expected)) {
+      $contradictions.Add("$($entry.Name)=$($entry.Raw)")
+    }
+  }
+
+  if ($contradictions.Count -gt 0) {
+    return @{
+      Ok               = $false
+      Reason           = "version source(s) contradict DisplayVersion $Expected."
+      DisplayVersion   = $DisplayVersion
+      FileVersion      = $FileVersion
+      ProductVersion   = $ProductVersion
+      BannerVersion    = $bannerVersionText
+      Contradictions   = $contradictions.ToArray()
+    }
+  }
+
+  return @{
+    Ok               = $true
+    Reason           = $null
+    DisplayVersion   = $DisplayVersion
+    FileVersion      = $FileVersion
+    ProductVersion   = $ProductVersion
+    BannerVersion    = $bannerVersionText
+    Contradictions   = @()
+  }
+}
+
+function Get-InnoRegistryEntry {
   $registryKeys = @(
     "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Inno Setup 6_is1",
     "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Inno Setup 6_is1"
@@ -55,78 +132,100 @@ function Get-InnoInstallDirFromRegistry {
     if (-not (Test-Path -LiteralPath $keyPath)) {
       continue
     }
-    $installLocation = (Get-ItemProperty -LiteralPath $keyPath -ErrorAction SilentlyContinue).InstallLocation
-    if (-not [string]::IsNullOrWhiteSpace($installLocation)) {
-      return NormalizeDir $installLocation
+    $props = Get-ItemProperty -LiteralPath $keyPath -ErrorAction SilentlyContinue
+    if ($null -eq $props) {
+      continue
+    }
+    $installLocation = $props.InstallLocation
+    if ([string]::IsNullOrWhiteSpace($installLocation)) {
+      continue
+    }
+    return @{
+      RegistryKey     = $keyPath
+      InstallLocation = NormalizeDir $installLocation
+      DisplayVersion  = [string]$props.DisplayVersion
     }
   }
   return $null
 }
 
-function Get-InnoCandidateInstallDirs {
-  $ordered = [System.Collections.Generic.List[string]]::new()
-  $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
-
-  function Add-Candidate([string]$dir) {
-    $normalized = NormalizeDir $dir
-    if ($null -eq $normalized) {
-      return
-    }
-    if ($seen.Add($normalized)) {
-      $ordered.Add($normalized)
-    }
+function Get-IsccPeVersions([string]$isccPath) {
+  if (-not (Test-Path -LiteralPath $isccPath)) {
+    return $null
   }
-
-  $regDir = Get-InnoInstallDirFromRegistry
-  if ($null -ne $regDir) {
-    Add-Candidate $regDir
+  $vi = (Get-Item -LiteralPath $isccPath).VersionInfo
+  return @{
+    FileVersion    = [string]$vi.FileVersion
+    ProductVersion = [string]$vi.ProductVersion
   }
+}
 
-  Add-Candidate "C:\ProgramData\chocolatey\lib\innosetup\tools"
-
-  $pf86 = ${env:ProgramFiles(x86)}
-  if (-not [string]::IsNullOrWhiteSpace($pf86)) {
-    Add-Candidate (Join-Path $pf86 "Inno Setup 6")
+function Get-IsccBannerText([string]$isccPath) {
+  if (-not (Test-Path -LiteralPath $isccPath)) {
+    return $null
   }
-
-  return $ordered
+  return (& $isccPath 2>&1 | Out-String)
 }
 
 $pathIsccShim = Get-Command iscc.exe -ErrorAction SilentlyContinue
 $pathIsccResolved = if ($null -ne $pathIsccShim) { $pathIsccShim.Source } else { "(not on PATH)" }
 
-$candidateDirs = Get-InnoCandidateInstallDirs
-$attemptLog = [System.Collections.Generic.List[string]]::new()
-$realIscc = $null
-$peFileVersion = $null
+$regEntry = Get-InnoRegistryEntry
 
-foreach ($dir in $candidateDirs) {
-  $isccCandidate = Join-Path $dir "ISCC.exe"
-  if (-not (Test-Path -LiteralPath $isccCandidate)) {
-    $attemptLog.Add("$isccCandidate=(missing)")
-    continue
-  }
-  $ver = Get-IsccFileVersion $isccCandidate
-  $attemptLog.Add("$isccCandidate fileVersion=$ver")
-  if (Test-InnoVersionMatches $ver $expectedInno) {
-    $realIscc = $isccCandidate
-    $peFileVersion = $ver
-    break
-  }
-}
-
-if ($null -eq $realIscc) {
-  $attemptText = if ($attemptLog.Count -gt 0) { $attemptLog -join "; " } else { "(no candidates)" }
+if ($null -eq $regEntry) {
   Write-Error @"
 ci-installer: Inno Setup $expectedInno required (real ISCC.exe, never Chocolatey PATH shim).
 PATH iscc.exe (ignored if Chocolatey shim)=$pathIsccResolved
-attempted paths and versions: $attemptText
+registry: no Inno Setup 6_is1 uninstall key with InstallLocation found
 "@
   exit 1
 }
 
-$realInnoDir = NormalizeDir (Split-Path -Parent $realIscc)
-Write-Host "ci-installer: resolved ISCC path=$realIscc fileVersion=$peFileVersion installDir=$realInnoDir"
+$realInnoDir = $regEntry.InstallLocation
+$realIscc = Join-Path $realInnoDir "ISCC.exe"
+$peVersions = Get-IsccPeVersions $realIscc
+$fileVersion = if ($null -ne $peVersions) { $peVersions.FileVersion } else { "(missing ISCC)" }
+$productVersion = if ($null -ne $peVersions) { $peVersions.ProductVersion } else { "(missing ISCC)" }
+
+$bannerText = $null
+if (Test-Path -LiteralPath $realIscc) {
+  $bannerText = Get-IsccBannerText $realIscc
+}
+
+$decision = Resolve-InnoVersionDecision `
+  -DisplayVersion $regEntry.DisplayVersion `
+  -FileVersion $fileVersion `
+  -ProductVersion $productVersion `
+  -BannerText $bannerText `
+  -Expected $expectedInno
+
+Write-Host "ci-installer: resolved ISCC path=$realIscc installDir=$realInnoDir"
+Write-Host "ci-installer: registry key=$($regEntry.RegistryKey)"
+Write-Host "ci-installer: version source DisplayVersion=$($regEntry.DisplayVersion)"
+Write-Host "ci-installer: version source FileVersion=$fileVersion"
+Write-Host "ci-installer: version source ProductVersion=$productVersion"
+$bannerLine = if ($null -ne $bannerText -and $bannerText -match "(?m)^.*Compiler version.*$") { $Matches[0].Trim() } else { "(unparsable or no banner)" }
+Write-Host "ci-installer: version source bannerLine=$bannerLine"
+Write-Host "ci-installer: version source BannerVersion=$($decision.BannerVersion)"
+
+if (-not $decision.Ok) {
+  $contradictionText = if ($decision.Contradictions.Count -gt 0) { $decision.Contradictions -join "; " } else { "(none)" }
+  Write-Error @"
+ci-installer: Inno Setup $expectedInno required (real ISCC.exe, never Chocolatey PATH shim).
+PATH iscc.exe (ignored if Chocolatey shim)=$pathIsccResolved
+resolved ISCC path=$realIscc
+registry key=$($regEntry.RegistryKey)
+DisplayVersion=$($regEntry.DisplayVersion)
+FileVersion=$fileVersion
+ProductVersion=$productVersion
+bannerLine=$bannerLine
+BannerVersion=$($decision.BannerVersion)
+reason=$($decision.Reason)
+contradictions=$contradictionText
+"@
+  exit 1
+}
+
 $issTargets = @(
   (Join-Path $root "installer/server/CheckpointServer.iss"),
   (Join-Path $root "installer/kiosk/CheckpointKiosk.iss")
