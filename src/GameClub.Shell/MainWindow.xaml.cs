@@ -1365,7 +1365,11 @@ public partial class MainWindow : Window
 
         var utcNow = DateTime.UtcNow;
         var deadline = PendingLoopbackPanelNavigationTimeoutPolicy.Deadline;
-        TryConfirmTimedOutLoopbackPanelNavigation(utcNow, fromTimer: false);
+        if (TryConfirmTimedOutLoopbackPanelNavigation(utcNow, fromTimer: false))
+        {
+            return false;
+        }
+
         var hasPending = _panelNavigationPending.TryGetOldestPendingLoopbackPanelNavigation(
             IsLoopbackPanelTarget,
             utcNow,

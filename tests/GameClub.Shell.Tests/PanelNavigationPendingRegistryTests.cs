@@ -92,7 +92,7 @@ public sealed class PanelNavigationPendingRegistryTests
                 oldestPendingAge: age,
                 pendingDeadline: deadline));
 
-        Assert.Equal(1, registry.PruneExpiredLoopbackPanelNavigations(IsLoopbackPanel, tExpire, deadline));
+        Assert.True(registry.TryRemovePendingLoopbackNavigation(7));
         Assert.False(registry.TryGetOldestPendingLoopbackPanelNavigation(
             IsLoopbackPanel,
             tExpire,

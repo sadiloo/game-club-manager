@@ -46,6 +46,74 @@ public sealed class ShellPanelNavigationFailureTests
     }
 
     [Fact]
+    public void shell_pending_panel_nav_past_deadline_confirms_once_late_completion_orphan_timed_out()
+    {
+        if (!WebView2RuntimePresent()) throw new InvalidOperationException("WebView2 runtime required");
+        ExecuteWithShellDataRoot(() =>
+        {
+            ShellPanelHttpSplitStub? stub = null;
+            try
+            {
+                stub = CreateStub(200, 25_000);
+                _fixture.RunAsync(async () =>
+                {
+                    MainWindow? window = null;
+                    try
+                    {
+                        ShellFileLog.Write("shell-deadline-orphan-baseline");
+                        var logBaseline = Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log")
+                            .Select(File.ReadAllText)
+                            .Aggregate("", string.Concat);
+
+                        window = await StartWindowOnStubAsync(stub);
+                        var wv = await WaitForPanelWebViewAsync(window, TimeSpan.FromSeconds(45));
+                        await WaitForPanelUnavailableOfflineAsync(wv, TimeSpan.FromSeconds(90));
+                        var navAtOffline = window.NavigationStartingCount;
+
+                        await Task.Delay(TimeSpan.FromSeconds(20));
+                        Assert.Equal(navAtOffline, window.NavigationStartingCount);
+                        Assert.Equal(0, window.PanelNavigationPendingCountForTests);
+
+                        var log = Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log")
+                            .Select(File.ReadAllText)
+                            .Aggregate("", string.Concat);
+                        var delta = logBaseline.Length == 0 ? log : log.Replace(logBaseline, "");
+
+                        static bool IsPanelNavTimeoutConfirm(string line) =>
+                            line.Contains("branch=panel-nav-timeout", StringComparison.Ordinal)
+                            && !line.Contains("panel-nav-timeout-", StringComparison.Ordinal);
+
+                        Assert.Equal(
+                            1,
+                            delta.Split('\n').Count(IsPanelNavTimeoutConfirm));
+                        Assert.InRange(
+                            delta.Split('\n')
+                                .Count(l => l.Contains("panel-navigate caller=PresentOffline", StringComparison.Ordinal)),
+                            1,
+                            2);
+                        Assert.Contains("nav-completed-orphan", delta, StringComparison.Ordinal);
+                        Assert.Contains("timedOut=", delta, StringComparison.OrdinalIgnoreCase);
+                        Assert.Equal(
+                            0,
+                            delta.Split('\n').Count(l =>
+                                l.Contains("panel-nav-timeout-skip", StringComparison.Ordinal)
+                                && l.Contains("reason=no-pending", StringComparison.Ordinal)));
+                    }
+                    finally
+                    {
+                        RestoreStubSeams();
+                        window?.Close();
+                    }
+                }, TimeSpan.FromSeconds(180));
+            }
+            finally
+            {
+                stub?.Dispose();
+            }
+        });
+    }
+
+    [Fact]
     public void shell_probe_ok_navigation_timeout_shows_panel_unavailable_without_navigation_loop()
     {
         if (!WebView2RuntimePresent()) throw new InvalidOperationException("WebView2 runtime required");
