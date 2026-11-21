@@ -118,26 +118,44 @@ try {
 }
 finally {
     $shellLogsSource = Join-Path $env:LOCALAPPDATA "Checkpoint\Shell\logs"
-    if (-not (Test-Path $shellLogsSource)) {
-        throw "Shell logs directory missing (no trace visibility): $shellLogsSource"
-    }
-
-    $shellLogFiles = @(Get-ChildItem -Path $shellLogsSource -Filter "shell-*.log" -File -ErrorAction SilentlyContinue)
-    if ($shellLogFiles.Count -eq 0) {
-        throw "Shell logs directory is empty (lost trace must not look like a pass): $shellLogsSource"
-    }
-
-    Copy-Item -Path (Join-Path $shellLogsSource "*") -Destination $logDir -Force -ErrorAction Stop
-    Write-Host "=== SHELL-OFFLINE-TRACE / SHELL-RACE-NAV (from $shellLogsSource) ==="
-    foreach ($logFile in $shellLogFiles) {
-        $lines = Get-Content -Path $logFile.FullName -ErrorAction Stop
-        foreach ($line in $lines) {
-            if ($line -match "SHELL-OFFLINE-TRACE" -or $line -match "SHELL-RACE-NAV") {
-                Write-Host $line
-            }
+    $trxPath = Join-Path $artifactDir "shell-windows.trx"
+    $shellTestsExecuted = $false
+    if (Test-Path -LiteralPath $trxPath) {
+        [xml]$trx = Get-Content -LiteralPath $trxPath
+        $executedAttr = $trx.TestRun.ResultSummary.Counters.executed
+        if ($null -ne $executedAttr) {
+            $shellTestsExecuted = [int]$executedAttr -gt 0
         }
     }
-    Write-Host "=== end shell trace dump ==="
+
+    # Require default %LOCALAPPDATA%\Checkpoint\Shell\logs only when this run actually executed
+    # shell integration tests (WebView/logging). A filter that matches zero tests never starts
+    # the shell and must not fail the job solely because the log directory was never created.
+    if (-not $shellTestsExecuted) {
+        Write-Host "Skipping default shell log harvest: no shell integration tests executed (trx executed=0 or trx missing)."
+    }
+    else {
+        if (-not (Test-Path -LiteralPath $shellLogsSource)) {
+            throw "Shell logs directory missing (no trace visibility): $shellLogsSource"
+        }
+
+        $shellLogFiles = @(Get-ChildItem -Path $shellLogsSource -Filter "shell-*.log" -File -ErrorAction SilentlyContinue)
+        if ($shellLogFiles.Count -eq 0) {
+            throw "Shell logs directory is empty (lost trace must not look like a pass): $shellLogsSource"
+        }
+
+        Copy-Item -Path (Join-Path $shellLogsSource "*") -Destination $logDir -Force -ErrorAction Stop
+        Write-Host "=== SHELL-OFFLINE-TRACE / SHELL-RACE-NAV (from $shellLogsSource) ==="
+        foreach ($logFile in $shellLogFiles) {
+            $lines = Get-Content -Path $logFile.FullName -ErrorAction Stop
+            foreach ($line in $lines) {
+                if ($line -match "SHELL-OFFLINE-TRACE" -or $line -match "SHELL-RACE-NAV") {
+                    Write-Host $line
+                }
+            }
+        }
+        Write-Host "=== end shell trace dump ==="
+    }
 }
 
 if (Test-Path (Join-Path $env:LOCALAPPDATA "Checkpoint\Shell\window.json")) {
