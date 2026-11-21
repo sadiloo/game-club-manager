@@ -43,13 +43,9 @@ public static class G2BandAlignWait
 
         foreach (var edge in edges)
         {
+            // UpcomingEdge never returns a wall time before nowTehran, so untilEdge is never negative.
             var upcoming = UpcomingEdge(nowTehran, edge);
             var untilEdge = upcoming - nowTehran;
-            if (untilEdge < TimeSpan.Zero)
-            {
-                continue;
-            }
-
             if (untilEdge > ApproachWindow)
             {
                 continue;
@@ -79,15 +75,20 @@ public static class G2BandAlignWait
     }
 
     /// <summary>
-    /// Fails when session start or any checkpoint lies on different sides of a band edge within the span.
+    /// Fails when session start, powered-span end, or any checkpoint lies on different sides of a band edge.
     /// </summary>
     public static void AssertSameSideOfAllBandEdges(
         TimeBand band,
         DateTimeOffset sessionStartUtc,
-        IEnumerable<DateTime> checkpointAtUtc)
+        IEnumerable<DateTime> checkpointAtUtc,
+        DateTimeOffset poweredSpanEndUtc)
     {
         var edges = BandEdges(band);
-        var instants = new List<DateTimeOffset> { TehranTime.FromUtc(sessionStartUtc.ToUniversalTime().DateTime) };
+        var instants = new List<DateTimeOffset>
+        {
+            TehranTime.FromUtc(sessionStartUtc.ToUniversalTime().DateTime),
+            TehranTime.FromUtc(poweredSpanEndUtc.ToUniversalTime().DateTime),
+        };
         instants.AddRange(checkpointAtUtc.Select(t => TehranTime.FromUtc(DateTime.SpecifyKind(t, DateTimeKind.Utc))));
         instants = instants.OrderBy(t => t).ToList();
         if (instants.Count == 0)

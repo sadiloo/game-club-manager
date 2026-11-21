@@ -650,7 +650,8 @@ public sealed class WindowsKioskServerIntegrationTests
             var afterOutage2 = (await runtime.GetQueue().PendingAsync()).Count(e => e.Type == "offline_play_segment");
             Assert.True(afterOutage2 > afterOutage1, "outage 2 must enqueue offline_play_segment evidence");
 
-            var poweredSpanSeconds = (DateTime.UtcNow - poweredSpanStartUtc).TotalSeconds;
+            var poweredSpanEndUtc = DateTime.UtcNow;
+            var poweredSpanSeconds = (poweredSpanEndUtc - poweredSpanStartUtc).TotalSeconds;
             var secondsPastMinute = poweredSpanSeconds % 60;
             var marginToNearestMinute = Math.Min(secondsPastMinute, secondsPastMinute == 0 ? 60 : 60 - secondsPastMinute);
             Console.WriteLine(
@@ -704,7 +705,8 @@ public sealed class WindowsKioskServerIntegrationTests
             G2BandAlignWait.AssertSameSideOfAllBandEdges(
                 PilotSeed.PcNormalSpecialHours,
                 new DateTimeOffset(evidence.SessionStartedAtUtc, TimeSpan.Zero),
-                evidence.CheckpointAtUtc);
+                evidence.CheckpointAtUtc,
+                new DateTimeOffset(poweredSpanEndUtc, TimeSpan.Zero));
             Assert.Equal(evidence.ExpectedCollectibleToman, evidence.PendingBillCollectibleToman);
         }
         finally

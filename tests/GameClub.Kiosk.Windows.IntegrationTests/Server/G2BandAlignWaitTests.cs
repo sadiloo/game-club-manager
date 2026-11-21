@@ -82,11 +82,19 @@ public sealed class G2BandAlignWaitTests
     }
 
     [Fact]
-    public void approach_window_midnight_at_thirteen_minutes_plus_one_second_waits()
+    public void approach_window_midnight_one_second_inside_inclusive_boundary_still_waits()
     {
         var now = TehranTime.At(2026, 6, 3, 23, 47, 1);
         var plan = G2BandAlignWait.ComputePlan(now.ToUniversalTime(), Edges());
         Assert.True(plan.WaitMilliseconds > 0);
+    }
+
+    [Fact]
+    public void approach_window_midnight_exclusive_one_second_outside_thirteen_minutes()
+    {
+        var now = TehranTime.At(2026, 6, 3, 23, 46, 59);
+        var plan = G2BandAlignWait.ComputePlan(now.ToUniversalTime(), Edges());
+        Assert.Equal(0, plan.WaitMilliseconds);
     }
 
     [Fact]
@@ -112,11 +120,28 @@ public sealed class G2BandAlignWaitTests
     {
         var start = TehranTime.At(2026, 6, 3, 8, 29, 0);
         var checkpoint = TehranTime.At(2026, 6, 3, 8, 31, 0);
+        var end = TehranTime.At(2026, 6, 3, 8, 32, 0);
         var ex = Assert.Throws<Xunit.Sdk.XunitException>(() =>
             G2BandAlignWait.AssertSameSideOfAllBandEdges(
                 Band,
                 start.ToUniversalTime(),
-                new[] { checkpoint.UtcDateTime }));
+                new[] { checkpoint.UtcDateTime },
+                end.ToUniversalTime()));
+        Assert.Contains("straddle", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void assert_fails_when_checkpoint_exactly_on_edge_and_span_straddles()
+    {
+        var start = TehranTime.At(2026, 6, 3, 8, 29, 0);
+        var checkpoint = TehranTime.At(2026, 6, 3, 8, 30, 0);
+        var end = TehranTime.At(2026, 6, 3, 8, 31, 0);
+        var ex = Assert.Throws<Xunit.Sdk.XunitException>(() =>
+            G2BandAlignWait.AssertSameSideOfAllBandEdges(
+                Band,
+                start.ToUniversalTime(),
+                new[] { checkpoint.UtcDateTime },
+                end.ToUniversalTime()));
         Assert.Contains("straddle", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -125,10 +150,12 @@ public sealed class G2BandAlignWaitTests
     {
         var start = TehranTime.At(2026, 6, 3, 8, 31, 0);
         var checkpoint = TehranTime.At(2026, 6, 3, 8, 40, 0);
+        var end = TehranTime.At(2026, 6, 3, 8, 41, 0);
         G2BandAlignWait.AssertSameSideOfAllBandEdges(
             Band,
             start.ToUniversalTime(),
-            new[] { checkpoint.UtcDateTime });
+            new[] { checkpoint.UtcDateTime },
+            end.ToUniversalTime());
     }
 }
 #endif
