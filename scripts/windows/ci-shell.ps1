@@ -103,12 +103,11 @@ if (-not $wv2) {
 
 dotnet build tests/GameClub.Shell.Windows.IntegrationTests/GameClub.Shell.Windows.IntegrationTests.csproj -c Release -f net48 --nologo
 & (Join-Path $PSScriptRoot "shell-windowshell-inventory.ps1") -Role Shell
-$filter = if ($env:GAMECLUB_SHELL_BISECT_FILTER) { $env:GAMECLUB_SHELL_BISECT_FILTER } else { "Category=WindowsShell" }
 $testExitCode = 0
 try {
     dotnet test tests/GameClub.Shell.Windows.IntegrationTests/GameClub.Shell.Windows.IntegrationTests.csproj `
       -c Release -f net48 --no-build --nologo `
-      --filter $filter `
+      --filter "Category=WindowsShell" `
       --logger "console;verbosity=normal" `
       --results-directory $artifactDir `
       --logger "trx;LogFileName=shell-windows.trx"
