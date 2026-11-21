@@ -564,7 +564,7 @@ public sealed class WindowsKioskServerIntegrationTests
         await runtime.DisposeAsync();
     }
 
-    [Fact(Timeout = 1_200_000)]
+    [SkippableFact(Timeout = 1_800_000)]
     [Trait("Category", "UbuntuG2Oracle")]
     public async Task live_server_two_outages_bill_matches_main_g2_oracle()
     {
@@ -577,6 +577,12 @@ public sealed class WindowsKioskServerIntegrationTests
             g2RunStartUtc.AddMinutes(g2ExpectedRunMinutes),
             TimeSpan.FromHours(3));
         var g2HostArgs = PcSpecialBandHarnessEnv.HostArgsFromBand(g2HarnessBand);
+        var g2HarnessTimeBand = new TimeBand(
+            "g2-harness",
+            PilotSeed.PcNormalGroupId,
+            "g2-harness",
+            g2HarnessBand.Start,
+            g2HarnessBand.End);
         try
         {
             ownedServer = await OutOfProcessLiveServer.StartNewAsync(g2HostArgs);
@@ -591,6 +597,20 @@ public sealed class WindowsKioskServerIntegrationTests
             var customerId = await backend.SeedCustomerWithCredentialAsync("g2user", "pass", 500_000);
             var (deviceId, deviceKey, leasePem) = await backend.PairAsync("PC-G2");
             var kioskHttp = backend.CreateKioskHttpClient(deviceId, deviceKey);
+            var bandEdges = G2BandAlignWait.BandEdges(g2HarnessTimeBand);
+            var alignNowUtc = DateTimeOffset.UtcNow;
+            var alignPlan = G2BandAlignWait.ComputePlan(alignNowUtc, bandEdges);
+            if (alignPlan.WaitMilliseconds <= 0)
+            {
+                Console.WriteLine("G2_BAND_ALIGN none");
+            }
+            else
+            {
+                Console.WriteLine(
+                    $"G2_BAND_ALIGN now={alignNowUtc:O} edge={alignPlan.TriggeringEdgeTehran:O} waitMs={alignPlan.WaitMilliseconds}");
+                await Task.Delay(TimeSpan.FromMilliseconds(alignPlan.WaitMilliseconds));
+            }
+
             var login = await kioskHttp.PostAsJsonAsync(
                 "/api/kiosk/auth/login",
                 new { loginName = "g2user", password = "pass", stationId = "PC-G2" });
@@ -650,7 +670,10 @@ public sealed class WindowsKioskServerIntegrationTests
             Assert.True(afterOutage2 > afterOutage1, "outage 2 must enqueue offline_play_segment evidence");
 
             var poweredSpanEndUtc = DateTime.UtcNow;
-            AssertG2PoweredSpanStaysInOnlineDayBand(poweredSpanStartUtc, poweredSpanEndUtc, g2HarnessBand);
+            G2BandAlignWait.AssertSameSideOfAllBandEdges(
+                g2HarnessTimeBand,
+                new DateTimeOffset(poweredSpanStartUtc, TimeSpan.Zero),
+                new[] { poweredSpanEndUtc });
             var poweredSpanSeconds = (poweredSpanEndUtc - poweredSpanStartUtc).TotalSeconds;
             var secondsPastMinute = poweredSpanSeconds % 60;
             var marginToNearestMinute = Math.Min(secondsPastMinute, secondsPastMinute == 0 ? 60 : 60 - secondsPastMinute);
@@ -704,6 +727,10 @@ public sealed class WindowsKioskServerIntegrationTests
             Assert.Equal(0, evidence.OfflinePlaySegmentCount);
             Assert.Equal(evidence.ExpectedBillableMinutes, evidence.CheckpointCount);
             Assert.Equal(0, evidence.DuplicateCheckpointMinuteBuckets);
+            G2BandAlignWait.AssertSameSideOfAllBandEdges(
+                g2HarnessTimeBand,
+                new DateTimeOffset(evidence.SessionStartedAtUtc, TimeSpan.Zero),
+                evidence.CheckpointAtUtc);
             Assert.Equal(evidence.ExpectedCollectibleToman, evidence.PendingBillCollectibleToman);
         }
         finally
@@ -724,38 +751,6 @@ public sealed class WindowsKioskServerIntegrationTests
         {
             Assert.Fail(
                 $"G2 requires test-host --pc-band day; now {now:yyyy-MM-dd HH:mm} Tehran is inside harness special {start.Hour:00}:{start.Minute:00}–{end.Hour:00}:{end.Minute:00}.");
-        }
-    }
-
-    private static void AssertG2PoweredSpanStaysInOnlineDayBand(
-        DateTime spanStartUtc,
-        DateTime spanEndUtc,
-        (TimeOfDay Start, TimeOfDay End) harnessBand)
-    {
-        var (start, end) = harnessBand;
-        var startTehran = TehranTime.FromUtc(spanStartUtc);
-        var endTehran = TehranTime.FromUtc(spanEndUtc);
-        if (IsInsideHarnessSpecialBand(startTehran, start, end) || IsInsideHarnessSpecialBand(endTehran, start, end))
-        {
-            Assert.Fail(
-                $"G2 powered span must stay in online day via harness override; span {startTehran:HH:mm}–{endTehran:HH:mm} Tehran intersects harness special {start.Hour:00}:{start.Minute:00}–{end.Hour:00}:{end.Minute:00}.");
-        }
-
-        for (var day = startTehran.Date; day <= endTehran.Date; day = day.AddDays(1))
-        {
-            foreach (var boundary in new[]
-                     {
-                         TehranTime.At(day.Year, day.Month, day.Day, 0, 0),
-                         TehranTime.At(day.Year, day.Month, day.Day, 8, 30),
-                     })
-            {
-                var boundaryUtc = boundary.UtcDateTime;
-                if (spanStartUtc < boundaryUtc && boundaryUtc < spanEndUtc)
-                {
-                    Assert.Fail(
-                        $"G2 powered span must not cross 00:00 or 08:30 Tehran; crossed {boundary:yyyy-MM-dd HH:mm} between {startTehran:O} and {endTehran:O}.");
-                }
-            }
         }
     }
 
