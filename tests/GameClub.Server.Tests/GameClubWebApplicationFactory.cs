@@ -31,6 +31,12 @@ public class GameClubWebApplicationFactory : WebApplicationFactory<Program>
 
     public string ConnectionString { get; private set; } = "";
 
+    /// <summary>
+    /// When overridden by a prefixed-database fixture, supplies the connection string without mutating
+    /// <c>GAMECLUB_TEST_DATABASE</c> / <c>GAMECLUB_DATABASE</c> process environment variables.
+    /// </summary>
+    protected virtual string? DedicatedConnectionString => null;
+
     /// <summary>When set, <see cref="SaveTitleSecondSaveFaultInterceptor"/> faults the second SaveChanges in the request.</summary>
     internal SaveTitleSaveFaultGate? SaveTitleSaveFaultGate { get; set; }
 
@@ -55,11 +61,19 @@ public class GameClubWebApplicationFactory : WebApplicationFactory<Program>
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
-        ConnectionString = Environment.GetEnvironmentVariable("GAMECLUB_TEST_DATABASE")
-            ?? Environment.GetEnvironmentVariable("GAMECLUB_DATABASE")
-            ?? "Host=localhost;Database=gameclub_test;Username=gameclub;Password=gameclub";
+        var dedicated = DedicatedConnectionString;
+        if (!string.IsNullOrWhiteSpace(dedicated))
+        {
+            ConnectionString = dedicated;
+        }
+        else
+        {
+            ConnectionString = Environment.GetEnvironmentVariable("GAMECLUB_TEST_DATABASE")
+                ?? Environment.GetEnvironmentVariable("GAMECLUB_DATABASE")
+                ?? "Host=localhost;Database=gameclub_test;Username=gameclub;Password=gameclub";
 
-        Environment.SetEnvironmentVariable("GAMECLUB_DATABASE", ConnectionString);
+            Environment.SetEnvironmentVariable("GAMECLUB_DATABASE", ConnectionString);
+        }
         Environment.SetEnvironmentVariable("GAMECLUB_API_KEY", "dev-key");
         Environment.SetEnvironmentVariable("DeadPc__SweepIntervalSeconds", "1");
 

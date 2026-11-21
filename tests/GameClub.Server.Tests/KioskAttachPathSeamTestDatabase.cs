@@ -37,8 +37,6 @@ internal sealed class KioskAttachPathSeamTestDatabase : IDisposable
 
             template.Database = _databaseName;
             ConnectionString = template.ConnectionString;
-            Environment.SetEnvironmentVariable("GAMECLUB_TEST_DATABASE", ConnectionString);
-            Environment.SetEnvironmentVariable("GAMECLUB_DATABASE", ConnectionString);
             _initialized = true;
         }
     }
@@ -80,6 +78,8 @@ public sealed class KioskAttachPathSeamWebApplicationFactory : GameClubWebApplic
     {
         _database.EnsureInitialized();
     }
+
+    protected override string? DedicatedConnectionString => _database.ConnectionString;
 
     protected override void Dispose(bool disposing)
     {

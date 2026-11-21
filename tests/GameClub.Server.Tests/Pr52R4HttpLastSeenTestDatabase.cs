@@ -37,8 +37,6 @@ internal sealed class Pr52R4HttpLastSeenTestDatabase : IDisposable
 
             template.Database = _databaseName;
             ConnectionString = template.ConnectionString;
-            Environment.SetEnvironmentVariable("GAMECLUB_TEST_DATABASE", ConnectionString);
-            Environment.SetEnvironmentVariable("GAMECLUB_DATABASE", ConnectionString);
             _initialized = true;
         }
     }
@@ -80,6 +78,8 @@ public sealed class Pr52R4HttpLastSeenWebApplicationFactory : GameClubWebApplica
     {
         _database.EnsureInitialized();
     }
+
+    protected override string? DedicatedConnectionString => _database.ConnectionString;
 
     protected override void Dispose(bool disposing)
     {
