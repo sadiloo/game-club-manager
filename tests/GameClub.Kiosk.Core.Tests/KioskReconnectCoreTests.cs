@@ -510,6 +510,7 @@ public sealed class KioskReconnectCoreTests
             estimatedRemainingSeconds: null,
             lastErrorDetail: null);
         Assert.False(KioskStationStatus.ImpliesBareConnected(state));
+        Assert.False(KioskStationStatus.ContainsConnectedWording(text));
         Assert.Contains(ConnReconnecting, text, StringComparison.Ordinal);
     }
 
@@ -529,6 +530,7 @@ public sealed class KioskReconnectCoreTests
             estimatedRemainingSeconds: null,
             lastErrorDetail: null);
         Assert.Contains(ConnNoResponse, byFailures, StringComparison.Ordinal);
+        Assert.False(KioskStationStatus.ContainsConnectedWording(byFailures));
         Assert.False(KioskStationStatus.ImpliesBareConnected(
             KioskStationStatus.ResolveState(
                 "PC-LOCK",
@@ -556,6 +558,7 @@ public sealed class KioskReconnectCoreTests
             estimatedRemainingSeconds: null,
             lastErrorDetail: null);
         Assert.Contains(ConnNoResponse, byStaleAck, StringComparison.Ordinal);
+        Assert.False(KioskStationStatus.ContainsConnectedWording(byStaleAck));
         Assert.False(KioskStationStatus.ImpliesBareConnected(
             KioskStationStatus.ResolveState(
                 "PC-LOCK",
@@ -699,6 +702,7 @@ public sealed class KioskReconnectCoreTests
             utcNow: DateTime.UtcNow,
             estimatedRemainingSeconds: null,
             lastErrorDetail: null);
+        Assert.False(KioskStationStatus.ContainsConnectedWording(text));
         Assert.False(KioskStationStatus.ImpliesBareConnected(
             KioskStationStatus.ResolveState(
                 "PC-SR",
@@ -763,6 +767,7 @@ public sealed class KioskReconnectCoreTests
             estimatedRemainingSeconds: null,
             lastErrorDetail: null);
         Assert.Contains(ConnNotConnected, text, StringComparison.Ordinal);
+        Assert.False(KioskStationStatus.ContainsConnectedWording(text));
         Assert.False(KioskStationStatus.ImpliesBareConnected(
             KioskStationStatus.ResolveState(
                 "PC-C",
@@ -925,6 +930,18 @@ public sealed class KioskReconnectCoreTests
         await runtime.StartAsync(default);
         transport.SimulateSignalRReconnecting();
         Assert.Equal(KioskTransportPhase.Reconnecting, last);
+        var status = KioskStationStatus.Resolve(
+            "PC-Rh",
+            runtime.TransportPhase,
+            runtime.IsTransportConnected,
+            transport.SignalRAutoReconnecting,
+            false,
+            false,
+            0,
+            null,
+            DateTime.UtcNow,
+            null,
+            null);
         var lineState = KioskStationStatus.ResolveState(
             "PC-Rh",
             runtime.TransportPhase,
@@ -937,6 +954,7 @@ public sealed class KioskReconnectCoreTests
             DateTime.UtcNow,
             null,
             null);
+        Assert.False(KioskStationStatus.ContainsConnectedWording(status));
         Assert.False(KioskStationStatus.ImpliesBareConnected(lineState));
     }
 

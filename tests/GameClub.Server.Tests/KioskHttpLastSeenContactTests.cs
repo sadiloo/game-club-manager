@@ -85,14 +85,52 @@ public sealed class KioskHttpLastSeenContactTests(Pr52R4HttpLastSeenWebApplicati
         Assert.True(contact2Utc > contact1Utc);
     }
 
+    [Fact(Skip = "Run on main 977703de only to refresh KioskPaidSessionMainOracle.")]
+    public async Task emit_main_paid_kiosk_bill_fingerprint_for_oracle_capture()
+    {
+        var withoutHttp = await RunPaidKioskSessionAsync(interleaveHttpContact: false, "PC-ORACLE-CAPTURE");
+        throw new Xunit.Sdk.XunitException("ORACLE_FINGERPRINT=" + BillFingerprint(withoutHttp.Bill));
+    }
+
     [Fact]
     public async Task paid_kiosk_session_bill_and_lease_match_with_or_without_http_last_seen_stamps()
     {
         const string stationId = "PC-PARITY";
         var withHttp = await RunPaidKioskSessionAsync(interleaveHttpContact: true, stationId);
-        var withoutHttp = await RunPaidKioskSessionAsync(interleaveHttpContact: false, stationId);
+        var withoutHttp = await RunPaidKioskSessionAsync(interleaveHttpContact: false, stationId + "-B");
         Assert.Equal(withoutHttp.Steps, withHttp.Steps);
-        Assert.Equal(BillFingerprint(withoutHttp.Bill), BillFingerprint(withHttp.Bill));
+        var withBill = BillFingerprint(withoutHttp.Bill);
+        var httpBill = BillFingerprint(withHttp.Bill);
+        Assert.Equal(withBill, httpBill);
+        Assert.Equal(KioskPaidSessionMainOracle.WithoutHttpBillFingerprint, withBill);
+        Assert.Equal(KioskPaidSessionMainOracle.WithoutHttpBillFingerprint, httpBill);
+    }
+
+    [Fact]
+    public async Task last_seen_http_write_throttled_to_once_per_thirty_seconds_per_device()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        const string stationId = "PC-THROTTLE";
+        var baseTime = new DateTimeOffset(2026, 9, 1, 8, 0, 0, TimeSpan.Zero);
+        factory.Clock.SetUtc(baseTime);
+        var api = factory.CreateClientWithKey();
+        await S3TestHelpers.RegisterPc(api, stationId, PilotSeed.PcNormalGroupId);
+        var (deviceId, deviceKey, _) = await PairDeviceAsync(stationId);
+        var kiosk = CreateKioskClient(deviceId, deviceKey);
+
+        factory.Clock.SetUtc(baseTime.AddSeconds(10));
+        (await kiosk.GetAsync($"/api/kiosk/stations/{stationId}/config")).EnsureSuccessStatusCode();
+        var firstSeen = await ReadLastSeenAsync(deviceId);
+
+        factory.Clock.SetUtc(baseTime.AddSeconds(25));
+        (await kiosk.GetAsync($"/api/kiosk/stations/{stationId}/config")).EnsureSuccessStatusCode();
+        var secondSeen = await ReadLastSeenAsync(deviceId);
+        Assert.Equal(firstSeen, secondSeen);
+
+        factory.Clock.SetUtc(baseTime.AddSeconds(41));
+        (await kiosk.GetAsync($"/api/kiosk/stations/{stationId}/config")).EnsureSuccessStatusCode();
+        var thirdSeen = await ReadLastSeenAsync(deviceId);
+        Assert.True(thirdSeen > firstSeen);
     }
 
     private async Task<PaidKioskSessionOutcome> RunPaidKioskSessionAsync(bool interleaveHttpContact, string stationId)
@@ -154,9 +192,19 @@ public sealed class KioskHttpLastSeenContactTests(Pr52R4HttpLastSeenWebApplicati
 
         var op = await factory.CreateOperatorClientAsync();
         factory.Clock.SetTehran(2026, 6, 10, 14, 45);
-        await op.PostAsync($"/api/operator/sessions/{sessionId}/force-logout", null);
+        var forceLogout = await op.PostAsync($"/api/operator/sessions/{sessionId}/force-logout", null);
+        Assert.Equal(System.Net.HttpStatusCode.NoContent, forceLogout.StatusCode);
         var bill = await op.GetFromJsonAsync<JsonElement>($"/api/operator/sessions/{sessionId}/bill");
         return new PaidKioskSessionOutcome(steps, BillOutcome.FromJson(bill));
+    }
+
+    private async Task<DateTime?> ReadLastSeenAsync(Guid deviceId)
+    {
+        await using var scope = factory.Services.CreateAsyncScope();
+        return await scope.ServiceProvider.GetRequiredService<AppDbContext>().KioskDevices.AsNoTracking()
+            .Where(d => d.Id == deviceId)
+            .Select(d => d.LastSeenUtc)
+            .SingleAsync();
     }
 
     private HttpClient CreateKioskClient(Guid deviceId, string deviceKey)

@@ -262,4 +262,105 @@ public sealed class KioskOperatorLockServiceTests(GameClubWebApplicationFactory 
         var tile = grid.EnumerateArray().FirstOrDefault(e => e.GetProperty("id").GetString() == stationId);
         Assert.True(tile.ValueKind == JsonValueKind.Undefined || tile.GetProperty("status").GetString() != "FreeUse");
     }
+
+    [Fact]
+    public async Task operator_lock_on_open_pc_session_stops_session_writes_audit_and_freezes_bill()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        const string stationId = "PC-OPL";
+        factory.Clock.SetTehran(2026, 7, 1, 12, 0);
+
+        var api = factory.CreateClientWithKey();
+        await S3TestHelpers.RegisterPc(api, stationId, PilotSeed.PcNormalGroupId);
+        await using (var scope = factory.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var customer = new CustomerEntity
+            {
+                Id = Guid.NewGuid(),
+                Name = "Lock",
+                Mobile = "09121112222",
+                CreatedAtUtc = factory.Clock.UtcNow.UtcDateTime,
+            };
+            db.Customers.Add(customer);
+            db.CustomerMembers.Add(new CustomerMemberEntity { CustomerId = customer.Id, RealToman = 500_000 });
+            await db.SaveChangesAsync();
+            await scope.ServiceProvider.GetRequiredService<KioskCustomerAuthService>()
+                .SetCredentialAsync(customer.Id, "lockme", "pass", default);
+        }
+
+        var (deviceId, deviceKey, _) = await PairDeviceAsync(stationId);
+        var kiosk = CreateKioskClient(deviceId, deviceKey);
+        var login = await kiosk.PostAsJsonAsync(
+            "/api/kiosk/auth/login",
+            new { loginName = "lockme", password = "pass", stationId });
+        login.EnsureSuccessStatusCode();
+        var sessionId = (await login.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("sessionId").GetGuid();
+
+        factory.Clock.SetTehran(2026, 7, 1, 12, 20);
+        var lockAt = factory.Clock.UtcNow.UtcDateTime;
+        await using (var hbScope = factory.Services.CreateAsyncScope())
+        {
+            await hbScope.ServiceProvider.GetRequiredService<KioskCheckpointCoordinator>()
+                .OnHeartbeatAsync(deviceId, sessionId, 1_200_000, default);
+        }
+
+        var lockResponse = await kiosk.PostAsJsonAsync(
+            $"/api/kiosk/stations/{stationId}/operator-lock/session",
+            new { sessionId });
+        lockResponse.EnsureSuccessStatusCode();
+
+        await using (var scope = factory.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var session = await db.Sessions.AsNoTracking().SingleAsync(s => s.Id == sessionId);
+            Assert.True(session.Status is SessionStatus.BillOpen or SessionStatus.AwaitingPayment);
+            Assert.True(await db.AuditLog.AnyAsync(a => a.Action == "kiosk.operator_lock"));
+        }
+
+        var op = await factory.CreateOperatorClientAsync();
+        var bill = await op.GetFromJsonAsync<JsonElement>($"/api/operator/sessions/{sessionId}/bill");
+        Assert.Equal(lockAt, bill.GetProperty("frozenAtUtc").GetDateTime());
+    }
+
+    [Fact]
+    public async Task operator_lock_on_console_station_returns_400_not_pc()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var api = factory.CreateClientWithKey();
+        var op = await factory.CreateOperatorClientAsync();
+        await S3TestHelpers.RegisterConsole(api, op, "PS5-OPL", 1);
+        var (deviceId, deviceKey, _) = await PairDeviceAsync("PS5-OPL");
+        var sessionId = await S3TestHelpers.StartSession(api, "PS5-OPL", 1);
+        var kiosk = CreateKioskClient(deviceId, deviceKey);
+        var response = await kiosk.PostAsJsonAsync(
+            "/api/kiosk/stations/PS5-OPL/operator-lock/session",
+            new { sessionId });
+        Assert.Equal(StatusCodes.Status400BadRequest, (int)response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("not_pc", body.GetProperty("code").GetString());
+    }
+
+    private HttpClient CreateKioskClient(Guid deviceId, string deviceKey)
+    {
+        var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Add(KioskDeviceAuthMiddleware.DeviceIdHeader, deviceId.ToString());
+        client.DefaultRequestHeaders.Add(KioskDeviceAuthMiddleware.DeviceKeyHeader, deviceKey);
+        return client;
+    }
+
+    private async Task<(Guid DeviceId, string DeviceKey, string PublicKey)> PairDeviceAsync(string stationId)
+    {
+        var op = await factory.CreateOperatorClientAsync();
+        var codeBody = await op.PostAsync($"/api/operator/stations/{stationId}/pairing-code", null);
+        codeBody.EnsureSuccessStatusCode();
+        var code = JsonDocument.Parse(await codeBody.Content.ReadAsStringAsync()).RootElement.GetProperty("code").GetString();
+        var pair = await factory.CreateClient().PostAsJsonAsync("/api/kiosk/pair", new { code });
+        pair.EnsureSuccessStatusCode();
+        var doc = JsonDocument.Parse(await pair.Content.ReadAsStringAsync());
+        return (
+            doc.RootElement.GetProperty("deviceId").GetGuid(),
+            doc.RootElement.GetProperty("deviceKey").GetString()!,
+            doc.RootElement.GetProperty("leaseVerifyPublicKeyPem").GetString()!);
+    }
 }

@@ -5,7 +5,22 @@ Set-Location $root
 
 Write-Host "ci-installer: compile gate (publish server win-x64)"
 dotnet publish src/GameClub.Server/GameClub.Server.csproj -c Release -r win-x64 --self-contained true -o artifacts/installer/server-publish --nologo
+if ($LASTEXITCODE -ne 0) {
+  Write-Error "ci-installer: server publish failed (exit $LASTEXITCODE)"
+  exit 1
+}
 dotnet publish src/GameClub.Kiosk/GameClub.Kiosk.csproj -c Release -f net48 -o artifacts/installer/kiosk-publish --nologo
+if ($LASTEXITCODE -ne 0) {
+  Write-Error "ci-installer: kiosk publish failed (exit $LASTEXITCODE)"
+  exit 1
+}
+
+$appVersion = (dotnet msbuild Directory.Build.props -getProperty:Version -nologo | Select-Object -Last 1).Trim()
+if ([string]::IsNullOrWhiteSpace($appVersion)) {
+  Write-Error "ci-installer: could not read Version from Directory.Build.props"
+  exit 1
+}
+Write-Host "ci-installer: AppVersion=$appVersion"
 
 $serverSize = (Get-ChildItem artifacts/installer/server-publish -Recurse -File | Measure-Object -Property Length -Sum).Sum
 $kioskSize = (Get-ChildItem artifacts/installer/kiosk-publish -Recurse -File | Measure-Object -Property Length -Sum).Sum
@@ -14,113 +29,16 @@ Write-Host "ci-installer: kiosk publish bytes=$kioskSize"
 
 Write-Host "ci-installer: static installer rules"
 & (Join-Path $root "installer/tests/NoBackupDelete.Tests.ps1")
+& (Join-Path $root "installer/tests/IsccVersionGate.Tests.ps1")
 
 $expectedInno = [Version]"6.7.1"
+. (Join-Path $PSScriptRoot "Resolve-InnoSetupVersion.ps1")
 
 function NormalizeDir([string]$path) {
   if ([string]::IsNullOrWhiteSpace($path)) {
     return $null
   }
   return [System.IO.Path]::GetFullPath($path).TrimEnd('\')
-}
-
-function Try-ParseInnoVersionString([string]$text) {
-  if ([string]::IsNullOrWhiteSpace($text)) {
-    return $null
-  }
-  if ($text -eq "0.0.0.0") {
-    return $null
-  }
-  try {
-    return [Version]$text
-  }
-  catch {
-    return $null
-  }
-}
-
-function Test-VersionMatchesExpected([Version]$parsed, [Version]$expected) {
-  if ($null -eq $parsed) {
-    return $false
-  }
-  return $parsed.Major -eq $expected.Major `
-    -and $parsed.Minor -eq $expected.Minor `
-    -and $parsed.Build -eq $expected.Build
-}
-
-function Parse-InnoBannerCompilerVersion([string]$bannerText) {
-  if ([string]::IsNullOrWhiteSpace($bannerText)) {
-    return $null
-  }
-  if ($bannerText -match "(?m)Compiler version\s+(\d+\.\d+(?:\.\d+)?)") {
-    return $Matches[1]
-  }
-  return $null
-}
-
-function Resolve-InnoVersionDecision {
-  param(
-    [string]$DisplayVersion,
-    [string]$FileVersion,
-    [string]$ProductVersion,
-    [string]$BannerText,
-    [Version]$Expected
-  )
-
-  $displayParsed = Try-ParseInnoVersionString $DisplayVersion
-  $fileParsed = Try-ParseInnoVersionString $FileVersion
-  $productParsed = Try-ParseInnoVersionString $ProductVersion
-  $bannerVersionText = Parse-InnoBannerCompilerVersion $BannerText
-  $bannerParsed = Try-ParseInnoVersionString $bannerVersionText
-
-  $contradictions = [System.Collections.Generic.List[string]]::new()
-
-  if ($null -eq $displayParsed -or -not (Test-VersionMatchesExpected $displayParsed $Expected)) {
-    return @{
-      Ok               = $false
-      Reason           = "DisplayVersion must be $Expected (registry uninstall key)."
-      DisplayVersion   = $DisplayVersion
-      FileVersion      = $FileVersion
-      ProductVersion   = $ProductVersion
-      BannerVersion    = $bannerVersionText
-      Contradictions   = @()
-    }
-  }
-
-  foreach ($entry in @(
-      @{ Name = "FileVersion"; Parsed = $fileParsed; Raw = $FileVersion }
-      @{ Name = "ProductVersion"; Parsed = $productParsed; Raw = $ProductVersion }
-      @{ Name = "BannerVersion"; Parsed = $bannerParsed; Raw = $bannerVersionText }
-    )) {
-    if ($null -eq $entry.Parsed) {
-      continue
-    }
-    if (-not (Test-VersionMatchesExpected $entry.Parsed $Expected)) {
-      $contradictions.Add("$($entry.Name)=$($entry.Raw)")
-    }
-  }
-
-  if ($contradictions.Count -gt 0) {
-    return @{
-      Ok               = $false
-      Reason           = "version source(s) contradict DisplayVersion $Expected."
-      DisplayVersion   = $DisplayVersion
-      FileVersion      = $FileVersion
-      ProductVersion   = $ProductVersion
-      BannerVersion    = $bannerVersionText
-      Contradictions   = $contradictions.ToArray()
-    }
-  }
-
-  return @{
-    Ok               = $true
-    Reason           = $null
-    DisplayVersion   = $DisplayVersion
-    FileVersion      = $FileVersion
-    ProductVersion   = $ProductVersion
-    BannerVersion    = $bannerVersionText
-    Contradictions   = @()
-  }
 }
 
 function Get-InnoRegistryEntry {
@@ -214,7 +132,7 @@ Write-Host "ci-installer: registry key=$($regEntry.RegistryKey)"
 Write-Host "ci-installer: version source DisplayVersion=$($regEntry.DisplayVersion)"
 Write-Host "ci-installer: version source FileVersion=$fileVersion"
 Write-Host "ci-installer: version source ProductVersion=$productVersion"
-$bannerLine = if ($null -ne $bannerText -and $bannerText -match "(?m)^.*Compiler version.*$") { $Matches[0].Trim() } else { "(unparsable or no banner)" }
+$bannerLine = if ($null -ne $bannerText -and $bannerText -match "(?m)^.*Compiler (engine )?version.*$") { $Matches[0].Trim() } else { "(unparsable or no banner)" }
 Write-Host "ci-installer: version source bannerLine=$bannerLine"
 Write-Host "ci-installer: version source BannerVersion=$($decision.BannerVersion)"
 
@@ -242,8 +160,8 @@ $issTargets = @(
 )
 $compiledOutputs = [System.Collections.Generic.List[string]]::new()
 foreach ($iss in $issTargets) {
-  Write-Host "ci-installer: iscc $iss (via $realIscc)"
-  $compileLog = & $realIscc $iss 2>&1 | Out-String
+  Write-Host "ci-installer: iscc $iss (via $realIscc) AppVersion=$appVersion"
+  $compileLog = & $realIscc "/DAppVersion=$appVersion" $iss 2>&1 | Out-String
   Write-Host $compileLog
   if ($LASTEXITCODE -ne 0) {
     Write-Error "ci-installer: iscc failed for $iss (exit $LASTEXITCODE)"

@@ -51,6 +51,9 @@ public sealed class KioskHostStatusTimerTests
         return state is not null && KioskStationStatus.ImpliesBareConnected(state.Value);
     }
 
+    private static bool StatusContainsConnectedWording(string text)
+        => !string.IsNullOrEmpty(text) && KioskStationStatus.ContainsConnectedWording(text);
+
     [Fact]
     public void host_boot_path_shows_no_server_response_when_heartbeats_fail()
         => RunScenario(lateConnect: true, operatorStopLock: false);
@@ -343,7 +346,7 @@ public sealed class KioskHostStatusTimerTests
 
                 if (operatorStopLock)
                 {
-                    if (staleConnectedWatchActive && HostImpliesBareConnected(host))
+                    if (staleConnectedWatchActive && StatusContainsConnectedWording(text))
                     {
                         sawBareConnected = true;
                     }
@@ -358,7 +361,7 @@ public sealed class KioskHostStatusTimerTests
                         pastFailureThreshold = true;
                     }
 
-                    if (pastFailureThreshold && HostImpliesBareConnected(host))
+                    if (pastFailureThreshold && StatusContainsConnectedWording(text))
                     {
                         sawBareConnected = true;
                     }
@@ -1423,6 +1426,7 @@ public sealed class KioskHostStatusTimerTests
             }
 
             Assert.False(HostImpliesBareConnected(host));
+            Assert.False(KioskStationStatus.ContainsConnectedWording(StatusCombined(status)));
         }
         finally
         {
