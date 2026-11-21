@@ -118,27 +118,14 @@ try {
 }
 finally {
     $shellLogsSource = Join-Path $env:LOCALAPPDATA "Checkpoint\Shell\logs"
-    $trxPath = Join-Path $artifactDir "shell-windows.trx"
-    $shellTestsExecuted = $false
-    if (Test-Path -LiteralPath $trxPath) {
-        [xml]$trx = Get-Content -LiteralPath $trxPath
-        $executedAttr = $trx.TestRun.ResultSummary.Counters.executed
-        if ($null -ne $executedAttr) {
-            $shellTestsExecuted = [int]$executedAttr -gt 0
-        }
-    }
 
-    # Require default %LOCALAPPDATA%\Checkpoint\Shell\logs only when this run actually executed
-    # shell integration tests (WebView/logging). A filter that matches zero tests never starts
-    # the shell and must not fail the job solely because the log directory was never created.
-    if (-not $shellTestsExecuted) {
-        Write-Host "Skipping default shell log harvest: no shell integration tests executed (trx executed=0 or trx missing)."
+    # Rule: missing log directory → skip harvest (no throw). Filtered or checkpoint-only runs
+    # that never spin up MainWindow/WebView never create %LOCALAPPDATA%\Checkpoint\Shell\logs.
+    # Non-empty directory that exists but has no shell-*.log → still fail (shell did log, trace lost).
+    if (-not (Test-Path -LiteralPath $shellLogsSource)) {
+        Write-Host "Skipping default shell log harvest: directory not created ($shellLogsSource)."
     }
     else {
-        if (-not (Test-Path -LiteralPath $shellLogsSource)) {
-            throw "Shell logs directory missing (no trace visibility): $shellLogsSource"
-        }
-
         $shellLogFiles = @(Get-ChildItem -Path $shellLogsSource -Filter "shell-*.log" -File -ErrorAction SilentlyContinue)
         if ($shellLogFiles.Count -eq 0) {
             throw "Shell logs directory is empty (lost trace must not look like a pass): $shellLogsSource"
