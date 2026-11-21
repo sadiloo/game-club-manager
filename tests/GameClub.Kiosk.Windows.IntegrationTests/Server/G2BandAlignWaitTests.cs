@@ -131,10 +131,10 @@ public sealed class G2BandAlignWaitTests
     }
 
     [Fact]
-    public void assert_fails_when_checkpoint_exactly_on_edge_and_span_straddles()
+    public void assert_fails_when_only_powered_span_end_crosses_0830()
     {
-        var start = TehranTime.At(2026, 6, 3, 8, 29, 0);
-        var checkpoint = TehranTime.At(2026, 6, 3, 8, 30, 0);
+        var start = TehranTime.At(2026, 6, 3, 8, 20, 0);
+        var checkpoint = TehranTime.At(2026, 6, 3, 8, 25, 0);
         var end = TehranTime.At(2026, 6, 3, 8, 31, 0);
         var ex = Assert.Throws<Xunit.Sdk.XunitException>(() =>
             G2BandAlignWait.AssertSameSideOfAllBandEdges(
@@ -143,6 +143,34 @@ public sealed class G2BandAlignWaitTests
                 new[] { checkpoint.UtcDateTime },
                 end.ToUniversalTime()));
         Assert.Contains("straddle", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void assert_fails_when_start_before_edge_checkpoint_and_end_on_edge()
+    {
+        var start = TehranTime.At(2026, 6, 3, 8, 29, 59);
+        var checkpoint = TehranTime.At(2026, 6, 3, 8, 30, 0);
+        var end = TehranTime.At(2026, 6, 3, 8, 30, 0);
+        var ex = Assert.Throws<Xunit.Sdk.XunitException>(() =>
+            G2BandAlignWait.AssertSameSideOfAllBandEdges(
+                Band,
+                start.ToUniversalTime(),
+                new[] { checkpoint.UtcDateTime },
+                end.ToUniversalTime()));
+        Assert.Contains("straddle", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void assert_passes_when_all_instants_on_or_after_0830_including_on_edge()
+    {
+        var start = TehranTime.At(2026, 6, 3, 8, 30, 0);
+        var checkpoint = TehranTime.At(2026, 6, 3, 8, 30, 0);
+        var end = TehranTime.At(2026, 6, 3, 8, 35, 0);
+        G2BandAlignWait.AssertSameSideOfAllBandEdges(
+            Band,
+            start.ToUniversalTime(),
+            new[] { checkpoint.UtcDateTime },
+            end.ToUniversalTime());
     }
 
     [Fact]
