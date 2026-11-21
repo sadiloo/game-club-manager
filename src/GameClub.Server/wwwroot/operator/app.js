@@ -2434,6 +2434,43 @@ bindClick("mgrGiftCapBtn", async () => {
   if (values == null) return;
 });
 
+bindClick("mgrDiscountCapBtn", async () => {
+  const cur = await api("/api/operator/members/settings/discount-cap");
+  const values = await cpForm({
+    title: "سقف تخفیف ترکیبی",
+    confirmLabel: "ذخیره",
+    fields: [
+      {
+        name: "maxCombinedPercent",
+        kind: "number",
+        label: "حداکثر درصد تخفیف ترکیبی (سطح + تولد)",
+        value: cur.maxCombinedPercent ?? 100,
+      },
+    ],
+    validate: (v) => {
+      const p = cpParseInteger(String(v.maxCombinedPercent));
+      if (p == null || p < 0 || p > 100) return { maxCombinedPercent: "درصد باید بین ۰ و ۱۰۰ باشد." };
+      return null;
+    },
+    onSubmit: async (v) => {
+      try {
+        await api("/api/operator/members/settings/discount-cap", {
+          method: "PUT",
+          body: JSON.stringify({ maxCombinedPercent: cpParseInteger(String(v.maxCombinedPercent)) }),
+        });
+        cpToast({ tone: "success", text: "سقف تخفیف ذخیره شد." });
+      } catch (e) {
+        const msg =
+          e && e.code === "forbidden"
+            ? "فقط مدیر یا مالک می‌تواند تنظیم کند."
+            : e?.message || "ذخیره نشد.";
+        throw Object.assign(new Error(msg), { code: e?.code, message: msg });
+      }
+    },
+  });
+  if (values == null) return;
+});
+
 bindClick("mgrCorrectionsBtn", async () => {
   const rows = (await api("/api/operator/members/wallet/corrections")) || [];
   await cpAlert({

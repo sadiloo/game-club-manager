@@ -32,7 +32,14 @@ internal static class OperatorMoneyValidation
 
     public static void EnsureWalletBalances(long realToman, long giftToman, string amountCode = "invalid_amount")
     {
-        EnsureNonNegativeBounded(realToman, amountCode);
+        if (realToman < -MaxToman || realToman > MaxToman)
+        {
+            throw new ApiException(
+                StatusCodes.Status400BadRequest,
+                amountCode,
+                realToman < 0 ? "بدهی از حد مجاز بیشتر است." : "مبلغ از حد مجاز بیشتر است.");
+        }
+
         EnsureNonNegativeBounded(giftToman, "invalid_gift");
         var total = MoneyMath.CheckedAdd(realToman, giftToman);
         if (total > MaxToman)

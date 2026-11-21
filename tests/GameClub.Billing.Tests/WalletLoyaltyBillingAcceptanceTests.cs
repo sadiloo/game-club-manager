@@ -31,6 +31,29 @@ public class WalletLoyaltyBillingAcceptanceTests
     }
 
     [Fact]
+    public void wl_scenario_buffet_only_full_wallet_49500_rounds_like_cash()
+    {
+        var request = new InvoiceRequest(
+            [],
+            [new BuffetLine("custom", "خدمت", 1, 49_500)],
+            [],
+            null,
+            null,
+            DiscountPolicy.Default,
+            Step5Up,
+            T.At(2026, 6, 3, 15, 0));
+        var (invoice, alloc) = InvoiceCalculator.Collect(
+            request,
+            [new Tender(PaymentMethod.Wallet, 50_000, "m")],
+            [new MemberWallet("m", 50_000, 0)]);
+        Assert.True(alloc.IsValid);
+        Assert.Equal(50_000, alloc.PayableToman);
+        Assert.Equal(500, alloc.RoundingToman);
+        Assert.Equal(50_000, invoice.PayableToman);
+        Assert.Equal(50_000, alloc.Tenders.Single().AmountToman);
+    }
+
+    [Fact]
     public void wl_scenario_04_mixed_wallet_50001_counter_rounds_to_150001()
     {
         var request = new InvoiceRequest(
