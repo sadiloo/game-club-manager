@@ -107,4 +107,45 @@ public sealed class InpageFormsPr51R4bWalletRoundingTests(GameClubWebApplication
         Assert.Equal(150_000, invoice.CollectibleToman);
         Assert.Equal(150, invoice.RoundingToman);
     }
+
+    [Fact]
+    public async Task session_time_only_full_wallet_49500_matches_cash_twin_collectible_50000()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var api = factory.CreateClientWithKey();
+        var op = await factory.CreateOperatorClientAsync();
+        var customerId = await CreateCustomerAsync(op);
+        (await op.PostAsJsonAsync(
+            $"/api/operator/members/customers/{customerId}/wallet/top-up",
+            new { method = "Cash", amountToman = 100_000L, commandId = Guid.NewGuid() })).EnsureSuccessStatusCode();
+
+        await S3TestHelpers.RegisterConsole(api, op, "PS5-RND495", 1);
+        factory.Clock.SetTehran(2026, 6, 3, 14, 0);
+        var sessionId = await S3TestHelpers.StartSession(api, "PS5-RND495", 1);
+        await op.PutAsJsonAsync($"/api/operator/sessions/{sessionId}/customer", new { customerId });
+        factory.Clock.SetTehran(2026, 6, 3, 14, 27);
+        var open = await op.PostAsync($"/api/operator/sessions/{sessionId}/bill/open", null);
+        open.EnsureSuccessStatusCode();
+        var bill = await open.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(49_500, bill!.GetProperty("unroundedPayableToman").GetInt64());
+        Assert.Equal(50_000, bill.GetProperty("collectibleToman").GetInt64());
+
+        var cashPreview = await op.PostAsJsonAsync(
+            $"/api/operator/sessions/{sessionId}/bill/preview",
+            new { payments = new[] { new { method = "Cash", amountToman = 50_000L } } });
+        cashPreview.EnsureSuccessStatusCode();
+        Assert.Equal(50_000, (await cashPreview.Content.ReadFromJsonAsync<JsonElement>())!.GetProperty("collectibleToman").GetInt64());
+
+        var walletPreview = await op.PostAsJsonAsync(
+            $"/api/operator/sessions/{sessionId}/bill/preview",
+            new { payments = new[] { new { method = "Wallet", amountToman = 50_000L } } });
+        walletPreview.EnsureSuccessStatusCode();
+        Assert.Equal(50_000, (await walletPreview.Content.ReadFromJsonAsync<JsonElement>())!.GetProperty("collectibleToman").GetInt64());
+
+        var before = await WalletSpendableAsync(op, customerId);
+        (await op.PostAsJsonAsync(
+            $"/api/operator/sessions/{sessionId}/bill/confirm",
+            new { payments = new[] { new { method = "Wallet", amountToman = 50_000L } } })).EnsureSuccessStatusCode();
+        Assert.Equal(before - 50_000, await WalletSpendableAsync(op, customerId));
+    }
 }

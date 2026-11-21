@@ -458,15 +458,6 @@ public static class PaymentAllocator
         var shares = new List<LineShare>();
         var results = new TenderResult[tenders.Count];
         var errors = new List<PaymentError>();
-        var hasTimeCharge = false;
-        for (var i = 0; i < lines.Count; i++)
-        {
-            if (lines[i].IsTimeCharge)
-            {
-                hasTimeCharge = true;
-                break;
-            }
-        }
 
         var order = BalanceFirst(tenders);
         foreach (var index in order)
@@ -660,9 +651,9 @@ public static class PaymentAllocator
                 $"Counter tenders {counterTendered} toman against rounded remainder {counterRounded}."));
         }
 
-        if (!hasTimeCharge && rounding.Enabled && counterExact == 0 && counterTendered == 0 && balanceApplied > 0)
+        if (rounding.Enabled && counterExact == 0 && counterTendered == 0 && balanceApplied > 0)
         {
-            var (roundedTotal, walletRoundDelta) = MoneyMath.Round(exact, rounding);
+            var (roundedTotal, walletRoundDelta) = RoundPayableWhenCounterWouldPayAll(lines, exact, rounding);
             var lift = roundedTotal - balanceApplied;
             long walletTendered = 0;
             foreach (var tender in tenders)
@@ -718,6 +709,39 @@ public static class PaymentAllocator
             tenderList,
             errors,
             remainingWallets);
+    }
+
+    private static (long RoundedPayable, long RoundingDelta) RoundPayableWhenCounterWouldPayAll(
+        IReadOnlyList<PayableLine> lines,
+        long exact,
+        RoundingPolicy rounding)
+    {
+        if (!rounding.Enabled)
+        {
+            return (exact, 0);
+        }
+
+        long timeTotal = 0;
+        long otherTotal = 0;
+        for (var i = 0; i < lines.Count; i++)
+        {
+            if (lines[i].IsTimeCharge)
+            {
+                timeTotal = MoneyMath.CheckedAdd(timeTotal, lines[i].NetToman);
+            }
+            else
+            {
+                otherTotal = MoneyMath.CheckedAdd(otherTotal, lines[i].NetToman);
+            }
+        }
+
+        if (rounding.Scope == RoundingScope.TimeChargesOnly)
+        {
+            var (roundedTime, delta) = MoneyMath.Round(timeTotal, rounding);
+            return (MoneyMath.CheckedAdd(roundedTime, otherTotal), delta);
+        }
+
+        return MoneyMath.Round(exact, rounding);
     }
 
     private static bool ApplyWalletRoundingLift(
