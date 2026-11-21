@@ -2,46 +2,51 @@
 param(
     [string] $PrimaryBackupDir = "C:\ProgramData\Checkpoint\backups",
     [string] $SecondaryBackupDir = "",
-    [string] $LogsDir = "C:\ProgramData\Checkpoint\logs"
+    [string] $LogsDir = "C:\ProgramData\Checkpoint\logs",
+    [string] $ServerJsonPath = "$env:ProgramData\Checkpoint\config\server.json"
 )
 
 $ErrorActionPreference = "Stop"
-$serverJson = "C:\ProgramData\Checkpoint\config\server.json"
-$connScript = Join-Path $PSScriptRoot "Read-ServerJsonConnection.ps1"
-if (-not (Test-Path -LiteralPath $connScript)) {
-    throw "Read-ServerJsonConnection.ps1 missing"
-}
-$conn = & $connScript -ServerJsonPath $serverJson
+. (Join-Path $PSScriptRoot "CheckpointDbConfig.ps1")
 
-New-Item -ItemType Directory -Force -Path $PrimaryBackupDir | Out-Null
-New-Item -ItemType Directory -Force -Path $LogsDir | Out-Null
-
-$stamp = Get-Date -Format "yyyyMMdd-HHmm"
-$dump = Join-Path $PrimaryBackupDir "checkpoint-$stamp.dump"
 $logPath = Join-Path $LogsDir "backup.log"
-
-$env:PGPASSWORD = $conn.Password
-& pg_dump -Fc -h $conn.Host -p $conn.Port -U $conn.Username -d $conn.Database -f $dump
-if ($LASTEXITCODE -ne 0) {
-    $line = "$(Get-Date -Format o) backup error pg_dump exit=$LASTEXITCODE"
-    Add-Content -Path $logPath -Value $line
-    throw "pg_dump failed with exit $LASTEXITCODE"
-}
-if (-not (Test-Path -LiteralPath $dump) -or (Get-Item -LiteralPath $dump).Length -eq 0) {
-    Add-Content -Path $logPath -Value "$(Get-Date -Format o) backup error zero-byte dump"
-    throw "pg_dump produced empty file"
-}
-
-if ($SecondaryBackupDir) {
-    try {
-        New-Item -ItemType Directory -Force -Path $SecondaryBackupDir | Out-Null
-        Copy-Item -LiteralPath $dump -Destination (Join-Path $SecondaryBackupDir (Split-Path $dump -Leaf)) -Force
+function Write-BackupLog([string]$line) {
+    if (-not (Test-Path -LiteralPath $LogsDir)) {
+        New-Item -ItemType Directory -Force -Path $LogsDir | Out-Null
     }
-    catch {
-        $flag = Join-Path $LogsDir "backup-secondary-missing.flag"
-        Set-Content -LiteralPath $flag -Value "پوشهٔ پشتیبان دوم در دسترس نیست."
-        Add-Content -Path $logPath -Value "$(Get-Date -Format o) backup secondary copy failed: $_"
-    }
+    Add-Content -Path $logPath -Value "$(Get-Date -Format o) $line"
 }
 
-Add-Content -Path $logPath -Value "$(Get-Date -Format o) backup ok $dump"
+try {
+    if (-not (Test-Path -LiteralPath $PrimaryBackupDir)) {
+        New-Item -ItemType Directory -Force -Path $PrimaryBackupDir | Out-Null
+    }
+
+    $cfg = Read-CheckpointServerJsonConfig -ServerJsonPath $ServerJsonPath
+    $stamp = Get-Date -Format "yyyyMMdd-HHmm"
+    $dump = Join-Path $PrimaryBackupDir "checkpoint-$stamp.dump"
+
+    $env:PGPASSWORD = $cfg.Password
+    & pg_dump -Fc -h $cfg.Host -p $cfg.Port -U $cfg.Username $cfg.Database -f $dump
+    if ($LASTEXITCODE -ne 0) {
+        throw "pg_dump failed with exit code $LASTEXITCODE"
+    }
+
+    Test-PostgresDumpReadable -DumpPath $dump
+
+    if ($SecondaryBackupDir) {
+        if (-not (Test-Path -LiteralPath $SecondaryBackupDir)) {
+            throw "Secondary backup folder missing: $SecondaryBackupDir"
+        }
+        Copy-Item -LiteralPath $dump -Destination (Join-Path $SecondaryBackupDir (Split-Path $dump -Leaf))
+    }
+
+    Write-BackupLog "backup ok $dump"
+}
+catch {
+    Write-BackupLog "backup error $($_.Exception.Message)"
+    throw
+}
+finally {
+    Remove-Item Env:PGPASSWORD -ErrorAction SilentlyContinue
+}

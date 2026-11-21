@@ -18,7 +18,8 @@ public sealed class KioskOperatorLockService(
 
     public async Task LockOpenSessionAsync(string stationId, Guid sessionId, Guid kioskDeviceId, CancellationToken ct)
     {
-        var station = await db.Stations.AsNoTracking().FirstOrDefaultAsync(s => s.Id == stationId, ct)
+        var station = await db.Stations.Include(s => s.Group).AsNoTracking()
+            .FirstOrDefaultAsync(s => s.Id == stationId, ct)
             ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Station not found.");
         if (station.Group?.Kind != StationKind.Pc)
         {

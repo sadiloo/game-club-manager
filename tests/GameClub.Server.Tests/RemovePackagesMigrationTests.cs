@@ -9,21 +9,15 @@ namespace GameClub.Server.Tests;
 
 public sealed class RemovePackagesMigrationTests
 {
-    const string TestDbPrefix = "gameclub_mig_test_";
-
-    static string ResolveConnectionString() =>
-        Environment.GetEnvironmentVariable("GAMECLUB_TEST_DATABASE")
-        ?? Environment.GetEnvironmentVariable("GAMECLUB_DATABASE")
-        ?? "Host=localhost;Database=gameclub_test;Username=gameclub;Password=gameclub";
-
     static async Task<string> FreshDbAsync()
     {
-        var template = new NpgsqlConnectionStringBuilder(ResolveConnectionString());
-        var dbName = TestDbPrefix + Guid.NewGuid().ToString("N");
+        var template = GameClubPrefixedTestDatabase.ResolveServerTemplate();
+        var dbName = GameClubPrefixedTestDatabase.NamePrefix + "mig_" + Guid.NewGuid().ToString("N")[..12];
+        TestDatabaseGuard.EnsureDeletableDatabaseName(dbName);
         var admin = new NpgsqlConnectionStringBuilder(template.ConnectionString) { Database = "postgres" };
         await using var adminConn = new NpgsqlConnection(admin.ConnectionString);
         await adminConn.OpenAsync();
-        await using (var cmd = new NpgsqlCommand($"CREATE DATABASE \"{dbName}\"", adminConn))
+        await using (var cmd = new NpgsqlCommand($"""CREATE DATABASE "{dbName}" """, adminConn))
         {
             await cmd.ExecuteNonQueryAsync();
         }
@@ -32,44 +26,73 @@ public sealed class RemovePackagesMigrationTests
         return template.ConnectionString;
     }
 
+    static async Task DropDatabaseAsync(string connectionString)
+    {
+        var builder = new NpgsqlConnectionStringBuilder(connectionString);
+        var dbName = builder.Database;
+        if (string.IsNullOrWhiteSpace(dbName))
+        {
+            return;
+        }
+
+        builder.Database = "postgres";
+        await using var conn = new NpgsqlConnection(builder.ConnectionString);
+        await conn.OpenAsync();
+        await using var drop = new NpgsqlCommand($"""DROP DATABASE IF EXISTS "{dbName}" WITH (FORCE)""", conn);
+        await drop.ExecuteNonQueryAsync();
+    }
+
     [Fact]
     public async Task migration_guard_stops_on_customer_packages_row()
     {
         var cs = await FreshDbAsync();
-        var options = new DbContextOptionsBuilder<AppDbContext>().UseNpgsql(cs).Options;
-        await using var db = new AppDbContext(options);
-        await db.Database.MigrateAsync("20261108171252_20261108_StepPcKioskScope");
-        var customerId = Guid.NewGuid();
-        db.Customers.Add(new CustomerEntity { Id = customerId, Name = "x", Mobile = "09120000000", CreatedAtUtc = DateTime.UtcNow });
-        db.CustomerMembers.Add(new CustomerMemberEntity { CustomerId = customerId });
-        await db.SaveChangesAsync();
-        await db.Database.ExecuteSqlRawAsync(
-            """INSERT INTO customer_packages ("Id","CustomerId","Name","RemainingMinutes","FaceValueToman") VALUES ({0},{1},'p',60,1000)""",
-            Guid.NewGuid(), customerId);
-        await Assert.ThrowsAsync<PostgresException>(() => db.Database.MigrateAsync());
+        try
+        {
+            var options = new DbContextOptionsBuilder<AppDbContext>().UseNpgsql(cs).Options;
+            await using var db = new AppDbContext(options);
+            await db.Database.MigrateAsync("20261108171252_20261108_StepPcKioskScope");
+            var customerId = Guid.NewGuid();
+            db.Customers.Add(new CustomerEntity { Id = customerId, Name = "x", Mobile = "09120000000", CreatedAtUtc = DateTime.UtcNow });
+            db.CustomerMembers.Add(new CustomerMemberEntity { CustomerId = customerId });
+            await db.SaveChangesAsync();
+            await db.Database.ExecuteSqlRawAsync(
+                """INSERT INTO customer_packages ("Id","CustomerId","Name","RemainingMinutes","FaceValueToman") VALUES ({0},{1},'p',60,1000)""",
+                Guid.NewGuid(), customerId);
+            await Assert.ThrowsAsync<PostgresException>(() => db.Database.MigrateAsync());
+        }
+        finally
+        {
+            await DropDatabaseAsync(cs);
+        }
     }
 
     [Fact]
     public async Task migration_guard_stops_on_wallet_ledger_package_purchase_kind()
     {
         var cs = await FreshDbAsync();
-        var options = new DbContextOptionsBuilder<AppDbContext>().UseNpgsql(cs).Options;
-        await using var db = new AppDbContext(options);
-        await db.Database.MigrateAsync("20261108171252_20261108_StepPcKioskScope");
-        var customerId = Guid.NewGuid();
-        db.Customers.Add(new CustomerEntity { Id = customerId, Name = "x", Mobile = "09120000001", CreatedAtUtc = DateTime.UtcNow });
-        db.CustomerMembers.Add(new CustomerMemberEntity { CustomerId = customerId });
-        await db.SaveChangesAsync();
-        await db.Database.ExecuteSqlRawAsync(
-            """
-            INSERT INTO wallet_ledger ("CustomerId","AtUtc","Kind","RealDeltaToman","GiftDeltaToman")
-            VALUES ({0}, NOW() AT TIME ZONE 'utc', 'PackagePurchase', 0, 0)
-            """,
-            customerId);
-        var ex = await Assert.ThrowsAsync<PostgresException>(() => db.Database.MigrateAsync());
-        Assert.Contains("PackagePurchase", ex.MessageText);
+        try
+        {
+            var options = new DbContextOptionsBuilder<AppDbContext>().UseNpgsql(cs).Options;
+            await using var db = new AppDbContext(options);
+            await db.Database.MigrateAsync("20261108171252_20261108_StepPcKioskScope");
+            var customerId = Guid.NewGuid();
+            db.Customers.Add(new CustomerEntity { Id = customerId, Name = "x", Mobile = "09120000001", CreatedAtUtc = DateTime.UtcNow });
+            db.CustomerMembers.Add(new CustomerMemberEntity { CustomerId = customerId });
+            await db.SaveChangesAsync();
+            await db.Database.ExecuteSqlRawAsync(
+                """
+                INSERT INTO wallet_ledger ("CustomerId","AtUtc","Kind","RealDeltaToman","GiftDeltaToman")
+                VALUES ({0}, NOW() AT TIME ZONE 'utc', 'PackagePurchase', 0, 0)
+                """,
+                customerId);
+            var ex = await Assert.ThrowsAsync<PostgresException>(() => db.Database.MigrateAsync());
+            Assert.Contains("PackagePurchase", ex.MessageText);
+        }
+        finally
+        {
+            await DropDatabaseAsync(cs);
+        }
     }
-
 }
 
 [Collection("server")]

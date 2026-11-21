@@ -25,6 +25,30 @@ public sealed class KioskFreeUsePresenceTests
     }
 
     [Fact]
+    public void open_row_at_179_seconds_since_contact_is_not_no_contact()
+    {
+        var last = new DateTime(2026, 6, 1, 10, 0, 0, DateTimeKind.Utc);
+        var now = last.AddSeconds(179);
+        Assert.False(KioskFreeUsePresence.IsNoContact(last, now, isOpen: true));
+    }
+
+    [Fact]
+    public void open_row_at_180_seconds_since_contact_is_still_reachable()
+    {
+        var last = new DateTime(2026, 6, 1, 10, 0, 0, DateTimeKind.Utc);
+        var now = last.AddSeconds(180);
+        Assert.False(KioskFreeUsePresence.IsNoContact(last, now, isOpen: true));
+    }
+
+    [Fact]
+    public void open_row_at_181_seconds_since_contact_is_no_contact()
+    {
+        var last = new DateTime(2026, 6, 1, 10, 0, 0, DateTimeKind.Utc);
+        var now = last.AddSeconds(181);
+        Assert.True(KioskFreeUsePresence.IsNoContact(last, now, isOpen: true));
+    }
+
+    [Fact]
     public void closed_row_is_never_no_contact()
     {
         var lastContact = DateTime.UtcNow.AddHours(-1);

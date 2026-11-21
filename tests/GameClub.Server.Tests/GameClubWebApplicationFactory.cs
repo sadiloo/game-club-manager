@@ -18,6 +18,9 @@ namespace GameClub.Server.Tests;
 
 public class GameClubWebApplicationFactory : WebApplicationFactory<Program>
 {
+    private readonly GameClubPrefixedTestDatabase _ownedDatabase = new();
+    private bool _hostStorageInitialized;
+
     public MutableClock Clock { get; } = new(DateTimeOffset.UtcNow);
 
     /// <summary>
@@ -33,7 +36,7 @@ public class GameClubWebApplicationFactory : WebApplicationFactory<Program>
 
     /// <summary>
     /// When overridden by a prefixed-database fixture, supplies the connection string without mutating
-    /// <c>GAMECLUB_TEST_DATABASE</c> / <c>GAMECLUB_DATABASE</c> process environment variables.
+    /// <c>GAMECLUB_TEST_DATABASE</c>.
     /// </summary>
     protected virtual string? DedicatedConnectionString => null;
 
@@ -68,11 +71,7 @@ public class GameClubWebApplicationFactory : WebApplicationFactory<Program>
         }
         else
         {
-            ConnectionString = Environment.GetEnvironmentVariable("GAMECLUB_TEST_DATABASE")
-                ?? Environment.GetEnvironmentVariable("GAMECLUB_DATABASE")
-                ?? "Host=localhost;Database=gameclub_test;Username=gameclub;Password=gameclub";
-
-            Environment.SetEnvironmentVariable("GAMECLUB_DATABASE", ConnectionString);
+            ConnectionString = GameClubPrefixedTestDatabase.ResolveDedicatedConnectionStringOrCreate(_ownedDatabase);
         }
         Environment.SetEnvironmentVariable("GAMECLUB_API_KEY", "dev-key");
         Environment.SetEnvironmentVariable("DeadPc__SweepIntervalSeconds", "1");
@@ -95,18 +94,38 @@ public class GameClubWebApplicationFactory : WebApplicationFactory<Program>
 
     protected override IHost CreateHost(IHostBuilder builder)
     {
-        var options = new DbContextOptionsBuilder<AppDbContext>().UseNpgsql(ConnectionString).Options;
-        if (!PreserveDatabaseOnBootstrap)
+        if (!_hostStorageInitialized)
         {
-            using (var bootstrap = new AppDbContext(options))
+            var options = new DbContextOptionsBuilder<AppDbContext>().UseNpgsql(ConnectionString).Options;
+            if (!PreserveDatabaseOnBootstrap)
             {
-                bootstrap.Database.EnsureDeleted();
+                var dbName = new Npgsql.NpgsqlConnectionStringBuilder(ConnectionString).Database;
+                TestDatabaseGuard.EnsureDeletableDatabaseName(dbName);
+                using (var bootstrap = new AppDbContext(options))
+                {
+                    bootstrap.Database.EnsureDeleted();
+                }
             }
         }
 
         var host = base.CreateHost(builder);
-        SeedDatabase(host);
+        if (!_hostStorageInitialized)
+        {
+            SeedDatabase(host);
+            _hostStorageInitialized = true;
+        }
+
         return host;
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            _ownedDatabase.Dispose();
+        }
+
+        base.Dispose(disposing);
     }
 
     private static void SeedDatabase(IHost host)

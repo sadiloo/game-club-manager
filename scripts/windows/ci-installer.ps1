@@ -63,15 +63,20 @@ Invoke-DotnetPublish @(
 
 Write-Host "ci-installer: static installer rules"
 & (Join-Path $root "installer/tests/NoBackupDelete.Tests.ps1")
+& (Join-Path $root "installer/tests/BackupRestoreConfig.Tests.ps1")
+& (Join-Path $root "installer/tests/PersianIslKeys.Tests.ps1")
+& (Join-Path $root "installer/tests/IsccVersionGate.Tests.ps1")
+& (Join-Path $root "installer/tests/IssAppVersionStatic.Tests.ps1")
 & (Join-Path $root "installer/tests/KioskInstallStatic.Tests.ps1")
 & (Join-Path $root "installer/tests/BackupDailyTehran.Tests.ps1")
+& (Join-Path $root "installer/tests/ServerWizardStatic.Tests.ps1")
 
 $expectedInno = [Version]"6.7.1"
+. (Join-Path $PSScriptRoot "Resolve-InnoSetupVersion.ps1")
 
-function Parse-InnoBannerCompilerVersion([string]$bannerText) {
-    if ([string]::IsNullOrWhiteSpace($bannerText)) { return $null }
-    if ($bannerText -match "(?m)Compiler version\s+(\d+\.\d+(?:\.\d+)?)") { return $Matches[1] }
-    return $null
+function NormalizeDir([string]$path) {
+    if ([string]::IsNullOrWhiteSpace($path)) { return $null }
+    return [System.IO.Path]::GetFullPath($path).TrimEnd('\')
 }
 
 function Get-InnoRegistryEntry {
@@ -81,25 +86,63 @@ function Get-InnoRegistryEntry {
         )) {
         if (-not (Test-Path -LiteralPath $keyPath)) { continue }
         $props = Get-ItemProperty -LiteralPath $keyPath -ErrorAction SilentlyContinue
-        if ($props.InstallLocation) {
-            return @{ InstallLocation = $props.InstallLocation; DisplayVersion = [string]$props.DisplayVersion }
+        if ($null -eq $props) { continue }
+        if ([string]::IsNullOrWhiteSpace($props.InstallLocation)) { continue }
+        return @{
+            RegistryKey     = $keyPath
+            InstallLocation = NormalizeDir $props.InstallLocation
+            DisplayVersion  = [string]$props.DisplayVersion
         }
     }
     return $null
 }
 
+function Get-IsccPeVersions([string]$isccPath) {
+    if (-not (Test-Path -LiteralPath $isccPath)) { return $null }
+    $vi = (Get-Item -LiteralPath $isccPath).VersionInfo
+    return @{
+        FileVersion    = [string]$vi.FileVersion
+        ProductVersion = [string]$vi.ProductVersion
+    }
+}
+
+function Get-IsccBannerText([string]$isccPath) {
+    if (-not (Test-Path -LiteralPath $isccPath)) { return $null }
+    return (& $isccPath 2>&1 | Out-String)
+}
+
+$pathIsccShim = Get-Command iscc.exe -ErrorAction SilentlyContinue
+$pathIsccResolved = if ($null -ne $pathIsccShim) { $pathIsccShim.Source } else { "(not on PATH)" }
+
 $regEntry = Get-InnoRegistryEntry
 if ($null -eq $regEntry) {
-    Write-Error "ci-installer: Inno Setup registry entry missing"
+    Write-Error "ci-installer: Inno Setup registry entry missing (PATH iscc=$pathIsccResolved)"
     exit 1
 }
+
 $realIscc = Join-Path $regEntry.InstallLocation "ISCC.exe"
 if (-not (Test-Path -LiteralPath $realIscc)) {
-    Write-Error "ci-installer: ISCC missing"
+    Write-Error "ci-installer: ISCC missing at $realIscc"
     exit 1
 }
-if ($regEntry.DisplayVersion -ne "6.7.1") {
-    Write-Error "ci-installer: Inno DisplayVersion must be 6.7.1"
+
+$peVersions = Get-IsccPeVersions $realIscc
+$fileVersion = if ($null -ne $peVersions) { $peVersions.FileVersion } else { "(missing ISCC)" }
+$productVersion = if ($null -ne $peVersions) { $peVersions.ProductVersion } else { "(missing ISCC)" }
+$bannerText = Get-IsccBannerText $realIscc
+
+$decision = Resolve-InnoVersionDecision `
+    -DisplayVersion $regEntry.DisplayVersion `
+    -FileVersion $fileVersion `
+    -ProductVersion $productVersion `
+    -BannerText $bannerText `
+    -Expected $expectedInno
+
+Write-Host "ci-installer: resolved ISCC path=$realIscc"
+Write-Host "ci-installer: DisplayVersion=$($regEntry.DisplayVersion) BannerVersion=$($decision.BannerVersion)"
+
+if (-not $decision.Ok) {
+    Write-Error "ci-installer: Inno Setup $expectedInno required; reason=$($decision.Reason)"
     exit 1
 }
 

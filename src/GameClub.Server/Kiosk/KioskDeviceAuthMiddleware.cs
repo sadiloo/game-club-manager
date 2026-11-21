@@ -53,9 +53,13 @@ public sealed class KioskDeviceAuthMiddleware(RequestDelegate next)
         context.Items["KioskStationId"] = device.StationId;
 
         var contactUtc = clock.UtcNow.UtcDateTime;
-        await db.KioskDevices
-            .Where(d => d.Id == deviceId)
-            .ExecuteUpdateAsync(s => s.SetProperty(d => d.LastSeenUtc, contactUtc));
+        var lastSeen = device.LastSeenUtc;
+        if (lastSeen is null || (contactUtc - lastSeen.Value).TotalSeconds >= 30)
+        {
+            await db.KioskDevices
+                .Where(d => d.Id == deviceId)
+                .ExecuteUpdateAsync(s => s.SetProperty(d => d.LastSeenUtc, contactUtc));
+        }
 
         await next(context);
     }

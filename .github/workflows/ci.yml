@@ -23,8 +23,8 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     env:
-      GAMECLUB_DATABASE: Host=localhost;Port=5432;Database=gameclub_test;Username=postgres;Password=postgres
-      GAMECLUB_TEST_DATABASE: Host=localhost;Port=5432;Database=gameclub_test;Username=postgres;Password=postgres
+      GAMECLUB_DATABASE: Host=localhost;Port=5432;Database=gameclub_test_${{ github.run_id }}_${{ github.run_attempt }}_linux;Username=postgres;Password=postgres
+      GAMECLUB_TEST_DATABASE: Host=localhost;Port=5432;Database=gameclub_test_${{ github.run_id }}_${{ github.run_attempt }}_linux;Username=postgres;Password=postgres
       GAMECLUB_API_KEY: ci-test-key
     steps:
       - uses: actions/checkout@v4

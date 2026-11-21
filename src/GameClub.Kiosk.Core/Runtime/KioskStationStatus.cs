@@ -120,6 +120,32 @@ public static class KioskStationStatus
     public static bool ImpliesBareConnected(KioskStatusLineState state)
         => KioskStatusMessages.IsBareConnectedConnection(state.Connection);
 
+    public static bool ContainsConnectedWording(string statusText)
+    {
+        if (string.IsNullOrEmpty(statusText))
+        {
+            return false;
+        }
+
+        var connected = KioskStatusMessages.DisplayText(KioskStatusMessages.Keys.ConnConnected);
+        var reconnecting = KioskStatusMessages.DisplayText(KioskStatusMessages.Keys.ConnReconnecting);
+        var notConnected = KioskStatusMessages.DisplayText(KioskStatusMessages.Keys.ConnNotConnected);
+        if (statusText.Contains(reconnecting, StringComparison.Ordinal)
+            || statusText.Contains(notConnected, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (statusText.Contains(connected, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        return statusText.IndexOf("connected", StringComparison.OrdinalIgnoreCase) >= 0
+            && statusText.IndexOf("not connected", StringComparison.OrdinalIgnoreCase) < 0
+            && statusText.IndexOf("reconnecting", StringComparison.OrdinalIgnoreCase) < 0;
+    }
+
     public static string Resolve(
         string stationId,
         KioskTransportPhase transportPhase,
