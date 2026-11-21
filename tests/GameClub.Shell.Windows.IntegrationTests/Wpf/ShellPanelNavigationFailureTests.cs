@@ -130,6 +130,135 @@ public sealed class ShellPanelNavigationFailureTests
     }
 
     [Fact]
+    public void shell_stopped_in_flight_operator_nav_shows_offline_data_not_about_blank()
+    {
+        if (!WebView2RuntimePresent()) throw new InvalidOperationException("WebView2 runtime required");
+        var root = AllocateShellDataRoot();
+        ShellPanelHttpSplitStub? stub = null;
+        try
+        {
+            stub = CreateStub(200, 25_000);
+            _fixture.RunAsync(async () =>
+            {
+                MainWindow? window = null;
+                try
+                {
+                    window = await StartWindowOnStubAsync(stub);
+                    var wv = await WaitForPanelWebViewAsync(window, TimeSpan.FromSeconds(45));
+                    var navStartedDeadline = DateTime.UtcNow.AddSeconds(45);
+                    while (DateTime.UtcNow < navStartedDeadline && window.NavigationStartingCount < 1)
+                    {
+                        await Task.Delay(200);
+                    }
+
+                    Assert.True(window.NavigationStartingCount >= 1, "expected in-flight /operator/ navigation");
+                    stub.OperatorStatusCode = 503;
+                    stub.OperatorDelayMilliseconds = 0;
+
+                    var offlineDeadline = DateTime.UtcNow.AddSeconds(90);
+                    while (DateTime.UtcNow < offlineDeadline)
+                    {
+                        await Task.Delay(200);
+                        wv = window.FindName("PanelWebView") as Microsoft.Web.WebView2.Wpf.WebView2;
+                        if (wv?.CoreWebView2 is null)
+                        {
+                            continue;
+                        }
+
+                        var href = UnquoteWebViewScriptString(
+                            await wv.CoreWebView2.ExecuteScriptAsync("location.href"));
+                        Assert.NotEqual("about:blank", href, StringComparer.OrdinalIgnoreCase);
+                    }
+
+                    wv = window.FindName("PanelWebView") as Microsoft.Web.WebView2.Wpf.WebView2;
+                    Assert.NotNull(wv);
+                    await WaitForPanelUnavailableOfflineAsync(wv, TimeSpan.FromSeconds(60));
+                }
+                finally
+                {
+                    RestoreStubSeams();
+                    window?.Close();
+                }
+            }, TimeSpan.FromSeconds(180));
+        }
+        finally
+        {
+            stub?.Dispose();
+            CleanupShellDataRoot(root);
+        }
+    }
+
+    [Fact]
+    public void shell_after_stop_offline_data_nav_recovers_on_confirmed_2xx()
+    {
+        if (!WebView2RuntimePresent()) throw new InvalidOperationException("WebView2 runtime required");
+        var root = AllocateShellDataRoot();
+        ShellPanelHttpSplitStub? stub = null;
+        try
+        {
+            stub = CreateStub(200, 25_000);
+            _fixture.RunAsync(async () =>
+            {
+                MainWindow? window = null;
+                try
+                {
+                    window = await StartWindowOnStubAsync(stub);
+                    var wv = await WaitForPanelWebViewAsync(window, TimeSpan.FromSeconds(45));
+                    var navStartedDeadline = DateTime.UtcNow.AddSeconds(45);
+                    while (DateTime.UtcNow < navStartedDeadline && window.NavigationStartingCount < 1)
+                    {
+                        await Task.Delay(200);
+                    }
+
+                    stub.OperatorStatusCode = 503;
+                    stub.OperatorDelayMilliseconds = 0;
+                    wv = window.FindName("PanelWebView") as Microsoft.Web.WebView2.Wpf.WebView2;
+                    Assert.NotNull(wv);
+                    await WaitForPanelUnavailableOfflineAsync(wv, TimeSpan.FromSeconds(75));
+                    var navAfterOffline = window.NavigationStartingCount;
+
+                    stub.OperatorStatusCode = 200;
+                    stub.OperatorDelayMilliseconds = 0;
+                    var recoverDeadline = DateTime.UtcNow.AddSeconds(90);
+                    var panelOk = false;
+                    while (DateTime.UtcNow < recoverDeadline)
+                    {
+                        await Task.Delay(500);
+                        wv = window.FindName("PanelWebView") as Microsoft.Web.WebView2.Wpf.WebView2;
+                        if (wv?.CoreWebView2 is null)
+                        {
+                            continue;
+                        }
+
+                        var loc = UnquoteWebViewScriptString(
+                            await wv.CoreWebView2.ExecuteScriptAsync(
+                                "location.pathname + '|' + document.readyState"));
+                        if (loc.StartsWith("/operator/", StringComparison.OrdinalIgnoreCase)
+                            && loc.EndsWith("|complete", StringComparison.Ordinal))
+                        {
+                            panelOk = true;
+                            break;
+                        }
+                    }
+
+                    Assert.True(panelOk, "panel did not recover on confirmed 2xx after stop/offline data nav");
+                    Assert.InRange(window.NavigationStartingCount, navAfterOffline, navAfterOffline + 1);
+                }
+                finally
+                {
+                    RestoreStubSeams();
+                    window?.Close();
+                }
+            }, TimeSpan.FromSeconds(180));
+        }
+        finally
+        {
+            stub?.Dispose();
+            CleanupShellDataRoot(root);
+        }
+    }
+
+    [Fact]
     public void shell_tray_reloads_do_not_leak_webview_handler_wiring()
     {
         if (!WebView2RuntimePresent()) throw new InvalidOperationException("WebView2 runtime required");

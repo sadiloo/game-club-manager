@@ -481,7 +481,6 @@ public partial class MainWindow : Window
         _panelNavigated = false;
         if (!_offlineShown)
         {
-            TryStopInFlightPanelNavigation();
             _ = PresentOfflinePageAsync("panel-unavailable");
         }
         else
@@ -632,7 +631,6 @@ public partial class MainWindow : Window
         _panelNavigated = false;
         if (!_offlineShown)
         {
-            TryStopInFlightPanelNavigation();
             _ = PresentOfflinePageAsync("panel-unavailable");
         }
     }
