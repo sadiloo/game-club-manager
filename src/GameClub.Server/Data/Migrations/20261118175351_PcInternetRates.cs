@@ -129,7 +129,7 @@ namespace GameClub.Server.Data.Migrations
                   IF COALESCE((j->>'SchemaVersion')::int, 0) = 2 THEN
                     RETURN old_json;
                   END IF;
-                  FOR elem IN SELECT value FROM jsonb_array_elements(COALESCE(j->'Lines', '[]'::jsonb))
+                  FOR elem IN SELECT el FROM jsonb_array_elements(COALESCE(j->'Lines', '[]'::jsonb)) AS el
                   LOOP
                     IF elem->>'GroupId' NOT IN ('pc-normal', 'pc-vip') THEN
                       out_lines := out_lines || jsonb_build_array(elem);
@@ -162,19 +162,11 @@ namespace GameClub.Server.Data.Migrations
                       jsonb_build_object('GroupId', gid, 'PlayMode', 'Online', 'PlayerCount', null, 'IsSpecialBand', true, 'HourlyToman', day_rate + surcharge));
                     IF EXISTS (
                       SELECT 1 FROM jsonb_array_elements(COALESCE(j->'Lines', '[]'::jsonb)) e
-                      WHERE e->>'GroupId' = gid AND e->>'PlayMode' = 'Offline' AND (e->>'PlayerCount')::int = 1 AND (e->>'IsSpecialBand')::boolean = false
-                    ) THEN
-                      out_lines := out_lines || jsonb_build_array((
-                        SELECT e FROM jsonb_array_elements(COALESCE(j->'Lines', '[]'::jsonb)) e
-                        WHERE e->>'GroupId' = gid AND e->>'PlayMode' = 'Offline' AND (e->>'PlayerCount')::int = 1 AND (e->>'IsSpecialBand')::boolean = false LIMIT 1));
-                    END IF;
-                    IF EXISTS (
-                      SELECT 1 FROM jsonb_array_elements(COALESCE(j->'Lines', '[]'::jsonb)) e
                       WHERE e->>'GroupId' = gid AND e->>'PlayMode' = 'Offline' AND (e->>'PlayerCount')::int = 1 AND (e->>'IsSpecialBand')::boolean = true
                     ) THEN
                       out_lines := out_lines || jsonb_build_array((
-                        SELECT e FROM jsonb_array_elements(COALESCE(j->'Lines', '[]'::jsonb)) e
-                        WHERE e->>'GroupId' = gid AND e->>'PlayMode' = 'Offline' AND (e->>'PlayerCount')::int = 1 AND (e->>'IsSpecialBand')::boolean = true LIMIT 1));
+                        SELECT el FROM jsonb_array_elements(COALESCE(j->'Lines', '[]'::jsonb)) AS el
+                        WHERE el->>'GroupId' = gid AND el->>'PlayMode' = 'Offline' AND (el->>'PlayerCount')::int = 1 AND (el->>'IsSpecialBand')::boolean = true LIMIT 1));
                     ELSE
                       out_lines := out_lines || jsonb_build_array(
                         jsonb_build_object('GroupId', gid, 'PlayMode', 'Offline', 'PlayerCount', 1, 'IsSpecialBand', true, 'HourlyToman', day_rate + surcharge));
@@ -254,21 +246,7 @@ namespace GameClub.Server.Data.Migrations
 
             migrationBuilder.Sql(
                 """
-                UPDATE branch_rounding
-                SET "PcSpecialBandSurchargeToman" = COALESCE((
-                    SELECT MAX(night."HourlyToman" - day."HourlyToman")
-                    FROM rate_lines day
-                    INNER JOIN rate_lines night
-                      ON night."GroupId" = day."GroupId"
-                     AND night."PlayMode" = 'Online'
-                     AND night."IsSpecialBand" = true
-                    WHERE day."GroupId" IN ('pc-normal', 'pc-vip')
-                      AND day."PlayMode" = 'Online'
-                      AND day."PlayerCount" IS NULL
-                      AND day."IsSpecialBand" = false
-                ), 20000);
-
-                CREATE OR REPLACE FUNCTION revert_pc_open_snapshot_v1(v2_json text, surcharge bigint) RETURNS text
+                CREATE OR REPLACE FUNCTION revert_pc_open_snapshot_v1(v2_json text) RETURNS text
                 LANGUAGE plpgsql AS $$
                 DECLARE
                   j jsonb := v2_json::jsonb;
@@ -277,17 +255,50 @@ namespace GameClub.Server.Data.Migrations
                   out_lines jsonb := '[]'::jsonb;
                   elem jsonb;
                   gid text;
-                  day_rate bigint;
+                  surcharge bigint := 20000;
+                  night_rate bigint;
                 BEGIN
                   IF COALESCE((j->>'SchemaVersion')::int, 0) <> 2 THEN
                     RETURN v2_json;
                   END IF;
-                  FOR elem IN SELECT value FROM jsonb_array_elements(COALESCE(j->'Lines', '[]'::jsonb))
+                  SELECT COALESCE(
+                    (SELECT MAX((night_e->>'HourlyToman')::bigint - (day_e->>'HourlyToman')::bigint)
+                     FROM jsonb_array_elements(COALESCE(j->'Lines', '[]'::jsonb)) day_e
+                     INNER JOIN jsonb_array_elements(COALESCE(j->'Lines', '[]'::jsonb)) night_e
+                       ON night_e->>'GroupId' = day_e->>'GroupId'
+                     WHERE day_e->>'GroupId' IN ('pc-normal', 'pc-vip')
+                       AND day_e->>'PlayMode' = 'Online'
+                       AND day_e->>'PlayerCount' IS NULL
+                       AND NOT (day_e->>'IsSpecialBand')::boolean
+                       AND night_e->>'PlayMode' = 'Online'
+                       AND night_e->>'PlayerCount' IS NULL
+                       AND (night_e->>'IsSpecialBand')::boolean),
+                    (SELECT MAX((night_e->>'HourlyToman')::bigint - (day_e->>'HourlyToman')::bigint)
+                     FROM jsonb_array_elements(COALESCE(j->'Lines', '[]'::jsonb)) day_e
+                     INNER JOIN jsonb_array_elements(COALESCE(j->'Lines', '[]'::jsonb)) night_e
+                       ON night_e->>'GroupId' = day_e->>'GroupId'
+                     WHERE day_e->>'GroupId' IN ('pc-normal', 'pc-vip')
+                       AND day_e->>'PlayMode' = 'Online'
+                       AND day_e->>'PlayerCount' IS NULL
+                       AND NOT (day_e->>'IsSpecialBand')::boolean
+                       AND night_e->>'PlayMode' = 'Offline'
+                       AND (night_e->>'PlayerCount')::int = 1
+                       AND (night_e->>'IsSpecialBand')::boolean),
+                    20000
+                  ) INTO surcharge;
+
+                  FOR elem IN SELECT el FROM jsonb_array_elements(COALESCE(j->'Lines', '[]'::jsonb)) AS el
                   LOOP
                     gid := elem->>'GroupId';
                     IF gid IN ('pc-normal', 'pc-vip')
                        AND elem->>'PlayMode' = 'Online'
                        AND (elem->>'IsSpecialBand')::boolean = true THEN
+                      CONTINUE;
+                    END IF;
+                    IF gid IN ('pc-normal', 'pc-vip')
+                       AND elem->>'PlayMode' = 'Offline'
+                       AND (elem->>'PlayerCount')::int = 1
+                       AND NOT (elem->>'IsSpecialBand')::boolean = true THEN
                       CONTINUE;
                     END IF;
                     IF gid IN ('pc-normal', 'pc-vip')
@@ -302,25 +313,35 @@ namespace GameClub.Server.Data.Migrations
                           'HourlyToman', (elem->>'HourlyToman')::bigint));
                       CONTINUE;
                     END IF;
-                    out_lines := out_lines || jsonb_build_array(elem);
+                    IF gid IN ('pc-normal', 'pc-vip')
+                       AND elem->>'PlayMode' = 'Offline'
+                       AND (elem->>'PlayerCount')::int = 1
+                       AND (elem->>'IsSpecialBand')::boolean = true THEN
+                      out_lines := out_lines || jsonb_build_array(elem);
+                      CONTINUE;
+                    END IF;
+                    IF gid NOT IN ('pc-normal', 'pc-vip') THEN
+                      out_lines := out_lines || jsonb_build_array(elem);
+                    END IF;
                   END LOOP;
                   FOREACH gid IN ARRAY ARRAY['pc-normal', 'pc-vip']
                   LOOP
-                    IF NOT EXISTS (
+                    IF EXISTS (
                       SELECT 1 FROM jsonb_array_elements(out_lines) e
                       WHERE e->>'GroupId' = gid AND e->>'PlayMode' = 'Offline' AND (e->>'IsSpecialBand')::boolean = true
                     ) THEN
-                      SELECT (e->>'HourlyToman')::bigint INTO day_rate
-                      FROM jsonb_array_elements(out_lines) e
-                      WHERE e->>'GroupId' = gid
-                        AND e->>'PlayMode' = 'Offline'
-                        AND (e->>'PlayerCount')::int = 1
-                        AND (e->>'IsSpecialBand')::boolean = false
-                      LIMIT 1;
-                      IF day_rate IS NOT NULL THEN
-                        out_lines := out_lines || jsonb_build_array(
-                          jsonb_build_object('GroupId', gid, 'PlayMode', 'Offline', 'PlayerCount', 1, 'IsSpecialBand', true, 'HourlyToman', day_rate + surcharge));
-                      END IF;
+                      CONTINUE;
+                    END IF;
+                    SELECT (e->>'HourlyToman')::bigint INTO night_rate
+                    FROM jsonb_array_elements(COALESCE(j->'Lines', '[]'::jsonb)) e
+                    WHERE e->>'GroupId' = gid
+                      AND e->>'PlayMode' = 'Online'
+                      AND e->>'PlayerCount' IS NULL
+                      AND (e->>'IsSpecialBand')::boolean = true
+                    LIMIT 1;
+                    IF night_rate IS NOT NULL THEN
+                      out_lines := out_lines || jsonb_build_array(
+                        jsonb_build_object('GroupId', gid, 'PlayMode', 'Offline', 'PlayerCount', 1, 'IsSpecialBand', true, 'HourlyToman', night_rate));
                     END IF;
                   END LOOP;
                   RETURN jsonb_build_object(
@@ -331,17 +352,28 @@ namespace GameClub.Server.Data.Migrations
                 END;
                 $$;
 
+                UPDATE branch_rounding
+                SET "PcSpecialBandSurchargeToman" = COALESCE((
+                    SELECT MAX((revert_pc_open_snapshot_v1(rcs."Json")::jsonb->>'PcSpecialBandSurchargeToman')::bigint)
+                    FROM rate_card_snapshot rcs
+                    INNER JOIN sessions s ON s."RateCardSnapshotId" = rcs."Id"
+                    INNER JOIN stations st ON s."StationId" = st."Id"
+                    INNER JOIN station_groups g ON st."GroupId" = g."Id"
+                    WHERE g."Kind" = 'Pc' AND s."Status" <> 'Closed'
+                      AND COALESCE((rcs."Json"::jsonb->>'SchemaVersion')::int, 0) = 2
+                ), 20000);
+
                 UPDATE rate_card_snapshot rcs
-                SET "Json" = revert_pc_open_snapshot_v1(rcs."Json", br."PcSpecialBandSurchargeToman")
+                SET "Json" = revert_pc_open_snapshot_v1(rcs."Json")
                 FROM sessions s
                 INNER JOIN stations st ON s."StationId" = st."Id"
                 INNER JOIN station_groups g ON st."GroupId" = g."Id"
-                CROSS JOIN branch_rounding br
                 WHERE rcs."Id" = s."RateCardSnapshotId"
                   AND g."Kind" = 'Pc'
-                  AND s."Status" <> 'Closed';
+                  AND s."Status" <> 'Closed'
+                  AND COALESCE((rcs."Json"::jsonb->>'SchemaVersion')::int, 0) = 2;
 
-                DROP FUNCTION revert_pc_open_snapshot_v1(text, bigint);
+                DROP FUNCTION revert_pc_open_snapshot_v1(text);
 
                 UPDATE rate_lines
                 SET "PlayMode" = 'Offline', "PlayerCount" = 1

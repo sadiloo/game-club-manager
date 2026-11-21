@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using GameClub.Billing;
@@ -21,15 +22,22 @@ public sealed class PcInternetRatesMigrationTests(GameClubWebApplicationFactory 
         await db.Database.MigrateAsync();
     }
 
+    private static async Task EnsurePrePcInternetMigrationAsync(AppDbContext db)
+    {
+        await db.Database.MigrateAsync();
+        db.GetService<IMigrator>().Migrate(PrePcInternetMigration);
+        await DatabaseSeed.EnsureAsync(db);
+    }
+
     private static async Task WithPrePcInternetSeedAsync(GameClubWebApplicationFactory factory, Func<AppDbContext, Task> body)
     {
         await S3TestHelpers.ResetAsync(factory);
+        factory.Clock.SetTehran(2026, 6, 3, 14, 0);
         await using var scope = factory.Services.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         try
         {
-            await db.Database.MigrateAsync(PrePcInternetMigration);
-            await DatabaseSeed.EnsureAsync(db);
+            await EnsurePrePcInternetMigrationAsync(db);
             await body(db);
         }
         finally
@@ -136,7 +144,7 @@ public sealed class PcInternetRatesMigrationTests(GameClubWebApplicationFactory 
             var api = factory.CreateClientWithKey();
             await S3TestHelpers.RegisterPc(api, "PC-MIG-OPEN", PilotSeed.PcNormalGroupId);
             await S3TestHelpers.RegisterPc(api, "PC-MIG-CLOSED", PilotSeed.PcNormalGroupId);
-            var (openSessionId, endUtc, expectedToman) = await SeedPreMigrationPcSessionsAsync(db, "PC-MIG-OPEN", "PC-MIG-CLOSED");
+            var (openSessionId, endUtc, expectedToman) = await SeedPreMigrationPcSessionsAsync(db, "PC-MIG-OPEN", "PC-MIG-CLOSED", skipStations: true);
             var before = await ChargeTotalAsync(factory.Services, openSessionId, endUtc);
             Assert.Equal(expectedToman, before);
             await db.Database.MigrateAsync();
@@ -156,7 +164,7 @@ public sealed class PcInternetRatesMigrationTests(GameClubWebApplicationFactory 
             var api = factory.CreateClientWithKey();
             await S3TestHelpers.RegisterPc(api, "PC-MIG-OPEN", PilotSeed.PcNormalGroupId);
             await S3TestHelpers.RegisterPc(api, "PC-MIG-CLOSED", PilotSeed.PcNormalGroupId);
-            var (_, endUtc, expectedToman) = await SeedPreMigrationPcSessionsAsync(db, "PC-MIG-OPEN", "PC-MIG-CLOSED");
+            var (_, endUtc, expectedToman) = await SeedPreMigrationPcSessionsAsync(db, "PC-MIG-OPEN", "PC-MIG-CLOSED", skipStations: true);
             var closedId = await db.Sessions.AsNoTracking().Where(s => s.StationId == "PC-MIG-CLOSED").Select(s => s.Id).SingleAsync();
             var before = await ChargeTotalAsync(factory.Services, closedId, endUtc);
             Assert.Equal(expectedToman, before);
@@ -198,8 +206,7 @@ public sealed class PcInternetRatesMigrationTests(GameClubWebApplicationFactory 
         await S3TestHelpers.ResetAsync(factory);
         await using var scope = factory.Services.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        await db.Database.MigrateAsync(PrePcInternetMigration);
-        await DatabaseSeed.EnsureAsync(db);
+        await EnsurePrePcInternetMigrationAsync(db);
         var surchargeBefore = await db.Database.SqlQueryRaw<long>(
             """SELECT "PcSpecialBandSurchargeToman" AS "Value" FROM branch_rounding LIMIT 1""").SingleAsync();
         Assert.Equal(20_000, surchargeBefore);
@@ -227,8 +234,7 @@ public sealed class PcInternetRatesMigrationTests(GameClubWebApplicationFactory 
         await S3TestHelpers.ResetAsync(factory);
         await using var scope = factory.Services.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        await db.Database.MigrateAsync(PrePcInternetMigration);
-        await DatabaseSeed.EnsureAsync(db);
+        await EnsurePrePcInternetMigrationAsync(db);
         await db.Database.ExecuteSqlRawAsync("""UPDATE branch_rounding SET "PcSpecialBandSurchargeToman" = 25000""");
         var start = TestTimes.T(2026, 6, 2, 10, 0).UtcDateTime;
         var checkpoint = TestTimes.T(2026, 6, 2, 11, 0).UtcDateTime;
@@ -250,6 +256,137 @@ public sealed class PcInternetRatesMigrationTests(GameClubWebApplicationFactory 
         Assert.Equal(115_000, night.HourlyToman);
         var at11 = TestTimes.T(2026, 6, 2, 11, 0).UtcDateTime;
         Assert.Equal(80_000, await ChargeTotalAsync(factory.Services, sessionId, at11));
+    }
+
+    [Fact]
+    public async Task PcInternetMigration_OpenSession_afterUp_sql_snapshot_has_online_day_not_offline_day_duplicate()
+    {
+        await WithPrePcInternetSeedAsync(factory, async db =>
+        {
+            var start = TestTimes.T(2026, 6, 2, 10, 0).UtcDateTime;
+            var checkpoint = TestTimes.T(2026, 6, 2, 11, 0).UtcDateTime;
+            var sessionId = await SeedOpenPreMigrationPcSessionAsync(db, "PC-V2", start, checkpoint);
+            await db.Database.MigrateAsync();
+            var json = await db.Sessions.AsNoTracking()
+                .Where(s => s.Id == sessionId)
+                .Join(db.RateCardSnapshots, s => s.RateCardSnapshotId, r => r.Id, (_, r) => r.Json)
+                .SingleAsync();
+            AssertV2OpenSnapshotWithoutOfflineDayBase(json);
+        });
+    }
+
+    [Fact]
+    public async Task PcInternetMigration_Down_main_legacy_deserialize_bills_without_duplicate_base_rate()
+    {
+        try
+        {
+        await S3TestHelpers.ResetAsync(factory);
+        await using var scope = factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        await EnsurePrePcInternetMigrationAsync(db);
+        await db.Database.ExecuteSqlRawAsync("""UPDATE branch_rounding SET "PcSpecialBandSurchargeToman" = 25000""");
+        var start = TestTimes.T(2026, 6, 2, 10, 0).UtcDateTime;
+        var checkpoint = TestTimes.T(2026, 6, 2, 11, 0).UtcDateTime;
+        var sessionId = await SeedOpenPreMigrationPcSessionAsync(db, "PC-MAIN", start, checkpoint);
+        await db.Database.ExecuteSqlRawAsync(
+            """
+            UPDATE rate_lines SET "HourlyToman" = 90000
+            WHERE "GroupId"='pc-normal' AND "PlayMode"='Offline' AND "PlayerCount"=1 AND NOT "IsSpecialBand"
+            """);
+        await db.Database.MigrateAsync();
+        await db.Database.ExecuteSqlRawAsync(
+            """
+            UPDATE rate_lines SET "HourlyToman" = 90000
+            WHERE "GroupId"='pc-normal' AND "PlayMode"='Online' AND "PlayerCount" IS NULL AND NOT "IsSpecialBand";
+            UPDATE rate_lines SET "HourlyToman" = 130000
+            WHERE "GroupId"='pc-normal' AND "PlayMode"='Online' AND "PlayerCount" IS NULL AND "IsSpecialBand";
+            """);
+        db.GetService<IMigrator>().Migrate(PrePcInternetMigration);
+
+        var json = await db.Sessions.AsNoTracking()
+            .Where(s => s.Id == sessionId)
+            .Join(db.RateCardSnapshots, s => s.RateCardSnapshotId, r => r.Id, (_, r) => r.Json)
+            .SingleAsync();
+        using (var doc = JsonDocument.Parse(json))
+        {
+            Assert.False(doc.RootElement.TryGetProperty("SchemaVersion", out var sv) && sv.GetInt32() == 2);
+            Assert.Equal(25_000, doc.RootElement.GetProperty("PcSpecialBandSurchargeToman").GetInt64());
+            var offlineDayCount = doc.RootElement.GetProperty("Lines").EnumerateArray().Count(l =>
+                l.GetProperty("GroupId").GetString() == PilotSeed.PcNormalGroupId
+                && l.GetProperty("PlayMode").GetString() == nameof(PlayMode.Offline)
+                && l.TryGetProperty("PlayerCount", out var pc) && pc.GetInt32() == 1
+                && !l.GetProperty("IsSpecialBand").GetBoolean());
+            Assert.Equal(1, offlineDayCount);
+        }
+
+        await using var billScope = factory.Services.CreateAsyncScope();
+        var rates = billScope.ServiceProvider.GetRequiredService<RateConfigService>();
+        var _ = rates.DeserializeSnapshot(json);
+
+        var at11 = TestTimes.T(2026, 6, 2, 11, 0).UtcDateTime;
+        Assert.Equal(80_000, await ChargeTotalAsync(factory.Services, sessionId, at11));
+        var stopUtc = TestTimes.T(2026, 6, 2, 11, 30).UtcDateTime;
+        Assert.Equal(120_000, await ChargeTotalAsync(factory.Services, sessionId, stopUtc));
+        var surcharge = await db.Database.SqlQueryRaw<long>(
+            """SELECT "PcSpecialBandSurchargeToman" AS "Value" FROM branch_rounding LIMIT 1""").SingleAsync();
+        Assert.Equal(25_000, surcharge);
+        }
+        finally
+        {
+            await using var scope = factory.Services.CreateAsyncScope();
+            await EnsureLatestMigrationAsync(scope.ServiceProvider.GetRequiredService<AppDbContext>());
+        }
+    }
+
+    [Fact]
+    public async Task PcInternetMigration_MigratedOpenSession_toggleOff_returns_offline_rate_missing()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        await using var scope = factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        await EnsurePrePcInternetMigrationAsync(db);
+        var start = TestTimes.T(2026, 6, 2, 10, 0).UtcDateTime;
+        var checkpoint = TestTimes.T(2026, 6, 2, 11, 0).UtcDateTime;
+        var sessionId = await SeedOpenPreMigrationPcSessionAsync(db, "PC-B3", start, checkpoint);
+        await db.Database.MigrateAsync();
+        Assert.False(await db.RateLines.AnyAsync(r =>
+            r.GroupId == PilotSeed.PcNormalGroupId && r.PlayMode == nameof(PlayMode.Offline)));
+        Assert.Equal(PlayMode.Online, await db.Sessions.Where(s => s.Id == sessionId).Select(s => s.Mode).SingleAsync());
+        var op = await factory.CreateOperatorClientAsync();
+        var version = await db.Sessions.Where(s => s.Id == sessionId).Select(s => s.RowVersion).SingleAsync();
+        var res = await op.PostAsJsonAsync($"/api/operator/sessions/{sessionId}/internet", new
+        {
+            on = false,
+            expectedVersion = version,
+            commandId = Guid.NewGuid(),
+        });
+        Assert.Equal(HttpStatusCode.Conflict, res.StatusCode);
+        var body = await res.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("offline_rate_missing", body.GetProperty("code").GetString());
+    }
+
+    private static void AssertV2OpenSnapshotWithoutOfflineDayBase(string json)
+    {
+        using var doc = JsonDocument.Parse(json);
+        Assert.Equal(2, doc.RootElement.GetProperty("SchemaVersion").GetInt32());
+        foreach (var line in doc.RootElement.GetProperty("Lines").EnumerateArray())
+        {
+            var gid = line.GetProperty("GroupId").GetString();
+            if (gid is not (PilotSeed.PcNormalGroupId or PilotSeed.PcVipGroupId))
+            {
+                continue;
+            }
+
+            var mode = line.GetProperty("PlayMode").GetString();
+            var isSpecial = line.GetProperty("IsSpecialBand").GetBoolean();
+            if (mode == nameof(PlayMode.Offline)
+                && line.TryGetProperty("PlayerCount", out var pc)
+                && pc.GetInt32() == 1
+                && !isSpecial)
+            {
+                Assert.Fail("Open-session v2 snapshot must not retain Offline/1 day lines after migration SQL.");
+            }
+        }
     }
 
     private static async Task<Guid> SeedOpenPreMigrationPcSessionAsync(
@@ -301,7 +438,8 @@ public sealed class PcInternetRatesMigrationTests(GameClubWebApplicationFactory 
     private static async Task<(Guid OpenSessionId, DateTime EndUtc, long ExpectedToman)> SeedPreMigrationPcSessionsAsync(
         AppDbContext db,
         string openStationId,
-        string closedStationId)
+        string closedStationId,
+        bool skipStations = false)
     {
         var snapshotJson = await BuildLegacySnapshotJsonAsync(db);
         var snapOpen = new RateCardSnapshotEntity { Json = snapshotJson };
@@ -315,6 +453,25 @@ public sealed class PcInternetRatesMigrationTests(GameClubWebApplicationFactory 
 
         var openId = Guid.NewGuid();
         var closedId = Guid.NewGuid();
+        if (!skipStations)
+        {
+            db.Stations.AddRange(
+                new StationEntity
+                {
+                    Id = openStationId,
+                    GroupId = PilotSeed.PcNormalGroupId,
+                    DefaultPlayMode = PlayMode.Offline,
+                    OperationalState = StationOperationalState.Available,
+                },
+                new StationEntity
+                {
+                    Id = closedStationId,
+                    GroupId = PilotSeed.PcNormalGroupId,
+                    DefaultPlayMode = PlayMode.Offline,
+                    OperationalState = StationOperationalState.Available,
+                });
+        }
+
         db.Sessions.Add(new PlaySessionEntity
         {
             Id = openId,

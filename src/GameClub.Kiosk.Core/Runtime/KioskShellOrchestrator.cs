@@ -72,7 +72,7 @@ public sealed class KioskShellOrchestrator
         {
             Phase = KioskShellPhase.Ended;
             phase = Phase;
-            WriteHbAckLine(ack, sessionId, runtimeSid, phase);
+            WriteHbAckLine(ack, sessionId, runtimeSid, phase, DescribeLeaseVerify(ack.Lease));
             return phase;
         }
 
@@ -84,7 +84,7 @@ public sealed class KioskShellOrchestrator
             {
                 Phase = KioskShellPhase.Locked;
                 phase = Phase;
-                WriteHbAckLine(ack, sessionId, runtimeSid, phase);
+                WriteHbAckLine(ack, sessionId, runtimeSid, phase, DescribeLeaseVerify(ack.Lease));
                 return phase;
             }
 
@@ -92,7 +92,7 @@ public sealed class KioskShellOrchestrator
             {
                 Phase = KioskShellPhase.LeaseExpired;
                 phase = Phase;
-                WriteHbAckLine(ack, sessionId, runtimeSid, phase);
+                WriteHbAckLine(ack, sessionId, runtimeSid, phase, DescribeLeaseVerify(ack.Lease));
                 return phase;
             }
 
@@ -101,21 +101,25 @@ public sealed class KioskShellOrchestrator
             Phase = KioskShellPhase.Playing;
             EnqueuePoweredSegment(sessionId, clientMonotonicMs);
             phase = Phase;
-            WriteHbAckLine(ack, sessionId, runtimeSid, phase);
+            WriteHbAckLine(ack, sessionId, runtimeSid, phase, (true, "ok"));
             return phase;
         }
 
         Phase = KioskShellPhase.Locked;
         phase = Phase;
-        WriteHbAckLine(ack, sessionId, runtimeSid, phase);
+        WriteHbAckLine(ack, sessionId, runtimeSid, phase, DescribeLeaseVerify(ack.Lease));
         return phase;
     }
 
-    private void WriteHbAckLine(KioskHeartbeatAck ack, Guid hostSessionId, Guid runtimeSessionId, KioskShellPhase phase)
+    private void WriteHbAckLine(
+        KioskHeartbeatAck ack,
+        Guid hostSessionId,
+        Guid runtimeSessionId,
+        KioskShellPhase phase,
+        (bool Ok, string Detail) leaseVerify)
     {
-        var (leaseOk, leaseDetail) = DescribeLeaseVerify(ack.Lease);
         var (verifyLabel, lockedReason) = ObservabilityLogFormats.DescribeLeaseAndLock(
-            ack, hostSessionId, phase, leaseOk, leaseDetail);
+            ack, hostSessionId, phase, leaseVerify.Ok, leaseVerify.Detail);
         ObservabilityLogFormats.WriteHbAck(ack, hostSessionId, runtimeSessionId, phase, verifyLabel, lockedReason);
     }
 

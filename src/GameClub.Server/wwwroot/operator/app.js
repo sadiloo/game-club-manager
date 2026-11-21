@@ -2698,15 +2698,27 @@ async function pcSavePcRates(groupId, wrap, errEl) {
     if (n == null) return null;
     return n;
   };
+  const readOffline = (f) => {
+    const el = wrap.querySelector(`input[data-f="${f}"]`);
+    const t = (el?.value || "").trim();
+    if (t === "") return { empty: true, value: null };
+    const n = ss14ParseTomanInput(t);
+    if (n == null) return { empty: false, value: undefined };
+    return { empty: false, value: n };
+  };
   const onlineDay = read("onlineDay");
   const onlineNight = read("onlineNight");
-  const offlineDay = read("offlineDay");
-  const offlineNight = read("offlineNight");
+  const offlineDay = readOffline("offlineDay");
+  const offlineNight = readOffline("offlineNight");
   if (onlineDay == null || onlineNight == null) {
     errEl.textContent = "عدد معتبر وارد کنید.";
     return;
   }
-  const body = { onlineDay, onlineNight, offlineDay, offlineNight };
+  if (offlineDay.value === undefined || offlineNight.value === undefined) {
+    errEl.textContent = "عدد معتبر وارد کنید.";
+    return;
+  }
+  const body = { onlineDay, onlineNight, offlineDay: offlineDay.value, offlineNight: offlineNight.value };
   if ((body.offlineDay == null) !== (body.offlineNight == null)) {
     errEl.textContent = "نرخ آفلاین روز و شب را با هم وارد کنید.";
     return;
