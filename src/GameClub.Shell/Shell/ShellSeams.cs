@@ -39,6 +39,10 @@ public interface IHttpProbeSeam
     bool TryGetOperatorOk(out int statusCode);
 
     bool TryGetOperatorOk(out int statusCode, int timeoutMilliseconds);
+
+    bool TryGetPanelOk(out int statusCode);
+
+    bool TryGetPanelOk(out int statusCode, int timeoutMilliseconds);
 }
 
 public sealed class ProductionServiceControllerSeam : IServiceControllerSeam
@@ -192,12 +196,32 @@ public sealed class ProductionHttpProbeSeam : IHttpProbeSeam
     public bool TryGetOperatorOk(out int statusCode) =>
         TryGetOperatorOk(out statusCode, HttpProbeRequestTimeoutPolicy.StandardMilliseconds);
 
+    public bool TryGetPanelOk(out int statusCode) =>
+        TryGetPanelOk(out statusCode, HttpProbeRequestTimeoutPolicy.StandardMilliseconds);
+
     public bool TryGetOperatorOk(out int statusCode, int timeoutMilliseconds)
     {
         statusCode = 0;
         try
         {
             var request = System.Net.WebRequest.Create(ShellSeams.ResolveHttpProbeUrl());
+            HttpProbeRequestTimeoutPolicy.Apply(request, timeoutMilliseconds);
+            using var response = (System.Net.HttpWebResponse)request.GetResponse();
+            statusCode = (int)response.StatusCode;
+            return statusCode == 200;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    public bool TryGetPanelOk(out int statusCode, int timeoutMilliseconds)
+    {
+        statusCode = 0;
+        try
+        {
+            var request = System.Net.WebRequest.Create(ShellSeams.ResolvePanelUrl());
             HttpProbeRequestTimeoutPolicy.Apply(request, timeoutMilliseconds);
             using var response = (System.Net.HttpWebResponse)request.GetResponse();
             statusCode = (int)response.StatusCode;

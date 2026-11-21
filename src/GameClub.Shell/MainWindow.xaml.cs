@@ -756,7 +756,7 @@ public partial class MainWindow : Window
         {
             var attempt = _panelNavRetryPolicy.FailureCount + 1;
             var nextDelayBeforeAttempt = _panelNavRetryPolicy.GetNextDelayAfterLastFailure();
-            var (ok, statusCode) = await Task.Run(ProbePanelHttp);
+            var (ok, statusCode) = await Task.Run(ProbePanelRecoveryHttp);
             if (!ok)
             {
                 var utcNow = DateTime.UtcNow;
@@ -764,12 +764,16 @@ public partial class MainWindow : Window
                 var nextDelay = _panelNavRetryPolicy.GetNextDelayAfterLastFailure();
                 ShellFileLog.Write(
                     $"panel-nav-retry attempt={attempt} nextDelaySec={nextDelay.TotalSeconds:F0} action=probe outcome=fail status={statusCode}");
+                ShellFileLog.Write(
+                    $"panel-recovery-probe target=panel status={statusCode} outcome=fail");
                 LogOfflineTrace(
                     "panel-probe-fail",
                     $"status={statusCode} scheduledDelaySec={nextDelayBeforeAttempt.TotalSeconds:F0}");
                 return;
             }
 
+            ShellFileLog.Write(
+                $"panel-recovery-probe target=panel status={statusCode} outcome=ok");
             ShellFileLog.Write(
                 $"panel-nav-retry attempt={attempt} nextDelaySec=0 action=probe outcome=ok status={statusCode}");
             await Dispatcher.InvokeAsync(() => NavigatePanelFromProbe());
@@ -783,6 +787,18 @@ public partial class MainWindow : Window
     private static (bool Ok, int StatusCode) ProbePanelHttp()
     {
         if (!ShellSeams.HttpProbe.TryGetOperatorOk(out var statusCode))
+        {
+            return (false, statusCode);
+        }
+
+        return (statusCode is >= 200 and < 300, statusCode);
+    }
+
+    private static (bool Ok, int StatusCode) ProbePanelRecoveryHttp()
+    {
+        if (!ShellSeams.HttpProbe.TryGetPanelOk(
+                out var statusCode,
+                HttpProbeRequestTimeoutPolicy.StandardMilliseconds))
         {
             return (false, statusCode);
         }

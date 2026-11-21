@@ -56,7 +56,16 @@ internal sealed class FakeHttpSeam : IHttpProbeSeam
   public bool TryGetOperatorOk(out int statusCode) =>
     TryGetOperatorOk(out statusCode, timeoutMilliseconds: 3000);
 
+  public bool TryGetPanelOk(out int statusCode) =>
+    TryGetPanelOk(out statusCode, timeoutMilliseconds: 3000);
+
   public bool TryGetOperatorOk(out int statusCode, int timeoutMilliseconds)
+  {
+    statusCode = OperatorPageOk ? 200 : 503;
+    return OperatorPageOk;
+  }
+
+  public bool TryGetPanelOk(out int statusCode, int timeoutMilliseconds)
   {
     statusCode = OperatorPageOk ? 200 : 503;
     return OperatorPageOk;
