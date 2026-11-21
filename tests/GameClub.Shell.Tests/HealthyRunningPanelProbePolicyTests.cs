@@ -1,3 +1,4 @@
+using System;
 using GameClub.Shell.Shell;
 using Xunit;
 
@@ -5,6 +6,10 @@ namespace GameClub.Shell.Tests;
 
 public sealed class HealthyRunningPanelProbePolicyTests
 {
+    [Fact]
+    public void dispatcher_poll_interval_is_shorter_than_service_poller_tick() =>
+        Assert.True(HealthyRunningPanelProbePolicy.DispatcherPollInterval < TimeSpan.FromSeconds(5));
+
     [Theory]
     [InlineData(false, true, true, true)]
     [InlineData(true, true, true, false)]

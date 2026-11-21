@@ -50,6 +50,7 @@ public partial class MainWindow : Window
     private readonly PanelNavigationPendingRegistry _panelNavigationPending = new();
     private bool _probeOkPanelNavTimeoutCycleConsumed;
     private DispatcherTimer? _loopbackPanelNavTimeoutTimer;
+    private DispatcherTimer? _healthyPanelProbeTimer;
     private Task? _exhaustedRecoveryRetryTask;
     private int _panelWebViewWireCount;
     private int _navigationCompletedHandledCount;
@@ -141,15 +142,10 @@ public partial class MainWindow : Window
                     _offlinePresentInFlightState = null;
                     _allowOfflineDataNav = false;
                     var recoverUri = new Uri(ShellSeams.ResolvePanelUrl());
-                    LogPanelNavigate("RunningRecover", recoverUri);
-                    LogRaceNav("RunningRecover.Source");
-                    if (_closed)
+                    if (!TryStartLoopbackPanelNavigation("RunningRecover", recoverUri))
                     {
                         return;
                     }
-
-                    _panelNavigated = true;
-                    PanelWebView.Source = recoverUri;
                 }
                 else if (RunningPanelLoadFailingPollerPolicy.Applies(_runningPanelLoadFailing, _offlineShown))
                 {
@@ -437,6 +433,7 @@ public partial class MainWindow : Window
                 LogOfflineTrace(
                     "nav-completed-panel-ok",
                     $"webError={e.WebErrorStatus} http={e.HttpStatusCode} startUri={FormatUriForLog(startUri)}");
+                ArmHealthyPanelProbeTimer();
                 return;
             }
 
@@ -488,6 +485,7 @@ public partial class MainWindow : Window
 
     private void HandleRunningPanelNavigationFailure()
     {
+        CancelHealthyPanelProbeTimer("panel-nav-failure");
         _runningPanelLoadFailing = true;
         var utcNow = DateTime.UtcNow;
         _panelNavRetryPolicy.RecordFailure(utcNow);
@@ -531,7 +529,7 @@ public partial class MainWindow : Window
 
     private void ArmLoopbackPanelNavTimeoutTimer(ulong navigationId)
     {
-        CancelLoopbackPanelNavTimeoutTimer();
+        CancelLoopbackPanelNavTimeoutTimer("rearm");
         _probeOkPanelNavTimeoutCycleConsumed = false;
         _loopbackPanelNavTimeoutTimer = new DispatcherTimer
         {
@@ -539,11 +537,12 @@ public partial class MainWindow : Window
         };
         _loopbackPanelNavTimeoutTimer.Tick += OnLoopbackPanelNavTimeoutTick;
         _loopbackPanelNavTimeoutTimer.Start();
-        ShellFileLog.Write(
-            $"panel-nav-timeout-armed id={navigationId} deadlineSec={PendingLoopbackPanelNavigationTimeoutPolicy.Deadline.TotalSeconds:F0}");
+        LogOfflineTrace(
+            "panel-nav-timeout-arm",
+            $"id={navigationId} deadlineSec={PendingLoopbackPanelNavigationTimeoutPolicy.Deadline.TotalSeconds:F0}");
     }
 
-    private void CancelLoopbackPanelNavTimeoutTimer()
+    private void CancelLoopbackPanelNavTimeoutTimer(string reason = "cancel")
     {
         if (_loopbackPanelNavTimeoutTimer is null)
         {
@@ -553,13 +552,21 @@ public partial class MainWindow : Window
         _loopbackPanelNavTimeoutTimer.Stop();
         _loopbackPanelNavTimeoutTimer.Tick -= OnLoopbackPanelNavTimeoutTick;
         _loopbackPanelNavTimeoutTimer = null;
+        LogOfflineTrace("panel-nav-timeout-cancel", $"reason={reason}");
     }
 
     private void OnLoopbackPanelNavTimeoutTick(object? sender, EventArgs e)
     {
-        CancelLoopbackPanelNavTimeoutTimer();
-        if (_closed || _probeOkPanelNavTimeoutCycleConsumed)
+        CancelLoopbackPanelNavTimeoutTimer("fired");
+        if (_closed)
         {
+            LogOfflineTrace("panel-nav-timeout-skip", "reason=closed");
+            return;
+        }
+
+        if (_probeOkPanelNavTimeoutCycleConsumed)
+        {
+            LogOfflineTrace("panel-nav-timeout-skip", "reason=cycleConsumed");
             return;
         }
 
@@ -570,6 +577,19 @@ public partial class MainWindow : Window
                 out var age,
                 out var navigationId))
         {
+            LogOfflineTrace("panel-nav-timeout-skip", "reason=no-pending");
+            return;
+        }
+
+        if (_runningPanelLoadFailing)
+        {
+            LogOfflineTrace("panel-nav-timeout-skip", "reason=loadFailing");
+            return;
+        }
+
+        if (_offlineShown)
+        {
+            LogOfflineTrace("panel-nav-timeout-skip", "reason=offlineShown");
             return;
         }
 
@@ -580,6 +600,9 @@ public partial class MainWindow : Window
                 hasPendingLoopbackNavigation: true,
                 age))
         {
+            LogOfflineTrace(
+                "panel-nav-timeout-skip",
+                $"reason=not-due pendingId={navigationId} ageSec={age.TotalSeconds:F1}");
             return;
         }
 
@@ -588,6 +611,71 @@ public partial class MainWindow : Window
             "panel-nav-timeout",
             $"pendingId={navigationId} ageSec={age.TotalSeconds:F1}");
         HandleRunningPanelNavigationFailure();
+    }
+
+    private void ArmHealthyPanelProbeTimer()
+    {
+        if (_closed || !_webViewReady)
+        {
+            return;
+        }
+
+        if (!HealthyRunningPanelProbePolicy.ShouldProbeOnPollerTick(
+                _runningPanelLoadFailing,
+                _panelNavigated,
+                IsActiveOnPanelOrigin()))
+        {
+            CancelHealthyPanelProbeTimer("not-applicable");
+            return;
+        }
+
+        if (_healthyPanelProbeTimer is not null)
+        {
+            return;
+        }
+
+        _healthyPanelProbeTimer = new DispatcherTimer
+        {
+            Interval = HealthyRunningPanelProbePolicy.DispatcherPollInterval,
+        };
+        _healthyPanelProbeTimer.Tick += OnHealthyPanelProbeTimerTick;
+        _healthyPanelProbeTimer.Start();
+        LogOfflineTrace(
+            "healthy-panel-probe-timer-arm",
+            $"intervalMs={HealthyRunningPanelProbePolicy.DispatcherPollInterval.TotalMilliseconds:F0}");
+    }
+
+    private void CancelHealthyPanelProbeTimer(string reason)
+    {
+        if (_healthyPanelProbeTimer is null)
+        {
+            return;
+        }
+
+        _healthyPanelProbeTimer.Stop();
+        _healthyPanelProbeTimer.Tick -= OnHealthyPanelProbeTimerTick;
+        _healthyPanelProbeTimer = null;
+        LogOfflineTrace("healthy-panel-probe-timer-cancel", $"reason={reason}");
+    }
+
+    private void OnHealthyPanelProbeTimerTick(object? sender, EventArgs e)
+    {
+        if (_closed)
+        {
+            CancelHealthyPanelProbeTimer("closed");
+            return;
+        }
+
+        if (!HealthyRunningPanelProbePolicy.ShouldProbeOnPollerTick(
+                _runningPanelLoadFailing,
+                _panelNavigated,
+                IsActiveOnPanelOrigin()))
+        {
+            CancelHealthyPanelProbeTimer("not-applicable");
+            return;
+        }
+
+        TryHealthyRunningPanelProbeWhenDue();
     }
 
     private async Task TryHealthyRunningPanelProbeCoreAsync()
@@ -698,6 +786,7 @@ public partial class MainWindow : Window
 
     private void EnterRunningPanelLoadFailingMode(int statusCode)
     {
+        CancelHealthyPanelProbeTimer("panel-load-failing");
         _runningPanelLoadFailing = true;
         var utcNow = DateTime.UtcNow;
         _panelNavRetryPolicy.RecordFailure(utcNow);
@@ -725,10 +814,7 @@ public partial class MainWindow : Window
         }
 
         var uri = new Uri(ShellSeams.ResolvePanelUrl());
-        LogPanelNavigate("NavigatePanel", uri);
-        LogRaceNav("NavigatePanel.Source");
-        _panelNavigated = true;
-        PanelWebView.Source = uri;
+        TryStartLoopbackPanelNavigation("NavigatePanel", uri);
     }
 
     private void RestoreRunningPanelOfflineView()
@@ -1226,6 +1312,43 @@ public partial class MainWindow : Window
         return $"scheme={uri.Scheme} host_hash8={Sha256Hex8(host)}";
     }
 
+    private bool TryStartLoopbackPanelNavigation(string caller, Uri uri)
+    {
+        if (_closed || !_webViewReady)
+        {
+            return false;
+        }
+
+        var utcNow = DateTime.UtcNow;
+        var hasPending = _panelNavigationPending.TryGetOldestPendingLoopbackPanelNavigation(
+            IsLoopbackPanelTarget,
+            utcNow,
+            out var oldestAge,
+            out var oldestId);
+        var pendingCount = _panelNavigationPending.PendingCount;
+        if (LoopbackPanelNavigationInFlightPolicy.ShouldDeferNewPanelNavigation(hasPending))
+        {
+            LogOfflineTrace(
+                "panel-nav-defer-in-flight",
+                $"caller={caller} pendingCount={pendingCount} oldestId={oldestId} oldestAgeSec={oldestAge.TotalSeconds:F1} supersedes=true");
+            return false;
+        }
+
+        LogOfflineTrace(
+            "panel-nav-start",
+            $"caller={caller} pendingCount={pendingCount} oldestId={oldestId} supersedes=false");
+        LogPanelNavigate(caller, uri);
+        LogRaceNav($"{caller}.Source");
+        if (_closed)
+        {
+            return false;
+        }
+
+        _panelNavigated = true;
+        PanelWebView.Source = uri;
+        return true;
+    }
+
     private static void LogPanelNavigate(string caller, Uri uri)
     {
         var host = (uri.Host ?? "").ToLowerInvariant();
@@ -1520,7 +1643,8 @@ public partial class MainWindow : Window
     protected override void OnClosed(EventArgs e)
     {
         _closed = true;
-        CancelLoopbackPanelNavTimeoutTimer();
+        CancelLoopbackPanelNavTimeoutTimer("window-closed");
+        CancelHealthyPanelProbeTimer("window-closed");
         _allowOfflineDataNav = false;
         if (_webViewEnvironment is not null)
         {
