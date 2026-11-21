@@ -196,3 +196,13 @@ jobs:
       - name: installer acceptance
         shell: pwsh
         run: ./scripts/windows/ci-installer.ps1
+      - name: upload installer artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: checkpoint-installers
+          path: |
+            installer/server/Output/CheckpointServerSetup-*.exe
+            installer/kiosk/Output/CheckpointKioskSetup-*.exe
+            artifacts/installer/acceptance-logs/**
+            artifacts/installer/third-party-cache/**

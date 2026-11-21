@@ -1,11 +1,25 @@
-; Checkpoint server installer skeleton (B). Extended on Windows CI.
+; Checkpoint server installer (B) — full payload staged by ci-installer.ps1
+#ifndef AppVersion
+  #define AppVersion "UNSET"
+#endif
+#ifndef StagingServerDir
+  #define StagingServerDir "..\..\artifacts\installer\stage-server"
+#endif
+#ifndef StagingPgDir
+  #define StagingPgDir "..\..\artifacts\installer\stage-pg-trimmed"
+#endif
+#ifndef StagingWebView2
+  #define StagingWebView2 "..\..\artifacts\installer\stage-webview2\MicrosoftEdgeWebView2RuntimeInstallerX64.exe"
+#endif
+
 #define AppName "چک‌پوینت سرور"
-#define AppVersion "0.0.0-b"
+#define SetupBase "CheckpointServerSetup-" + AppVersion
 
 [Setup]
 AppId={{8E5E6B2E-6B6D-4F5B-9D9A-4F4E7F8F6B6D}
 AppName={#AppName}
 AppVersion={#AppVersion}
+AppVerName={#AppName} {#AppVersion}
 DefaultDirName={pf}\Checkpoint\Server
 DisableDirPage=yes
 DisableProgramGroupPage=yes
@@ -14,18 +28,89 @@ WizardStyle=modern
 WizardSizePercent=120
 ShowLanguageDialog=no
 LanguageDetectionMethod=none
+OutputBaseFilename={#SetupBase}
+OutputDir=Output
+UninstallDisplayName={#AppName}
+SetupLogging=yes
+CloseApplications=force
+RestartApplications=no
+ArchitecturesAllowed=x64compatible
+ArchitecturesInstallIn64BitMode=x64compatible
+ChangesAssociations=no
 
 [Languages]
 Name: "persian"; MessagesFile: "..\lang\Persian.isl"
 
+[LangOptions]
+RightToLeft=yes
+
 [Files]
-; Publish output staged by ci-installer.ps1 into {#SourcePath}
+Source: "{#StagingServerDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Check: PayloadDirExists('{#StagingServerDir}')
+Source: "{#StagingPgDir}\*"; DestDir: "{pf}\Checkpoint\PostgreSQL"; Flags: ignoreversion recursesubdirs createallsubdirs; Check: PayloadDirExists('{#StagingPgDir}')
+Source: "{#StagingWebView2}"; DestDir: "{app}\_thirdparty"; Flags: ignoreversion; Check: PayloadFileExists('{#StagingWebView2}')
+Source: "..\tools\*.ps1"; DestDir: "{app}\tools"; Flags: ignoreversion
+Source: "..\tools\CheckpointInstall.Common.psm1"; DestDir: "{app}\tools"; Flags: ignoreversion
+Source: "..\..\docs\install\server-install.fa.md"; DestDir: "{app}\docs"; Flags: ignoreversion
+
+[Dirs]
+Name: "{commonappdata}\Checkpoint"; Permissions: administrators-full
+Name: "{commonappdata}\Checkpoint\config"; Permissions: administrators-full
+Name: "{commonappdata}\Checkpoint\pgdata"; Permissions: administrators-full
+Name: "{commonappdata}\Checkpoint\backups"; Permissions: administrators-full
+Name: "{commonappdata}\Checkpoint\logs"; Permissions: administrators-full
+
+[Icons]
+Name: "{userdesktop}\چک‌پوینت — پیشخوان"; Filename: "{app}\GameClub.Shell.exe"; Tasks: desktopicon; Check: FileExists(ExpandConstant('{app}\GameClub.Shell.exe'))
+Name: "{group}\چک‌پوینت — پیشخوان"; Filename: "{app}\GameClub.Shell.exe"; Check: FileExists(ExpandConstant('{app}\GameClub.Shell.exe'))
+Name: "{group}\راهنمای نصب"; Filename: "{app}\docs\server-install.fa.md"
+
+[Tasks]
+Name: "desktopicon"; Description: "میان‌بر روی میزکار"; Flags: unchecked
 
 [Run]
-Filename: "{app}\GameClub.Server.exe"; Description: "شروع سرور"; Flags: postinstall nowait skipifsilent
+Filename: "pwsh.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\tools\server-postinstall.ps1"" -InstallMode install -AccountsFile ""{code:GetAccountsFile}"""; StatusMsg: "پیکربندی سرور و پایگاه داده…"; Flags: runhidden waituntilidle; Check: IsFirstInstall
+Filename: "pwsh.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\tools\server-postinstall.ps1"" -InstallMode upgrade"; StatusMsg: "ارتقای سرور…"; Flags: runhidden waituntilidle; Check: IsUpgradeInstallCheck
+Filename: "{app}\docs\server-install.fa.md"; Description: "مشاهدهٔ راهنمای نصب"; Flags: postinstall shellexec skipifsilent unchecked; Check: FileExists(ExpandConstant('{app}\docs\server-install.fa.md'))
+
+[UninstallRun]
+Filename: "sc.exe"; Parameters: "stop CheckpointServer"; Flags: runhidden
+Filename: "sc.exe"; Parameters: "delete CheckpointServer"; Flags: runhidden
+Filename: "sc.exe"; Parameters: "stop CheckpointPostgres"; Flags: runhidden
+Filename: "sc.exe"; Parameters: "delete CheckpointPostgres"; Flags: runhidden
+Filename: "schtasks.exe"; Parameters: "/Delete /TN CheckpointDailyBackup /F"; Flags: runhidden
+Filename: "netsh.exe"; Parameters: "advfirewall firewall delete rule name=""Checkpoint Server API"""; Flags: runhidden
+
+[UninstallDelete]
+Type: filesandordirs; Name: "{app}"
 
 [Code]
+#include "ServerWizard.inc.iss"
+
+function PayloadDirExists(const Dir: string): Boolean;
+begin
+  Result := DirExists(Dir);
+end;
+
+function PayloadFileExists(const Path: string): Boolean;
+begin
+  Result := FileExists(Path);
+end;
+
+function GetAccountsFile(Param: String): String;
+begin
+  if ExpandConstant('{param:ACCOUNTS|}') <> '' then
+    Result := ExpandConstant('{param:ACCOUNTS|}')
+  else
+    Result := AccountsJsonPath;
+end;
+
 function InitializeSetup: Boolean;
 begin
+  if '{#AppVersion}' = 'UNSET' then
+  begin
+    MsgBox('AppVersion not defined. Build must pass /DAppVersion from Directory.Build.props.', mbError, MB_OK);
+    Result := False;
+    Exit;
+  end;
   Result := True;
 end;
