@@ -183,6 +183,16 @@ registry: no Inno Setup 6_is1 uninstall key with InstallLocation found
 
 $realInnoDir = $regEntry.InstallLocation
 $realIscc = Join-Path $realInnoDir "ISCC.exe"
+if (-not (Test-Path -LiteralPath $realIscc)) {
+  Write-Error @"
+ci-installer: Inno Setup $expectedInno required (real ISCC.exe, never Chocolatey PATH shim).
+PATH iscc.exe (ignored if Chocolatey shim)=$pathIsccResolved
+resolved ISCC path=$realIscc (missing)
+registry key=$($regEntry.RegistryKey)
+DisplayVersion=$($regEntry.DisplayVersion)
+"@
+  exit 1
+}
 $peVersions = Get-IsccPeVersions $realIscc
 $fileVersion = if ($null -ne $peVersions) { $peVersions.FileVersion } else { "(missing ISCC)" }
 $productVersion = if ($null -ne $peVersions) { $peVersions.ProductVersion } else { "(missing ISCC)" }
