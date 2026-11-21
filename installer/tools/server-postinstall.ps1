@@ -38,6 +38,12 @@ if ($isUpgrade) {
 & (Join-Path $PSScriptRoot "Initialize-CheckpointPostgres.ps1") -PgRoot $pgRoot -SuperPassword $dbPassword
 
 $initialUsers = @()
+if ($AccountsFile -and (Test-Path -LiteralPath $AccountsFile)) {
+    $acc = Get-Content -LiteralPath $AccountsFile -Raw | ConvertFrom-Json
+    if ($acc.secondaryBackupDir) {
+        $SecondaryBackupDir = [string]$acc.secondaryBackupDir
+    }
+}
 if (-not $isUpgrade -and $AccountsFile -and (Test-Path -LiteralPath $AccountsFile)) {
     $acc = Get-Content -LiteralPath $AccountsFile -Raw | ConvertFrom-Json
     foreach ($role in @(
@@ -132,9 +138,7 @@ if ($wv2) {
     }
 }
 
-# Daily backup task 09:00 Iran Standard Time
-$taskName = "CheckpointDailyBackup"
-$action = New-ScheduledTaskAction -Execute "pwsh.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$(Join-Path $PSScriptRoot 'backup-daily.ps1')`" -SecondaryBackupDir `"$SecondaryBackupDir`""
-$trigger = New-ScheduledTaskTrigger -Daily -At "09:00"
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable
-Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -User "SYSTEM" -Force | Out-Null
+if ([string]::IsNullOrWhiteSpace($SecondaryBackupDir)) {
+    Set-Content -LiteralPath (Join-Path $logsDir "backup-secondary-missing.flag") -Value "پوشهٔ دوم پشتیبان انتخاب نشده است."
+}
+& (Join-Path $PSScriptRoot "Register-CheckpointDailyBackup.ps1") -BackupScriptPath (Join-Path $PSScriptRoot "backup-daily.ps1") -SecondaryBackupDir $SecondaryBackupDir

@@ -2,8 +2,8 @@
   "postgresql": {
     "version": "16.6-1",
     "url": "https://get.enterprisedb.com/postgresql/postgresql-16.6-1-windows-x64-binaries.zip",
-    "sha256": "",
-    "documentedSizeBytes": 355000000,
+    "sha256": "6a1bfb6435b13d9563ae481445c70ac2a19846bd8a430b12903b408eec300f9b",
+    "documentedSizeBytes": 304112325,
     "port": 5433,
     "listenAddress": "127.0.0.1",
     "databaseName": "checkpoint",
@@ -12,8 +12,8 @@
   "webview2": {
     "label": "Evergreen Standalone Installer x64",
     "url": "https://go.microsoft.com/fwlink/?linkid=2124701",
-    "sha256": "",
-    "documentedSizeBytes": 180000000
+    "sha256": "47bc51387aff95c1275ce38cfbbb5fbab99b43b33214049877bbcdbcc7a970d5",
+    "documentedSizeBytes": 294099168
   },
   "innosetup": {
     "requiredVersion": "6.7.1"

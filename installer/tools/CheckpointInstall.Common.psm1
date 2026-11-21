@@ -82,9 +82,7 @@ function Assert-FileSha256 {
         [string] $Label
     )
     if ([string]::IsNullOrWhiteSpace($ExpectedSha256)) {
-        $computed = Save-FileSha256 $Path
-        Write-Host "installer-third-party: $Label sha256=$computed (not pinned in manifest)"
-        return $computed
+        throw "$Label sha256 must be pinned in installer/third-party/versions.json"
     }
     $actual = Save-FileSha256 $Path
     if ($actual -ne $ExpectedSha256.ToLowerInvariant()) {
@@ -107,6 +105,20 @@ function Set-CheckpointServerJsonAcl {
 
 # Hook for R8b: setup.json + admin-lock.json trust ACL via Guard — not implemented in R8c (see kiosk-postinstall.ps1).
 
+function Get-CheckpointIranTimeZone {
+    try {
+        return [System.TimeZoneInfo]::FindSystemTimeZoneById("Iran Standard Time")
+    } catch {
+        return [System.TimeZoneInfo]::FindSystemTimeZoneById("Asia/Tehran")
+    }
+}
+
+function Get-CheckpointDailyBackupStartBoundaryUtc {
+    $tehran = Get-CheckpointIranTimeZone
+    $localNine = [DateTime]::SpecifyKind([DateTime]::Today.AddHours(9), [DateTimeKind]::Unspecified)
+    return [System.TimeZoneInfo]::ConvertTimeToUtc($localNine, $tehran).ToString("yyyy-MM-dd'T'HH:mm:ss'Z'")
+}
+
 Export-ModuleMember -Function @(
     "Get-CheckpointRepoRoot",
     "Get-CheckpointAppVersion",
@@ -116,5 +128,7 @@ Export-ModuleMember -Function @(
     "Get-CheckpointThirdPartyManifest",
     "Save-FileSha256",
     "Assert-FileSha256",
-    "Set-CheckpointServerJsonAcl"
+    "Set-CheckpointServerJsonAcl",
+    "Get-CheckpointDailyBackupStartBoundaryUtc",
+    "Get-CheckpointIranTimeZone"
 )

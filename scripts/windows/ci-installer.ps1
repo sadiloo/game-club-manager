@@ -17,6 +17,10 @@ function Invoke-DotnetPublish {
 
 $appVersion = Get-CheckpointAppVersion -RepoRoot $root
 Write-Host "ci-installer: AppVersion=$appVersion"
+$lowVersion = "0.0.9"
+$high2Version = if ($appVersion -match "^(\d+)\.(\d+)\.(\d+)$") {
+    "$($Matches[1]).$($Matches[2]).$([int]$Matches[3] + 1)"
+} else { "$appVersion.1" }
 
 $stageServer = Join-Path $root "artifacts/installer/stage-server"
 $stageKiosk = Join-Path $root "artifacts/installer/stage-kiosk"
@@ -40,7 +44,7 @@ if (Test-Path -LiteralPath $shellProj) {
         "-o", $stageServer, "--nologo"
     ) -Label "publish shell win-x64"
 } else {
-    Write-Host "ci-installer: GameClub.Shell not present at base; server-only payload"
+    Write-Host "ci-installer: GameClub.Shell not present (out of scope); server-only payload"
 }
 
 Invoke-DotnetPublish @(
@@ -60,96 +64,47 @@ Invoke-DotnetPublish @(
 Write-Host "ci-installer: static installer rules"
 & (Join-Path $root "installer/tests/NoBackupDelete.Tests.ps1")
 & (Join-Path $root "installer/tests/KioskInstallStatic.Tests.ps1")
+& (Join-Path $root "installer/tests/BackupDailyTehran.Tests.ps1")
 
 $expectedInno = [Version]"6.7.1"
 
-function NormalizeDir([string]$path) {
-    if ([string]::IsNullOrWhiteSpace($path)) { return $null }
-    return [System.IO.Path]::GetFullPath($path).TrimEnd('\')
-}
-
-function Try-ParseInnoVersionString([string]$text) {
-    if ([string]::IsNullOrWhiteSpace($text)) { return $null }
-    if ($text -eq "0.0.0.0") { return $null }
-    try { return [Version]$text } catch { return $null }
-}
-
-function Test-VersionMatchesExpected([Version]$parsed, [Version]$expected) {
-    if ($null -eq $parsed) { return $false }
-    return $parsed.Major -eq $expected.Major -and $parsed.Minor -eq $expected.Minor -and $parsed.Build -eq $expected.Build
-}
-
 function Parse-InnoBannerCompilerVersion([string]$bannerText) {
     if ([string]::IsNullOrWhiteSpace($bannerText)) { return $null }
-    if ($bannerText -match "(?m)Compiler version\s+(\d+\.\d+(?:\.\d+)?)") {
-        return $Matches[1]
-    }
+    if ($bannerText -match "(?m)Compiler version\s+(\d+\.\d+(?:\.\d+)?)") { return $Matches[1] }
     return $null
 }
 
-function Resolve-InnoVersionDecision {
-    param(
-        [string]$DisplayVersion, [string]$FileVersion, [string]$ProductVersion,
-        [string]$BannerText, [Version]$Expected
-    )
-    $displayParsed = Try-ParseInnoVersionString $DisplayVersion
-    $fileParsed = Try-ParseInnoVersionString $FileVersion
-    $productParsed = Try-ParseInnoVersionString $ProductVersion
-    $bannerVersionText = Parse-InnoBannerCompilerVersion $BannerText
-    $bannerParsed = Try-ParseInnoVersionString $bannerVersionText
-    $contradictions = [System.Collections.Generic.List[string]]::new()
-
-    if ($null -eq $displayParsed -or -not (Test-VersionMatchesExpected $displayParsed $Expected)) {
-        return @{ Ok = $false; Reason = "DisplayVersion must be $Expected (registry uninstall key)."; Contradictions = @() }
-    }
-    foreach ($entry in @(
-            @{ Name = "FileVersion"; Parsed = $fileParsed; Raw = $FileVersion },
-            @{ Name = "ProductVersion"; Parsed = $productParsed; Raw = $ProductVersion },
-            @{ Name = "BannerVersion"; Parsed = $bannerParsed; Raw = $bannerVersionText }
-        )) {
-        if ($null -eq $entry.Parsed) { continue }
-        if (-not (Test-VersionMatchesExpected $entry.Parsed $Expected)) {
-            $contradictions.Add("$($entry.Name)=$($entry.Raw)")
-        }
-    }
-    if ($contradictions.Count -gt 0) {
-        return @{ Ok = $false; Reason = "version source(s) contradict DisplayVersion $Expected."; Contradictions = $contradictions.ToArray() }
-    }
-    return @{ Ok = $true; Reason = $null; Contradictions = @() }
-}
-
 function Get-InnoRegistryEntry {
-    $registryKeys = @(
-        "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Inno Setup 6_is1",
-        "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Inno Setup 6_is1"
-    )
-    foreach ($keyPath in $registryKeys) {
+    foreach ($keyPath in @(
+            "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Inno Setup 6_is1",
+            "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Inno Setup 6_is1"
+        )) {
         if (-not (Test-Path -LiteralPath $keyPath)) { continue }
         $props = Get-ItemProperty -LiteralPath $keyPath -ErrorAction SilentlyContinue
-        if ($null -eq $props) { continue }
-        if ([string]::IsNullOrWhiteSpace($props.InstallLocation)) { continue }
-        return @{ RegistryKey = $keyPath; InstallLocation = NormalizeDir $props.InstallLocation; DisplayVersion = [string]$props.DisplayVersion }
+        if ($props.InstallLocation) {
+            return @{ InstallLocation = $props.InstallLocation; DisplayVersion = [string]$props.DisplayVersion }
+        }
     }
     return $null
 }
 
 $regEntry = Get-InnoRegistryEntry
 if ($null -eq $regEntry) {
-    Write-Error "ci-installer: Inno Setup $expectedInno required (registry InstallLocation missing)"
+    Write-Error "ci-installer: Inno Setup registry entry missing"
     exit 1
 }
 $realIscc = Join-Path $regEntry.InstallLocation "ISCC.exe"
 if (-not (Test-Path -LiteralPath $realIscc)) {
-    Write-Error "ci-installer: missing $realIscc"
+    Write-Error "ci-installer: ISCC missing"
+    exit 1
+}
+if ($regEntry.DisplayVersion -ne "6.7.1") {
+    Write-Error "ci-installer: Inno DisplayVersion must be 6.7.1"
     exit 1
 }
 
 function Invoke-IsccCompile {
-    param(
-        [string] $IssPath,
-        [string] $Version,
-        [string] $LowerVersion = ""
-    )
+    param([string] $IssPath, [string] $Version)
     $defines = @(
         "/DAppVersion=$Version",
         "/DStagingServerDir=$stageServer",
@@ -158,34 +113,42 @@ function Invoke-IsccCompile {
         "/DStagingKioskDir=$stageKiosk",
         "/DStagingGuardDir=$stageGuard"
     )
-    Write-Host "ci-installer: iscc $IssPath version=$Version"
+    Write-Host "ci-installer: iscc $IssPath AppVersion=$Version"
     $compileLog = & $realIscc $defines $IssPath 2>&1 | Out-String
     Write-Host $compileLog
-    if ($LASTEXITCODE -ne 0) {
-        Write-Error "ci-installer: iscc failed for $IssPath"
-        exit 1
-    }
-    if ($compileLog -match 'Resulting Setup program filename is:\s*(.+\.exe)') {
-        return $Matches[1].Trim()
-    }
-    throw "ci-installer: could not parse iscc output for $IssPath"
+    if ($LASTEXITCODE -ne 0) { throw "iscc failed $IssPath" }
+    if ($compileLog -match 'Resulting Setup program filename is:\s*(.+\.exe)') { return $Matches[1].Trim() }
+    throw "iscc output parse failed"
 }
 
 $serverIss = Join-Path $root "installer/server/CheckpointServer.iss"
 $kioskIss = Join-Path $root "installer/kiosk/CheckpointKiosk.iss"
-$serverSetup = Invoke-IsccCompile -IssPath $serverIss -Version $appVersion
-$kioskSetup = Invoke-IsccCompile -IssPath $kioskIss -Version $appVersion
 
-foreach ($outPath in @($serverSetup, $kioskSetup)) {
+$serverLow = Invoke-IsccCompile -IssPath $serverIss -Version $lowVersion
+$serverHigh = Invoke-IsccCompile -IssPath $serverIss -Version $appVersion
+$serverHigh2 = Invoke-IsccCompile -IssPath $serverIss -Version $high2Version
+$kioskLow = Invoke-IsccCompile -IssPath $kioskIss -Version $lowVersion
+$kioskHigh = Invoke-IsccCompile -IssPath $kioskIss -Version $appVersion
+
+foreach ($outPath in @($serverLow, $serverHigh, $serverHigh2, $kioskLow, $kioskHigh)) {
     $len = (Get-Item -LiteralPath $outPath).Length
     Write-Host ("ci-installer: installer path={0} bytes={1}" -f $outPath, $len)
 }
 
 $logRoot = Join-Path $root "artifacts/installer/acceptance-logs"
 $accounts = Join-Path $root "installer/ci/accounts-silent.json"
+$acceptance = Join-Path $root "installer/tools/acceptance"
 
-& (Join-Path $root "installer/tools/acceptance/Invoke-B1-CleanServerInstall.ps1") -ServerSetup $serverSetup -AccountsFile $accounts -LogsDir $logRoot
-& (Join-Path $root "installer/tools/acceptance/Invoke-B5-KioskInstall.ps1") -KioskSetup $kioskSetup -LogsDir $logRoot
+& (Join-Path $acceptance "Invoke-B2-Upgrade.ps1") -LowSetup $serverLow -HighSetup $serverHigh -AccountsFile $accounts -LowVersion $lowVersion -HighVersion $appVersion -Mode WithoutOpenSessions
+& (Join-Path $acceptance "Invoke-B2-Upgrade.ps1") -LowSetup $serverHigh -HighSetup $serverHigh2 -AccountsFile $accounts -LowVersion $appVersion -HighVersion $high2Version -Mode WithOpenSessions -SkipDowngradeCheck
+& (Join-Path $acceptance "Invoke-B1-CleanServerInstall.ps1") -ServerSetup $serverHigh -AccountsFile $accounts -LogsDir $logRoot
+& (Join-Path $acceptance "Invoke-B3-BackupNeverDeletes.ps1") -LogsDir $logRoot
+& (Join-Path $acceptance "Invoke-B4-UninstallReinstall.ps1") -ServerSetup $serverHigh -AccountsFile $accounts
+& (Join-Path $acceptance "Invoke-B5-KioskInstall.ps1") -KioskSetup $kioskHigh -LogsDir $logRoot
+& (Join-Path $acceptance "Invoke-B6-B12-KioskFirstRun.ps1") -RepoRoot $root
+& (Join-Path $acceptance "Invoke-B7-KioskUpgrade.ps1") -LowKioskSetup $kioskLow -HighKioskSetup $kioskHigh
+& (Join-Path $acceptance "Invoke-B8-WindowsBillingRestart.ps1") -AccountsFile $accounts
+& (Join-Path $acceptance "Invoke-B13-DefaultPinUpgrade.ps1") -ServerSetup $serverHigh -AccountsFile $accounts
 
-Write-Host "ci-installer: B-2..B-4, B-6..B-13 acceptance scripts queued on staging (extend in follow-up CI iterations)"
+Copy-Item -Force "C:\ProgramData\Checkpoint\logs\upgrade.log" (Join-Path $logRoot "upgrade.log") -ErrorAction SilentlyContinue
 Write-Host "ci-installer: done"

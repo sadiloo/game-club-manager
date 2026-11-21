@@ -1,0 +1,77 @@
+$ErrorActionPreference = "Stop"
+
+function Get-InstallerServerJson {
+    $path = "C:\ProgramData\Checkpoint\config\server.json"
+    if (-not (Test-Path -LiteralPath $path)) { throw "server.json missing" }
+    return Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+}
+
+function Get-InstallerApiHeaders {
+    $json = Get-InstallerServerJson
+    $key = [string]$json.GAMECLUB_API_KEY
+    return @{ "X-Api-Key" = $key }
+}
+
+function New-InstallerOperatorClient {
+    param([string] $Username, [string] $Pin)
+    $session = New-Object Microsoft.PowerShell.Commands.WebRequestSession
+    $body = @{ Username = $Username; Pin = $Pin } | ConvertTo-Json
+    $resp = Invoke-WebRequest -Method Post -Uri "http://127.0.0.1:5000/api/operator/auth/login" -Body $body -ContentType "application/json" -WebSession $session -UseBasicParsing
+    if ($resp.StatusCode -ne 200) { throw "operator login failed" }
+    return $session
+}
+
+function Invoke-InstallerApiJson {
+    param(
+        [string] $Method,
+        [string] $Uri,
+        [object] $Body = $null,
+        [Microsoft.PowerShell.Commands.WebRequestSession] $Session = $null
+    )
+    $headers = Get-InstallerApiHeaders
+    $params = @{
+        Method      = $Method
+        Uri         = $Uri
+        Headers     = $headers
+        UseBasicParsing = $true
+    }
+    if ($Session) { $params.WebSession = $Session }
+    if ($null -ne $Body) {
+        $params.Body = ($Body | ConvertTo-Json -Depth 8)
+        $params.ContentType = "application/json"
+    }
+    return Invoke-WebRequest @params
+}
+
+function Get-InstallerDbCounts {
+    $json = Get-InstallerServerJson
+    $cs = [string]$json.ConnectionStrings.Default
+    $m = [regex]::Match($cs, 'Password=([^;]+)')
+    $pw = $m.Groups[1].Value
+    $env:PGPASSWORD = $pw
+    $q = @"
+SELECT
+ (SELECT count(*) FROM customers),
+ (SELECT count(*) FROM sessions),
+ (SELECT count(*) FROM invoices),
+ (SELECT count(*) FROM wallet_ledger);
+"@
+    $out = & psql -h 127.0.0.1 -p 5433 -U postgres -d checkpoint -At -F '|' -c $q 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "psql count failed: $out" }
+    $parts = $out.Trim() -split '\|'
+    return [PSCustomObject]@{
+        Customers    = [int]$parts[0]
+        Sessions     = [int]$parts[1]
+        Invoices     = [int]$parts[2]
+        WalletLedger = [int]$parts[3]
+    }
+}
+
+function Get-ServerSecretsFingerprint {
+    $json = Get-InstallerServerJson
+    return [PSCustomObject]@{
+        OperatorSessionSecret = [string]$json.OperatorSessionSecret
+        ApiKey                = [string]$json.GAMECLUB_API_KEY
+        InitialUsersJson      = ($json.InitialUsers | ConvertTo-Json -Compress)
+    }
+}

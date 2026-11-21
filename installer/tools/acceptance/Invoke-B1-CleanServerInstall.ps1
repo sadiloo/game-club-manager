@@ -43,7 +43,7 @@ if ($installLog -and (Test-Path -LiteralPath $installLog)) {
 # API login checks (401 on defaults)
 $base = "http://127.0.0.1:5000"
 $acc = Get-Content -LiteralPath $AccountsFile -Raw | ConvertFrom-Json
-$loginBody = @{ username = "manager"; pin = "1234" } | ConvertTo-Json
+$loginBody = @{ Username = "manager"; Pin = "1234" } | ConvertTo-Json
 try {
     Invoke-RestMethod -Method Post -Uri "$base/api/operator/auth/login" -Body $loginBody -ContentType "application/json" -ErrorAction Stop
     throw "B-1: manager/1234 should be 401"
