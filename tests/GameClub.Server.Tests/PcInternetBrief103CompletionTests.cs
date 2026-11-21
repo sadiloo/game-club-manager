@@ -489,6 +489,59 @@ public sealed class PcInternetBrief103CompletionTests(GameClubWebApplicationFact
     }
 
     [Fact]
+    public async Task PcInternet_heartbeat_ignored_report_writes_no_internet_audit()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var api = factory.CreateClientWithKey();
+        await S3TestHelpers.RegisterPc(api, "PC-HBIGN", PilotSeed.PcNormalGroupId);
+        factory.Clock.SetTehran(2026, 6, 2, 12, 0);
+        await S3TestHelpers.StartSession(api, "PC-HBIGN");
+        var deviceId = await SeedKioskDeviceAsync("PC-HBIGN");
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var row = await db.StationInternetStates.SingleAsync(s => s.StationId == "PC-HBIGN");
+        row.AppliedVersion = 5;
+        await db.SaveChangesAsync();
+        var coordinator = scope.ServiceProvider.GetRequiredService<KioskCheckpointCoordinator>();
+        var staleEpoch = Guid.NewGuid();
+        await coordinator.OnHeartbeatAsync(deviceId, null, 0, new KioskInternetAppliedReport
+        {
+            Epoch = staleEpoch,
+            Version = 6,
+            On = true,
+            AppliedAtUtc = factory.Clock.UtcNow.UtcDateTime,
+        }, CancellationToken.None);
+        Assert.Empty(await db.AuditLog.Where(a => a.Action == "internet.applied" || a.Action == "internet.apply_failed").ToListAsync());
+    }
+
+    [Fact]
+    public async Task PcInternet_transfer_duration_prepaid_writes_duration_converted_audit()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var op = await factory.CreateOperatorClientAsync();
+        var mgr = await factory.CreateOperatorClientAsync("manager", "1234");
+        var api = factory.CreateClientWithKey();
+        await EnsureOfflineRatesAsync(mgr);
+        await S3TestHelpers.RegisterPc(api, "PC-DCV", PilotSeed.PcNormalGroupId);
+        await S3TestHelpers.RegisterPc(api, "PC-DCVV", PilotSeed.PcVipGroupId);
+        factory.Clock.SetTehran(2026, 6, 2, 20, 0);
+        (await op.PostAsJsonAsync(
+            "/api/operator/stations/PC-DCV/start-guest",
+            new { prepaidKind = 1, minutes = 60, openPayAtEnd = false })).EnsureSuccessStatusCode();
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var sessionId = await db.Sessions.Select(s => s.Id).SingleAsync();
+        factory.Clock.SetTehran(2026, 6, 2, 20, 15);
+        await S3TestHelpers.CheckpointAsync(api, sessionId, factory.Clock.UtcNow);
+        var cmd = Guid.NewGuid();
+        (await S3TestHelpers.TransferAsync(op, sessionId, "PC-DCVV", expectedVersion: await RowVersionAsync(sessionId), commandId: cmd))
+            .EnsureSuccessStatusCode();
+        Assert.Contains(
+            await db.AuditLog.Where(a => a.Action == "prepaid.duration_converted").ToListAsync(),
+            a => a.DetailsJson.Contains(cmd.ToString(), StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public async Task PcInternet_heartbeat_apply_failed_audit_once_per_version()
     {
         await S3TestHelpers.ResetAsync(factory);

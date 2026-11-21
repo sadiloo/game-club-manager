@@ -2,6 +2,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using GameClub.Billing;
 using GameClub.Server.Data;
+using GameClub.Server.Kiosk;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -190,6 +191,13 @@ public sealed class PcInternetBillOracleTests(GameClubWebApplicationFactory fact
         (await S3TestHelpers.TransferAsync(op, sessionId, "PC-O6BV", expectedVersion: await RowVersionAsync(sessionId))).EnsureSuccessStatusCode();
         factory.Clock.SetTehran(2026, 6, 2, 20, 25);
         await S3TestHelpers.CheckpointAsync(api, sessionId, factory.Clock.UtcNow);
+        using (var scope6b = factory.Services.CreateScope())
+        {
+            var session = await scope6b.ServiceProvider.GetRequiredService<AppDbContext>().Sessions.AsNoTracking()
+                .SingleAsync(s => s.Id == sessionId);
+            Assert.Equal(1560L, session.PrepaidBookedActiveSeconds);
+        }
+
         var bill = await BillAfterStopAsync(op, api, sessionId);
         AssertBill(bill, 38_333, (15, 20_000), (10, 18_333));
     }
@@ -210,10 +218,30 @@ public sealed class PcInternetBillOracleTests(GameClubWebApplicationFactory fact
             $"/api/operator/members/customers/{customerId}/wallet/top-up",
             new { method = "Cash", amountToman = 30_000L, commandId = Guid.NewGuid() });
         factory.Clock.SetTehran(2026, 6, 2, 20, 0);
-        (await op.PostAsJsonAsync($"/api/operator/stations/PC-O7/start", new { customerId })).EnsureSuccessStatusCode();
+        var sessionId = await S3TestHelpers.StartSession(api, "PC-O7");
+        (await op.PutAsJsonAsync($"/api/operator/sessions/{sessionId}/customer", new { customerId })).EnsureSuccessStatusCode();
         using var scope = factory.Services.CreateScope();
-        var sessionId = await scope.ServiceProvider.GetRequiredService<AppDbContext>().Sessions.Select(s => s.Id).SingleAsync();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var session = await db.Sessions.AsNoTracking().SingleAsync(s => s.Id == sessionId);
+        Assert.NotNull(session.CustomerId);
+        Assert.Equal(customerId, session.CustomerId);
+        var display = scope.ServiceProvider.GetRequiredService<KioskDisplayService>();
+        factory.Clock.SetTehran(2026, 6, 2, 20, 0);
+        session = await scope.ServiceProvider.GetRequiredService<AppDbContext>().Sessions
+            .Include(s => s.Segments).Include(s => s.Station)!.ThenInclude(st => st!.Group)
+            .Include(s => s.Pauses).SingleAsync(s => s.Id == sessionId);
+        var onDisplay = await display.BuildAsync(session, CancellationToken.None);
+        Assert.Equal(22 * 60, onDisplay!.EstimatedRemainingSeconds);
         await ToggleAsync(op, sessionId, false);
+        await using (var scope2 = factory.Services.CreateAsyncScope())
+        {
+            session = await scope2.ServiceProvider.GetRequiredService<AppDbContext>().Sessions
+                .Include(s => s.Segments).Include(s => s.Station)!.ThenInclude(st => st!.Group)
+                .Include(s => s.Pauses).SingleAsync(s => s.Id == sessionId);
+            var offDisplay = await scope2.ServiceProvider.GetRequiredService<KioskDisplayService>().BuildAsync(session, CancellationToken.None);
+            Assert.Equal(30 * 60, offDisplay!.EstimatedRemainingSeconds);
+        }
+
         factory.Clock.SetTehran(2026, 6, 2, 20, 30);
         await S3TestHelpers.CheckpointAsync(api, sessionId, factory.Clock.UtcNow);
         var bill = await BillAfterStopAsync(op, api, sessionId);
@@ -330,6 +358,13 @@ public sealed class PcInternetBillOracleTests(GameClubWebApplicationFactory fact
         await ToggleAsync(op, sessionId, false);
         factory.Clock.SetTehran(2026, 6, 3, 0, 42);
         await S3TestHelpers.CheckpointAsync(api, sessionId, factory.Clock.UtcNow);
+        using (var scope12Booked = factory.Services.CreateScope())
+        {
+            var session = await scope12Booked.ServiceProvider.GetRequiredService<AppDbContext>().Sessions.AsNoTracking()
+                .SingleAsync(s => s.Id == sessionId);
+            Assert.Equal(4380L, session.PrepaidBookedActiveSeconds);
+        }
+
         var bill = await BillAfterStopAsync(op, api, sessionId);
         AssertBill(bill, 89_333, (10, 13_333L), (20, 20_000L), (42, 56_000L));
     }
@@ -356,6 +391,13 @@ public sealed class PcInternetBillOracleTests(GameClubWebApplicationFactory fact
         (await S3TestHelpers.TransferAsync(op, sessionId, "PC-O13V", expectedVersion: await RowVersionAsync(sessionId))).EnsureSuccessStatusCode();
         factory.Clock.SetTehran(2026, 6, 2, 20, 47);
         await S3TestHelpers.CheckpointAsync(api, sessionId, factory.Clock.UtcNow);
+        using (var scope13Booked = factory.Services.CreateScope())
+        {
+            var session = await scope13Booked.ServiceProvider.GetRequiredService<AppDbContext>().Sessions.AsNoTracking()
+                .SingleAsync(s => s.Id == sessionId);
+            Assert.Equal(2880L, session.PrepaidBookedActiveSeconds);
+        }
+
         var bill = await BillAfterStopAsync(op, api, sessionId);
         AssertBill(bill, 78_667, (15, 20_000), (32, 58_667));
     }

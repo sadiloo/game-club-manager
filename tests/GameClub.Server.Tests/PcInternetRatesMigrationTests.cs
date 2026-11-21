@@ -167,6 +167,32 @@ public sealed class PcInternetRatesMigrationTests(GameClubWebApplicationFactory 
     }
 
     [Fact]
+    public async Task PcInternetMigration_OpenSessionBillUnchanged_when_rates_edited_mid_session_before_up()
+    {
+        await WithPrePcInternetSeedAsync(factory, async db =>
+        {
+            var start = TestTimes.T(2026, 6, 2, 10, 0).UtcDateTime;
+            var endUtc = TestTimes.T(2026, 6, 2, 11, 0).UtcDateTime;
+            var sessionId = await SeedOpenPreMigrationPcSessionAsync(db, "PC-MIG-R8B", start, endUtc);
+            var beforeEdit = await ChargeTotalAsync(factory.Services, sessionId, endUtc);
+            Assert.Equal(80_000, beforeEdit);
+            await db.Database.ExecuteSqlRawAsync(
+                """
+                UPDATE rate_lines SET "HourlyToman" = 90000
+                WHERE "GroupId"='pc-normal' AND "PlayMode"='Offline' AND "PlayerCount"=1 AND NOT "IsSpecialBand"
+                """);
+            var afterRateEdit = await ChargeTotalAsync(factory.Services, sessionId, endUtc);
+            Assert.Equal(80_000, afterRateEdit);
+            await db.Database.MigrateAsync();
+            var afterUp = await ChargeTotalAsync(factory.Services, sessionId, endUtc);
+            Assert.Equal(80_000, afterUp);
+            var stopUtc = TestTimes.T(2026, 6, 2, 11, 30).UtcDateTime;
+            var stopBill = await ChargeTotalAsync(factory.Services, sessionId, stopUtc);
+            Assert.Equal(120_000, stopBill);
+        });
+    }
+
+    [Fact]
     public async Task PcInternetMigration_DownThenUp_round_trip_restores_pre_state_and_reapplies_up()
     {
         await S3TestHelpers.ResetAsync(factory);
@@ -193,6 +219,83 @@ public sealed class PcInternetRatesMigrationTests(GameClubWebApplicationFactory 
         Assert.Equal(80_000, await db.RateLines.Where(r =>
                 r.GroupId == PilotSeed.PcNormalGroupId && r.PlayMode == nameof(PlayMode.Online) && !r.IsSpecialBand)
             .Select(r => r.HourlyToman).SingleAsync());
+    }
+
+    [Fact]
+    public async Task PcInternetMigration_DownThenUp_round_trip_with_edited_rates_and_open_session_preserves_surcharge_and_bill()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        await using var scope = factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        await db.Database.MigrateAsync(PrePcInternetMigration);
+        await DatabaseSeed.EnsureAsync(db);
+        await db.Database.ExecuteSqlRawAsync("""UPDATE branch_rounding SET "PcSpecialBandSurchargeToman" = 25000""");
+        var start = TestTimes.T(2026, 6, 2, 10, 0).UtcDateTime;
+        var checkpoint = TestTimes.T(2026, 6, 2, 11, 0).UtcDateTime;
+        var sessionId = await SeedOpenPreMigrationPcSessionAsync(db, "PC-RT", start, checkpoint);
+        await db.Database.ExecuteSqlRawAsync(
+            """UPDATE rate_lines SET "HourlyToman" = 90000 WHERE "GroupId"='pc-normal' AND "PlayMode"='Offline' AND "PlayerCount"=1 AND NOT "IsSpecialBand" """);
+
+        await db.Database.MigrateAsync();
+        var migrator = db.GetService<IMigrator>();
+        migrator.Migrate(PrePcInternetMigration);
+        var surcharge = await db.Database.SqlQueryRaw<long>(
+            """SELECT "PcSpecialBandSurchargeToman" AS "Value" FROM branch_rounding LIMIT 1""").SingleAsync();
+        Assert.Equal(25_000, surcharge);
+        var stationMode = await db.Stations.Where(s => s.Id == "PC-RT").Select(s => s.DefaultPlayMode).SingleAsync();
+        Assert.Equal(PlayMode.Offline, stationMode);
+        await db.Database.MigrateAsync();
+        var night = await db.RateLines.SingleAsync(r =>
+            r.GroupId == PilotSeed.PcNormalGroupId && r.IsSpecialBand && r.PlayMode == nameof(PlayMode.Online));
+        Assert.Equal(115_000, night.HourlyToman);
+        var at11 = TestTimes.T(2026, 6, 2, 11, 0).UtcDateTime;
+        Assert.Equal(80_000, await ChargeTotalAsync(factory.Services, sessionId, at11));
+    }
+
+    private static async Task<Guid> SeedOpenPreMigrationPcSessionAsync(
+        AppDbContext db,
+        string stationId,
+        DateTime startUtc,
+        DateTime checkpointUtc)
+    {
+        var snapshotJson = await BuildLegacySnapshotJsonAsync(db);
+        var snap = new RateCardSnapshotEntity { Json = snapshotJson };
+        db.RateCardSnapshots.Add(snap);
+        await db.SaveChangesAsync();
+
+        var sessionId = Guid.NewGuid();
+        db.Stations.Add(new StationEntity
+        {
+            Id = stationId,
+            GroupId = PilotSeed.PcNormalGroupId,
+            DefaultPlayMode = PlayMode.Offline,
+            OperationalState = StationOperationalState.Available,
+        });
+        db.Sessions.Add(new PlaySessionEntity
+        {
+            Id = sessionId,
+            StationId = stationId,
+            Status = SessionStatus.Open,
+            StartedAtUtc = startUtc,
+            Mode = PlayMode.Offline,
+            PlayerCount = 1,
+            RateCardSnapshotId = snap.Id,
+            LastCheckpointUtc = checkpointUtc,
+        });
+        db.Segments.Add(new PlaySegmentEntity
+        {
+            SessionId = sessionId,
+            SegmentKey = "a",
+            StartUtc = startUtc,
+            EndUtc = null,
+            StationId = stationId,
+            GroupId = PilotSeed.PcNormalGroupId,
+            Mode = PlayMode.Offline,
+            PlayerCount = 1,
+            Kind = StationKind.Pc,
+        });
+        await db.SaveChangesAsync();
+        return sessionId;
     }
 
     private static async Task<(Guid OpenSessionId, DateTime EndUtc, long ExpectedToman)> SeedPreMigrationPcSessionsAsync(

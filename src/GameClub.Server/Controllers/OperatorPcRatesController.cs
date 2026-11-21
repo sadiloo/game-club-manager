@@ -1,3 +1,4 @@
+using System.Text.Json;
 using GameClub.Billing;
 using GameClub.Server.Data;
 using GameClub.Server.Data.Entities;
@@ -22,7 +23,7 @@ public sealed class OperatorPcRatesController(
         return Ok(await LoadGroupsAsync(ct));
     }
 
-  [HttpGet("{groupId}")]
+    [HttpGet("{groupId}")]
     public async Task<IActionResult> GetOne(string groupId, CancellationToken ct)
     {
         RequireManager();
@@ -34,10 +35,8 @@ public sealed class OperatorPcRatesController(
         return Ok(await LoadGroupAsync(groupId, ct));
     }
 
-    public sealed record PcRatesBody(long OnlineDay, long OnlineNight, long? OfflineDay, long? OfflineNight);
-
     [HttpPut("{groupId}")]
-    public async Task<IActionResult> Put(string groupId, PcRatesBody body, CancellationToken ct)
+    public async Task<IActionResult> Put(string groupId, [FromBody] JsonElement body, CancellationToken ct)
     {
         RequireManager();
         if (!PcRateCardSupport.IsPcGroup(groupId))
@@ -45,29 +44,66 @@ public sealed class OperatorPcRatesController(
             throw new ApiException(StatusCodes.Status400BadRequest, "not_pc_group", "فقط گروه‌های PC مجاز هستند.");
         }
 
-        if (body.OnlineDay < 0 || body.OnlineNight < 0)
+        if (body.ValueKind != JsonValueKind.Object)
         {
             throw new ApiException(StatusCodes.Status400BadRequest, "invalid_rate", "عدد معتبر وارد کنید.");
         }
 
-        if (body.OfflineDay.HasValue != body.OfflineNight.HasValue)
+        if (!body.TryGetProperty("onlineDay", out var onlineDayEl) || !body.TryGetProperty("onlineNight", out var onlineNightEl))
+        {
+            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_rate", "عدد معتبر وارد کنید.");
+        }
+
+        var onlineDay = ParseRequiredPcRate(onlineDayEl);
+        var onlineNight = ParseRequiredPcRate(onlineNightEl);
+        long? offlineDay = null;
+        long? offlineNight = null;
+        if (body.TryGetProperty("offlineDay", out var offDayEl))
+        {
+            offlineDay = GameRateTomanParser.ParseOptional(offDayEl, "عدد معتبر وارد کنید.");
+        }
+
+        if (body.TryGetProperty("offlineNight", out var offNightEl))
+        {
+            offlineNight = GameRateTomanParser.ParseOptional(offNightEl, "عدد معتبر وارد کنید.");
+        }
+
+        if (offlineDay.HasValue != offlineNight.HasValue)
         {
             throw new ApiException(StatusCodes.Status400BadRequest, "offline_pair_required", "نرخ آفلاین روز و شب را با هم وارد کنید.");
         }
 
         var before = await LoadGroupAsync(groupId, ct);
-        await UpsertLineAsync(groupId, PlayMode.Online, null, false, body.OnlineDay, ct);
-        await UpsertLineAsync(groupId, PlayMode.Online, null, true, body.OnlineNight, ct);
-        if (body.OfflineDay is long offDay && body.OfflineNight is long offNight)
+        await UpsertLineAsync(groupId, PlayMode.Online, null, false, onlineDay, ct);
+        await UpsertLineAsync(groupId, PlayMode.Online, null, true, onlineNight, ct);
+        if (offlineDay is long offDay && offlineNight is long offNight)
         {
+            ValidatePcRate(offDay);
+            ValidatePcRate(offNight);
             await UpsertLineAsync(groupId, PlayMode.Offline, 1, false, offDay, ct);
             await UpsertLineAsync(groupId, PlayMode.Offline, 1, true, offNight, ct);
         }
 
+        await db.SaveChangesAsync(ct);
         var after = await LoadGroupAsync(groupId, ct);
         await audit.AppendAsync("rate.change", new { groupId, before, after, actor = context.UserId }, ct);
         await db.SaveChangesAsync(ct);
         return Ok(after);
+    }
+
+    private static long ParseRequiredPcRate(JsonElement value)
+    {
+        var toman = GameRateTomanParser.ParseRequired(value, "عدد معتبر وارد کنید.");
+        ValidatePcRate(toman);
+        return toman;
+    }
+
+    private static void ValidatePcRate(long toman)
+    {
+        if (toman > OperatorMoneyValidation.MaxToman)
+        {
+            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_rate", "عدد معتبر وارد کنید.");
+        }
     }
 
     private void RequireManager()

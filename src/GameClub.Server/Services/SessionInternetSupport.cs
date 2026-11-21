@@ -123,7 +123,7 @@ public static class SessionInternetSupport
 
             var previousHourly = ResolveHourly(snapshot, session, now);
             openSegment.EndUtc = now;
-            var nextKey = ((char)('a' + session.Segments.Count)).ToString();
+            var nextKey = SegmentKeySupport.Allocate(session.Segments.Count);
             session.Segments.Add(new PlaySegmentEntity
             {
                 SegmentKey = nextKey,

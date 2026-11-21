@@ -55,7 +55,7 @@ public sealed class StationInternetStateService(AppDbContext db, IClock clock)
     public static bool IsPending(StationInternetStateEntity row)
         => row.AppliedVersion is null || row.AppliedVersion < row.DesiredVersion;
 
-    public async Task ApplyReportAsync(
+    public async Task<bool> ApplyReportAsync(
         string stationId,
         Guid epoch,
         long version,
@@ -67,17 +67,17 @@ public sealed class StationInternetStateService(AppDbContext db, IClock clock)
         var row = await db.StationInternetStates.FirstOrDefaultAsync(s => s.StationId == stationId, ct);
         if (row is null)
         {
-            return;
+            return false;
         }
 
         if (row.Epoch != epoch)
         {
-            return;
+            return false;
         }
 
         if (row.AppliedVersion is long applied && version <= applied)
         {
-            return;
+            return false;
         }
 
         row.AppliedVersion = version;
@@ -85,5 +85,6 @@ public sealed class StationInternetStateService(AppDbContext db, IClock clock)
         row.AppliedAtUtc = appliedAtUtc;
         row.LastError = string.IsNullOrEmpty(error) ? null : error;
         row.LastReportUtc = clock.UtcNow.UtcDateTime;
+        return true;
     }
 }

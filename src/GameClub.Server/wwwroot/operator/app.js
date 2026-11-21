@@ -2693,15 +2693,21 @@ async function pcSavePcRates(groupId, wrap, errEl) {
   const read = (f) => {
     const el = wrap.querySelector(`input[data-f="${f}"]`);
     const t = (el?.value || "").trim();
-    return t === "" ? null : Number(t.replace(/٬|,/g, ""));
+    if (t === "") return null;
+    const n = ss14ParseTomanInput(t);
+    if (n == null) return null;
+    return n;
   };
-  const body = {
-    onlineDay: read("onlineDay"),
-    onlineNight: read("onlineNight"),
-    offlineDay: read("offlineDay"),
-    offlineNight: read("offlineNight"),
-  };
-  if (body.offlineDay == null !== body.offlineNight == null) {
+  const onlineDay = read("onlineDay");
+  const onlineNight = read("onlineNight");
+  const offlineDay = read("offlineDay");
+  const offlineNight = read("offlineNight");
+  if (onlineDay == null || onlineNight == null) {
+    errEl.textContent = "عدد معتبر وارد کنید.";
+    return;
+  }
+  const body = { onlineDay, onlineNight, offlineDay, offlineNight };
+  if ((body.offlineDay == null) !== (body.offlineNight == null)) {
     errEl.textContent = "نرخ آفلاین روز و شب را با هم وارد کنید.";
     return;
   }

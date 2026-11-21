@@ -32,6 +32,29 @@ public sealed class PcInternetAppJsTests
         var js = File.ReadAllText(AppJsPath());
         Assert.Contains("pcRates", js, StringComparison.Ordinal);
         Assert.Contains("نرخ آفلاین روز و شب را با هم وارد کنید", js, StringComparison.Ordinal);
+        Assert.Contains("ss14ParseTomanInput", js, StringComparison.Ordinal);
+        Assert.DoesNotMatch(new System.Text.RegularExpressions.Regex(@"offlineDay == null !=="), js);
+    }
+
+    [Fact]
+    public void PcInternet_pc_rates_jsdom_selftest_passes()
+    {
+        var script = Path.GetFullPath(Path.Combine(
+            AppContext.BaseDirectory,
+            "..", "..", "..", "..", "..",
+            "tests", "GameClub.Server.Tests", "Scripts", "pc-rates-shipped-parser-selftest.mjs"));
+        var psi = new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = "node",
+            ArgumentList = { script },
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        using var proc = System.Diagnostics.Process.Start(psi)!;
+        proc.WaitForExit(30_000);
+        var output = proc.StandardOutput.ReadToEnd();
+        Assert.Equal(0, proc.ExitCode);
+        Assert.Contains("pc-rates-shipped-parser-selftest: ok", output, StringComparison.Ordinal);
     }
 
     [Fact]

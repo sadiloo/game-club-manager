@@ -129,7 +129,7 @@ public static class SessionTransferSupport
                 session.Status = SessionStatus.Open;
             }
 
-            var nextKey = ((char)('a' + session.Segments.Count)).ToString();
+            var nextKey = SegmentKeySupport.Allocate(session.Segments.Count);
             var clearedGame = session.CurrentGameTitleId;
             var transferMode = target.Group!.Kind == StationKind.Pc ? PlayMode.Online : session.Mode;
             var transferPlayers = target.Group.Kind == StationKind.Pc ? 1 : session.PlayerCount;
@@ -179,7 +179,22 @@ public static class SessionTransferSupport
             var snapshot = await LoadSnapshotAsync(rates, session, ct);
             if (target.Group!.Kind == StationKind.Pc)
             {
-                _ = DurationPrepaidConverter.TryConvertToAmountBudget(session, snapshot, "transfer", commandId);
+                var convertedBudget = DurationPrepaidConverter.TryConvertToAmountBudget(session, snapshot, "transfer", commandId);
+                if (convertedBudget is not null)
+                {
+                    await audit.AppendAsync(
+                        "prepaid.duration_converted",
+                        new
+                        {
+                            sessionId,
+                            session.PrepaidBookedActiveSeconds,
+                            budgetToman = convertedBudget,
+                            reason = "transfer",
+                            commandId,
+                        },
+                        ct);
+                }
+
                 SessionPrepaidRecalculator.RecalcAmountPrepaid(session, transferSegment, snapshot, now);
             }
             else if (target.Group.Kind == StationKind.Console)

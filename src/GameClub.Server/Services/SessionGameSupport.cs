@@ -110,7 +110,7 @@ public static class SessionGameSupport
                 previousNight = openSegment.GameNightHourlyRateToman;
                 var now = clock.UtcNow.UtcDateTime;
                 openSegment.EndUtc = now;
-                var nextKey = ((char)('a' + session.Segments.Count)).ToString();
+                var nextKey = SegmentKeySupport.Allocate(session.Segments.Count);
                 var newSeg = new PlaySegmentEntity
                 {
                     SegmentKey = nextKey,
@@ -131,7 +131,7 @@ public static class SessionGameSupport
             {
                 var now = clock.UtcNow.UtcDateTime;
                 openSegment.EndUtc = now;
-                var nextKey = ((char)('a' + session.Segments.Count)).ToString();
+                var nextKey = SegmentKeySupport.Allocate(session.Segments.Count);
                 var newSeg = new PlaySegmentEntity
                 {
                     SegmentKey = nextKey,

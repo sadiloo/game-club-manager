@@ -266,13 +266,6 @@ public sealed class KioskLeaseService(
                 authorizedUntil = lastCheckpoint.AddMinutes(Math.Max(1, Math.Max(0, moneyMinutes)));
             }
 
-            var bandLabel = snapshot.Card.BandAt(groupId, TehranTime.TimeOfDay(at))?.Id;
-            var pocket = settled.Account.Pc;
-            Console.WriteLine(
-                $"LEASE_BUILD sessionId={session.Id} paidToman={pocket.RealToman} giftToman={pocket.GiftToman} "
-                + $"walletTotalToman={pocket.TotalToman} mode={session.Mode} playerCount={session.PlayerCount} groupId={groupId} "
-                + $"hourlyRateToman={estimate.HourlyRateToman} rateSource={estimate.Source} band={bandLabel ?? "none"} "
-                + $"moneyMinutes={moneyMinutes} authorizedUntilUtc={authorizedUntil:O}");
         }
 
         var catalogVersion = await db.GameCatalogEntries.Select(e => (long?)e.CatalogVersion).MaxAsync(ct) ?? 0;
@@ -568,7 +561,7 @@ public sealed class KioskCheckpointCoordinator(
             var prev = await db.StationInternetStates.AsNoTracking()
                 .FirstOrDefaultAsync(s => s.StationId == device.StationId, ct);
             var prevVersion = prev?.AppliedVersion;
-            await internetStates.ApplyReportAsync(
+            var applied = await internetStates.ApplyReportAsync(
                 device.StationId,
                 internetApplied.Epoch,
                 internetApplied.Version,
@@ -576,7 +569,7 @@ public sealed class KioskCheckpointCoordinator(
                 internetApplied.AppliedAtUtc,
                 internetApplied.Error,
                 ct);
-            if (prevVersion != internetApplied.Version)
+            if (applied && prevVersion != internetApplied.Version)
             {
                 var action = string.IsNullOrEmpty(internetApplied.Error) ? "internet.applied" : "internet.apply_failed";
                 await audit.AppendAsync(action, new

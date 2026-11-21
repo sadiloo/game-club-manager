@@ -929,7 +929,7 @@ public sealed class SessionService(
             }
 
             openSegment.EndUtc = now;
-            var nextKey = ((char)('a' + session.Segments.Count)).ToString();
+            var nextKey = SegmentKeySupport.Allocate(session.Segments.Count);
             var newSegment = new PlaySegmentEntity
             {
                 SegmentKey = nextKey,
