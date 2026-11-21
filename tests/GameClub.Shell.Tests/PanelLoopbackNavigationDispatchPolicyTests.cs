@@ -10,4 +10,13 @@ public sealed class PanelLoopbackNavigationDispatchPolicyTests
     {
         Assert.Equal("CoreWebView2.Navigate", PanelLoopbackNavigationDispatchPolicy.RequiredApi);
     }
+
+    [Fact]
+    public void loopback_panel_dispatch_does_not_assign_wpf_source_after_navigate()
+    {
+        Assert.DoesNotContain(
+            "PanelWebView.Source",
+            PanelLoopbackNavigationDispatchPolicy.RequiredApi,
+            System.StringComparison.Ordinal);
+    }
 }

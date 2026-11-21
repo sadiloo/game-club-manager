@@ -689,8 +689,7 @@ public partial class MainWindow : Window
 
         try
         {
-            var (ok, statusCode) = await ProbePanelHttpWithTimeoutAsync(
-                HealthyRunningPanelProbePolicy.PerProbeTimeout);
+            var (ok, statusCode) = await Task.Run(ProbePanelHttpForHealthyRunning).ConfigureAwait(false);
             await Dispatcher.InvokeAsync(() =>
             {
                 if (_closed
@@ -773,17 +772,16 @@ public partial class MainWindow : Window
         return (statusCode is >= 200 and < 300, statusCode);
     }
 
-    private static async Task<(bool Ok, int StatusCode)> ProbePanelHttpWithTimeoutAsync(TimeSpan timeout)
+    private static (bool Ok, int StatusCode) ProbePanelHttpForHealthyRunning()
     {
-        using var cts = new CancellationTokenSource(timeout);
-        try
+        if (!ShellSeams.HttpProbe.TryGetOperatorOk(
+                out var statusCode,
+                HttpProbeRequestTimeoutPolicy.HealthyProbeMilliseconds))
         {
-            return await Task.Run(ProbePanelHttp, cts.Token).ConfigureAwait(false);
+            return (false, statusCode);
         }
-        catch (OperationCanceledException)
-        {
-            return (false, 0);
-        }
+
+        return (statusCode is >= 200 and < 300, statusCode);
     }
 
     private async Task TryProbeThenNavigatePanelAsync()
@@ -1395,11 +1393,6 @@ public partial class MainWindow : Window
         _lastNavigationUri = uriString;
         _panelNavigated = true;
         core.Navigate(uriString);
-        if (!Uri.Equals(PanelWebView.Source, uri))
-        {
-            PanelWebView.Source = uri;
-        }
-
         return true;
     }
 

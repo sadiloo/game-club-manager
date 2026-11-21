@@ -37,6 +37,8 @@ public interface IShellNotificationSeam
 public interface IHttpProbeSeam
 {
     bool TryGetOperatorOk(out int statusCode);
+
+    bool TryGetOperatorOk(out int statusCode, int timeoutMilliseconds);
 }
 
 public sealed class ProductionServiceControllerSeam : IServiceControllerSeam
@@ -187,13 +189,16 @@ public sealed class ProductionNotificationSeam : IShellNotificationSeam
 
 public sealed class ProductionHttpProbeSeam : IHttpProbeSeam
 {
-    public bool TryGetOperatorOk(out int statusCode)
+    public bool TryGetOperatorOk(out int statusCode) =>
+        TryGetOperatorOk(out statusCode, HttpProbeRequestTimeoutPolicy.StandardMilliseconds);
+
+    public bool TryGetOperatorOk(out int statusCode, int timeoutMilliseconds)
     {
         statusCode = 0;
         try
         {
             var request = System.Net.WebRequest.Create(ShellSeams.ResolveHttpProbeUrl());
-            request.Timeout = 3000;
+            HttpProbeRequestTimeoutPolicy.Apply(request, timeoutMilliseconds);
             using var response = (System.Net.HttpWebResponse)request.GetResponse();
             statusCode = (int)response.StatusCode;
             return statusCode == 200;
