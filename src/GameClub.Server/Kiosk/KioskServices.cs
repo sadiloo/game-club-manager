@@ -11,6 +11,7 @@ using GameClub.Server.Operator;
 using GameClub.Server.Services;
 using GameClub.Server.Time;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 
 namespace GameClub.Server.Kiosk;
 
@@ -207,7 +208,8 @@ public sealed class KioskLeaseService(
     AppDbContext db,
     RateConfigService rates,
     OperatorMemberContext members,
-    SessionBilling billing)
+    SessionBilling billing,
+    IOptions<KioskOptions> kioskOptions)
 {
     public async Task<SignedSessionLease?> BuildLeaseAsync(PlaySessionEntity session, CancellationToken ct)
     {
@@ -219,6 +221,8 @@ public sealed class KioskLeaseService(
         var lastCheckpoint = session.LastCheckpointUtc ?? session.StartedAtUtc;
         DateTime authorizedUntil;
         var walletDigest = session.CustomerId?.ToString() ?? "guest";
+        string? leaseTraceRateSource = null;
+        string? leaseTraceBand = null;
         if (session.CustomerId is null)
         {
             authorizedUntil = session.PrepaidKind != PrepaidSessionKind.None && session.PrepaidBookedActiveSeconds is long booked
@@ -266,6 +270,17 @@ public sealed class KioskLeaseService(
                 authorizedUntil = lastCheckpoint.AddMinutes(Math.Max(1, Math.Max(0, moneyMinutes)));
             }
 
+            leaseTraceRateSource = estimate.Source.ToString();
+            leaseTraceBand = snapshot.Card.BandAt(groupId, TehranTime.TimeOfDay(at))?.Id;
+        }
+
+        if (kioskOptions.Value.LeaseBuildTrace)
+        {
+            var traceGroupId = session.Station?.GroupId ?? PilotSeed.PcNormalGroupId;
+            Console.WriteLine(
+                $"LEASE_BUILD sessionId={session.Id} mode={session.Mode} groupId={traceGroupId} "
+                + $"rateSource={leaseTraceRateSource ?? "none"} band={leaseTraceBand ?? "none"} "
+                + $"authorizedUntilUtc={authorizedUntil:O}");
         }
 
         var catalogVersion = await db.GameCatalogEntries.Select(e => (long?)e.CatalogVersion).MaxAsync(ct) ?? 0;

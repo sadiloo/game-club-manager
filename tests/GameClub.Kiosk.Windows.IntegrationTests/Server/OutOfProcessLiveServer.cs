@@ -221,6 +221,8 @@ internal sealed class OutOfProcessLiveServer : IAsyncDisposable
 
     private void CopyServerEnvironment(ProcessStartInfo psi)
     {
+        psi.Environment["Kiosk__LeaseBuildTrace"] = "true";
+
         foreach (var key in new[] { "GAMECLUB_DATABASE", "GAMECLUB_TEST_DATABASE", "GAMECLUB_API_KEY", "OperatorSessionSecret", "ASPNETCORE_ENVIRONMENT", "CI_KIOSK_LOG_DIR" })
         {
             var value = Environment.GetEnvironmentVariable(key);

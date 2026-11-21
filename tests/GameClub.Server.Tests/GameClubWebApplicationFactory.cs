@@ -2,6 +2,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using GameClub.Server.Data;
 using GameClub.Server.Data.Entities;
+using GameClub.Server.Kiosk;
 using GameClub.Server.Operator;
 using GameClub.Server.Services;
 using GameClub.Server.Testing;
@@ -30,6 +31,9 @@ public class GameClubWebApplicationFactory : WebApplicationFactory<Program>
     public bool DeadPcBackgroundSweepEnabled { get; set; }
 
     public string ConnectionString { get; private set; } = "";
+
+    /// <summary>When true, KioskLeaseService emits LEASE_BUILD diagnostic lines (test harness only).</summary>
+    public bool KioskLeaseBuildTrace { get; set; }
 
     /// <summary>When set, <see cref="SaveTitleSecondSaveFaultInterceptor"/> faults the second SaveChanges in the request.</summary>
     internal SaveTitleSaveFaultGate? SaveTitleSaveFaultGate { get; set; }
@@ -66,6 +70,10 @@ public class GameClubWebApplicationFactory : WebApplicationFactory<Program>
         builder.UseSetting("ConnectionStrings:Default", ConnectionString);
         builder.UseSetting($"{DeadPcSweepOptions.SectionName}:SweepIntervalSeconds", "1");
         builder.UseSetting("OperatorSessionSecret", "test-operator-secret");
+        if (KioskLeaseBuildTrace)
+        {
+            builder.UseSetting($"{KioskOptions.SectionName}:LeaseBuildTrace", "true");
+        }
 
         builder.ConfigureServices(services =>
         {

@@ -93,6 +93,7 @@ public static class ServerApplication
         builder.Services.AddScoped<OperatorContext>();
         builder.Services.AddSingleton<OperatorPolicies>();
         builder.Services.Configure<DeadPcSweepOptions>(builder.Configuration.GetSection(DeadPcSweepOptions.SectionName));
+        builder.Services.Configure<KioskOptions>(builder.Configuration.GetSection(KioskOptions.SectionName));
         builder.Services.AddScoped<RateConfigService>();
         builder.Services.AddScoped<AuditService>();
         builder.Services.AddScoped<StationService>();
