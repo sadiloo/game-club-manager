@@ -1,64 +1,200 @@
 $ErrorActionPreference = "Stop"
 $root = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 . (Join-Path $root "installer\tools\CheckpointDbConfig.ps1")
+$goldenRestore = Join-Path $root "installer\tools\restore.ps1"
 
 function New-StubPgBinaries {
     param(
         [int]$PgDumpExit = 0,
-        [int]$PgRestoreListExit = 0,
-        [int]$PgRestoreCleanExit = 0,
-        [string]$PgDumpOutFile = "",
-        [int]$PgRestoreListExitAfterSafety = -1
+        [int]$FirstListExit = 0,
+        [int]$SecondListExit = 0,
+        [int]$CleanExit = 0,
+        [switch]$PgDumpWriteOnFailure
     )
     $dir = Join-Path ([System.IO.Path]::GetTempPath()) ("gcm-stub-pg-" + [Guid]::NewGuid().ToString("N"))
     New-Item -ItemType Directory -Force -Path $dir | Out-Null
-    $trace = Join-Path $dir "pg-restore-trace.txt"
-    $listPass = Join-Path $dir "pg_restore-list-passed"
+    $listTrace = Join-Path $dir "list-trace.txt"
+    $cleanTrace = Join-Path $dir "clean-trace.txt"
+    $listPass = Join-Path $dir "list.pass"
 
-    $dumpOut = $PgDumpOutFile.Replace("'", "'\\''")
-    $dumpScript = @"
-#!/bin/sh
-outfile='$dumpOut'
-while [ `$# -gt 0 ]; do
-  if [ "`$1" = "-f" ]; then outfile="`$2"; shift 2; continue; fi
+    $writeOnFail = if ($PgDumpWriteOnFailure) { "1" } else { "0" }
+    if ($IsWindows -or ($env:OS -eq 'Windows_NT')) {
+        @"
+@echo off
+setlocal EnableDelayedExpansion
+set "outfile="
+:parse
+if "%~1"=="" goto done
+if /I "%~1"=="-f" (
+  set "outfile=%~2"
   shift
+)
+shift
+goto parse
+:done
+if defined outfile (
+  if $PgDumpExit equ 0 (
+    echo.>"!outfile!"
+    exit /b 0
+  )
+  if $writeOnFail equ 1 echo.>"!outfile!"
+)
+exit /b $PgDumpExit
+"@ | Set-Content -LiteralPath (Join-Path $dir "pg_dump.cmd") -Encoding ASCII
+
+        @"
+@echo off
+set "args=%*"
+echo %args% | findstr /I "--list" >nul
+if %errorlevel% equ 0 (
+  if not exist "$listPass" (
+    echo LIST>> "$listTrace"
+    echo.>"$listPass"
+    exit /b $FirstListExit
+  ) else (
+    echo LIST>> "$listTrace"
+    exit /b $SecondListExit
+  )
+)
+echo %args% | findstr /I "--clean" >nul
+if %errorlevel% equ 0 (
+  echo CLEAN>> "$cleanTrace"
+  exit /b $CleanExit
+)
+exit /b 0
+"@ | Set-Content -LiteralPath (Join-Path $dir "pg_restore.cmd") -Encoding ASCII
+    } else {
+        @"
+#!/bin/sh
+outfile=
+write_on_fail=$writeOnFail
+while [ `$# -gt 0 ]; do
+  case "`$1" in
+    -f) outfile="`$2"; shift 2 ;;
+    *) shift ;;
+  esac
 done
 if [ -n "`$outfile" ]; then
-  printf '\001' > "`$outfile"
+  if [ $PgDumpExit -eq 0 ]; then
+    printf '\001' > "`$outfile"
+  elif [ "`$write_on_fail" = "1" ]; then
+    printf '\001' > "`$outfile"
+  fi
 fi
 exit $PgDumpExit
-"@
-    Set-Content -LiteralPath (Join-Path $dir "pg_dump") -Value $dumpScript -Encoding UTF8 -NoNewline
-    [System.IO.File]::AppendAllText((Join-Path $dir "pg_dump"), "`n")
+"@ | Set-Content -LiteralPath (Join-Path $dir "pg_dump") -Encoding UTF8 -NoNewline
+        [System.IO.File]::AppendAllText((Join-Path $dir "pg_dump"), "`n")
 
-    $listAfter = if ($PgRestoreListExitAfterSafety -ge 0) { $PgRestoreListExitAfterSafety } else { $PgRestoreListExit }
-    $restoreScript = @"
+        @"
 #!/bin/sh
 for a in "`$@"; do
   case "`$a" in
     --list)
-      if [ -f '$listPass' ]; then
-        exit $listAfter
+      if [ ! -f '$listPass' ]; then
+        echo LIST >> '$listTrace'
+        touch '$listPass'
+        exit $FirstListExit
       fi
-      touch '$listPass'
-      exit $PgRestoreListExit
+      echo LIST >> '$listTrace'
+      exit $SecondListExit
       ;;
     --clean)
-      echo CLEAN >> '$trace'
-      exit $PgRestoreCleanExit
+      echo CLEAN >> '$cleanTrace'
+      exit $CleanExit
       ;;
   esac
 done
 exit 0
-"@
-    Set-Content -LiteralPath (Join-Path $dir "pg_restore") -Value $restoreScript -Encoding UTF8 -NoNewline
-    [System.IO.File]::AppendAllText((Join-Path $dir "pg_restore"), "`n")
-
-    foreach ($name in @('pg_dump', 'pg_restore')) {
-        & chmod +x (Join-Path $dir $name)
+"@ | Set-Content -LiteralPath (Join-Path $dir "pg_restore") -Encoding UTF8 -NoNewline
+        [System.IO.File]::AppendAllText((Join-Path $dir "pg_restore"), "`n")
+        foreach ($name in @('pg_dump', 'pg_restore')) {
+            & chmod +x (Join-Path $dir $name)
+        }
     }
 
-    return [pscustomobject]@{ Dir = $dir; Trace = $trace }
+    return [pscustomobject]@{
+        Dir        = $dir
+        ListTrace  = $listTrace
+        CleanTrace = $cleanTrace
+    }
+}
+
+function Invoke-RestoreScript {
+    param(
+        [string]$ScriptPath,
+        [string]$DumpPath,
+        [string]$ServerJsonPath,
+        [string]$WorkProgramData,
+        [pscustomobject]$Stub
+    )
+    function Stop-Service { param([string]$Name, $ErrorAction) }
+    function Start-Service { param([string]$Name, $ErrorAction) }
+
+    $prevPath = $env:PATH
+    $prevPd = $env:ProgramData
+    $env:PATH = "$($Stub.Dir)" + [IO.Path]::PathSeparator + $env:PATH
+    $env:ProgramData = $WorkProgramData
+    try {
+        $recorded = $null
+        try {
+            & $ScriptPath -DumpPath $DumpPath -ServerJsonPath $ServerJsonPath 2>&1 | Out-Null
+        } catch {
+            $recorded = $_
+        }
+        $clean = ''
+        $list = ''
+        if (Test-Path -LiteralPath $Stub.CleanTrace) { $clean = Get-Content -LiteralPath $Stub.CleanTrace -Raw }
+        if (Test-Path -LiteralPath $Stub.ListTrace) { $list = Get-Content -LiteralPath $Stub.ListTrace -Raw }
+        return [pscustomobject]@{
+            Error     = $recorded
+            CleanRan  = $clean -match 'CLEAN'
+            ListCalls = @($list -split "`n" | Where-Object { $_ -match '\S' }).Count
+        }
+    } finally {
+        $env:PATH = $prevPath
+        $env:ProgramData = $prevPd
+    }
+}
+
+function New-RestoreMutant {
+    param(
+        [string]$Tag,
+        [scriptblock]$Transform,
+        [string]$WorkDir
+    )
+    $dest = Join-Path $WorkDir "restore-mutant-$Tag.ps1"
+    $text = Get-Content -LiteralPath $goldenRestore -Raw
+    $text = & $Transform $text
+    Set-Content -LiteralPath $dest -Value $text -Encoding UTF8
+    return $dest
+}
+
+function Assert-MutantKilled {
+    param(
+        [string]$Name,
+        [scriptblock]$Transform,
+        [scriptblock]$GoldenSafe,
+        [scriptblock]$MutantUnsafe,
+        [string]$WorkDir
+    )
+    try {
+        $goldenOk = & $GoldenSafe $goldenRestore
+    } catch {
+        Write-Error "golden restore scenario failed for ${Name}: $($_.Exception.Message)"
+    }
+    if (-not $goldenOk) {
+        Write-Error "golden restore scenario failed for ${Name}"
+    }
+    $mutant = New-RestoreMutant -Tag $Name -Transform $Transform -WorkDir $WorkDir
+    $mutantSurvives = $false
+    try {
+        $mutantSurvives = & $MutantUnsafe $mutant
+    } catch {
+        $mutantSurvives = $false
+    }
+    if ($mutantSurvives) {
+        Write-Error "mutant not killed: $Name"
+    }
 }
 
 $workDir = Join-Path ([System.IO.Path]::GetTempPath()) ("gcm-br-" + [Guid]::NewGuid().ToString("N"))
@@ -81,33 +217,18 @@ try {
     $emptyThrown = $false
     try {
         Test-PostgresDumpReadable -DumpPath $emptyDump
-    }
-    catch [System.Management.Automation.RuntimeException] {
-        if ($_.Exception.Message -notmatch '^Dump file is empty:') {
-            throw
-        }
+    } catch [System.Management.Automation.RuntimeException] {
+        if ($_.Exception.Message -notmatch '^Dump file is empty:') { throw }
         $emptyThrown = $true
     }
     if (-not $emptyThrown) {
         Write-Error "expected empty dump to throw Dump file is empty"
     }
 
-    # Mutant check: a no-op Test-PostgresDumpReadable must not satisfy the empty-dump guard above.
-    function Test-PostgresDumpReadable_NoOp { param([string]$DumpPath) }
-    $mutantPassesEmpty = $true
-    try {
-        Test-PostgresDumpReadable_NoOp -DumpPath $emptyDump
-    } catch {
-        $mutantPassesEmpty = $false
-    }
-    if (-not $mutantPassesEmpty) {
-        Write-Error "mutant harness broken: no-op reader must accept a zero-byte dump (so replacing Test-PostgresDumpReadable would fail the empty-dump test)"
-    }
-
     $backupDir = Join-Path $workDir "backups"
     $backupScript = Join-Path $root "installer\tools\backup-daily.ps1"
-  $stubGood = New-StubPgBinaries -PgDumpExit 0 -PgRestoreListExit 0 -PgDumpOutFile (Join-Path $backupDir "out.dump")
-  try {
+    $stubGood = New-StubPgBinaries -PgDumpExit 0 -FirstListExit 0
+    try {
         $env:PATH = "$($stubGood.Dir)" + [IO.Path]::PathSeparator + $env:PATH
         $env:ProgramData = $workDir
         New-Item -ItemType Directory -Force -Path (Join-Path $workDir "Checkpoint\config") | Out-Null
@@ -116,8 +237,7 @@ try {
         if (-not (Test-Path -LiteralPath $backupDir)) {
             Write-Error "backup dir was not created"
         }
-    }
-    finally {
+    } finally {
         $env:PATH = ($env:PATH -split [IO.Path]::PathSeparator | Where-Object { $_ -ne $stubGood.Dir }) -join [IO.Path]::PathSeparator
     }
 
@@ -132,99 +252,108 @@ try {
             $failed = $true
         }
         if (-not $failed) { Write-Error "expected pg_dump failure to abort backup" }
-    }
-    finally {
+    } finally {
         $env:PATH = ($env:PATH -split [IO.Path]::PathSeparator | Where-Object { $_ -ne $stubDumpFail.Dir }) -join [IO.Path]::PathSeparator
     }
 
-    $restoreScript = Join-Path $root "installer\tools\restore.ps1"
     $inputDump = Join-Path $workDir "input.dump"
     [System.IO.File]::WriteAllBytes($inputDump, [byte[]](1, 2, 3))
-    $safeDir = Join-Path $workDir "Checkpoint\backups"
-    New-Item -ItemType Directory -Force -Path $safeDir | Out-Null
-    $env:ProgramData = $workDir
+    New-Item -ItemType Directory -Force -Path (Join-Path $workDir "Checkpoint\backups") | Out-Null
 
-    $stubSafetyUnreadable = New-StubPgBinaries -PgDumpExit 0 -PgRestoreListExit 5 -PgDumpOutFile (Join-Path $safeDir "pre.dump")
-    try {
-        $env:PATH = "$($stubSafetyUnreadable.Dir)" + [IO.Path]::PathSeparator + $env:PATH
-        $safetyAborted = $false
-        try {
-            & $restoreScript -DumpPath $inputDump -ServerJsonPath $jsonPath 2>&1 | Out-Null
-        } catch {
-            if ($_.Exception.Message -notmatch 'restore aborted before --clean') { throw }
-            $safetyAborted = $true
-        }
-        if (-not $safetyAborted) { Write-Error "expected safety dump list failure to abort restore" }
-        if (Test-Path -LiteralPath $stubSafetyUnreadable.Trace) {
-            $trace = Get-Content -LiteralPath $stubSafetyUnreadable.Trace -Raw
-            if ($trace -match 'CLEAN') { Write-Error "restore must not run --clean when safety dump is unreadable" }
-        }
+    $safetyDumpFailStub = New-StubPgBinaries -PgDumpExit 4
+    $r = Invoke-RestoreScript -ScriptPath $goldenRestore -DumpPath $inputDump -ServerJsonPath $jsonPath -WorkProgramData $workDir -Stub $safetyDumpFailStub
+    if (-not $r.Error) { Write-Error "expected safety pg_dump exit failure" }
+    if ($r.Error.Exception.Message -notmatch 'Safety pg_dump failed with exit code 4') {
+        Write-Error "unexpected safety pg_dump message: $($r.Error.Exception.Message)"
     }
-    finally {
-        $env:PATH = ($env:PATH -split [IO.Path]::PathSeparator | Where-Object { $_ -ne $stubSafetyUnreadable.Dir }) -join [IO.Path]::PathSeparator
-    }
+    if ($r.CleanRan) { Write-Error "restore must not reach --clean when safety pg_dump fails" }
 
-    $stubInputUnreadable = New-StubPgBinaries -PgDumpExit 0 -PgRestoreListExit 0
-    try {
-        $env:PATH = "$($stubInputUnreadable.Dir)" + [IO.Path]::PathSeparator + $env:PATH
-        @"
-#!/bin/sh
-list='$($stubInputUnreadable.Dir)/calls'
-for a in "`$@"; do
-  case "`$a" in
-    --list)
-      if [ ! -f "`$list" ]; then
-        touch "`$list"
-        exit 7
-      fi
-      exit 0
-      ;;
-    --clean)
-      echo CLEAN >> '$($stubInputUnreadable.Trace)'
-      exit 0
-      ;;
-  esac
-done
-exit 0
-"@ | Set-Content -LiteralPath (Join-Path $stubInputUnreadable.Dir "pg_restore") -Encoding UTF8
-        & chmod +x (Join-Path $stubInputUnreadable.Dir "pg_restore")
-
-        $inputAborted = $false
-        try {
-            & $restoreScript -DumpPath $inputDump -ServerJsonPath $jsonPath 2>&1 | Out-Null
-        } catch {
-            if ($_.Exception.Message -notmatch 'restore aborted before --clean') { throw }
-            $inputAborted = $true
-        }
-        if (-not $inputAborted) { Write-Error "expected input dump validation failure to abort restore" }
-        if (Test-Path -LiteralPath $stubInputUnreadable.Trace) {
-            $trace = Get-Content -LiteralPath $stubInputUnreadable.Trace -Raw
-            if ($trace -match 'CLEAN') { Write-Error "restore must validate input dump before --clean" }
-        }
+    $safetyUnreadStub = New-StubPgBinaries -PgDumpExit 0 -FirstListExit 6
+    $r = Invoke-RestoreScript -ScriptPath $goldenRestore -DumpPath $inputDump -ServerJsonPath $jsonPath -WorkProgramData $workDir -Stub $safetyUnreadStub
+    if (-not $r.Error) { Write-Error "expected safety dump readability failure" }
+    if ($r.Error.Exception.Message -notmatch 'Safety dump is unreadable') {
+        Write-Error "unexpected safety readability message: $($r.Error.Exception.Message)"
     }
-    finally {
-        $env:PATH = ($env:PATH -split [IO.Path]::PathSeparator | Where-Object { $_ -ne $stubInputUnreadable.Dir }) -join [IO.Path]::PathSeparator
+    if ($r.CleanRan) { Write-Error "restore must not reach --clean when safety dump is unreadable" }
+
+    $inputUnreadStub = New-StubPgBinaries -PgDumpExit 0 -FirstListExit 0 -SecondListExit 7
+    $r = Invoke-RestoreScript -ScriptPath $goldenRestore -DumpPath $inputDump -ServerJsonPath $jsonPath -WorkProgramData $workDir -Stub $inputUnreadStub
+    if (-not $r.Error) { Write-Error "expected input dump readability failure" }
+    if ($r.Error.Exception.Message -notmatch 'Input dump is unreadable') {
+        Write-Error "unexpected input readability message: $($r.Error.Exception.Message)"
+    }
+    if ($r.ListCalls -lt 2) { Write-Error "expected input validation to run pg_restore --list after safety list" }
+    if ($r.CleanRan) { Write-Error "restore must not reach --clean when input dump is unreadable" }
+
+    $cleanFailStub = New-StubPgBinaries -PgDumpExit 0 -FirstListExit 0 -SecondListExit 0 -CleanExit 9
+    $r = Invoke-RestoreScript -ScriptPath $goldenRestore -DumpPath $inputDump -ServerJsonPath $jsonPath -WorkProgramData $workDir -Stub $cleanFailStub
+    if (-not $r.Error) { Write-Error "expected pg_restore --clean failure" }
+    if ($r.Error.Exception.Message -notmatch 'pg_restore failed with exit code 9') {
+        Write-Error "unexpected pg_restore --clean message: $($r.Error.Exception.Message)"
+    }
+    if (-not $r.CleanRan) { Write-Error "expected stub to record --clean invocation" }
+
+    Assert-MutantKilled -Name 'no-safety-readable' -WorkDir $workDir -Transform {
+        param($t)
+        $t -replace '(?ms)try \{\r?\n\s*Test-PostgresDumpReadable -DumpPath \$pre\r?\n\}\r?\n catch \{\r?\n\s*Write-Error "Safety dump is unreadable[^"]*"\r?\n\s*exit 1\r?\n\}\r?\n\r?\n', ''
+    } -GoldenSafe {
+        param([string]$ScriptPath)
+        $stub = New-StubPgBinaries -PgDumpExit 0 -FirstListExit 6
+        $r = Invoke-RestoreScript -ScriptPath $ScriptPath -DumpPath $inputDump -ServerJsonPath $jsonPath -WorkProgramData $workDir -Stub $stub
+        return ($r.Error -and $r.Error.Exception.Message -match 'Safety dump is unreadable' -and -not $r.CleanRan)
+    } -MutantUnsafe {
+        param([string]$ScriptPath)
+        $stub = New-StubPgBinaries -PgDumpExit 0 -FirstListExit 6
+        $r = Invoke-RestoreScript -ScriptPath $ScriptPath -DumpPath $inputDump -ServerJsonPath $jsonPath -WorkProgramData $workDir -Stub $stub
+        return $r.CleanRan
     }
 
-    $stubRestoreFail = New-StubPgBinaries -PgDumpExit 0 -PgRestoreListExit 0 -PgRestoreCleanExit 9
-    try {
-        $env:PATH = "$($stubRestoreFail.Dir)" + [IO.Path]::PathSeparator + $env:PATH
-        $raised = $false
-        try {
-            & $restoreScript -DumpPath $inputDump -ServerJsonPath $jsonPath 2>&1 | Out-Null
-        } catch {
-            $raised = $true
-        }
-        if (-not $raised -and $LASTEXITCODE -ne 9) {
-            Write-Error "expected pg_restore --clean failure to surface non-zero exit"
-        }
+    Assert-MutantKilled -Name 'no-input-readable' -WorkDir $workDir -Transform {
+        param($t)
+        $t -replace '(?ms)try \{\r?\n\s*Test-PostgresDumpReadable -DumpPath \$DumpPath\r?\n\}\r?\n catch \{\r?\n\s*Write-Error "Input dump is unreadable[^"]*"\r?\n\s*exit 1\r?\n\}\r?\n\r?\n', ''
+    } -GoldenSafe {
+        param([string]$ScriptPath)
+        $stub = New-StubPgBinaries -PgDumpExit 0 -FirstListExit 0 -SecondListExit 7
+        $r = Invoke-RestoreScript -ScriptPath $ScriptPath -DumpPath $inputDump -ServerJsonPath $jsonPath -WorkProgramData $workDir -Stub $stub
+        return ($r.Error -and $r.Error.Exception.Message -match 'Input dump is unreadable' -and -not $r.CleanRan)
+    } -MutantUnsafe {
+        param([string]$ScriptPath)
+        $stub = New-StubPgBinaries -PgDumpExit 0 -FirstListExit 0 -SecondListExit 7
+        $r = Invoke-RestoreScript -ScriptPath $ScriptPath -DumpPath $inputDump -ServerJsonPath $jsonPath -WorkProgramData $workDir -Stub $stub
+        return $r.CleanRan
     }
-    finally {
-        $env:PATH = ($env:PATH -split [IO.Path]::PathSeparator | Where-Object { $_ -ne $stubRestoreFail.Dir }) -join [IO.Path]::PathSeparator
+
+    Assert-MutantKilled -Name 'no-safety-pgdump-exit' -WorkDir $workDir -Transform {
+        param($t)
+        $t -replace '(?ms)& pg_dump[^\r\n]+\r?\nif \(\$LASTEXITCODE -ne 0\) \{\r?\n\s*Write-Error "Safety pg_dump failed[^"]*"\r?\n\s*exit 1\r?\n\}\r?\n\r?\n', "& pg_dump -Fc -h `$cfg.Host -p `$cfg.Port -U `$cfg.Username `$cfg.Database -f `$pre`n"
+    } -GoldenSafe {
+        param([string]$ScriptPath)
+        $stub = New-StubPgBinaries -PgDumpExit 4 -PgDumpWriteOnFailure
+        $r = Invoke-RestoreScript -ScriptPath $ScriptPath -DumpPath $inputDump -ServerJsonPath $jsonPath -WorkProgramData $workDir -Stub $stub
+        return ($r.Error -and $r.Error.Exception.Message -match 'Safety pg_dump failed with exit code 4' -and -not $r.CleanRan)
+    } -MutantUnsafe {
+        param([string]$ScriptPath)
+        $stub = New-StubPgBinaries -PgDumpExit 4 -PgDumpWriteOnFailure
+        $r = Invoke-RestoreScript -ScriptPath $ScriptPath -DumpPath $inputDump -ServerJsonPath $jsonPath -WorkProgramData $workDir -Stub $stub
+        return $r.CleanRan
+    }
+
+    Assert-MutantKilled -Name 'no-clean-exit' -WorkDir $workDir -Transform {
+        param($t)
+        $t -replace '(?ms)& pg_restore --clean[^\r\n]+\r?\nif \(\$LASTEXITCODE -ne 0\) \{\r?\n\s*Write-Error "pg_restore failed[^"]*"\r?\n\s*exit 1\r?\n\}\r?\n\r?\n', "& pg_restore --clean --if-exists -h `$cfg.Host -p `$cfg.Port -U `$cfg.Username -d `$cfg.Database `$DumpPath`n"
+    } -GoldenSafe {
+        param([string]$ScriptPath)
+        $stub = New-StubPgBinaries -PgDumpExit 0 -FirstListExit 0 -SecondListExit 0 -CleanExit 9
+        $r = Invoke-RestoreScript -ScriptPath $ScriptPath -DumpPath $inputDump -ServerJsonPath $jsonPath -WorkProgramData $workDir -Stub $stub
+        return ($r.Error -and $r.Error.Exception.Message -match 'pg_restore failed with exit code 9')
+    } -MutantUnsafe {
+        param([string]$ScriptPath)
+        $stub = New-StubPgBinaries -PgDumpExit 0 -FirstListExit 0 -SecondListExit 0 -CleanExit 9
+        $r = Invoke-RestoreScript -ScriptPath $ScriptPath -DumpPath $inputDump -ServerJsonPath $jsonPath -WorkProgramData $workDir -Stub $stub
+        return -not $r.Error
     }
 
     Write-Host "BackupRestoreConfig: ok"
-}
-finally {
+} finally {
     Remove-Item -LiteralPath $workDir -Recurse -Force -ErrorAction SilentlyContinue
 }

@@ -21,6 +21,7 @@ public partial class Program
         }
 
         var builder = WebApplication.CreateBuilder(args);
+        builder.Host.UseWindowsService();
         builder.Configuration.AddJsonFile(@"C:\ProgramData\Checkpoint\config\server.json", optional: true, reloadOnChange: true);
         builder.Services.AddControllers()
             .ConfigureApiBehaviorOptions(options =>

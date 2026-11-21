@@ -85,13 +85,6 @@ public sealed class KioskHttpLastSeenContactTests(Pr52R4HttpLastSeenWebApplicati
         Assert.True(contact2Utc > contact1Utc);
     }
 
-    [Fact(Skip = "Run on main 977703de only to refresh KioskPaidSessionMainOracle.")]
-    public async Task emit_main_paid_kiosk_bill_fingerprint_for_oracle_capture()
-    {
-        var withoutHttp = await RunPaidKioskSessionAsync(interleaveHttpContact: false, "PC-ORACLE-CAPTURE");
-        throw new Xunit.Sdk.XunitException("ORACLE_FINGERPRINT=" + BillFingerprint(withoutHttp.Bill));
-    }
-
     [Fact]
     public async Task paid_kiosk_session_bill_and_lease_match_with_or_without_http_last_seen_stamps()
     {

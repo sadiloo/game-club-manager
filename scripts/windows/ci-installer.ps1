@@ -29,6 +29,8 @@ Write-Host "ci-installer: kiosk publish bytes=$kioskSize"
 
 Write-Host "ci-installer: static installer rules"
 & (Join-Path $root "installer/tests/NoBackupDelete.Tests.ps1")
+& (Join-Path $root "installer/tests/BackupRestoreConfig.Tests.ps1")
+& (Join-Path $root "installer/tests/PersianIslKeys.Tests.ps1")
 & (Join-Path $root "installer/tests/IsccVersionGate.Tests.ps1")
 
 $expectedInno = [Version]"6.7.1"
