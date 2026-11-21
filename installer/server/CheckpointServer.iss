@@ -68,8 +68,14 @@ Name: "{group}\راهنمای نصب"; Filename: "{app}\docs\server-install.fa.m
 Name: "desktopicon"; Description: "میان‌بر روی میزکار"; Flags: unchecked
 
 [Run]
-Filename: "pwsh.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\tools\server-postinstall.ps1"" -InstallMode install -AccountsFile ""{code:GetAccountsFile}"""; StatusMsg: "پیکربندی سرور و پایگاه داده…"; Flags: runhidden waituntilidle; Check: IsFirstInstall
-Filename: "pwsh.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\tools\server-postinstall.ps1"" -InstallMode upgrade"; StatusMsg: "ارتقای سرور…"; Flags: runhidden waituntilidle; Check: IsUpgradeInstallCheck
+Filename: "pwsh.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\tools\server-postinstall.ps1"" -InstallPhase webview2"; StatusMsg: "در حال نصب WebView2…"; Flags: runhidden waituntilidle; Check: NeedWebView2Install
+Filename: "pwsh.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\tools\server-postinstall.ps1"" -InstallPhase database"; StatusMsg: "در حال آماده کردن پایگاه داده…"; Flags: runhidden waituntilidle; Check: IsFirstInstall
+Filename: "pwsh.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\tools\server-postinstall.ps1"" -InstallPhase accounts -AccountsFile ""{code:GetAccountsFile}"""; StatusMsg: "در حال آماده کردن حساب‌ها…"; Flags: runhidden waituntilidle; Check: IsFirstInstall
+Filename: "pwsh.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\tools\server-postinstall.ps1"" -InstallPhase services"; StatusMsg: "در حال نصب سرویس‌های چک‌پوینت…"; Flags: runhidden waituntilidle; Check: IsFirstInstall
+Filename: "pwsh.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\tools\server-postinstall.ps1"" -InstallPhase firewall"; StatusMsg: "در حال تنظیم فایروال…"; Flags: runhidden waituntilidle; Check: IsFirstInstall
+Filename: "pwsh.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\tools\server-postinstall.ps1"" -InstallPhase backup -AccountsFile ""{code:GetAccountsFile}"""; StatusMsg: "در حال تنظیم پشتیبان روزانه…"; Flags: runhidden waituntilidle; Check: IsFirstInstall
+Filename: "pwsh.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\tools\server-postinstall.ps1"" -InstallPhase start"; StatusMsg: "در حال روشن کردن سرور…"; Flags: runhidden waituntilidle; Check: IsFirstInstall
+Filename: "pwsh.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\tools\server-postinstall.ps1"" -InstallMode upgrade -InstallPhase upgrade -AccountsFile ""{code:GetAccountsFile}"" -DefaultPinsFile ""{code:GetDefaultPinsFile}"""; StatusMsg: "در حال گرفتن پشتیبان پیش از ارتقا…"; Flags: runhidden waituntilidle; Check: IsUpgradeInstallCheck and UpgradeDefaultPinsReady
 Filename: "{app}\docs\server-install.fa.md"; Description: "مشاهدهٔ راهنمای نصب"; Flags: postinstall shellexec skipifsilent unchecked; Check: FileExists(ExpandConstant('{app}\docs\server-install.fa.md'))
 
 [UninstallRun]
@@ -105,12 +111,25 @@ begin
 end;
 
 function InitializeSetup: Boolean;
+var Installed, NewVer: String; Cmp: Integer;
 begin
   if '{#AppVersion}' = 'UNSET' then
   begin
     MsgBox('AppVersion not defined. Build must pass /DAppVersion from Directory.Build.props.', mbError, MB_OK);
     Result := False;
     Exit;
+  end;
+  Installed := GetInstalledDisplayVersion;
+  NewVer := '{#AppVersion}';
+  if Installed <> '' then
+  begin
+    Cmp := CompareVersionParts(Installed, NewVer);
+    if Cmp > 0 then
+    begin
+      MsgBox(Format('نسخهٔ نصب‌شده (%s) از این نصاب (%s) تازه‌تر است. برای برگشت به نسخهٔ قبلی، اول آن را حذف کنید.', [Installed, NewVer]), mbError, MB_OK);
+      Result := False;
+      Exit;
+    end;
   end;
   Result := True;
 end;
