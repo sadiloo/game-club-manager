@@ -160,14 +160,6 @@ namespace GameClub.Server.Data.Migrations
                     out_lines := out_lines || jsonb_build_array(
                       jsonb_build_object('GroupId', gid, 'PlayMode', 'Online', 'PlayerCount', null, 'IsSpecialBand', false, 'HourlyToman', day_rate),
                       jsonb_build_object('GroupId', gid, 'PlayMode', 'Online', 'PlayerCount', null, 'IsSpecialBand', true, 'HourlyToman', day_rate + surcharge));
-                    IF EXISTS (
-                      SELECT 1 FROM jsonb_array_elements(COALESCE(j->'Lines', '[]'::jsonb)) e
-                      WHERE e->>'GroupId' = gid AND e->>'PlayMode' = 'Offline' AND (e->>'PlayerCount')::int = 1 AND (e->>'IsSpecialBand')::boolean = true
-                    ) THEN
-                      out_lines := out_lines || jsonb_build_array((
-                        SELECT el FROM jsonb_array_elements(COALESCE(j->'Lines', '[]'::jsonb)) AS el
-                        WHERE el->>'GroupId' = gid AND el->>'PlayMode' = 'Offline' AND (el->>'PlayerCount')::int = 1 AND (el->>'IsSpecialBand')::boolean = true LIMIT 1));
-                    END IF;
                   END LOOP;
                   RETURN jsonb_build_object('SchemaVersion', 2, 'StepToman', step, 'Direction', dir, 'Lines', out_lines)::text;
                 END;
@@ -243,7 +235,9 @@ namespace GameClub.Server.Data.Migrations
 
             migrationBuilder.Sql(
                 """
-                -- branch_rounding holds one pilot surcharge column; when pc-normal and pc-vip night-day differ, store MAX(night-day).
+                -- Emergency Down only: legacy branch_rounding has one PcSpecialBandSurchargeToman; it cannot hold
+                -- per-group surcharges. When pc-normal and pc-vip night-day differ, store MAX(night-day); re-Up may
+                -- re-price nights from that single value (accepted loss on rollback).
                 UPDATE branch_rounding
                 SET "PcSpecialBandSurchargeToman" = COALESCE((
                     SELECT MAX(n."HourlyToman" - d."HourlyToman")

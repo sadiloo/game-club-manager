@@ -7,14 +7,15 @@ Coordinator GO on same branch `cursor/pr40-r38b-staging`. No PR opened.
 ```
 PcInternetRatesMigrationTests.cs:363 — Expected: 25000, Actual: 20000 (no open sessions after Down)
 PcInternetRatesMigrationTests.cs:332 — Expected: 40000, Actual: 25000 (branch_rounding after Down with global 130k night)
+PcInternetRatesMigrationTests.cs:406 — Expected: 130000, Actual: 115000 (manager night; MAX-over-snapshots Down)
 ```
 
 ## Full Server.Tests
 
 | Run | Result |
 |-----|--------|
-| 1 | **583/583** (`/opt/cursor/artifacts/server-tests-run1.txt`) |
-| 2 | **583/583** (`/opt/cursor/artifacts/server-tests-run2.txt`) |
+| 1 | **583/583** |
+| 2 | **583/583** |
 
 ## Items (file:line)
 

@@ -341,80 +341,155 @@ public sealed class PcInternetRatesMigrationTests(GameClubWebApplicationFactory 
     [Fact]
     public async Task PcInternetMigration_DownThenUp_without_open_sessions_restores_manager_edited_night_rates()
     {
-        await S3TestHelpers.ResetAsync(factory);
-        await using var scope = factory.Services.CreateAsyncScope();
-        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        await EnsurePrePcInternetMigrationAsync(db);
-        await db.Database.MigrateAsync();
-        await db.Database.ExecuteSqlRawAsync(
-            """
-            UPDATE rate_lines SET "HourlyToman" = 90000
-            WHERE "GroupId"='pc-normal' AND "PlayMode"='Online' AND "PlayerCount" IS NULL AND NOT "IsSpecialBand";
-            UPDATE rate_lines SET "HourlyToman" = 115000
-            WHERE "GroupId"='pc-normal' AND "PlayMode"='Online' AND "PlayerCount" IS NULL AND "IsSpecialBand";
-            UPDATE rate_lines SET "HourlyToman" = 120000
-            WHERE "GroupId"='pc-vip' AND "PlayMode"='Online' AND "PlayerCount" IS NULL AND NOT "IsSpecialBand";
-            UPDATE rate_lines SET "HourlyToman" = 145000
-            WHERE "GroupId"='pc-vip' AND "PlayMode"='Online' AND "PlayerCount" IS NULL AND "IsSpecialBand";
-            """);
-        db.GetService<IMigrator>().Migrate(PrePcInternetMigration);
-        var preSurcharge = await db.Database.SqlQueryRaw<long>(
-            """SELECT "PcSpecialBandSurchargeToman" AS "Value" FROM branch_rounding LIMIT 1""").SingleAsync();
-        Assert.Equal(25_000, preSurcharge);
-        await db.Database.MigrateAsync();
-        var normalNight = await db.RateLines.SingleAsync(r =>
-            r.GroupId == PilotSeed.PcNormalGroupId && r.IsSpecialBand && r.PlayMode == nameof(PlayMode.Online));
-        var vipNight = await db.RateLines.SingleAsync(r =>
-            r.GroupId == PilotSeed.PcVipGroupId && r.IsSpecialBand && r.PlayMode == nameof(PlayMode.Online));
-        Assert.Equal(115_000, normalNight.HourlyToman);
-        Assert.Equal(145_000, vipNight.HourlyToman);
+        try
+        {
+            await S3TestHelpers.ResetAsync(factory);
+            await using var scope = factory.Services.CreateAsyncScope();
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            await EnsurePrePcInternetMigrationAsync(db);
+            await db.Database.MigrateAsync();
+            await db.Database.ExecuteSqlRawAsync(
+                """
+                UPDATE rate_lines SET "HourlyToman" = 90000
+                WHERE "GroupId"='pc-normal' AND "PlayMode"='Online' AND "PlayerCount" IS NULL AND NOT "IsSpecialBand";
+                UPDATE rate_lines SET "HourlyToman" = 115000
+                WHERE "GroupId"='pc-normal' AND "PlayMode"='Online' AND "PlayerCount" IS NULL AND "IsSpecialBand";
+                UPDATE rate_lines SET "HourlyToman" = 120000
+                WHERE "GroupId"='pc-vip' AND "PlayMode"='Online' AND "PlayerCount" IS NULL AND NOT "IsSpecialBand";
+                UPDATE rate_lines SET "HourlyToman" = 145000
+                WHERE "GroupId"='pc-vip' AND "PlayMode"='Online' AND "PlayerCount" IS NULL AND "IsSpecialBand";
+                """);
+            db.GetService<IMigrator>().Migrate(PrePcInternetMigration);
+            var preSurcharge = await db.Database.SqlQueryRaw<long>(
+                """SELECT "PcSpecialBandSurchargeToman" AS "Value" FROM branch_rounding LIMIT 1""").SingleAsync();
+            Assert.Equal(25_000, preSurcharge);
+            await db.Database.MigrateAsync();
+            var normalNight = await db.RateLines.SingleAsync(r =>
+                r.GroupId == PilotSeed.PcNormalGroupId && r.IsSpecialBand && r.PlayMode == nameof(PlayMode.Online));
+            var vipNight = await db.RateLines.SingleAsync(r =>
+                r.GroupId == PilotSeed.PcVipGroupId && r.IsSpecialBand && r.PlayMode == nameof(PlayMode.Online));
+            Assert.Equal(115_000, normalNight.HourlyToman);
+            Assert.Equal(145_000, vipNight.HourlyToman);
+        }
+        finally
+        {
+            await using var scope = factory.Services.CreateAsyncScope();
+            await EnsureLatestMigrationAsync(scope.ServiceProvider.GetRequiredService<AppDbContext>());
+        }
+    }
+
+    [Fact]
+    public async Task PcInternetMigration_DownThenUp_lossy_branch_surcharge_on_reUp_vip_night_160k()
+    {
+        try
+        {
+            await S3TestHelpers.ResetAsync(factory);
+            await using var scope = factory.Services.CreateAsyncScope();
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            await EnsurePrePcInternetMigrationAsync(db);
+            await db.Database.MigrateAsync();
+            await db.Database.ExecuteSqlRawAsync(
+                """
+                UPDATE rate_lines SET "HourlyToman" = 90000
+                WHERE "GroupId"='pc-normal' AND "PlayMode"='Online' AND "PlayerCount" IS NULL AND NOT "IsSpecialBand";
+                UPDATE rate_lines SET "HourlyToman" = 130000
+                WHERE "GroupId"='pc-normal' AND "PlayMode"='Online' AND "PlayerCount" IS NULL AND "IsSpecialBand";
+                UPDATE rate_lines SET "HourlyToman" = 120000
+                WHERE "GroupId"='pc-vip' AND "PlayMode"='Online' AND "PlayerCount" IS NULL AND NOT "IsSpecialBand";
+                UPDATE rate_lines SET "HourlyToman" = 145000
+                WHERE "GroupId"='pc-vip' AND "PlayMode"='Online' AND "PlayerCount" IS NULL AND "IsSpecialBand";
+                """);
+            db.GetService<IMigrator>().Migrate(PrePcInternetMigration);
+            var preSurcharge = await db.Database.SqlQueryRaw<long>(
+                """SELECT "PcSpecialBandSurchargeToman" AS "Value" FROM branch_rounding LIMIT 1""").SingleAsync();
+            Assert.Equal(40_000, preSurcharge);
+            await db.Database.MigrateAsync();
+            var vipNight = await db.RateLines.SingleAsync(r =>
+                r.GroupId == PilotSeed.PcVipGroupId && r.IsSpecialBand && r.PlayMode == nameof(PlayMode.Online));
+            Assert.Equal(160_000, vipNight.HourlyToman);
+        }
+        finally
+        {
+            await using var scope = factory.Services.CreateAsyncScope();
+            await EnsureLatestMigrationAsync(scope.ServiceProvider.GetRequiredService<AppDbContext>());
+        }
+    }
+
+    [Fact]
+    public async Task PcInternetMigration_DownThenUp_open_session_snapshot_priced_lines_match_after_round_trip()
+    {
+        try
+        {
+            await S3TestHelpers.ResetAsync(factory);
+            await using var scope = factory.Services.CreateAsyncScope();
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            await EnsurePrePcInternetMigrationAsync(db);
+            var start = TestTimes.T(2026, 6, 2, 10, 0).UtcDateTime;
+            var checkpoint = TestTimes.T(2026, 6, 2, 11, 0).UtcDateTime;
+            var sessionId = await SeedOpenPreMigrationPcSessionAsync(db, "PC-RT-SNAP", start, checkpoint);
+            await db.Database.MigrateAsync();
+            var jsonOriginalV2 = await SessionSnapshotJsonAsync(db, sessionId);
+            var pricedBefore = PricedLinesFromSnapshot(jsonOriginalV2, pcGroupsOnly: true);
+            db.GetService<IMigrator>().Migrate(PrePcInternetMigration);
+            await db.Database.MigrateAsync();
+            var jsonAfterRoundTrip = await SessionSnapshotJsonAsync(db, sessionId);
+            var pricedAfter = PricedLinesFromSnapshot(jsonAfterRoundTrip, pcGroupsOnly: true);
+            Assert.Equal(pricedBefore, pricedAfter);
+        }
+        finally
+        {
+            await using var scope = factory.Services.CreateAsyncScope();
+            await EnsureLatestMigrationAsync(scope.ServiceProvider.GetRequiredService<AppDbContext>());
+        }
     }
 
     [Fact]
     public async Task PcInternetMigration_DownThenUp_manager_night_with_open_session_preserves_snapshot_and_global_night()
     {
-        await S3TestHelpers.ResetAsync(factory);
-        await using var scope = factory.Services.CreateAsyncScope();
-        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        await EnsurePrePcInternetMigrationAsync(db);
-        var start = TestTimes.T(2026, 6, 2, 10, 0).UtcDateTime;
-        var checkpoint = TestTimes.T(2026, 6, 2, 11, 0).UtcDateTime;
-        var sessionId = await SeedOpenPreMigrationPcSessionAsync(db, "PC-MGR", start, checkpoint);
-        await db.Database.MigrateAsync();
-        var jsonBefore = await db.Sessions.AsNoTracking()
-            .Where(s => s.Id == sessionId)
-            .Join(db.RateCardSnapshots, s => s.RateCardSnapshotId, r => r.Id, (_, r) => r.Json)
-            .SingleAsync();
-        using (var doc = JsonDocument.Parse(jsonBefore))
+        try
         {
-            var day = doc.RootElement.GetProperty("Lines").EnumerateArray().Single(l =>
-                l.GetProperty("GroupId").GetString() == PilotSeed.PcNormalGroupId
-                && l.GetProperty("PlayMode").GetString() == nameof(PlayMode.Online)
-                && !l.GetProperty("IsSpecialBand").GetBoolean());
-            Assert.Equal(80_000, day.GetProperty("HourlyToman").GetInt64());
-        }
+            await S3TestHelpers.ResetAsync(factory);
+            await using var scope = factory.Services.CreateAsyncScope();
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            await EnsurePrePcInternetMigrationAsync(db);
+            var start = TestTimes.T(2026, 6, 2, 10, 0).UtcDateTime;
+            var checkpoint = TestTimes.T(2026, 6, 2, 11, 0).UtcDateTime;
+            var sessionId = await SeedOpenPreMigrationPcSessionAsync(db, "PC-MGR", start, checkpoint);
+            await db.Database.MigrateAsync();
+            var jsonBefore = await SessionSnapshotJsonAsync(db, sessionId);
+            using (var doc = JsonDocument.Parse(jsonBefore))
+            {
+                var day = doc.RootElement.GetProperty("Lines").EnumerateArray().Single(l =>
+                    l.GetProperty("GroupId").GetString() == PilotSeed.PcNormalGroupId
+                    && l.GetProperty("PlayMode").GetString() == nameof(PlayMode.Online)
+                    && !l.GetProperty("IsSpecialBand").GetBoolean());
+                Assert.Equal(80_000, day.GetProperty("HourlyToman").GetInt64());
+            }
 
-        await db.Database.ExecuteSqlRawAsync(
-            """
-            UPDATE rate_lines SET "HourlyToman" = 130000
-            WHERE "GroupId"='pc-normal' AND "PlayMode"='Online' AND "PlayerCount" IS NULL AND "IsSpecialBand";
-            """);
-        db.GetService<IMigrator>().Migrate(PrePcInternetMigration);
-        await db.Database.MigrateAsync();
-        var night = await db.RateLines.SingleAsync(r =>
-            r.GroupId == PilotSeed.PcNormalGroupId && r.IsSpecialBand && r.PlayMode == nameof(PlayMode.Online));
-        Assert.Equal(130_000, night.HourlyToman);
-        var jsonAfter = await db.Sessions.AsNoTracking()
-            .Where(s => s.Id == sessionId)
-            .Join(db.RateCardSnapshots, s => s.RateCardSnapshotId, r => r.Id, (_, r) => r.Json)
-            .SingleAsync();
-        using (var doc = JsonDocument.Parse(jsonAfter))
+            await db.Database.ExecuteSqlRawAsync(
+                """
+                UPDATE rate_lines SET "HourlyToman" = 130000
+                WHERE "GroupId"='pc-normal' AND "PlayMode"='Online' AND "PlayerCount" IS NULL AND "IsSpecialBand";
+                """);
+            db.GetService<IMigrator>().Migrate(PrePcInternetMigration);
+            await db.Database.MigrateAsync();
+            var night = await db.RateLines.SingleAsync(r =>
+                r.GroupId == PilotSeed.PcNormalGroupId && r.IsSpecialBand && r.PlayMode == nameof(PlayMode.Online));
+            Assert.Equal(130_000, night.HourlyToman);
+            var jsonAfter = await SessionSnapshotJsonAsync(db, sessionId);
+            using (var doc = JsonDocument.Parse(jsonAfter))
+            {
+                var day = doc.RootElement.GetProperty("Lines").EnumerateArray().Single(l =>
+                    l.GetProperty("GroupId").GetString() == PilotSeed.PcNormalGroupId
+                    && l.GetProperty("PlayMode").GetString() == nameof(PlayMode.Online)
+                    && !l.GetProperty("IsSpecialBand").GetBoolean());
+                Assert.Equal(80_000, day.GetProperty("HourlyToman").GetInt64());
+            }
+        }
+        finally
         {
-            var day = doc.RootElement.GetProperty("Lines").EnumerateArray().Single(l =>
-                l.GetProperty("GroupId").GetString() == PilotSeed.PcNormalGroupId
-                && l.GetProperty("PlayMode").GetString() == nameof(PlayMode.Online)
-                && !l.GetProperty("IsSpecialBand").GetBoolean());
-            Assert.Equal(80_000, day.GetProperty("HourlyToman").GetInt64());
+            await using var scope = factory.Services.CreateAsyncScope();
+            await EnsureLatestMigrationAsync(scope.ServiceProvider.GetRequiredService<AppDbContext>());
         }
     }
 
@@ -443,6 +518,36 @@ public sealed class PcInternetRatesMigrationTests(GameClubWebApplicationFactory 
         Assert.Equal(HttpStatusCode.Conflict, res.StatusCode);
         var body = await res.Content.ReadFromJsonAsync<JsonElement>();
         Assert.Equal("offline_rate_missing", body.GetProperty("code").GetString());
+    }
+
+    private static Task<string> SessionSnapshotJsonAsync(AppDbContext db, Guid sessionId)
+        => db.Sessions.AsNoTracking()
+            .Where(s => s.Id == sessionId)
+            .Join(db.RateCardSnapshots, s => s.RateCardSnapshotId, r => r.Id, (_, r) => r.Json)
+            .SingleAsync();
+
+    private static HashSet<string> PricedLinesFromSnapshot(string json, bool pcGroupsOnly = false)
+    {
+        using var doc = JsonDocument.Parse(json);
+        var lines = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var line in doc.RootElement.GetProperty("Lines").EnumerateArray())
+        {
+            var gid = line.GetProperty("GroupId").GetString()!;
+            if (pcGroupsOnly && gid is not (PilotSeed.PcNormalGroupId or PilotSeed.PcVipGroupId))
+            {
+                continue;
+            }
+
+            var mode = line.GetProperty("PlayMode").GetString()!;
+            var special = line.GetProperty("IsSpecialBand").GetBoolean();
+            var hourly = line.GetProperty("HourlyToman").GetInt64();
+            var player = line.TryGetProperty("PlayerCount", out var pc) && pc.ValueKind != JsonValueKind.Null
+                ? pc.GetInt32().ToString()
+                : "-";
+            lines.Add($"{gid}|{mode}|{player}|{special}|{hourly}");
+        }
+
+        return lines;
     }
 
     private static void AssertV2OpenSnapshotWithoutOfflineDayBase(string json)
