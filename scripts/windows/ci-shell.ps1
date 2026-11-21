@@ -131,11 +131,24 @@ finally {
         }
 
         Copy-Item -Path (Join-Path $shellLogsSource "*") -Destination $logDir -Force -ErrorAction Stop
-        Write-Host "=== SHELL-OFFLINE-TRACE / SHELL-RACE-NAV (from $shellLogsSource) ==="
+        Write-Host "=== shell trace harvest (from $shellLogsSource) ==="
         foreach ($logFile in $shellLogFiles) {
             $lines = Get-Content -Path $logFile.FullName -ErrorAction Stop
             foreach ($line in $lines) {
-                if ($line -match "SHELL-OFFLINE-TRACE" -or $line -match "SHELL-RACE-NAV") {
+                $emit = $false
+                if ($line -match "SHELL-R27D-CI-TRACE") { $emit = $true }
+                elseif ($line -match "panel-recovery-probe") { $emit = $true }
+                elseif ($line -match "nav-completed-orphan") { $emit = $true }
+                elseif ($line -match "panel-navigate caller=NavigatePanel") { $emit = $true }
+                elseif ($line -match "nav-completed-panel-ok") { $emit = $true }
+                elseif ($line -match "SHELL-OFFLINE-TRACE") {
+                    if ($line -match "branch=panel-nav-timeout" -and $line -notmatch "panel-nav-timeout-") { $emit = $true }
+                    elseif ($line -match "branch=nav-completed-orphan") { $emit = $true }
+                    elseif ($line -match "branch=nav-starting") { $emit = $true }
+                    else { $emit = $true }
+                }
+                elseif ($line -match "SHELL-RACE-NAV") { $emit = $true }
+                if ($emit) {
                     Write-Host $line
                 }
             }

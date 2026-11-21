@@ -35,7 +35,10 @@ public sealed class ShellPanelNavigationFailureTests
                 stub = CreateStub(503, 0);
                 _fixture.RunAsync(async () =>
                 {
-                    await RunProbeOkNavigationFailureScenarioAsync(stub, expectSlowTimeout: false);
+                    await RunProbeOkNavigationFailureScenarioAsync(
+                        stub,
+                        expectSlowTimeout: false,
+                        ciTraceTestName: nameof(shell_probe_ok_navigation_503_shows_panel_unavailable_without_navigation_loop));
                 }, TimeSpan.FromSeconds(150));
             }
             finally
@@ -144,6 +147,9 @@ public sealed class ShellPanelNavigationFailureTests
                             Assert.Equal(navAtOffline, window.NavigationStartingCount);
                             Assert.Equal(0, window.PanelNavigationPendingCountForTests);
                         }
+
+                        EchoR27dBarTracesToStdout(
+                            nameof(shell_pending_panel_nav_past_deadline_confirms_once_late_completion_orphan_timed_out));
                     }
                     finally
                     {
@@ -171,7 +177,10 @@ public sealed class ShellPanelNavigationFailureTests
                 stub = CreateStub(200, 25_000);
                 _fixture.RunAsync(async () =>
                 {
-                    await RunProbeOkNavigationFailureScenarioAsync(stub, expectSlowTimeout: true);
+                    await RunProbeOkNavigationFailureScenarioAsync(
+                        stub,
+                        expectSlowTimeout: true,
+                        ciTraceTestName: nameof(shell_probe_ok_navigation_timeout_shows_panel_unavailable_without_navigation_loop));
                 }, TimeSpan.FromSeconds(180));
             }
             finally
@@ -231,6 +240,8 @@ public sealed class ShellPanelNavigationFailureTests
                     var log = Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log").Select(File.ReadAllText).Aggregate("", string.Concat);
                     var panelOkCount = log.Split('\n').Count(l => l.Contains("nav-completed-panel-ok", StringComparison.Ordinal));
                     Assert.InRange(panelOkCount, 1, 2);
+                    EchoR27dBarTracesToStdout(
+                        nameof(shell_probe_ok_navigation_failure_recovers_on_confirmed_2xx_without_extra_navigations));
                 }
                 finally
                 {
@@ -362,6 +373,8 @@ public sealed class ShellPanelNavigationFailureTests
 
                     Assert.True(panelOk, "panel did not recover on confirmed 2xx after stop/offline data nav");
                     Assert.InRange(window.NavigationStartingCount, navAfterOffline, navAfterOffline + 1);
+                    EchoR27dBarTracesToStdout(
+                        nameof(shell_after_stop_offline_data_nav_recovers_on_confirmed_2xx));
                 }
                 finally
                 {
@@ -464,7 +477,10 @@ public sealed class ShellPanelNavigationFailureTests
         }
     }
 
-    private async Task RunProbeOkNavigationFailureScenarioAsync(ShellPanelHttpSplitStub stub, bool expectSlowTimeout)
+    private async Task RunProbeOkNavigationFailureScenarioAsync(
+        ShellPanelHttpSplitStub stub,
+        bool expectSlowTimeout,
+        string? ciTraceTestName = null)
     {
         MainWindow? window = null;
         try
@@ -501,6 +517,10 @@ public sealed class ShellPanelNavigationFailureTests
                 log.Split('\n').Count(l => l.Contains("panel-nav-retry", StringComparison.Ordinal)),
                 1,
                 5);
+            if (ciTraceTestName is not null)
+            {
+                EchoR27dBarTracesToStdout(ciTraceTestName);
+            }
         }
         finally
         {
@@ -656,12 +676,81 @@ public sealed class ShellPanelNavigationFailureTests
         {
             foreach (var line in File.ReadAllLines(logPath))
             {
-                if (line.Contains("SHELL-OFFLINE-TRACE", StringComparison.Ordinal)
+                if (IsR27dCiTraceLine(line)
                     || line.Contains("SHELL-RACE-NAV", StringComparison.Ordinal)
                     || line.Contains("panel-navigate", StringComparison.Ordinal))
                 {
                     Console.WriteLine($"SHELL-TRACE-DUMP root={Path.GetFileName(root)} {line}");
                 }
+            }
+        }
+    }
+
+    private static bool IsR27dCiTraceLine(string line)
+    {
+        if (line.Contains("panel-recovery-probe", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        if (line.Contains("panel-navigate caller=NavigatePanel", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        if (line.Contains("nav-completed-panel-ok", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        if (line.Contains("nav-completed-orphan", StringComparison.Ordinal)
+            && line.Contains("timedOut=True", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        if (!line.Contains("SHELL-OFFLINE-TRACE", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (line.Contains("branch=nav-starting", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        if (line.Contains("branch=panel-nav-timeout", StringComparison.Ordinal)
+            && !line.Contains("panel-nav-timeout-", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        if (line.Contains("branch=nav-completed-orphan", StringComparison.Ordinal)
+            && line.Contains("timedOut=True", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    private static void EchoR27dBarTracesToStdout(string testName)
+    {
+        if (!Directory.Exists(ShellPaths.ShellLogsDir))
+        {
+            return;
+        }
+
+        foreach (var logPath in Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log"))
+        {
+            foreach (var line in File.ReadAllLines(logPath))
+            {
+                if (!IsR27dCiTraceLine(line))
+                {
+                    continue;
+                }
+
+                Console.WriteLine($"SHELL-R27D-CI-TRACE test={testName} {line}");
             }
         }
     }
