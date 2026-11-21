@@ -10,6 +10,29 @@ public sealed class PendingLoopbackPanelNavigationExpiryPolicyTests
   private static bool IsLoopbackPanel(string uri) =>
     uri.Contains("127.0.0.1", StringComparison.OrdinalIgnoreCase);
 
+  [Theory]
+  [InlineData(10, true)]
+  [InlineData(9.9, false)]
+  public void has_reached_deadline_at_second_boundary(double ageSeconds, bool expectedExpires)
+  {
+    var deadline = PendingLoopbackPanelNavigationTimeoutPolicy.Deadline;
+    Assert.Equal(
+      expectedExpires,
+      PendingLoopbackPanelNavigationExpiryPolicy.HasReachedDeadline(
+        TimeSpan.FromSeconds(ageSeconds),
+        deadline));
+  }
+
+  [Fact]
+  public void has_reached_deadline_one_millisecond_past_deadline_expires()
+  {
+    var deadline = PendingLoopbackPanelNavigationTimeoutPolicy.Deadline;
+    Assert.True(
+      PendingLoopbackPanelNavigationExpiryPolicy.HasReachedDeadline(
+        deadline + TimeSpan.FromMilliseconds(1),
+        deadline));
+  }
+
   [Fact]
   public void missing_completion_at_deadline_confirms_timeout_once_and_allows_no_defer()
   {

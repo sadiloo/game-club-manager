@@ -69,35 +69,81 @@ public sealed class ShellPanelNavigationFailureTests
                         var wv = await WaitForPanelWebViewAsync(window, TimeSpan.FromSeconds(45));
                         await WaitForPanelUnavailableOfflineAsync(wv, TimeSpan.FromSeconds(90));
                         var navAtOffline = window.NavigationStartingCount;
-
-                        await Task.Delay(TimeSpan.FromSeconds(20));
-                        Assert.Equal(navAtOffline, window.NavigationStartingCount);
                         Assert.Equal(0, window.PanelNavigationPendingCountForTests);
 
-                        var log = Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log")
-                            .Select(File.ReadAllText)
-                            .Aggregate("", string.Concat);
-                        var delta = logBaseline.Length == 0 ? log : log.Replace(logBaseline, "");
+                        static string ReadShellLog() =>
+                            Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log")
+                                .Select(File.ReadAllText)
+                                .Aggregate("", string.Concat);
+
+                        static string LogDelta(string baseline) =>
+                            baseline.Length == 0 ? ReadShellLog() : ReadShellLog().Replace(baseline, "");
 
                         static bool IsPanelNavTimeoutConfirm(string line) =>
                             line.Contains("branch=panel-nav-timeout", StringComparison.Ordinal)
                             && !line.Contains("panel-nav-timeout-", StringComparison.Ordinal);
 
+                        static bool TryParsePendingIdFromTimeoutConfirm(string line, out ulong pendingId)
+                        {
+                            pendingId = 0;
+                            const string marker = "pendingId=";
+                            var idx = line.IndexOf(marker, StringComparison.Ordinal);
+                            if (idx < 0)
+                            {
+                                return false;
+                            }
+
+                            var start = idx + marker.Length;
+                            var end = start;
+                            while (end < line.Length && char.IsDigit(line[end]))
+                            {
+                                end++;
+                            }
+
+                            return end > start && ulong.TryParse(line.Substring(start, end - start), out pendingId);
+                        }
+
+                        var delta = LogDelta(logBaseline);
+                        var timeoutConfirmLines = delta.Split('\n').Where(IsPanelNavTimeoutConfirm).ToArray();
+                        Assert.Single(timeoutConfirmLines);
+                        Assert.True(
+                            TryParsePendingIdFromTimeoutConfirm(timeoutConfirmLines[0], out var timeoutNavId));
+
                         Assert.Equal(
                             1,
-                            delta.Split('\n').Count(IsPanelNavTimeoutConfirm));
-                        Assert.InRange(
                             delta.Split('\n')
-                                .Count(l => l.Contains("panel-navigate caller=PresentOffline", StringComparison.Ordinal)),
-                            1,
-                            2);
-                        Assert.Contains("nav-completed-orphan", delta, StringComparison.Ordinal);
-                        Assert.Contains("timedOut=", delta, StringComparison.OrdinalIgnoreCase);
+                                .Count(l => l.Contains("panel-navigate caller=PresentOffline", StringComparison.Ordinal)));
                         Assert.Equal(
                             0,
                             delta.Split('\n').Count(l =>
                                 l.Contains("panel-nav-timeout-skip", StringComparison.Ordinal)
                                 && l.Contains("reason=no-pending", StringComparison.Ordinal)));
+
+                        string? matchingOrphan = null;
+                        var orphanPollDeadline = DateTime.UtcNow.AddSeconds(40);
+                        while (DateTime.UtcNow < orphanPollDeadline)
+                        {
+                            await Task.Delay(300);
+                            delta = LogDelta(logBaseline);
+                            matchingOrphan = delta.Split('\n').FirstOrDefault(l =>
+                                l.Contains("nav-completed-orphan", StringComparison.Ordinal)
+                                && l.Contains($"id={timeoutNavId}", StringComparison.Ordinal)
+                                && l.Contains("timedOut=True", StringComparison.Ordinal));
+                            if (matchingOrphan is not null)
+                            {
+                                break;
+                            }
+                        }
+
+                        Assert.False(string.IsNullOrEmpty(matchingOrphan));
+
+                        var steadyDeadline = DateTime.UtcNow.AddSeconds(15);
+                        while (DateTime.UtcNow < steadyDeadline)
+                        {
+                            await Task.Delay(500);
+                            Assert.Equal(navAtOffline, window.NavigationStartingCount);
+                            Assert.Equal(0, window.PanelNavigationPendingCountForTests);
+                        }
                     }
                     finally
                     {

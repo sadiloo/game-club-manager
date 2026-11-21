@@ -14,7 +14,11 @@ Sequence:
    **`nav-completed-orphan`** (ConnectionAborted), never `present-offline-enter`.
 
 **Fix:** `TryConfirmTimedOutLoopbackPanelNavigation` — one `panel-nav-timeout` → failure handler per nav id;
-late completion stays `nav-completed-orphan` with `timedOut=true` only logged.
+late completion stays `nav-completed-orphan` with `timedOut=True` only logged (case-sensitive; tied to `pendingId=`).
+
+**Exactly one offline:** first timeout calls `HandleRunningPanelNavigationFailure` while `_offlineShown` is false
+(`MainWindow.xaml.cs` ~502–504) → a single `PresentOfflinePageAsync("panel-unavailable")`. The same-call
+`TryStartLoopbackPanelNavigation` return prevents a racing second loopback navigation after confirm.
 
 ## Empty JSON (`shell_running_with_failing_panel_backs_off_and_avoids_offline_flash_loop`)
 
