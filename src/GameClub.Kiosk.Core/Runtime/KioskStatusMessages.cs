@@ -23,6 +23,7 @@ public static class KioskStatusMessages
         public const string ErrLaunch = "kiosk.status.err.launch";
         public const string ErrCatalog = "kiosk.status.err.catalog";
         public const string ErrGeneric = "kiosk.status.err.generic";
+        public const string ServerUnreachable = "kiosk.error.serverUnreachable";
         public const string Join = "kiosk.status.join";
         public const string Sep = "kiosk.status.sep";
     }
@@ -44,6 +45,7 @@ public static class KioskStatusMessages
         Keys.ErrLaunch,
         Keys.ErrCatalog,
         Keys.ErrGeneric,
+        Keys.ServerUnreachable,
         Keys.Join,
         Keys.Sep,
     };
@@ -65,6 +67,10 @@ public static class KioskStatusMessages
         [Keys.ErrLaunch] = "بازی باز نشد. دوباره امتحان کنید؛ اگر تکرار شد، به پیشخوان خبر بدهید.",
         [Keys.ErrCatalog] = "فهرست بازی‌ها به‌روز نشد.",
         [Keys.ErrGeneric] = "مشکلی پیش آمد. لطفاً به پیشخوان خبر بدهید.",
+        [Keys.ServerUnreachable] =
+            "TODO_UIUX: Cannot reach the game-club server. The server address may have changed. "
+            + "Update it from the kiosk admin panel: press F8, enter the kiosk manager password, "
+            + "then open Server settings (admin.server.*).",
         [Keys.Join] = "، ",
         [Keys.Sep] = " · ",
     };

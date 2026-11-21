@@ -165,9 +165,24 @@ public sealed class KioskHostService : IAsyncDisposable
 
     public async Task SubmitPairingCodeAsync(string code)
     {
-        var pair = await _http.PostAsync(
-            $"{_serverBase}/api/kiosk/pair",
-            new StringContent(JsonSerializer.Serialize(new { code }), Encoding.UTF8, "application/json"));
+        HttpResponseMessage pair;
+        try
+        {
+            pair = await _http.PostAsync(
+                $"{_serverBase}/api/kiosk/pair",
+                new StringContent(JsonSerializer.Serialize(new { code }), Encoding.UTF8, "application/json"));
+        }
+        catch (Exception ex) when (KioskServerTransportErrors.IsUnreachable(ex))
+        {
+            _pairingJustFailed = true;
+            LastLoginFailureKey = KioskServerTransportErrors.MessageKey;
+            PresentLoginFailure(LastLoginFailureKey);
+            RefreshStationStatusText();
+            return;
+        }
+
+        using (pair)
+        {
         if (!pair.IsSuccessStatusCode)
         {
             _pairingJustFailed = true;
@@ -195,6 +210,7 @@ public sealed class KioskHostService : IAsyncDisposable
         await RefreshCatalogAsync();
         PresentStatusLine(KioskStatusLineState.Paired(_stationId));
         EnsureStatusUiTickRunning();
+        }
     }
 
     public void DismissLoginErrorMessage()
@@ -254,7 +270,7 @@ public sealed class KioskHostService : IAsyncDisposable
                 $"{_serverBase}/api/kiosk/auth/login",
                 new StringContent(payload, Encoding.UTF8, "application/json"));
         }
-        catch (HttpRequestException ex)
+        catch (HttpRequestException ex) when (KioskServerTransportErrors.IsUnreachable(ex))
         {
             LastLoginHttpStatus = null;
             LastLoginFailureKey = KioskLoginUserMessages.ResolveFailureKey(
@@ -266,7 +282,7 @@ public sealed class KioskHostService : IAsyncDisposable
             RefreshStationStatusText();
             return;
         }
-        catch (TaskCanceledException ex)
+        catch (TaskCanceledException ex) when (KioskServerTransportErrors.IsUnreachable(ex))
         {
             LastLoginHttpStatus = null;
             LastLoginFailureKey = KioskLoginUserMessages.ResolveFailureKey(
@@ -633,6 +649,12 @@ public sealed class KioskHostService : IAsyncDisposable
             return;
         }
 
+        if (!_runtime.IsTransportConnected)
+        {
+            _transientStatusErrorKey = KioskServerTransportErrors.MessageKey;
+            _shell.Dispatcher.Invoke(RefreshStationStatusText);
+        }
+
         _orchestrator.EnqueuePoweredSegmentOnDisconnect(_sessionId, _runtime.ClientMonotonicMs);
     }
 
@@ -650,6 +672,12 @@ public sealed class KioskHostService : IAsyncDisposable
                         _runCatalogOnFirstConnected = false;
                         _ = RunStartupCatalogRefreshAsync();
                     }
+                }
+
+                if (_runtime.LastTransportUnreachable
+                    || KioskServerTransportErrors.IsUnreachableDetail(detail))
+                {
+                    _transientStatusErrorKey = KioskServerTransportErrors.MessageKey;
                 }
 
                 RefreshStationStatusText();
@@ -903,34 +931,49 @@ public sealed class KioskHostService : IAsyncDisposable
 
         try
         {
-            var response = await _http.GetAsync($"{_serverBase}/api/kiosk/stations/{_stationId}/config");
-            if (!response.IsSuccessStatusCode)
+            HttpResponseMessage response;
+            try
             {
+                response = await _http.GetAsync($"{_serverBase}/api/kiosk/stations/{_stationId}/config");
+            }
+            catch (Exception ex) when (KioskServerTransportErrors.IsUnreachable(ex))
+            {
+                _transientStatusErrorKey = KioskServerTransportErrors.MessageKey;
+                _shell.Dispatcher.Invoke(RefreshStationStatusText);
                 return;
             }
 
-            using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
-            var isTestMode = doc.RootElement.TryGetProperty("isTestMode", out var tm) && tm.GetBoolean();
-            _orchestrator.ApplyStationConfig(isTestMode);
-            _shell.Dispatcher.Invoke(() =>
+            using (response)
             {
-                if (isTestMode)
+                if (!response.IsSuccessStatusCode)
                 {
-                    _shell.WindowStyle = WindowStyle.SingleBorderWindow;
-                    _shell.ResizeMode = ResizeMode.CanResize;
-                    _shell.WindowState = WindowState.Normal;
+                    return;
                 }
-                else
+
+                using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+                var isTestMode = doc.RootElement.TryGetProperty("isTestMode", out var tm) && tm.GetBoolean();
+                _orchestrator.ApplyStationConfig(isTestMode);
+                _shell.Dispatcher.Invoke(() =>
                 {
-                    _shell.WindowStyle = WindowStyle.None;
-                    _shell.ResizeMode = ResizeMode.NoResize;
-                    _shell.WindowState = WindowState.Maximized;
-                }
-            });
+                    if (isTestMode)
+                    {
+                        _shell.WindowStyle = WindowStyle.SingleBorderWindow;
+                        _shell.ResizeMode = ResizeMode.CanResize;
+                        _shell.WindowState = WindowState.Normal;
+                    }
+                    else
+                    {
+                        _shell.WindowStyle = WindowStyle.None;
+                        _shell.ResizeMode = ResizeMode.NoResize;
+                        _shell.WindowState = WindowState.Maximized;
+                    }
+                });
+            }
         }
-        catch
+        catch (Exception ex) when (KioskServerTransportErrors.IsUnreachable(ex))
         {
-            // keep default final mode when profile is unreachable
+            _transientStatusErrorKey = KioskServerTransportErrors.MessageKey;
+            _shell.Dispatcher.Invoke(RefreshStationStatusText);
         }
     }
 

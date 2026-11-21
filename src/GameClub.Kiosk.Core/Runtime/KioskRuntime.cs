@@ -60,6 +60,8 @@ public sealed class KioskRuntime : IAsyncDisposable
 
     public string LastTransportErrorDetail { get; private set; } = "";
 
+    public bool LastTransportUnreachable { get; private set; }
+
     private long _lastTransportFailedSignalMs;
 
     internal Func<TimeSpan, CancellationToken, Task>? TestDelayAsync { get; set; }
@@ -171,9 +173,15 @@ public sealed class KioskRuntime : IAsyncDisposable
             _monotonicRestartedForInstance = true;
         }
 
+        if (phase == KioskTransportPhase.Connected)
+        {
+            LastTransportUnreachable = false;
+        }
+
         if (phase == KioskTransportPhase.LastError)
         {
             LastTransportErrorDetail = detail;
+            LastTransportUnreachable = KioskServerTransportErrors.IsUnreachableDetail(detail);
         }
 
         ConnectionStatusChanged?.Invoke(phase, detail);

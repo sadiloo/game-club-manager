@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
+using GameClub.Kiosk.Core.Runtime;
 using GameClub.Kiosk.Core.Setup;
 
 namespace GameClub.Kiosk.Views;
@@ -56,9 +57,13 @@ public partial class SetupPanel : UserControl
             StepCaption.Text = "مرحلهٔ ۲ از ۲";
             ManagerPasswordInput.Focus();
         }
-        catch (HttpRequestException)
+        catch (HttpRequestException ex) when (KioskServerTransportErrors.IsUnreachable(ex))
         {
-            ShowStep1Retry();
+            ShowServerUnreachable();
+        }
+        catch (TaskCanceledException ex) when (KioskServerTransportErrors.IsUnreachable(ex))
+        {
+            ShowServerUnreachable();
         }
         finally
         {
@@ -71,6 +76,13 @@ public partial class SetupPanel : UserControl
         Step1Error.Visibility = Visibility.Visible;
         Step1Error.Foreground = (System.Windows.Media.Brush)FindResource("Kiosk.WarningBrush");
         Step1Error.Text = "سرور پیدا نشد؛ دوباره تلاش می‌شود…";
+    }
+
+    private void ShowServerUnreachable()
+    {
+        Step1Error.Visibility = Visibility.Visible;
+        Step1Error.Foreground = (System.Windows.Media.Brush)FindResource("Kiosk.DangerBrush");
+        Step1Error.Text = KioskStatusMessages.DisplayText(KioskStatusMessages.Keys.ServerUnreachable);
     }
 
     private async void OnContinueClick(object sender, RoutedEventArgs e)
@@ -118,12 +130,19 @@ public partial class SetupPanel : UserControl
             });
             SetupCompleted?.Invoke(this, EventArgs.Empty);
         }
-        catch (HttpRequestException)
+        catch (HttpRequestException ex) when (KioskServerTransportErrors.IsUnreachable(ex))
         {
             Step1Panel.Visibility = Visibility.Visible;
             Step2Panel.Visibility = Visibility.Collapsed;
             StepCaption.Text = "مرحلهٔ ۱ از ۲";
-            ShowStep1Retry();
+            ShowServerUnreachable();
+        }
+        catch (TaskCanceledException ex) when (KioskServerTransportErrors.IsUnreachable(ex))
+        {
+            Step1Panel.Visibility = Visibility.Visible;
+            Step2Panel.Visibility = Visibility.Collapsed;
+            StepCaption.Text = "مرحلهٔ ۱ از ۲";
+            ShowServerUnreachable();
         }
         finally
         {

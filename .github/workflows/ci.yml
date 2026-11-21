@@ -71,6 +71,11 @@ jobs:
         run: dotnet build src/GameClub.Kiosk/GameClub.Kiosk.csproj -c Release -f net48 --nologo && dotnet build src/GameClub.Kiosk.Guard/GameClub.Kiosk.Guard.csproj -c Release -f net48 --nologo
       - name: test every target framework except server and windows kiosk integration
         run: dotnet test GameClub.slnx -c Release --nologo --filter "FullyQualifiedName!~GameClub.Server.Tests&FullyQualifiedName!~GameClub.Kiosk.Windows.IntegrationTests" --results-directory artifacts/windows-ci --logger "trx;LogFileName=windows-ci.trx"
+      - name: kiosk trust paths and ACL (L-3)
+        shell: pwsh
+        run: |
+          & ./installer/tests/KioskTrustPaths.Tests.ps1
+          & ./installer/tests/KioskTrustFileAcl.Tests.ps1
       - name: upload windows ci test artifacts
         if: always()
         uses: actions/upload-artifact@v4

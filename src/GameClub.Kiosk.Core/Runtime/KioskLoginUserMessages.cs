@@ -79,9 +79,16 @@ public static class KioskLoginUserMessages
     public static IReadOnlyCollection<string> MappedKeys => AllMappedKeys;
 
     public static string DisplayText(string key)
-        => TextByKey.TryGetValue(key, out var text)
+    {
+        if (string.Equals(key, KioskStatusMessages.Keys.ServerUnreachable, StringComparison.Ordinal))
+        {
+            return KioskStatusMessages.DisplayText(key);
+        }
+
+        return TextByKey.TryGetValue(key, out var text)
             ? text
             : TextByKey[Keys.Unknown];
+    }
 
     public static bool IsKnownKey(string key) => AllMappedKeys.Contains(key);
 
@@ -107,14 +114,9 @@ public static class KioskLoginUserMessages
 
     public static string ResolveFailureKey(string? responseBody, int httpStatus, LoginTransportFailure? transport = null)
     {
-        if (transport == LoginTransportFailure.Unreachable)
+        if (transport is LoginTransportFailure.Unreachable or LoginTransportFailure.Timeout)
         {
-            return Keys.Unreachable;
-        }
-
-        if (transport == LoginTransportFailure.Timeout)
-        {
-            return Keys.Timeout;
+            return KioskStatusMessages.Keys.ServerUnreachable;
         }
 
         var serverCode = TryParseServerCode(responseBody);

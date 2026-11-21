@@ -1,4 +1,5 @@
 using System.Text.Json;
+using GameClub.Kiosk.Core.Security;
 
 namespace GameClub.Kiosk.Core.Setup;
 
@@ -11,8 +12,13 @@ public sealed class KioskSetupStore
     };
 
     private readonly string _path;
+    private readonly IKioskTrustFileClient _trustWriter;
 
-    public KioskSetupStore(string? path = null) => _path = path ?? KioskSetupPaths.SetupJsonPath;
+    public KioskSetupStore(string? path = null, IKioskTrustFileClient? trustWriter = null)
+    {
+        _path = path ?? KioskSetupPaths.SetupJsonPath;
+        _trustWriter = trustWriter ?? KioskTrustFileClientFactory.ForPath(_path);
+    }
 
     public bool ShouldShowFirstRun() =>
         !KioskLegacyDevPath.IsActive() && !(TryLoad()?.IsComplete ?? false);
@@ -44,6 +50,6 @@ public sealed class KioskSetupStore
         }
 
         var json = JsonSerializer.Serialize(document, JsonOptions);
-        File.WriteAllText(_path, json);
+        _trustWriter.WriteTrustFile(_path, json);
     }
 }
