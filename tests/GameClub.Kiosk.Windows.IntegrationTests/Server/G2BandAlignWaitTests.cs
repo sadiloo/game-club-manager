@@ -66,6 +66,30 @@ public sealed class G2BandAlignWaitTests
     }
 
     [Fact]
+    public void waits_when_exactly_on_midnight_edge()
+    {
+        var now = TehranTime.At(2026, 6, 4, 0, 0, 0);
+        var plan = G2BandAlignWait.ComputePlan(now.ToUniversalTime(), Edges());
+        Assert.Equal(5000, plan.WaitMilliseconds);
+    }
+
+    [Fact]
+    public void no_wait_one_second_after_midnight_edge()
+    {
+        var now = TehranTime.At(2026, 6, 4, 0, 0, 1);
+        var plan = G2BandAlignWait.ComputePlan(now.ToUniversalTime(), Edges());
+        Assert.Equal(0, plan.WaitMilliseconds);
+    }
+
+    [Fact]
+    public void approach_window_midnight_at_thirteen_minutes_plus_one_second_waits()
+    {
+        var now = TehranTime.At(2026, 6, 3, 23, 47, 1);
+        var plan = G2BandAlignWait.ComputePlan(now.ToUniversalTime(), Edges());
+        Assert.True(plan.WaitMilliseconds > 0);
+    }
+
+    [Fact]
     public void no_wait_far_from_edges_noon()
     {
         var now = TehranTime.At(2026, 6, 3, 12, 0, 0);

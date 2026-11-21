@@ -701,11 +701,11 @@ public sealed class WindowsKioskServerIntegrationTests
             Assert.Equal(40_000, evidence.PcNormalOfflineHourlyToman);
             Assert.Equal(evidence.ExpectedBillableMinutes, evidence.CheckpointCount);
             Assert.Equal(0, evidence.DuplicateCheckpointMinuteBuckets);
-            Assert.Equal(evidence.ExpectedCollectibleToman, evidence.PendingBillCollectibleToman);
             G2BandAlignWait.AssertSameSideOfAllBandEdges(
                 PilotSeed.PcNormalSpecialHours,
                 new DateTimeOffset(evidence.SessionStartedAtUtc, TimeSpan.Zero),
                 evidence.CheckpointAtUtc);
+            Assert.Equal(evidence.ExpectedCollectibleToman, evidence.PendingBillCollectibleToman);
         }
         finally
         {
