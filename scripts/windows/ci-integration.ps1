@@ -260,7 +260,6 @@ function Assert-FirewallPhaseTestsExecuted {
     $count = $names.Count
     Write-Host "FW_PHASE_TESTS count=$count discovered=$DiscoveredCount minimum=$MinimumCount"
     Write-PhaseLog "FW_PHASE_TESTS count=$count discovered=$DiscoveredCount minimum=$MinimumCount"
-    Write-FirewallPhaseExecutedSummary -TrxPath $TrxPath -DiscoveredCount $DiscoveredCount
     if ($count -lt $DiscoveredCount) {
         throw "FW_PHASE_TESTS executed=$count discovered=$DiscoveredCount reason=phase_aborted_before_full_inventory"
     }

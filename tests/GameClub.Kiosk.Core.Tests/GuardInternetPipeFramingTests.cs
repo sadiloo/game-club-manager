@@ -192,7 +192,9 @@ public sealed class GuardInternetPipeFramingTests
         InternetPipeOwnerDiagnostics.WritePipeOwner(
             "regression_probe",
             nameof(internet_pipe_owner_diagnostics_does_not_steal_stub_server_instance_while_server_waits));
-        Assert.False(sawConnection.IsSet, "diagnostics probe must not connect and steal the single pipe instance");
+        Assert.False(
+            sawConnection.Wait(TimeSpan.FromMilliseconds(500)),
+            "diagnostics probe must not connect and steal the single pipe instance");
 
         using var client = new NamedPipeClientStream(".", GuardInternetClient.PipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
         await client.ConnectAsync(3_000);
