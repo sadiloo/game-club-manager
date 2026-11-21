@@ -48,6 +48,7 @@ public partial class MainWindow : Window
     private int _pendingBrowserRecreate;
     private readonly HashSet<ulong> _blockedNavigationIds = new();
     private readonly PanelNavigationPendingRegistry _panelNavigationPending = new();
+    private readonly HashSet<ulong> _loopbackPanelNavigationTimedOutIds = new();
     private bool _probeOkPanelNavTimeoutCycleConsumed;
     private DispatcherTimer? _loopbackPanelNavTimeoutTimer;
     private DispatcherTimer? _healthyPanelProbeTimer;
@@ -366,9 +367,10 @@ public partial class MainWindow : Window
     {
         if (!_panelNavigationPending.TryTakeNavigationCompleted(e.NavigationId, out var startUri))
         {
+            var timedOut = _loopbackPanelNavigationTimedOutIds.Contains(e.NavigationId);
             LogOfflineTrace(
                 "nav-completed-orphan",
-                $"id={e.NavigationId} IsSuccess={e.IsSuccess} webError={e.WebErrorStatus} http={e.HttpStatusCode}");
+                $"id={e.NavigationId} IsSuccess={e.IsSuccess} webError={e.WebErrorStatus} http={e.HttpStatusCode} timedOut={timedOut}");
             return;
         }
 
@@ -436,6 +438,7 @@ public partial class MainWindow : Window
                     "nav-completed-panel-ok",
                     $"webError={e.WebErrorStatus} http={e.HttpStatusCode} startUri={FormatUriForLog(startUri)}");
                 _healthyProbeConsecutiveFailures = 0;
+                _loopbackPanelNavigationTimedOutIds.Clear();
                 ArmHealthyPanelProbeTimer();
                 return;
             }
@@ -574,11 +577,11 @@ public partial class MainWindow : Window
         }
 
         var utcNow = DateTime.UtcNow;
-        var deadline = PendingLoopbackPanelNavigationTimeoutPolicy.Deadline;
-        _panelNavigationPending.PruneExpiredLoopbackPanelNavigations(
-            IsLoopbackPanelTarget,
-            utcNow,
-            deadline);
+        if (TryConfirmTimedOutLoopbackPanelNavigation(utcNow, fromTimer: true))
+        {
+            return;
+        }
+
         if (!_panelNavigationPending.TryGetOldestPendingLoopbackPanelNavigation(
                 IsLoopbackPanelTarget,
                 utcNow,
@@ -589,29 +592,44 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (!PendingLoopbackPanelNavigationTimeoutPolicy.ShouldExpireInFlightNavigation(
-                _probeOkPanelNavTimeoutCycleConsumed,
-                hasPendingLoopbackNavigation: true,
-                age))
+        LogOfflineTrace(
+            "panel-nav-timeout-skip",
+            $"reason=not-due pendingId={navigationId} ageSec={age.TotalSeconds:F1}");
+    }
+
+    private bool TryConfirmTimedOutLoopbackPanelNavigation(DateTime utcNow, bool fromTimer)
+    {
+        var deadline = PendingLoopbackPanelNavigationTimeoutPolicy.Deadline;
+        if (!_panelNavigationPending.TryGetOldestPendingLoopbackPanelNavigation(
+                IsLoopbackPanelTarget,
+                utcNow,
+                out var age,
+                out var navigationId))
         {
+            return false;
+        }
+
+        if (!PendingLoopbackPanelNavigationExpiryPolicy.HasReachedDeadline(age, deadline))
+        {
+            return false;
+        }
+
+        if (!_loopbackPanelNavigationTimedOutIds.Add(navigationId))
+        {
+            _panelNavigationPending.TryRemovePendingLoopbackNavigation(navigationId);
             LogOfflineTrace(
                 "panel-nav-timeout-skip",
-                $"reason=not-due pendingId={navigationId} ageSec={age.TotalSeconds:F1}");
-            return;
+                $"reason=already-confirmed pendingId={navigationId}");
+            return fromTimer;
         }
 
         _panelNavigationPending.TryRemovePendingLoopbackNavigation(navigationId);
         LogOfflineTrace(
             "panel-nav-timeout",
-            $"pendingId={navigationId} ageSec={age.TotalSeconds:F1} offlineShown={_offlineShown} loadFailing={_runningPanelLoadFailing}");
-        if (_offlineShown || _runningPanelLoadFailing)
-        {
-            _probeOkPanelNavTimeoutCycleConsumed = false;
-            return;
-        }
-
+            $"pendingId={navigationId} ageSec={age.TotalSeconds:F1} offlineShown={_offlineShown} loadFailing={_runningPanelLoadFailing} fromTimer={fromTimer}");
         _probeOkPanelNavTimeoutCycleConsumed = true;
         HandleRunningPanelNavigationFailure();
+        return true;
     }
 
     private void ArmHealthyPanelProbeTimer()
@@ -1347,10 +1365,7 @@ public partial class MainWindow : Window
 
         var utcNow = DateTime.UtcNow;
         var deadline = PendingLoopbackPanelNavigationTimeoutPolicy.Deadline;
-        _panelNavigationPending.PruneExpiredLoopbackPanelNavigations(
-            IsLoopbackPanelTarget,
-            utcNow,
-            deadline);
+        TryConfirmTimedOutLoopbackPanelNavigation(utcNow, fromTimer: false);
         var hasPending = _panelNavigationPending.TryGetOldestPendingLoopbackPanelNavigation(
             IsLoopbackPanelTarget,
             utcNow,
