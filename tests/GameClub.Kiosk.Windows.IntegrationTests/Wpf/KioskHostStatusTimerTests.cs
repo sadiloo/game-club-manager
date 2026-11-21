@@ -346,7 +346,8 @@ public sealed class KioskHostStatusTimerTests
 
                 if (operatorStopLock)
                 {
-                    if (staleConnectedWatchActive && StatusContainsConnectedWording(text))
+                    if (staleConnectedWatchActive
+                        && (HostImpliesBareConnected(host) || StatusContainsConnectedWording(text)))
                     {
                         sawBareConnected = true;
                     }
@@ -361,7 +362,8 @@ public sealed class KioskHostStatusTimerTests
                         pastFailureThreshold = true;
                     }
 
-                    if (pastFailureThreshold && StatusContainsConnectedWording(text))
+                    if (pastFailureThreshold
+                        && (HostImpliesBareConnected(host) || StatusContainsConnectedWording(text)))
                     {
                         sawBareConnected = true;
                     }

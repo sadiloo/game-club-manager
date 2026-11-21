@@ -36,7 +36,7 @@ public class GameClubWebApplicationFactory : WebApplicationFactory<Program>
 
     /// <summary>
     /// When overridden by a prefixed-database fixture, supplies the connection string without mutating
-    /// <c>GAMECLUB_TEST_DATABASE</c> / <c>GAMECLUB_DATABASE</c> process environment variables.
+    /// <c>GAMECLUB_TEST_DATABASE</c>.
     /// </summary>
     protected virtual string? DedicatedConnectionString => null;
 
@@ -72,7 +72,6 @@ public class GameClubWebApplicationFactory : WebApplicationFactory<Program>
         else
         {
             ConnectionString = GameClubPrefixedTestDatabase.ResolveDedicatedConnectionStringOrCreate(_ownedDatabase);
-            Environment.SetEnvironmentVariable("GAMECLUB_DATABASE", ConnectionString);
         }
         Environment.SetEnvironmentVariable("GAMECLUB_API_KEY", "dev-key");
         Environment.SetEnvironmentVariable("DeadPc__SweepIntervalSeconds", "1");

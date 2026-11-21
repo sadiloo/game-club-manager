@@ -83,14 +83,9 @@ internal class GameClubPrefixedTestDatabase : IDisposable
 
     public static NpgsqlConnectionStringBuilder ResolveServerTemplate()
     {
-        foreach (var envName in new[] { "GAMECLUB_TEST_DATABASE", "GAMECLUB_DATABASE" })
+        var raw = Environment.GetEnvironmentVariable("GAMECLUB_TEST_DATABASE");
+        if (!string.IsNullOrWhiteSpace(raw))
         {
-            var raw = Environment.GetEnvironmentVariable(envName);
-            if (string.IsNullOrWhiteSpace(raw))
-            {
-                continue;
-            }
-
             var builder = new NpgsqlConnectionStringBuilder(raw);
             if (!string.IsNullOrWhiteSpace(builder.Database)
                 && builder.Database.StartsWith(NamePrefix, StringComparison.Ordinal))
@@ -110,26 +105,21 @@ internal class GameClubPrefixedTestDatabase : IDisposable
 
     public static string ResolveDedicatedConnectionStringOrCreate(GameClubPrefixedTestDatabase database)
     {
-        foreach (var envName in new[] { "GAMECLUB_TEST_DATABASE", "GAMECLUB_DATABASE" })
+        var raw = Environment.GetEnvironmentVariable("GAMECLUB_TEST_DATABASE");
+        if (!string.IsNullOrWhiteSpace(raw))
         {
-            var raw = Environment.GetEnvironmentVariable(envName);
-            if (string.IsNullOrWhiteSpace(raw))
-            {
-                continue;
-            }
-
             var builder = new NpgsqlConnectionStringBuilder(raw);
             var name = builder.Database;
             if (string.IsNullOrWhiteSpace(name))
             {
-                continue;
+                throw new InvalidOperationException("GAMECLUB_TEST_DATABASE is missing Database=.");
             }
 
             if (string.Equals(name, "gameclub_test", StringComparison.Ordinal))
             {
                 throw new InvalidOperationException(
                     "Refusing shared database gameclub_test. Use a " + NamePrefix + "<unique> name in "
-                    + envName + ".");
+                    + "GAMECLUB_TEST_DATABASE.");
             }
 
             TestDatabaseGuard.EnsureDeletableDatabaseName(name);

@@ -37,6 +37,14 @@ catch {
     exit 1
 }
 
+try {
+    Test-PostgresDumpReadable -DumpPath $DumpPath
+}
+catch {
+    Write-Error "Input dump is unreadable ($($_.Exception.Message)); restore aborted before --clean."
+    exit 1
+}
+
 Write-Host "خدمت سرور متوقف می‌شود …"
 Stop-Service CheckpointServer -ErrorAction SilentlyContinue
 
