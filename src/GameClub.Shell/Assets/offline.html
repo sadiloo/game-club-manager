@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl" data-shell-offline-page="1">
+<head>
+  <meta charset="utf-8" />
+  <title>چک‌پوینت</title>
+  <style>
+    body { font-family: Tahoma, system-ui, sans-serif; margin: 0; background: #E8EEF8; color: #0E1524; min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+    .card { background: #fff; border: 1px solid #C5CEDC; border-radius: 16px; padding: 32px; max-width: 440px; text-align: center; }
+    h1 { font-size: 16px; margin: 0 0 12px; }
+    p { color: #556173; margin: 0 0 12px; line-height: 1.5; }
+    #countdown { font-size: 12px; color: #556173; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1 id="title">سرور در دسترس نیست؛ دوباره تلاش می‌شود…</h1>
+    <p id="body">برای روشن کردن سرور، روی آیکن چک‌پوینت کنار ساعت ویندوز راست‌کلیک کنید و «شروع سرور» را بزنید.</p>
+    <p id="countdown"></p>
+  </div>
+  <script>
+    (function () {
+      var params = new URLSearchParams(location.search);
+      var state = params.get("state") || "stopped";
+      var title = document.getElementById("title");
+      var body = document.getElementById("body");
+      if (state === "starting") {
+        title.textContent = "سرور در حال روشن شدن است";
+        body.textContent = "چند لحظه صبر کنید. پنل خودش باز می‌شود.";
+      } else if (state === "panel-unavailable") {
+        title.textContent = "سرور روشن است؛ پنل در دسترس نیست";
+        body.textContent = "چند لحظه صبر کنید. پنل دوباره بارگذاری می‌شود.";
+      } else if (state === "webview-recovery-exhausted") {
+        title.textContent = "پنل اپراتور از کار افتاد";
+        body.textContent = "روی آیکن چک‌پوینت کنار ساعت راست‌کلیک کنید و از منو «بازخوانی» را بزنید.";
+      }
+      var n = 5;
+      var cd = document.getElementById("countdown");
+      function tick() {
+        var digits = "۰۱۲۳۴۵۶۷۸۹";
+        var s = String(n).replace(/[0-9]/g, function (d) { return digits[d.charCodeAt(0) - 48]; });
+        cd.textContent = "تلاش بعدی تا " + s + " ثانیهٔ دیگر";
+        if (n <= 0) cd.textContent = "در حال تلاش…";
+        else n--;
+      }
+      tick();
+      setInterval(tick, 1000);
+    })();
+  </script>
+</body>
+</html>

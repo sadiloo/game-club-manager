@@ -450,8 +450,15 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
         await page.Locator("#buffetSaleLines .sale-line").Nth(1).WaitForAsync();
         var checkoutDone = page.WaitForResponseAsync(r =>
             r.Request.Method == "POST" && r.Url.Contains("/checkout", StringComparison.Ordinal) && r.Ok);
+        var checkoutBillGet = page.WaitForResponseAsync(r =>
+            r.Request.Method == "GET"
+            && r.Url.Contains("/buffet-only/", StringComparison.Ordinal)
+            && !r.Url.Contains("/lines/", StringComparison.Ordinal)
+            && !r.Url.Contains("/bill/preview", StringComparison.Ordinal)
+            && r.Ok);
         await page.ClickAsync("#buffetCheckoutBtn");
         await checkoutDone;
+        await checkoutBillGet;
         await page.WaitForSelectorAsync("#bill:not(.hidden)");
         var before = await WaitForBillTextAsync(
             async () => (await page.TextContentAsync("#billDetail"))!.Replace(" ", ""),
@@ -466,6 +473,7 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
             r.Request.Method == "GET"
             && r.Url.Contains("/buffet-only/", StringComparison.Ordinal)
             && !r.Url.Contains("/lines/", StringComparison.Ordinal)
+            && !r.Url.Contains("/bill/preview", StringComparison.Ordinal)
             && r.Ok);
         await page.Locator("#buffetSaleLines button", new() { HasText = "حذف" }).Last.ClickAsync();
         await deleteDone;
