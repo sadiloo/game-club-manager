@@ -58,7 +58,7 @@ public sealed class OperatorShiftCloseService(
     {
         if (op.Role is not UserRole.Manager and not UserRole.Owner)
         {
-            throw new ApiException(StatusCodes.Status403Forbidden, "forbidden", "Only a manager may change cafe settings.");
+            throw new ApiException(StatusCodes.Status403Forbidden, "forbidden", "تنظیمات کافه فقط برای مدیر است.");
         }
 
         var row = await db.BranchCafeSettings.FirstOrDefaultAsync(ct);
@@ -89,24 +89,21 @@ public sealed class OperatorShiftCloseService(
         var settings = await shiftGate.LoadSettingsAsync(ct);
         if (!settings.ShiftsEnabled)
         {
-            throw new ApiException(StatusCodes.Status409Conflict, "shifts_disabled", "Shifts are disabled.");
+            throw new ApiException(StatusCodes.Status409Conflict, "shifts_disabled", "شیفت غیرفعال است.");
         }
 
-        if (openingFloatToman < 0)
-        {
-            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_float", "Opening float must be non-negative.");
-        }
+        OperatorMoneyValidation.EnsureNonNegativeBounded(openingFloatToman, "invalid_float");
 
         await using var tx = await db.Database.BeginTransactionAsync(ct);
         await db.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock({0})", OpenShiftAdvisoryLock);
         if (await db.Shifts.AnyAsync(s => s.Status == ShiftStatus.Open, ct))
         {
-            throw new ApiException(StatusCodes.Status409Conflict, "shift_open", "A shift is already open.");
+            throw new ApiException(StatusCodes.Status409Conflict, "shift_open", "یک شیفت از قبل باز است.");
         }
 
         if (op.UserId is not Guid userId)
         {
-            throw new ApiException(StatusCodes.Status401Unauthorized, "unauthorized", "Operator login required.");
+            throw new ApiException(StatusCodes.Status401Unauthorized, "unauthorized", "ورود اپراتور لازم است.");
         }
 
         var shift = new ShiftEntity
@@ -129,7 +126,7 @@ public sealed class OperatorShiftCloseService(
         var settings = await shiftGate.LoadSettingsAsync(ct);
         var shift = settings.ShiftsEnabled
             ? await shiftGate.GetOpenShiftTrackedAsync(ct)
-                ?? throw new ApiException(StatusCodes.Status409Conflict, "no_open_shift", "No shift is open.")
+                ?? throw new ApiException(StatusCodes.Status409Conflict, "no_open_shift", "شیفت بازی باز نیست.")
             : null;
 
         var periodStart = shift?.OpenedAtUtc
@@ -193,14 +190,23 @@ public sealed class OperatorShiftCloseService(
 
     public async Task<object> CloseAsync(
         WorkingDayInput workingDay,
-        long actualCashToman,
-        long actualCardReaderToman,
+        long? actualCashToman,
+        long? actualCardReaderToman,
         string? discrepancyExplanation,
         IReadOnlyList<CloseSessionAction> sessionActions,
         Guid? nextRecipientUserId,
         CancellationToken ct)
     {
         _ = new LocalDate(workingDay.Year, workingDay.Month, workingDay.Day);
+        if (actualCashToman is null || actualCardReaderToman is null)
+        {
+            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_money", "مبلغ صندوق و کارت‌خوان را وارد کنید.");
+        }
+
+        OperatorMoneyValidation.EnsureNonNegativeBounded(actualCashToman.Value, "invalid_money");
+        OperatorMoneyValidation.EnsureNonNegativeBounded(actualCardReaderToman.Value, "invalid_money");
+        var cashToman = actualCashToman.Value;
+        var cardToman = actualCardReaderToman.Value;
         var settings = await shiftGate.LoadSettingsAsync(ct);
         var openSessionIds = await db.Sessions.AsNoTracking()
             .Where(s => s.Status != SessionStatus.Closed)
@@ -217,7 +223,7 @@ public sealed class OperatorShiftCloseService(
                 throw new ApiException(
                     StatusCodes.Status400BadRequest,
                     "session_disposition_required",
-                    "Every open session must be settled or carried forward before close.");
+                    "قبل از بستن برای هر جلسهٔ باز باید تسویه یا انتقال انتخاب شود.");
             }
         }
 
@@ -232,10 +238,10 @@ public sealed class OperatorShiftCloseService(
                 if (settings.ShiftsEnabled)
                 {
                     shift = await shiftGate.GetOpenShiftForUpdateAsync(ct)
-                        ?? throw new ApiException(StatusCodes.Status409Conflict, "no_open_shift", "No shift is open.");
+                        ?? throw new ApiException(StatusCodes.Status409Conflict, "no_open_shift", "شیفت بازی باز نیست.");
                     if (shift.Status != ShiftStatus.Open)
                     {
-                        throw new ApiException(StatusCodes.Status409Conflict, "already_closed", "Shift is already closed.");
+                        throw new ApiException(StatusCodes.Status409Conflict, "already_closed", "شیفت قبلاً بسته شده است.");
                     }
 
                     periodStart = shift.OpenedAtUtc;
@@ -251,7 +257,7 @@ public sealed class OperatorShiftCloseService(
                         throw new ApiException(
                             StatusCodes.Status409Conflict,
                             "already_closed",
-                            "This working period is already closed.");
+                            "این دورهٔ کاری قبلاً بسته شده است.");
                     }
 
                     periodStart = periodStartBeforeLock;
@@ -259,7 +265,7 @@ public sealed class OperatorShiftCloseService(
                             c => c.ShiftId == null && c.PeriodOpenedAtUtc == periodStart,
                             ct))
                     {
-                        throw new ApiException(StatusCodes.Status409Conflict, "already_closed", "This working period is already closed.");
+                        throw new ApiException(StatusCodes.Status409Conflict, "already_closed", "این دورهٔ کاری قبلاً بسته شده است.");
                     }
                 }
 
@@ -273,12 +279,12 @@ public sealed class OperatorShiftCloseService(
                 var walletPresentation = await BuildWalletPresentationAsync(shift?.Id, periodStart, ct);
                 var discrepancies = new[]
                 {
-                    actualCashToman - expected.CashExpected,
-                    actualCardReaderToman - expected.CardReaderExpected,
+                    cashToman - expected.CashExpected,
+                    cardToman - expected.CardReaderExpected,
                 };
                 if (discrepancies.Any(d => d != 0) && string.IsNullOrWhiteSpace(discrepancyExplanation))
                 {
-                    throw new ApiException(StatusCodes.Status400BadRequest, "explanation_required", "Discrepancy explanation is required.");
+                    throw new ApiException(StatusCodes.Status400BadRequest, "explanation_required", "توضیح اختلاف الزامی است.");
                 }
 
                 var closeId = Guid.NewGuid();
@@ -291,11 +297,11 @@ public sealed class OperatorShiftCloseService(
                     WorkingDayYear = workingDay.Year,
                     WorkingDayMonth = workingDay.Month,
                     WorkingDayDay = workingDay.Day,
-                    ActualCashToman = actualCashToman,
-                    ActualCardReaderToman = actualCardReaderToman,
+                    ActualCashToman = cashToman,
+                    ActualCardReaderToman = cardToman,
                     DiscrepancyExplanation = discrepancyExplanation?.Trim(),
                     NextRecipientUserId = nextRecipientUserId,
-                    ClosedByUserId = op.UserId ?? throw new ApiException(StatusCodes.Status401Unauthorized, "unauthorized", "Operator login required."),
+                    ClosedByUserId = op.UserId ?? throw new ApiException(StatusCodes.Status401Unauthorized, "unauthorized", "ورود اپراتور لازم است."),
                 };
                 db.CloseRecords.Add(closeRecord);
 
@@ -305,7 +311,7 @@ public sealed class OperatorShiftCloseService(
                         """SELECT "Id" FROM sessions WHERE "Id" = {0} FOR UPDATE""",
                         action.SessionId);
                     var session = await db.Sessions.FirstOrDefaultAsync(s => s.Id == action.SessionId, ct)
-                        ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Session not found.");
+                        ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "جلسه یافت نشد.");
                     session.CarriedAtCloseRecordId = closeId;
                 }
 
@@ -324,8 +330,8 @@ public sealed class OperatorShiftCloseService(
                         closeRecord.Id,
                         shiftId = shift?.Id,
                         workingDay,
-                        actualCashToman,
-                        actualCardReaderToman,
+                        actualCashToman = cashToman,
+                        actualCardReaderToman = cardToman,
                         expected,
                         discrepancies,
                     },
@@ -346,18 +352,18 @@ public sealed class OperatorShiftCloseService(
                     },
                     giftIssuedToman = walletPresentation.GiftIssuedToman,
                     postCloseCorrections = walletPresentation.PostCloseCorrections,
-                    actualCashToman,
-                    actualCardReaderToman,
+                    actualCashToman = cashToman,
+                    actualCardReaderToman = cardToman,
                 };
             });
         }
         catch (DbUpdateException ex) when (PostgresErrors.IsCloseRecordShiftUniqueViolation(ex))
         {
-            throw new ApiException(StatusCodes.Status409Conflict, "already_closed", "Shift is already closed.");
+            throw new ApiException(StatusCodes.Status409Conflict, "already_closed", "شیفت قبلاً بسته شده است.");
         }
         catch (Exception ex) when (PostgresErrors.IsDeadlock(ex))
         {
-            throw new ApiException(StatusCodes.Status409Conflict, "shift_busy", "Shift is being updated.");
+            throw new ApiException(StatusCodes.Status409Conflict, "shift_busy", "شیفت در حال به‌روزرسانی است.");
         }
     }
 

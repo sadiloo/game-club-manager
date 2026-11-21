@@ -146,7 +146,7 @@ public sealed class OperatorPanelController(
         var db = HttpContext.RequestServices.GetRequiredService<AppDbContext>();
         var id = StationIdNormalizer.Normalize(stationId);
         var station = await db.Stations.FirstOrDefaultAsync(s => s.Id == id, ct)
-            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Station not found.");
+            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "ایستگاه یافت نشد.");
         if (body.PlayerCount is int pc && pc is >= 1 and <= 4)
         {
             station.DefaultPlayerCount = pc;
@@ -212,12 +212,12 @@ public sealed class OperatorPanelController(
     {
         if (string.IsNullOrWhiteSpace(body.TargetStationId))
         {
-            throw new ApiException(StatusCodes.Status400BadRequest, "target_required", "Target station is required.");
+            throw new ApiException(StatusCodes.Status400BadRequest, "target_required", "ایستگاه مقصد الزامی است.");
         }
 
         if (body.CommandId == Guid.Empty)
         {
-            throw new ApiException(StatusCodes.Status400BadRequest, "command_required", "Command id is required.");
+            throw new ApiException(StatusCodes.Status400BadRequest, "command_required", "شناسهٔ دستور الزامی است.");
         }
 
         var result = await sessions.TransferAsync(

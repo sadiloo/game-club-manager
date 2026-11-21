@@ -15,6 +15,68 @@ let walletCorrectCommandId = null;
 let walletTopUpInFlight = false;
 let walletTopUpDraftKey = null;
 let walletCorrectDraftKey = null;
+let lastCollectibleToman = 0;
+let cpBgPollFailures = 0;
+
+/** Spec v2.1 §11 — final copy keyed for text-only edits later. */
+const CP_TEXT = {
+  cp: { retry: "تلاش دوباره" },
+  f12: {
+    title: "تنظیم تولد",
+    percent: "درصد تخفیف تولد",
+    windowKind: "بازهٔ تخفیف",
+    windowDays: "تعداد روزها",
+    anchor: "حساب روزها",
+    done: "تنظیم تولد ذخیره شد.",
+    kind: {
+      birth_month: "کل ماه تولد",
+      day_window: "چند روز",
+      exact_day: "فقط روز تولد",
+    },
+    anchorOpt: {
+      on_and_after: "از روز تولد به بعد",
+      around: "دور روز تولد (نیمی پیش، نیمی پس)",
+    },
+    errDays: "دست‌کم ۱ روز.",
+    errPercent: "درصد تولد باید بین ۰ و ۱۰۰ باشد.",
+  },
+  f14: {
+    title: "جدول سطح‌ها",
+    help: "هر مشتری بالاترین سطحی را می‌گیرد که به حداقل ساعت بازی‌اش رسیده است.",
+    col: { name: "نام سطح", hours: "حداقل ساعت بازی", percent: "درصد تخفیف" },
+    unit: { hours: "ساعت", percent: "٪" },
+    rowLabel: "سطح {i}",
+    add: "افزودن سطح",
+    delete: "حذف",
+    save: "ذخیرهٔ جدول",
+    saving: "در حال ذخیره…",
+    done: "جدول سطح‌ها ذخیره شد.",
+    loading: "در حال بارگذاری…",
+    loadFail: "جدول سطح‌ها بارگذاری نشد.",
+    empty: { title: "هنوز سطحی نیست.", body: "با «افزودن سطح» اولین سطح را بسازید." },
+    err: {
+      summary: "{n} خانه درست نیست. خانه‌های قرمز را درست کنید.",
+      noRows: "دست‌کم یک سطح لازم است.",
+      nameEmpty: "نام سطح را وارد کنید.",
+      nameDuplicate: "این نام برای سطح دیگری هم آمده است.",
+      hoursEmpty: "حداقل ساعت را وارد کنید.",
+      hoursOrder: "باید از سطح قبلی ({h} ساعت) بیشتر باشد.",
+      percentEmpty: "درصد را وارد کنید.",
+      percentRange: "درصد باید بین ۰ و ۱۰۰ باشد.",
+      server: "جدول سطح‌ها درست نیست. نام‌ها، ساعت‌ها و درصدها را بررسی کنید.",
+      forbidden: "فقط مدیر یا مالک می‌تواند جدول سطح‌ها را عوض کند.",
+      saveFail: "جدول سطح‌ها ذخیره نشد. دوباره تلاش کنید.",
+    },
+  },
+};
+
+function cpTextFaDigits(n) {
+  return String(n).replace(/\d/g, (d) => "۰۱۲۳۴۵۶۷۸۹"[Number(d)]);
+}
+
+function cpTextFormat(template, vars) {
+  return template.replace(/\{(\w+)\}/g, (_, k) => (vars[k] != null ? String(vars[k]) : ""));
+}
 
 const PENDING_ACTION_TIMEOUT_MS = 15000;
 const pendingRowInFlight = new Set();
@@ -87,8 +149,438 @@ function isBuffetOnlyPanelActive() {
 }
 
 function showError(msg) {
+  if (typeof cpLayer !== "undefined" && cpLayer.active) {
+    if (cpLayer.active.busy && typeof cpLayer.active.setServerError === "function") {
+      cpLayer.active.setServerError(typeof cpTranslateApiError === "function" ? cpTranslateApiError(null, msg) : msg);
+      return;
+    }
+  }
   const el = document.getElementById("error");
   el.textContent = msg || "";
+}
+
+function setCpBgStatus(failed) {
+  const el = document.getElementById("cpBgStatus");
+  if (!el) return;
+  if (failed) {
+    el.textContent = "اتصال به سرور برقرار نیست؛ دوباره تلاش می‌شود…";
+    el.classList.remove("hidden");
+  } else {
+    el.textContent = "";
+    el.classList.add("hidden");
+  }
+}
+
+function paymentMethodFa(method) {
+  const map = { Cash: "نقد", CardReader: "کارتخوان", CardToCard: "کارت‌به‌کارت", Wallet: "کیف پول" };
+  return map[method] || method;
+}
+
+function walletMethodFa(method) {
+  return paymentMethodFa(method);
+}
+
+function paymentRemainingToman() {
+  const paid = paymentDraft.reduce((s, l) => s + (l.amountToman || 0), 0);
+  return Math.max(0, (lastCollectibleToman || 0) - paid);
+}
+
+function fmtTehranDateTime(iso) {
+  if (!iso) return "—";
+  return new Date(iso).toLocaleString("fa-IR", {
+    timeZone: "Asia/Tehran",
+    dateStyle: "short",
+    timeStyle: "short",
+  });
+}
+
+function filterTransferDestinations(sourceTile) {
+  const srcId = sourceTile?.id;
+  const gk = sourceTile?.groupKind ?? null;
+  return (lastGridTiles || []).filter(
+    (t) =>
+      t.status === "Free" &&
+      t.id !== srcId &&
+      (gk == null || t.groupKind === gk) &&
+      t.id,
+  );
+}
+
+const CP_JALALI_MONTHS = [
+  "فروردین",
+  "اردیبهشت",
+  "خرداد",
+  "تیر",
+  "مرداد",
+  "شهریور",
+  "مهر",
+  "آبان",
+  "آذر",
+  "دی",
+  "بهمن",
+  "اسفند",
+];
+
+function cpIsJalaliLeapYear(year) {
+  const r = ((year % 33) + 33) % 33;
+  return r === 1 || r === 5 || r === 9 || r === 13 || r === 17 || r === 22 || r === 26 || r === 30;
+}
+
+function cpCurrentJalaliYear() {
+  const parts = new Intl.DateTimeFormat("en-US-u-ca-persian", { year: "numeric" }).formatToParts(new Date());
+  const y = parts.find((p) => p.type === "year")?.value;
+  const parsed = typeof cpParseInteger === "function" ? cpParseInteger(y) : Number(y);
+  return Number.isFinite(parsed) ? parsed : 1500;
+}
+
+function cpJalaliMonthLength(month, year) {
+  if (month >= 1 && month <= 6) return 31;
+  if (month >= 7 && month <= 11) return 30;
+  return cpIsJalaliLeapYear(year) ? 30 : 29;
+}
+
+function validateJalaliBirth(year, month, day) {
+  const maxY = cpCurrentJalaliYear();
+  if (year < 1300 || year > maxY || month < 1 || month > 12) return "تاریخ درست نیست.";
+  const maxDay = cpJalaliMonthLength(month, year);
+  if (day < 1 || day > maxDay) return "تاریخ درست نیست.";
+  return null;
+}
+
+function snapshotLevelLadderFromDom(host) {
+  const rows = [];
+  host.querySelectorAll(".cp-ladder-card").forEach((card) => {
+    rows.push({
+      name: card.querySelector('[data-ladder="name"]')?.value ?? "",
+      minimumLifetimeHours: card.querySelector('[data-ladder="hours"]')?.value ?? "",
+      discountPercent: card.querySelector('[data-ladder="pct"]')?.value ?? "",
+    });
+  });
+  return rows;
+}
+
+/** Mirrors GameClub.Billing/Levels.cs LevelLadder.Create :26-65. */
+function validateLevelLadderFieldErrors(rowDrafts) {
+  const fieldErrors = {};
+  let count = 0;
+  const mark = (key, msg) => {
+    if (!fieldErrors[key]) {
+      fieldErrors[key] = msg;
+      count++;
+    }
+  };
+  if (!Array.isArray(rowDrafts) || !rowDrafts.length) {
+    return { fieldErrors: {}, count: 1, rows: [], formOnly: CP_TEXT.f14.err.noRows };
+  }
+  const names = new Map();
+  let previousHours = null;
+  const rows = [];
+  for (let i = 0; i < rowDrafts.length; i++) {
+    const draft = rowDrafts[i];
+    const prefix = `ladder:${i}`;
+    const nameRaw = String(draft.name ?? "");
+    const name = nameRaw.trim();
+    const hoursTrim = String(draft.minimumLifetimeHours ?? "").trim();
+    const pctTrim = String(draft.discountPercent ?? "").trim();
+
+    if (!name) mark(`${prefix}:name`, CP_TEXT.f14.err.nameEmpty);
+    else {
+      if (!names.has(name)) names.set(name, []);
+      names.get(name).push(`${prefix}:name`);
+    }
+
+    let hours = null;
+    if (!hoursTrim) mark(`${prefix}:hours`, CP_TEXT.f14.err.hoursEmpty);
+    else if (typeof cpParseIntegerResult === "function") {
+      const hp = cpParseIntegerResult(hoursTrim);
+      if (!hp.ok) {
+        if (hp.reason === "too_long") mark(`${prefix}:hours`, "عدد نباید بیشتر از ۱۵ رقم باشد.");
+        else mark(`${prefix}:hours`, "عدد درست نیست؛ فقط رقم بنویسید.");
+      } else {
+        hours = hp.value;
+        if (hours < 0) mark(`${prefix}:hours`, CP_TEXT.f14.err.hoursEmpty);
+        else if (previousHours != null && hours <= previousHours) {
+          mark(
+            `${prefix}:hours`,
+            cpTextFormat(CP_TEXT.f14.err.hoursOrder, { h: cpTextFaDigits(previousHours) }),
+          );
+        }
+      }
+    } else {
+      hours = cpParseInteger(hoursTrim);
+      if (hours == null) mark(`${prefix}:hours`, "عدد درست نیست؛ فقط رقم بنویسید.");
+      else if (hours < 0) mark(`${prefix}:hours`, CP_TEXT.f14.err.hoursEmpty);
+      else if (previousHours != null && hours <= previousHours) {
+        mark(
+          `${prefix}:hours`,
+          cpTextFormat(CP_TEXT.f14.err.hoursOrder, { h: cpTextFaDigits(previousHours) }),
+        );
+      }
+    }
+
+    let pct = null;
+    if (!pctTrim) mark(`${prefix}:percent`, CP_TEXT.f14.err.percentEmpty);
+    else if (typeof cpParseIntegerResult === "function") {
+      const pp = cpParseIntegerResult(pctTrim);
+      if (!pp.ok) {
+        if (pp.reason === "too_long") mark(`${prefix}:percent`, "عدد نباید بیشتر از ۱۵ رقم باشد.");
+        else mark(`${prefix}:percent`, "عدد درست نیست؛ فقط رقم بنویسید.");
+      } else {
+        pct = pp.value;
+        if (pct < 0 || pct > 100) mark(`${prefix}:percent`, CP_TEXT.f14.err.percentRange);
+      }
+    } else {
+      pct = cpParseInteger(pctTrim);
+      if (pct == null) mark(`${prefix}:percent`, "عدد درست نیست؛ فقط رقم بنویسید.");
+      else if (pct < 0 || pct > 100) mark(`${prefix}:percent`, CP_TEXT.f14.err.percentRange);
+    }
+
+    if (hours != null) previousHours = hours;
+    rows.push({
+      name,
+      minimumLifetimeHours: hours,
+      discountPercent: pct,
+    });
+  }
+  for (const indices of names.values()) {
+    if (indices.length > 1) {
+      for (const key of indices) mark(key, CP_TEXT.f14.err.nameDuplicate);
+    }
+  }
+  return { fieldErrors, count, rows };
+}
+
+function clearLevelLadderFieldErrors(host) {
+  host.querySelectorAll("[data-cp-ladder-err]").forEach((el) => {
+    el.textContent = "";
+    el.classList.add("hidden");
+  });
+  host.querySelectorAll("[data-cp-ladder-field]").forEach((el) => el.removeAttribute("aria-invalid"));
+}
+
+function mountLevelLadderLoading(host, session) {
+  host.classList.add("cp-ladder-host");
+  session.fieldEls.ladder = host;
+  host.replaceChildren();
+  const p = document.createElement("p");
+  p.className = "cp-ladder-loading";
+  p.textContent = CP_TEXT.f14.loading;
+  host.appendChild(p);
+  session._ladderPhase = "loading";
+  const submit = document.querySelector("#cpLayer [data-cp-role='submit']");
+  if (submit) submit.disabled = true;
+}
+
+function mountLevelLadderLoadError(host, session, reload) {
+  host.replaceChildren();
+  const err = document.createElement("p");
+  err.className = "cp-server-error";
+  err.textContent = CP_TEXT.f14.loadFail;
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "cp-btn cp-secondary";
+  btn.textContent = CP_TEXT.cp.retry;
+  btn.onclick = () => reload();
+  host.append(err, btn);
+  session._ladderPhase = "error";
+}
+
+function renderLevelLadderEditor(host, session, rowDrafts) {
+  host.classList.add("cp-ladder-host");
+  session.fieldEls.ladder = host;
+  session.fieldEls.ladder_summary = host;
+  session._ladderPhase = "edit";
+  const submit = document.querySelector("#cpLayer [data-cp-role='submit']");
+  if (submit) submit.disabled = false;
+
+  const help = document.createElement("p");
+  help.className = "cp-help";
+  help.textContent = CP_TEXT.f14.help;
+
+  const body = document.createElement("div");
+  body.className = "cp-ladder-body";
+
+  const draw = (drafts) => {
+    body.replaceChildren();
+    clearLevelLadderFieldErrors(host);
+    if (!drafts.length) {
+      const empty = document.createElement("p");
+      empty.className = "cp-ladder-empty";
+      empty.textContent = `${CP_TEXT.f14.empty.title} ${CP_TEXT.f14.empty.body}`;
+      body.appendChild(empty);
+    }
+    drafts.forEach((row, idx) => {
+      const card = document.createElement("div");
+      card.className = "cp-ladder-card";
+      card.setAttribute("role", "group");
+      card.setAttribute("aria-label", cpTextFormat(CP_TEXT.f14.rowLabel, { i: cpTextFaDigits(idx + 1) }));
+
+      const top = document.createElement("div");
+      top.className = "cp-ladder-card-head";
+      const lbl = document.createElement("span");
+      lbl.textContent = cpTextFormat(CP_TEXT.f14.rowLabel, { i: cpTextFaDigits(idx + 1) });
+      const rm = document.createElement("button");
+      rm.type = "button";
+      rm.textContent = CP_TEXT.f14.delete;
+      rm.className = "cp-secondary cp-btn";
+      rm.setAttribute(
+        "aria-label",
+        row.name
+          ? cpTextFormat("حذف سطح \u2068{name}\u2069", { name: row.name })
+          : cpTextFormat("حذف سطح {i}", { i: cpTextFaDigits(idx + 1) }),
+      );
+      rm.onclick = () => {
+        const snap = snapshotLevelLadderFromDom(host);
+        snap.splice(idx, 1);
+        draw(snap);
+      };
+      top.append(lbl, rm);
+      card.appendChild(top);
+
+      const addField = (fieldKey, labelText, input) => {
+        const wrap = document.createElement("label");
+        wrap.className = "cp-field";
+        const span = document.createElement("span");
+        span.textContent = labelText;
+        wrap.append(span, input);
+        const err = document.createElement("span");
+        err.className = "cp-field-error hidden";
+        err.dataset.cpLadderErr = `ladder:${idx}:${fieldKey}`;
+        wrap.appendChild(err);
+        card.appendChild(wrap);
+      };
+
+      const nameInp = document.createElement("input");
+      nameInp.type = "text";
+      nameInp.dir = "auto";
+      nameInp.dataset.ladder = "name";
+      nameInp.dataset.cpLadderField = `ladder:${idx}:name`;
+      nameInp.value = row.name ?? "";
+      nameInp.oninput = () => {
+        const e = host.querySelector(`[data-cp-ladder-err="ladder:${idx}:name"]`);
+        if (e) {
+          e.classList.add("hidden");
+          e.textContent = "";
+        }
+        nameInp.removeAttribute("aria-invalid");
+      };
+      addField("name", CP_TEXT.f14.col.name, nameInp);
+
+      const hoursInp = document.createElement("input");
+      hoursInp.type = "text";
+      hoursInp.inputMode = "numeric";
+      hoursInp.dir = "ltr";
+      hoursInp.dataset.ladder = "hours";
+      hoursInp.dataset.cpLadderField = `ladder:${idx}:hours`;
+      hoursInp.value = row.minimumLifetimeHours ?? "";
+      hoursInp.oninput = () => {
+        const e = host.querySelector(`[data-cp-ladder-err="ladder:${idx}:hours"]`);
+        if (e) {
+          e.classList.add("hidden");
+          e.textContent = "";
+        }
+        hoursInp.removeAttribute("aria-invalid");
+      };
+      addField("hours", CP_TEXT.f14.col.hours, hoursInp);
+
+      const pctInp = document.createElement("input");
+      pctInp.type = "text";
+      pctInp.inputMode = "numeric";
+      pctInp.dir = "ltr";
+      pctInp.dataset.ladder = "pct";
+      pctInp.dataset.cpLadderField = `ladder:${idx}:percent`;
+      pctInp.value = row.discountPercent ?? "";
+      pctInp.oninput = () => {
+        const e = host.querySelector(`[data-cp-ladder-err="ladder:${idx}:percent"]`);
+        if (e) {
+          e.classList.add("hidden");
+          e.textContent = "";
+        }
+        pctInp.removeAttribute("aria-invalid");
+      };
+      addField("percent", CP_TEXT.f14.col.percent, pctInp);
+
+      body.appendChild(card);
+    });
+
+    const add = document.createElement("button");
+    add.type = "button";
+    add.className = "cp-btn cp-secondary";
+    add.textContent = CP_TEXT.f14.add;
+    add.onclick = () => {
+      const snap = snapshotLevelLadderFromDom(host);
+      const lastH = snap.length ? cpParseInteger(String(snap[snap.length - 1].minimumLifetimeHours)) : null;
+      const nextH = lastH == null ? 0 : lastH + 1;
+      snap.push({ name: "", minimumLifetimeHours: String(nextH), discountPercent: "0" });
+      draw(snap);
+      const lastCard = body.querySelector(".cp-ladder-card:last-of-type");
+      lastCard?.querySelector('[data-ladder="name"]')?.focus();
+    };
+    body.appendChild(add);
+  };
+
+  host.replaceChildren(help, body);
+  draw(
+    rowDrafts.map((r) => ({
+      name: r.name ?? "",
+      minimumLifetimeHours:
+        r.minimumLifetimeHours === undefined || r.minimumLifetimeHours === null
+          ? ""
+          : String(r.minimumLifetimeHours),
+      discountPercent:
+        r.discountPercent === undefined || r.discountPercent === null ? "" : String(r.discountPercent),
+    })),
+  );
+  session._ladderRedraw = draw;
+}
+
+function readLevelLadderEditor(session) {
+  const host = session.fieldEls.ladder || document.querySelector(".cp-ladder-host");
+  if (!host) return { errors: { _form: "خطای داخلی." } };
+  if (session._ladderPhase === "loading" || session._ladderPhase === "error") {
+    return { errors: { _form: CP_TEXT.f14.loadFail } };
+  }
+  clearLevelLadderFieldErrors(host);
+  const drafts = snapshotLevelLadderFromDom(host);
+  const { fieldErrors, count, rows, formOnly } = validateLevelLadderFieldErrors(drafts);
+  if (count > 0) {
+    if (formOnly) return { errors: { _form: formOnly } };
+    const summary = cpTextFormat(CP_TEXT.f14.err.summary, { n: cpTextFaDigits(count) });
+    for (const [key, msg] of Object.entries(fieldErrors)) {
+      const errEl = host.querySelector(`[data-cp-ladder-err="${key}"]`);
+      const input = host.querySelector(`[data-cp-ladder-field="${key}"]`);
+      if (errEl) {
+        errEl.textContent = msg;
+        errEl.classList.remove("hidden");
+      }
+      if (input) input.setAttribute("aria-invalid", "true");
+    }
+    return { errors: { ...fieldErrors, _form: summary } };
+  }
+  const payload = rows.map((r) => ({
+    name: r.name,
+    minimumLifetimeHours: r.minimumLifetimeHours,
+    discountPercent: r.discountPercent,
+  }));
+  return { values: { ladder: payload } };
+}
+
+function beginLevelLadderForm(host, session) {
+  mountLevelLadderLoading(host, session);
+  const reload = () => {
+    mountLevelLadderLoading(host, session);
+    loadLevelLadderIntoForm(host, session);
+  };
+  loadLevelLadderIntoForm(host, session, reload);
+}
+
+async function loadLevelLadderIntoForm(host, session, onRetry) {
+  try {
+    const cur = await api("/api/operator/members/settings/level-ladder", { background: true });
+    renderLevelLadderEditor(host, session, cur || []);
+  } catch (_e) {
+    mountLevelLadderLoadError(host, session, onRetry || (() => loadLevelLadderIntoForm(host, session, onRetry)));
+  }
 }
 
 function fmtTehran(iso) {
@@ -111,28 +603,64 @@ async function api(path, options = {}) {
   if (!isBackground) {
     showError("");
   }
-  const res = await fetch(path, {
-    credentials: "include",
-    headers: { "Content-Type": "application/json", ...(fetchOptions.headers || {}) },
-    ...fetchOptions,
-  });
+  let res;
+  try {
+    res = await fetch(path, {
+      credentials: "include",
+      headers: { "Content-Type": "application/json", ...(fetchOptions.headers || {}) },
+      ...fetchOptions,
+    });
+  } catch (e) {
+    if (isBackground) {
+      cpBgPollFailures++;
+      setCpBgStatus(true);
+    }
+    throw e;
+  }
   const text = await res.text();
   if (!res.ok) {
     let msg = text;
     let code;
+    let serverMessage;
     try {
       const j = JSON.parse(text);
       code = j.code;
+      serverMessage = typeof j.message === "string" ? j.message : undefined;
       msg = j.message || j.code || text;
     } catch (_) {}
     if (res.status === 409 && code === "not_pending") {
       msg = "این مورد قبلاً انجام شده است.";
     }
-    showError(msg);
+    if (typeof cpTranslateApiError === "function") {
+      let scope = null;
+      if (path.includes("level-ladder")) scope = { scope: "level_ladder" };
+      else if (path.includes("/void")) scope = { scope: "void_invoice" };
+      else if (path.includes("/wallet/gift")) scope = { scope: "member_gift" };
+      else if (
+        path.includes("/members/settings") ||
+        path.includes("/opening-balance") ||
+        path.includes("/birthday") ||
+        path.includes("/shift/open")
+      ) {
+        scope = { scope: "manager_action" };
+      }
+      msg = cpTranslateApiError(code, msg, scope);
+    }
+    if (isBackground) {
+      cpBgPollFailures++;
+      setCpBgStatus(true);
+    } else {
+      showError(msg);
+    }
     const err = new Error(msg);
     err.status = res.status;
     err.code = code;
+    if (serverMessage) err.serverMessage = serverMessage;
     throw err;
+  }
+  if (isBackground && cpBgPollFailures > 0) {
+    cpBgPollFailures = 0;
+    setCpBgStatus(false);
   }
   if (res.status === 204 || !text) return null;
   return JSON.parse(text);
@@ -183,14 +711,18 @@ function renderBuffetCategories() {
 async function addCatalogLine(item) {
   let body = { catalogItemId: item.id };
   if (item.kind === "ServiceCustom") {
-    const raw = window.prompt("مبلغ (تومان)", "20000");
-    if (raw == null) return;
-    const n = Number(String(raw).replace(/,/g, ""));
-    if (!Number.isInteger(n) || n <= 0) {
-      showError("مبلغ باید عدد صحیح مثبت باشد.");
-      return;
-    }
-    body.customAmountToman = n;
+    const amount = await cpPrompt({
+      title: item.name || "خدمت دلخواه",
+      confirmLabel: "افزودن",
+      field: {
+        kind: "money",
+        label: "مبلغ (تومان)",
+        placeholder: "۲۰٬۰۰۰",
+        positive: true,
+      },
+    });
+    if (amount == null) return;
+    body.customAmountToman = amount;
   }
   if (buffetMode === "buffet-only") {
     await api(`/api/operator/buffet-only/${buffetOpenSaleId}/lines`, { method: "POST", body: JSON.stringify(body) });
@@ -323,7 +855,7 @@ async function refreshWalletBalance() {
   const linked = displayedLinkedCustomer;
   const el = document.getElementById("walletBalance");
   if (!linked || !el) return;
-  const w = await api(`/api/operator/members/customers/${linked.id}/wallet`);
+  const w = await api(`/api/operator/members/customers/${linked.id}/wallet`, { background: true });
   el.textContent = `کیف پول: واقعی ${w.realToman} · هدیه ${w.giftToman} · کل ${w.spendableToman}`;
 }
 
@@ -367,69 +899,96 @@ async function refreshBillPreview() {
   } catch (_) {}
 }
 
+function walletTopUpTitle(method) {
+  if (method === "Cash") return "شارژ نقدی کیف پول";
+  if (method === "CardReader") return "شارژ کارتخوان";
+  return "شارژ کارت‌به‌کارت";
+}
+
 async function walletTopUp(method) {
   const linked = await resolveLinkedCustomerForWallet();
   if (!linked) {
     showError("عضوی پیوسته نیست.");
     return;
   }
-  const raw = window.prompt("مبلغ شارژ (تومان)", "50000");
-  if (!raw) {
-    resetWalletTopUpForm();
-    return;
-  }
-  const amountToman = Number(String(raw).replace(/,/g, ""));
-  if (!Number.isFinite(amountToman) || amountToman <= 0) {
-    showError("مبلغ نامعتبر است.");
-    resetWalletTopUpForm();
-    return;
-  }
-  const giftRaw = window.prompt("اعتبار هدیه (تومان، خالی = ۰)", "");
-  const giftToman = giftRaw && giftRaw.trim() ? Number(String(giftRaw).replace(/,/g, "")) : 0;
-  if (!Number.isFinite(giftToman) || giftToman < 0) {
-    showError("هدیه نامعتبر است.");
-    resetWalletTopUpForm();
-    return;
-  }
-  let destinationCardId;
+  const fields = [
+    { name: "amountToman", kind: "money", label: "مبلغ شارژ (تومان)", positive: true, placeholder: "۵۰٬۰۰۰" },
+    {
+      name: "giftToman",
+      kind: "money",
+      label: "اعتبار هدیه (تومان)",
+      required: false,
+      allowZero: true,
+      positive: false,
+      help: "خالی = ۰",
+    },
+  ];
   if (method === "CardToCard") {
-    destinationCardId = window.prompt("کارت مقصد", destinationCards[0]?.id || "") || undefined;
-    if (!destinationCardId) {
-      resetWalletTopUpForm();
-      return;
-    }
-  }
-  const draftKey = buildWalletTopUpDraftKey(linked.id, method, amountToman, giftToman, destinationCardId);
-  ensureWalletTopUpCommandIdForDraft(draftKey);
-  const commandId = method === "CardToCard"
-    ? (walletC2cCommandId ||= walletTopUpCommandId)
-    : walletTopUpCommandId;
-  const body = {
-    method,
-    amountToman,
-    giftToman,
-    commandId,
-  };
-  if (method === "CardToCard") {
-    body.destinationCardId = destinationCardId;
-    body.reference = window.prompt("ارجاع", "") || undefined;
-  }
-  if (walletTopUpInFlight) {
-    return;
-  }
-  walletTopUpInFlight = true;
-  setWalletTopUpButtonsDisabled(true);
-  try {
-    await api(`/api/operator/members/customers/${linked.id}/wallet/top-up`, {
-      method: "POST",
-      body: JSON.stringify(body),
+    fields.push({
+      name: "destinationCardId",
+      kind: "select",
+      label: "کارت مقصد",
+      value: destinationCards[0]?.id,
+      options: destinationCards.map((c) => ({ value: c.id, label: c.id })),
     });
-    renderCustomerChip(linked);
-    resetWalletTopUpForm();
-  } finally {
-    walletTopUpInFlight = false;
-    setWalletTopUpButtonsDisabled(false);
+    fields.push({ name: "reference", kind: "text", label: "ارجاع", required: false });
   }
+  const w = await api(`/api/operator/members/customers/${linked.id}/wallet`, { background: true }).catch(() => null);
+  const bodyText = w
+    ? `کیف پول: واقعی ${w.realToman} · هدیه ${w.giftToman} · کل ${w.spendableToman}`
+    : linked.name;
+  const values = await cpForm({
+    title: walletTopUpTitle(method),
+    body: bodyText,
+    confirmLabel: "ثبت شارژ",
+    fields,
+    validate: (v) => {
+      const errs = {};
+      if (!v.amountToman || v.amountToman <= 0) errs.amountToman = "مبلغ نامعتبر است.";
+      const gift = v.giftToman == null ? 0 : v.giftToman;
+      if (gift < 0) errs.giftToman = "هدیه نامعتبر است.";
+      return Object.keys(errs).length ? errs : null;
+    },
+    onSubmit: async (v) => {
+      const amountToman = v.amountToman;
+      const giftToman = v.giftToman == null ? 0 : v.giftToman;
+      const destinationCardId = v.destinationCardId;
+      if (method === "CardToCard" && !destinationCardId) {
+        const err = new Error("کارت مقصد الزامی است.");
+        throw err;
+      }
+      const draftKey = buildWalletTopUpDraftKey(linked.id, method, amountToman, giftToman, destinationCardId);
+      ensureWalletTopUpCommandIdForDraft(draftKey);
+      const commandId = method === "CardToCard"
+        ? (walletC2cCommandId ||= walletTopUpCommandId)
+        : walletTopUpCommandId;
+      const body = { method, amountToman, giftToman, commandId };
+      if (method === "CardToCard") {
+        body.destinationCardId = destinationCardId;
+        if (v.reference) body.reference = v.reference;
+      }
+      if (walletTopUpInFlight) return;
+      walletTopUpInFlight = true;
+      setWalletTopUpButtonsDisabled(true);
+      try {
+        await api(`/api/operator/members/customers/${linked.id}/wallet/top-up`, {
+          method: "POST",
+          body: JSON.stringify(body),
+        });
+        renderCustomerChip(linked);
+        resetWalletTopUpForm();
+        if (method === "CardToCard") {
+          cpToast({ tone: "success", text: "شارژ کارت‌به‌کارت ثبت شد و منتظر تأیید است." });
+        } else {
+          cpToast({ tone: "success", text: "شارژ ثبت شد." });
+        }
+      } finally {
+        walletTopUpInFlight = false;
+        setWalletTopUpButtonsDisabled(false);
+      }
+    },
+  });
+  if (values == null) resetWalletTopUpForm();
 }
 
 function setWalletTopUpButtonsDisabled(disabled) {
@@ -468,72 +1027,92 @@ async function walletCorrectTopUp() {
   }
   const list = await api(`/api/operator/members/customers/${linked.id}/wallet/top-ups`);
   if (!list?.length) {
-    window.alert("شارژ قابل اصلاحی نیست (موقت)");
+    cpToast({ tone: "info", text: "شارژ قابل اصلاحی نیست." });
     return;
   }
-  const lines = list.map(
-    (t, i) =>
-      `${i + 1}: ${t.method} ${t.currentAmountToman} + هدیه ${t.currentGiftToman ?? 0} (${t.topUpGroupId})`,
-  );
-  const pick = window.prompt(`شماره شارژ برای اصلاح (موقت):\n${lines.join("\n")}`, "1");
-  if (!pick) {
-    resetWalletCorrectForm();
-    return;
-  }
-  const idx = Number(pick) - 1;
-  if (!Number.isFinite(idx) || idx < 0 || idx >= list.length) {
-    showError("انتخاب نامعتبر");
-    resetWalletCorrectForm();
-    return;
-  }
-  const row = list[idx];
-  const amountRaw = window.prompt("مبلغ پرداختی درست (تومان)", String(row.currentAmountToman));
-  if (amountRaw == null) {
-    resetWalletCorrectForm();
-    return;
-  }
-  const giftRaw = window.prompt("هدیه درست (تومان)", String(row.currentGiftToman ?? 0));
-  if (giftRaw == null) {
-    resetWalletCorrectForm();
-    return;
-  }
-  const description = window.prompt("توضیح (اجباری)", "");
-  if (!description?.trim()) {
-    showError("توضیح الزامی است.");
-    resetWalletCorrectForm();
-    return;
-  }
-  const newAmountToman = Number(String(amountRaw).replace(/,/g, ""));
-  const newGiftToman = Number(String(giftRaw).replace(/,/g, ""));
-  const draftKey = JSON.stringify({
-    topUpGroupId: row.topUpGroupId,
-    newAmountToman,
-    newGiftToman,
-    description: description.trim(),
+  const pickItems = [...list]
+    .sort((a, b) => String(b.atUtc).localeCompare(String(a.atUtc)))
+    .map((t) => ({
+      id: t.topUpGroupId,
+      title: `${walletMethodFa(t.method)} · ${t.currentAmountToman} تومان`,
+      subtitle: `${fmtTehranDateTime(t.atUtc)} · هدیه ${t.currentGiftToman ?? 0}`,
+      row: t,
+    }));
+  const picked = await cpPick({
+    title: "اصلاح شارژ",
+    body: "شارژی را که می‌خواهید اصلاح کنید انتخاب کنید.",
+    items: pickItems,
+    emptyText: "شارژ قابل اصلاحی نیست.",
   });
-  ensureWalletCorrectCommandIdForDraft(draftKey);
-  const correctBtn = document.getElementById("walletCorrectBtn");
-  if (correctBtn) {
-    correctBtn.disabled = true;
+  if (!picked) {
+    resetWalletCorrectForm();
+    return;
   }
-  try {
-    await api(`/api/operator/members/wallet/top-ups/${row.topUpGroupId}/correct`, {
-      method: "POST",
-      body: JSON.stringify({
+  const row = picked.row || list.find((x) => x.topUpGroupId === picked.id);
+  if (!row) {
+    resetWalletCorrectForm();
+    return;
+  }
+  const values = await cpForm({
+    title: "اصلاح شارژ",
+    body: `${walletMethodFa(row.method)} · ${row.currentAmountToman} تومان + هدیه ${row.currentGiftToman ?? 0}`,
+    confirmLabel: "ثبت اصلاح",
+    fields: [
+      {
+        name: "newAmountToman",
+        kind: "money",
+        label: "مبلغ پرداختی درست (تومان)",
+        value: row.currentAmountToman,
+        allowZero: true,
+        positive: false,
+      },
+      {
+        name: "newGiftToman",
+        kind: "money",
+        label: "هدیه درست (تومان)",
+        value: row.currentGiftToman ?? 0,
+        allowZero: true,
+        positive: false,
+      },
+      { name: "description", kind: "textarea", label: "توضیح", value: "" },
+    ],
+    validate: (v) => {
+      const errs = {};
+      if (!v.description) errs.description = "توضیح الزامی است.";
+      if (
+        v.newAmountToman === row.currentAmountToman &&
+        (v.newGiftToman ?? 0) === (row.currentGiftToman ?? 0)
+      ) {
+        errs._form = "تغییری نسبت به مقدار فعلی ندارد.";
+      }
+      return Object.keys(errs).length ? errs : null;
+    },
+    onSubmit: async (v) => {
+      const newAmountToman = v.newAmountToman ?? 0;
+      const newGiftToman = v.newGiftToman ?? 0;
+      const description = v.description.trim();
+      const draftKey = JSON.stringify({
+        topUpGroupId: row.topUpGroupId,
         newAmountToman,
         newGiftToman,
-        description: description.trim(),
-        commandId: walletCorrectCommandId,
-      }),
-    });
-    renderCustomerChip(linked);
-    window.alert("اصلاح ثبت شد (موقت)");
-    resetWalletCorrectForm();
-  } finally {
-    if (correctBtn) {
-      correctBtn.disabled = false;
-    }
-  }
+        description,
+      });
+      ensureWalletCorrectCommandIdForDraft(draftKey);
+      await api(`/api/operator/members/wallet/top-ups/${row.topUpGroupId}/correct`, {
+        method: "POST",
+        body: JSON.stringify({
+          newAmountToman,
+          newGiftToman,
+          description,
+          commandId: walletCorrectCommandId,
+        }),
+      });
+      renderCustomerChip(linked);
+      cpToast({ tone: "success", text: "اصلاح ثبت شد." });
+      resetWalletCorrectForm();
+    },
+  });
+  if (values == null) resetWalletCorrectForm();
 }
 
 const walletCorrectBtn = document.getElementById("walletCorrectBtn");
@@ -798,9 +1377,10 @@ async function refreshGrid() {
 }
 
 function bindPendingListAction(button, kind, rowId, run, refreshList) {
+  const key = pendingRowKey(kind, rowId);
+  button.dataset.pendingKey = key;
   button.onclick = async () => {
     if (button.disabled) return;
-    const key = pendingRowKey(kind, rowId);
     if (pendingRowInFlight.has(key)) return;
     pendingRowInFlight.add(key);
     const li = button.closest("li");
@@ -839,6 +1419,9 @@ function bindPendingListAction(button, kind, rowId, run, refreshList) {
     } finally {
       clearTimeout(timer);
       pendingRowInFlight.delete(key);
+      for (const b of document.querySelectorAll(`[data-pending-key="${CSS.escape(key)}"]`)) {
+        if (b.isConnected) b.disabled = false;
+      }
     }
   };
 }
@@ -977,6 +1560,7 @@ function renderBill(bill) {
     (segText ? `\nبخش‌ها:\n${segText}` : "");
   renderBillSaleLines(bill.saleLines);
   renderCustomerChip(bill.linkedCustomer);
+  lastCollectibleToman = bill.collectibleToman ?? 0;
   const changeEl = document.getElementById("cashChange");
   if (changeEl) {
     const cash = cashTendered();
@@ -992,7 +1576,7 @@ function renderPaymentLines() {
   paymentDraft.forEach((line, idx) => {
     const row = document.createElement("div");
     row.className = "pay-line";
-    row.textContent = `${line.method} ${line.amountToman}`;
+    row.textContent = `${paymentMethodFa(line.method)} ${line.amountToman}`;
     const del = document.createElement("button");
     del.type = "button";
     del.textContent = "حذف";
@@ -1095,28 +1679,56 @@ async function onTileClick(t) {
 
 document.getElementById("transferBtn").onclick = async () => {
   const tile = (lastGridTiles || []).find((x) => x.sessionId === selectedSessionId);
-  if (typeof ss14ConfirmTransferIfGame === "function") {
-    const ok = await ss14ConfirmTransferIfGame(tile);
-    if (!ok) return;
-  }
-  const target = window.prompt("شناسه ایستگاه مقصد (مثلاً PS5-2)");
-  if (target == null || !String(target).trim()) return;
-  const markSourceBroken = document.getElementById("transferFaultChk").checked;
-  const commandId = newCommandId();
-  try {
-    await api(`/api/operator/sessions/${selectedSessionId}/transfer`, {
-      method: "POST",
-      body: JSON.stringify({
-        targetStationId: String(target).trim(),
-        markSourceBroken,
-        expectedVersion: tile?.rowVersion ?? null,
-        commandId,
-      }),
+  const destinations = filterTransferDestinations(tile);
+  const fields = [
+    {
+      name: "targetStationId",
+      kind: "radio",
+      label: "ایستگاه مقصد",
+      options: destinations.map((d) => ({ value: d.id, label: `${d.name || d.id} (${d.id})` })),
+    },
+  ];
+  if (!document.getElementById("transferFaultWrap").classList.contains("hidden")) {
+    fields.push({
+      name: "markSourceBroken",
+      kind: "checkbox",
+      label: "ایستگاه مبدأ خراب است",
+      value: document.getElementById("transferFaultChk").checked,
     });
-    document.getElementById("sessionActions").classList.add("hidden");
-  } finally {
-    await refreshGrid();
   }
+  const values = await cpForm({
+    title: "پرش ایستگاه",
+    body: tile ? `از ${tile.id}` : undefined,
+    warning: tile?.currentGameTitleId
+      ? `بازی فعلی (${tile.currentGameTitleName || tile.currentGameTitleId}) از جلسه برداشته می‌شود.`
+      : undefined,
+    confirmLabel: "جابه‌جا کن",
+    fields,
+    validate: (v) => {
+      if (!v.targetStationId) return { _form: destinations.length ? "ایستگاه مقصد را انتخاب کنید." : "ایستگاه آزادی از همین نوع نیست." };
+      return null;
+    },
+    onSubmit: async (v) => {
+      const markSourceBroken = !!v.markSourceBroken;
+      document.getElementById("transferFaultChk").checked = markSourceBroken;
+      const commandId = newCommandId();
+      try {
+        await api(`/api/operator/sessions/${selectedSessionId}/transfer`, {
+          method: "POST",
+          body: JSON.stringify({
+            targetStationId: String(v.targetStationId).trim(),
+            markSourceBroken,
+            expectedVersion: tile?.rowVersion ?? null,
+            commandId,
+          }),
+        });
+        document.getElementById("sessionActions").classList.add("hidden");
+      } finally {
+        await refreshGrid();
+      }
+    },
+  });
+  if (values == null) return;
 };
 
 document.getElementById("pauseBtn").onclick = async () => {
@@ -1126,9 +1738,20 @@ document.getElementById("pauseBtn").onclick = async () => {
 
 document.getElementById("forceLogoutBtn").onclick = async () => {
   if (!selectedSessionId) return;
-  await api(`/api/operator/sessions/${selectedSessionId}/force-logout`, { method: "POST" });
-  document.getElementById("sessionActions").classList.add("hidden");
-  await refreshGrid();
+  const tile = (lastGridTiles || []).find((x) => x.sessionId === selectedSessionId);
+  const ok = await cpConfirm({
+    title: `خروج اجباری ${tile?.id || ""}؟`,
+    body: "جلسهٔ این ایستگاه همین حالا متوقف می‌شود.",
+    confirmLabel: "خروج اجباری",
+    tone: "danger",
+    focusCancelFirst: true,
+    onConfirm: async () => {
+      await api(`/api/operator/sessions/${selectedSessionId}/force-logout`, { method: "POST" });
+      document.getElementById("sessionActions").classList.add("hidden");
+      await refreshGrid();
+    },
+  });
+  if (!ok) return;
 };
 
 document.getElementById("resumeBtn").onclick = async () => {
@@ -1155,32 +1778,73 @@ document.getElementById("openBillBtn").onclick = async () => {
   await refreshGrid();
 };
 
-function promptAmount(label) {
-  const v = window.prompt(label, "0");
-  if (v == null) return null;
-  return Number(v.replace(/,/g, ""));
+async function addPaymentLineSimple(method, title, label) {
+  const remain = paymentRemainingToman();
+  const amount = await cpPrompt({
+    title,
+    confirmLabel: "افزودن",
+    body: remain > 0 ? `باقی‌مانده: ${remain.toLocaleString("fa-IR")} تومان` : undefined,
+    field: {
+      kind: "money",
+      label,
+      value: remain > 0 ? remain : undefined,
+      positive: true,
+    },
+    validate: null,
+  });
+  if (amount == null) return;
+  if (!Number.isInteger(amount) || amount <= 0) {
+    cpToast({ tone: "error", text: "مبلغ باید عدد صحیح مثبت باشد." });
+    return;
+  }
+  paymentDraft.push({ method, amountToman: amount });
+  renderPaymentLines();
 }
 
 document.getElementById("addCashLineBtn").onclick = () => {
-  const amountToman = promptAmount("مبلغ نقد (تومان)");
-  if (amountToman == null || Number.isNaN(amountToman)) return;
-  paymentDraft.push({ method: "Cash", amountToman });
-  renderPaymentLines();
+  addPaymentLineSimple("Cash", "پرداخت نقد", "مبلغ نقد (تومان)").catch(() => {});
 };
 
 document.getElementById("addCardLineBtn").onclick = () => {
-  const amountToman = promptAmount("مبلغ کارتخوان");
-  if (amountToman == null || Number.isNaN(amountToman)) return;
-  paymentDraft.push({ method: "CardReader", amountToman });
-  renderPaymentLines();
+  addPaymentLineSimple("CardReader", "پرداخت کارتخوان", "مبلغ کارتخوان (تومان)").catch(() => {});
 };
 
-document.getElementById("addC2cLineBtn").onclick = () => {
-  const amountToman = promptAmount("مبلغ کارت‌به‌کارت");
-  if (amountToman == null || Number.isNaN(amountToman)) return;
-  const destinationCardId = window.prompt("کارت مقصد", destinationCards[0]?.id || "") || undefined;
-  const reference = window.prompt("ارجاع", "") || undefined;
-  paymentDraft.push({ method: "CardToCard", amountToman, destinationCardId, reference });
+document.getElementById("addC2cLineBtn").onclick = async () => {
+  const remain = paymentRemainingToman();
+  const values = await cpForm({
+    title: "پرداخت کارت‌به‌کارت",
+    body: remain > 0 ? `باقی‌مانده: ${remain.toLocaleString("fa-IR")} تومان` : undefined,
+    confirmLabel: "افزودن",
+    fields: [
+      {
+        name: "amountToman",
+        kind: "money",
+        label: "مبلغ کارت‌به‌کارت (تومان)",
+        value: remain > 0 ? remain : undefined,
+        positive: true,
+      },
+      {
+        name: "destinationCardId",
+        kind: "select",
+        label: "کارت مقصد",
+        required: false,
+        value: destinationCards[0]?.id,
+        options: destinationCards.map((c) => ({ value: c.id, label: c.id })),
+      },
+      { name: "reference", kind: "text", label: "ارجاع", required: false },
+    ],
+    validate: (v) => {
+      if (!v.amountToman || v.amountToman <= 0) return { amountToman: "مبلغ باید عدد صحیح مثبت باشد." };
+      return null;
+    },
+  });
+  if (values == null) return;
+  paymentDraft.push({
+    method: "CardToCard",
+    amountToman: values.amountToman,
+    destinationCardId: values.destinationCardId || undefined,
+    reference: values.reference || undefined,
+  });
   renderPaymentLines();
 };
 
@@ -1191,10 +1855,7 @@ document.getElementById("addWalletLineBtn").onclick = async () => {
     return;
   }
   renderCustomerChip(linked);
-  const amountToman = promptAmount("مبلغ کیف پول");
-  if (amountToman == null || Number.isNaN(amountToman)) return;
-  paymentDraft.push({ method: "Wallet", amountToman });
-  renderPaymentLines();
+  await addPaymentLineSimple("Wallet", "پرداخت کیف پول", "مبلغ کیف پول (تومان)");
 };
 
 document.getElementById("surchargeBtn").onclick = async () => {
@@ -1258,9 +1919,25 @@ document.getElementById("loadInvoiceBtn").onclick = async () => {
 
 document.getElementById("voidInvoiceBtn").onclick = async () => {
   const n = document.getElementById("invoiceNumber").value;
-  const reason = window.prompt("دلیل باطل", "") || "";
-  await api(`/api/operator/invoices/${n}/void`, { method: "POST", body: JSON.stringify({ reason }) });
-  document.getElementById("invoiceDetail").textContent = "باطل شد.";
+  if (!n) {
+    showError("شمارهٔ فاکتور را وارد کنید.");
+    return;
+  }
+  const values = await cpForm({
+    title: `باطل کردن فاکتور ${n}؟`,
+    body: document.getElementById("invoiceDetail").textContent || "این فاکتور باطل می‌شود.",
+    tone: "danger",
+    confirmLabel: "باطل کن",
+    focusCancelFirst: true,
+    fields: [{ name: "reason", kind: "textarea", label: "دلیل باطل" }],
+    validate: (v) => (!v.reason ? { reason: "دلیل باطل الزامی است." } : null),
+    onSubmit: async (v) => {
+      await api(`/api/operator/invoices/${n}/void`, { method: "POST", body: JSON.stringify({ reason: v.reason }) });
+      document.getElementById("invoiceDetail").textContent = "باطل شد.";
+      cpToast({ tone: "success", text: "فاکتور باطل شد." });
+    },
+  });
+  if (values == null) return;
 };
 
 async function refreshPendingWalletTopups() {
@@ -1330,41 +2007,81 @@ setInterval(() => {
 
 bindClick("prepaidDurationBtn", async () => {
   if (!selectedSessionId) return;
-  const minutes = Number(window.prompt("دقیقه", "60"));
-  if (!Number.isFinite(minutes) || minutes <= 0) return;
-  await api(`/api/operator/sessions/${selectedSessionId}/prepaid/duration`, {
-    method: "POST",
-    body: JSON.stringify({ minutes }),
+  const tile = (lastGridTiles || []).find((x) => x.sessionId === selectedSessionId);
+  const minutes = await cpPrompt({
+    title: "رزرو زمان",
+    body: tile?.id,
+    confirmLabel: "ثبت رزرو",
+    field: {
+      kind: "number",
+      label: "دقیقه",
+      placeholder: "۶۰",
+      positive: true,
+      emptyLabel: "دقیقه را وارد کنید.",
+      positiveErr: "دقیقه باید بیشتر از صفر باشد.",
+      formatLabel: "عدد درست نیست؛ فقط رقم بنویسید.",
+    },
+    onSubmit: async (v) => {
+      await api(`/api/operator/sessions/${selectedSessionId}/prepaid/duration`, {
+        method: "POST",
+        body: JSON.stringify({ minutes: v }),
+      });
+      await refreshPrepaidStatus();
+    },
   });
-  await refreshPrepaidStatus();
+  if (minutes == null) return;
 });
 
 bindClick("prepaidAmountBtn", async () => {
   if (!selectedSessionId) return;
-  const amountToman = Number(String(window.prompt("مبلغ", "55000")).replace(/,/g, ""));
-  if (!Number.isFinite(amountToman) || amountToman <= 0) return;
-  await api(`/api/operator/sessions/${selectedSessionId}/prepaid/amount`, {
-    method: "POST",
-    body: JSON.stringify({ amountToman }),
+  const tile = (lastGridTiles || []).find((x) => x.sessionId === selectedSessionId);
+  const amount = await cpPrompt({
+    title: "رزرو مبلغ",
+    body: tile?.id,
+    confirmLabel: "ثبت رزرو",
+    field: { kind: "money", label: "مبلغ (تومان)", placeholder: "۵۵٬۰۰۰", positive: true },
+    onSubmit: async (v) => {
+      await api(`/api/operator/sessions/${selectedSessionId}/prepaid/amount`, {
+        method: "POST",
+        body: JSON.stringify({ amountToman: v }),
+      });
+      await refreshPrepaidStatus();
+    },
   });
-  await refreshPrepaidStatus();
+  if (amount == null) return;
 });
 
 bindClick("mgrGiftBtn", async () => {
   const linked = await resolveLinkedCustomerForWallet();
   if (!linked) return showError("عضو پیوسته نیست.");
-  await api(`/api/operator/members/customers/${linked.id}/wallet/gift`, {
-    method: "POST",
-    body: JSON.stringify({ giftToman: Number(window.prompt("هدیه", "10000")) }),
+  const gift = await cpPrompt({
+    title: "اعتبار هدیه",
+    body: linked.name,
+    confirmLabel: "ثبت هدیه",
+    field: { kind: "money", label: "هدیه (تومان)", positive: true },
+    validate: null,
+    onSubmit: async (v) => {
+      if (v <= 0) throw new Error("مبلغ باید عدد صحیح مثبت باشد.");
+      await api(`/api/operator/members/customers/${linked.id}/wallet/gift`, {
+        method: "POST",
+        body: JSON.stringify({ giftToman: v }),
+      });
+      await refreshWalletBalance();
+      cpToast({ tone: "success", text: "هدیه ثبت شد." });
+    },
   });
-  await refreshWalletBalance();
+  if (gift == null) return;
 });
 
 bindClick("mgrPairingCodeBtn", async () => {
   const stationId = document.getElementById("mgrPairStationId").value.trim();
   if (!stationId) return showError("شناسه ایستگاه را وارد کنید.");
   const res = await api(`/api/operator/stations/${stationId}/pairing-code`, { method: "POST" });
-  showError(`کد جفت‌سازی: ${res.code}`);
+  await cpAlert({
+    title: "کد جفت‌سازی",
+    body: `این کد را روی ایستگاه ${stationId} وارد کنید.`,
+    codeDisplay: String(res.code),
+  });
 });
 
 function populateCatalogEditor(entry) {
@@ -1465,78 +2182,306 @@ bindClick("catalogSaveBtn", async () => {
 bindClick("mgrOpeningBtn", async () => {
   const linked = await resolveLinkedCustomerForWallet();
   if (!linked) return showError("عضو پیوسته نیست.");
-  const realRaw = window.prompt("واقعی (خالی = بدون تغییر)", "");
-  const giftRaw = window.prompt("هدیه (خالی = بدون تغییر)", "");
-  const debtRaw = window.prompt("بدهی (خالی = بدون تغییر)", "");
-  const hoursRaw = window.prompt("ساعت بازی (خالی = بدون تغییر)", "");
-  const body = {};
-  if (realRaw != null && realRaw.trim() !== "") body.realToman = Number(String(realRaw).replace(/,/g, ""));
-  if (giftRaw != null && giftRaw.trim() !== "") body.giftToman = Number(String(giftRaw).replace(/,/g, ""));
-  if (debtRaw != null && debtRaw.trim() !== "") body.debtToman = Number(String(debtRaw).replace(/,/g, ""));
-  if (hoursRaw != null && hoursRaw.trim() !== "") body.lifetimeHours = Number(String(hoursRaw).replace(/,/g, ""));
-  await api(`/api/operator/members/customers/${linked.id}/opening-balance`, {
-    method: "POST",
-    body: JSON.stringify(body),
+  const values = await cpForm({
+    title: "مانده افتتاحیه",
+    body: `${linked.name}. فقط یک بار برای هر عضو ثبت می‌شود.`,
+    confirmLabel: "ثبت مانده",
+    fields: [
+      { name: "realToman", kind: "money", label: "پول واقعی (تومان)", required: false, allowZero: true, positive: false },
+      { name: "giftToman", kind: "money", label: "هدیه (تومان)", required: false, allowZero: true, positive: false },
+      {
+        name: "debtToman",
+        kind: "money",
+        label: "بدهی (تومان)",
+        required: false,
+        allowZero: true,
+        positive: true,
+        help: "بدهی را به صورت عدد مثبت وارد کنید.",
+      },
+      { name: "lifetimeHours", kind: "number", label: "ساعت بازی", required: false },
+    ],
+    validate: (v) => {
+      const has =
+        v.realToman != null || v.giftToman != null || v.debtToman != null || v.lifetimeHours != null;
+      if (!has) return { _form: "دست‌کم یکی از مبلغ‌ها یا ساعت بازی را وارد کنید." };
+      if ((v.realToman || 0) > 0 && (v.debtToman || 0) > 0) return { debtToman: "پول واقعی و بدهی را با هم وارد نکنید." };
+      return null;
+    },
+    onSubmit: async (v) => {
+      const body = {};
+      if (v.realToman != null) body.realToman = v.realToman;
+      if (v.giftToman != null) body.giftToman = v.giftToman;
+      if (v.debtToman != null) body.debtToman = v.debtToman;
+      if (v.lifetimeHours != null) body.lifetimeHours = v.lifetimeHours;
+      await api(`/api/operator/members/customers/${linked.id}/opening-balance`, {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+      await refreshWalletBalance();
+    },
   });
-  await refreshWalletBalance();
+  if (values == null) return;
 });
 
 bindClick("mgrFloorBtn", async () => {
-  const raw = window.prompt("سقف نسیه (منفی)", "-50000");
-  await api("/api/operator/members/settings/debt-floor", {
-    method: "PUT",
-    body: JSON.stringify({ floorToman: raw === "" ? null : Number(raw) }),
+  const values = await cpForm({
+    title: "سقف نسیه",
+    body: "خالی یا ۰ یعنی نسیه ممنوع. فقط برای کنسول و میز.",
+    confirmLabel: "ذخیره",
+    fields: [
+      {
+        name: "mode",
+        kind: "radio",
+        label: "سقف نسیه",
+        value: "none",
+        options: [
+          { value: "none", label: "بدون نسیه" },
+          { value: "limited", label: "حداکثر بدهی مجاز" },
+        ],
+      },
+      {
+        name: "maxDebt",
+        kind: "money",
+        label: "حداکثر بدهی مجاز (تومان)",
+        required: false,
+        positive: true,
+        help: "مقدار فعلی نامعلوم",
+      },
+    ],
+    validate: (v) => {
+      if (v.mode === "limited" && (!v.maxDebt || v.maxDebt <= 0)) return { maxDebt: "حداکثر بدهی را وارد کنید." };
+      return null;
+    },
+    onSubmit: async (v) => {
+      const floorToman = v.mode === "none" ? null : -Math.abs(v.maxDebt);
+      await api("/api/operator/members/settings/debt-floor", {
+        method: "PUT",
+        body: JSON.stringify({ floorToman }),
+      });
+      cpToast({ tone: "success", text: "سقف نسیه ذخیره شد." });
+    },
   });
+  if (values == null) return;
 });
 
 bindClick("mgrBirthdayBtn", async () => {
-  const percent = Number(window.prompt("درصد تولد", "10"));
-  const windowKind = window.prompt("پنجره (birth_month | day_window | exact_day)", "birth_month");
-  if (!windowKind) return;
-  const windowDays = Number(window.prompt("روزهای پنجره", "1"));
-  const anchor = window.prompt("anchor (on_and_after | around)", "on_and_after");
-  await api("/api/operator/members/settings/birthday", {
-    method: "PUT",
-    body: JSON.stringify({ percent, windowKind, windowDays, anchor }),
+  const cur = (await api("/api/operator/members/settings/birthday")) || {};
+  const values = await cpForm({
+    title: CP_TEXT.f12.title,
+    confirmLabel: "ذخیره",
+    fields: [
+      {
+        name: "percent",
+        kind: "number",
+        label: CP_TEXT.f12.percent,
+        value: cur.percent ?? "",
+        emptyLabel: "درصد تولد را وارد کنید.",
+      },
+      {
+        name: "windowKind",
+        kind: "radio",
+        label: CP_TEXT.f12.windowKind,
+        value: cur.windowKind || "birth_month",
+        options: [
+          { value: "birth_month", label: CP_TEXT.f12.kind.birth_month },
+          { value: "day_window", label: CP_TEXT.f12.kind.day_window },
+          { value: "exact_day", label: CP_TEXT.f12.kind.exact_day },
+        ],
+      },
+      { name: "windowDays", kind: "number", label: CP_TEXT.f12.windowDays, value: cur.windowDays ?? 1, required: false },
+      {
+        name: "anchor",
+        kind: "radio",
+        label: CP_TEXT.f12.anchor,
+        value: cur.anchor || "on_and_after",
+        options: [
+          { value: "on_and_after", label: CP_TEXT.f12.anchorOpt.on_and_after },
+          { value: "around", label: CP_TEXT.f12.anchorOpt.around },
+        ],
+      },
+    ],
+    validate: (v) => {
+      const errs = {};
+      const pct = cpParseInteger(String(v.percent));
+      if (pct == null || pct < 0 || pct > 100) errs.percent = CP_TEXT.f12.errPercent;
+      if (v.windowKind === "day_window") {
+        const days = cpParseInteger(String(v.windowDays));
+        if (days == null || days < 1) errs.windowDays = CP_TEXT.f12.errDays;
+      }
+      return Object.keys(errs).length ? errs : null;
+    },
+    mapApiError: (e) => {
+      const serverMsg = e?.serverMessage || "";
+      const msg = e?.message || "";
+      if (e?.code === "invalid_policy" && serverMsg.includes("درصد تولد")) {
+        return { percent: serverMsg };
+      }
+      if (e?.code === "invalid_window_days") {
+        return { windowDays: msg || CP_TEXT.f12.errDays };
+      }
+      if (e?.code === "invalid_policy" && msg.includes("بازه")) {
+        return { windowKind: msg };
+      }
+      if (e?.code === "invalid_policy" && msg.includes("حساب روز")) {
+        return { anchor: msg };
+      }
+      return null;
+    },
+    onSubmit: async (v) => {
+      await api("/api/operator/members/settings/birthday", {
+        method: "PUT",
+        background: true,
+        body: JSON.stringify({
+          percent: cpParseInteger(String(v.percent)),
+          windowKind: v.windowKind,
+          windowDays: v.windowKind === "day_window" ? cpParseInteger(String(v.windowDays)) : cur.windowDays ?? 1,
+          anchor: v.windowKind === "day_window" ? v.anchor : cur.anchor || "on_and_after",
+        }),
+      });
+      cpToast({ tone: "success", text: CP_TEXT.f12.done });
+    },
   });
+  if (values == null) return;
 });
 
 bindClick("mgrCustBirthdayBtn", async () => {
   const linked = await resolveLinkedCustomerForWallet();
-  if (!linked) return;
-  const year = Number(window.prompt("سال شمسی", "1380"));
-  const month = Number(window.prompt("ماه", "1"));
-  const day = Number(window.prompt("روز", "1"));
-  await api(`/api/operator/members/customers/${linked.id}/birthday`, {
-    method: "PUT",
-    body: JSON.stringify({ year, month, day }),
+  if (!linked) return showError("عضو پیوسته نیست.");
+  const values = await cpForm({
+    title: "تاریخ تولد عضو",
+    body: linked.name,
+    confirmLabel: "ذخیره",
+    fields: [
+      { name: "year", kind: "number", label: "سال", value: linked.birthYear || 1380 },
+      {
+        name: "month",
+        kind: "select",
+        label: "ماه",
+        value: String(linked.birthMonth || 1),
+        options: CP_JALALI_MONTHS.map((label, i) => ({ value: String(i + 1), label })),
+      },
+      { name: "day", kind: "number", label: "روز", value: linked.birthDay || 1 },
+    ],
+    validate: (v) => {
+      const msg = validateJalaliBirth(Number(v.year), Number(v.month), Number(v.day));
+      return msg ? { _form: msg } : null;
+    },
+    onSubmit: async (v) => {
+      await api(`/api/operator/members/customers/${linked.id}/birthday`, {
+        method: "PUT",
+        body: JSON.stringify({ year: Number(v.year), month: Number(v.month), day: Number(v.day) }),
+      });
+      cpToast({ tone: "success", text: "تاریخ تولد ذخیره شد." });
+    },
   });
+  if (values == null) return;
 });
 
 bindClick("mgrLadderBtn", async () => {
-  const cur = await api("/api/operator/members/settings/level-ladder");
-  const raw = window.prompt("جدول سطح‌ها (JSON array)", JSON.stringify(cur));
-  if (raw == null) return;
-  const rows = JSON.parse(raw);
-  await api("/api/operator/members/settings/level-ladder", { method: "PUT", body: JSON.stringify(rows) });
+  const values = await cpForm({
+    title: CP_TEXT.f14.title,
+    confirmLabel: CP_TEXT.f14.save,
+    wide: true,
+    fields: [
+      {
+        name: "ladder",
+        kind: "custom",
+        label: "",
+        render: (host, session) => beginLevelLadderForm(host, session),
+        read: (session) => readLevelLadderEditor(session),
+      },
+    ],
+    onSubmit: async (v) => {
+      try {
+        await api("/api/operator/members/settings/level-ladder", { method: "PUT", body: JSON.stringify(v.ladder) });
+        cpToast({ tone: "success", text: CP_TEXT.f14.done });
+      } catch (e) {
+        const msg =
+          e && e.code === "invalid_level"
+            ? CP_TEXT.f14.err.server
+            : e && e.code === "forbidden"
+              ? CP_TEXT.f14.err.forbidden
+              : CP_TEXT.f14.err.saveFail;
+        throw Object.assign(new Error(msg), { code: e?.code, message: msg });
+      }
+    },
+  });
+  if (values == null) return;
 });
 
 bindClick("mgrGiftCapBtn", async () => {
   const cur = await api("/api/operator/members/settings/operator-gift-cap");
-  const maxToman = Number(String(window.prompt("سقف مبلغ هدیه (تومان)", String(cur.maxToman ?? 0))).replace(/,/g, ""));
-  const maxPercent = Number(window.prompt("سقف درصد هدیه", String(cur.maxPercent ?? 0)));
-  await api("/api/operator/members/settings/operator-gift-cap", {
-    method: "PUT",
-    body: JSON.stringify({ maxToman, maxPercent }),
+  const values = await cpForm({
+    title: "سقف هدیه اپراتور",
+    confirmLabel: "ذخیره",
+    fields: [
+      { name: "maxToman", kind: "money", label: "سقف مبلغ هدیه (تومان)", value: cur.maxToman ?? 0, allowZero: true, positive: false },
+      { name: "maxPercent", kind: "number", label: "سقف درصد هدیه", value: cur.maxPercent ?? 0 },
+    ],
+    validate: (v) => {
+      const p = cpParseInteger(String(v.maxPercent));
+      if (p == null || p < 0 || p > 100) return { maxPercent: "درصد باید بین ۰ و ۱۰۰ باشد." };
+      return null;
+    },
+    onSubmit: async (v) => {
+      await api("/api/operator/members/settings/operator-gift-cap", {
+        method: "PUT",
+        body: JSON.stringify({ maxToman: v.maxToman ?? 0, maxPercent: cpParseInteger(String(v.maxPercent)) }),
+      });
+      cpToast({ tone: "success", text: "سقف هدیه ذخیره شد." });
+    },
   });
+  if (values == null) return;
+});
+
+bindClick("mgrDiscountCapBtn", async () => {
+  const cur = await api("/api/operator/members/settings/discount-cap");
+  const values = await cpForm({
+    title: "سقف تخفیف ترکیبی",
+    confirmLabel: "ذخیره",
+    fields: [
+      {
+        name: "maxCombinedPercent",
+        kind: "number",
+        label: "حداکثر درصد تخفیف ترکیبی (سطح + تولد)",
+        value: cur.maxCombinedPercent ?? 100,
+      },
+    ],
+    validate: (v) => {
+      const p = cpParseInteger(String(v.maxCombinedPercent));
+      if (p == null || p < 0 || p > 100) return { maxCombinedPercent: "درصد باید بین ۰ و ۱۰۰ باشد." };
+      return null;
+    },
+    onSubmit: async (v) => {
+      try {
+        await api("/api/operator/members/settings/discount-cap", {
+          method: "PUT",
+          body: JSON.stringify({ maxCombinedPercent: cpParseInteger(String(v.maxCombinedPercent)) }),
+        });
+        cpToast({ tone: "success", text: "سقف تخفیف ذخیره شد." });
+      } catch (e) {
+        const msg =
+          e && e.code === "forbidden"
+            ? "فقط مدیر یا مالک می‌تواند تنظیم کند."
+            : e?.message || "ذخیره نشد.";
+        throw Object.assign(new Error(msg), { code: e?.code, message: msg });
+      }
+    },
+  });
+  if (values == null) return;
 });
 
 bindClick("mgrCorrectionsBtn", async () => {
-  const rows = await api("/api/operator/members/wallet/corrections");
-  const text = (rows || [])
-    .map((r) => `${r.atUtc}: ${r.beforeAmountToman}→${r.afterAmountToman} هدیه ${r.beforeGiftToman}→${r.afterGiftToman}`)
-    .join("\n");
-  window.alert(text || "اصلاحی ثبت نشده");
+  const rows = (await api("/api/operator/members/wallet/corrections")) || [];
+  await cpAlert({
+    title: "اصلاح‌های شارژ",
+    wide: true,
+    rows: rows.map((r) => ({
+      title: fmtTehranDateTime(r.atUtc),
+      subtitle: `${paymentMethodFa(r.method || "")} · مبلغ ${r.beforeAmountToman} ← ${r.afterAmountToman} · هدیه ${r.beforeGiftToman} ← ${r.afterGiftToman}${r.description ? ` · ${r.description}` : ""}`,
+    })),
+    emptyText: rows.length ? undefined : "اصلاحی ثبت نشده است.",
+  });
 });
 
 async function refreshShiftState() {
@@ -1550,10 +2495,24 @@ async function refreshShiftState() {
 }
 
 bindClick("openShiftBtn", async () => {
-  const raw = window.prompt("تنخواه (تومان)", "0");
-  const openingFloatToman = Number(String(raw || "0").replace(/,/g, ""));
-  await api("/api/operator/shift/open", { method: "POST", body: JSON.stringify({ openingFloatToman }) });
-  await refreshShiftState();
+  const v = await cpPrompt({
+    title: "باز کردن شیفت",
+    confirmLabel: "باز کردن شیفت",
+    field: {
+      kind: "money",
+      label: "تنخواه (تومان)",
+      required: false,
+      allowZero: true,
+      positive: false,
+      help: "خالی یعنی ۰ تومان.",
+    },
+    onSubmit: async (n) => {
+      const openingFloatToman = n == null ? 0 : n;
+      await api("/api/operator/shift/open", { method: "POST", body: JSON.stringify({ openingFloatToman }) });
+      await refreshShiftState();
+    },
+  });
+  if (v == null) return;
 });
 
 let closeBaseExpectedCash = 0;
@@ -1647,10 +2606,21 @@ function gregorianDayRangeUtc(g) {
   return { fromUtc: from.toISOString(), toUtc: to.toISOString() };
 }
 
+function escapeHtmlText(value) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 function renderReportsTable(title, headers, rows) {
-  const head = headers.map((h) => `<th>${h}</th>`).join("");
-  const body = rows.map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join("")}</tr>`).join("");
-  return `<h3>${title}</h3><table dir="rtl" border="1" cellpadding="4"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+  const head = headers.map((h) => `<th>${escapeHtmlText(h)}</th>`).join("");
+  const body = rows
+    .map((r) => `<tr>${r.map((c) => `<td>${escapeHtmlText(c)}</td>`).join("")}</tr>`)
+    .join("");
+  return `<h3>${escapeHtmlText(title)}</h3><table dir="rtl" border="1" cellpadding="4"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
 }
 
 function renderIncomeSummary(body) {
@@ -1773,19 +2743,33 @@ function renderCloseSessions(openSessions) {
   const host = document.getElementById("closeSessionList");
   if (!host) return;
   closeSettleExtraToman = 0;
+  host.replaceChildren();
   if (!openSessions?.length) {
-    host.innerHTML = "<p>جلسهٔ بازی باز نیست.</p>";
+    const p = document.createElement("p");
+    p.textContent = "جلسهٔ بازی باز نیست.";
+    host.appendChild(p);
     return;
   }
-  host.innerHTML = openSessions
-    .map(
-      (s) => `<div data-session="${s.sessionId}">
-        <strong>${s.stationId}</strong> — ${s.status}
-        <button type="button" data-action="settle" data-session="${s.sessionId}">تسویه در همین بستن</button>
-        <button type="button" data-action="carry" data-session="${s.sessionId}">انتقال به دوره بعد</button>
-      </div>`
-    )
-    .join("");
+  for (const s of openSessions) {
+    const row = document.createElement("div");
+    row.dataset.session = String(s.sessionId);
+    const strong = document.createElement("strong");
+    strong.textContent = s.stationId ?? "";
+    row.appendChild(strong);
+    row.appendChild(document.createTextNode(` — ${s.status ?? ""} `));
+    const settle = document.createElement("button");
+    settle.type = "button";
+    settle.dataset.action = "settle";
+    settle.dataset.session = String(s.sessionId);
+    settle.textContent = "تسویه در همین بستن";
+    const carry = document.createElement("button");
+    carry.type = "button";
+    carry.dataset.action = "carry";
+    carry.dataset.session = String(s.sessionId);
+    carry.textContent = "انتقال به دوره بعد";
+    row.append(settle, carry);
+    host.appendChild(row);
+  }
   host.querySelectorAll("button[data-action]").forEach((btn) => {
     btn.addEventListener("click", async () => {
       const sid = btn.getAttribute("data-session");
@@ -1854,8 +2838,20 @@ bindClick("closeShiftBtn", async () => {
   const jm = Number(document.getElementById("closeJm").value);
   const jd = Number(document.getElementById("closeJd").value);
   const g = await jalaliToGregorian(jy, jm, jd);
-  const actualCashToman = Number(String(document.getElementById("closeCash").value || "0").replace(/,/g, ""));
-  const actualCardReaderToman = Number(String(document.getElementById("closeReader").value || "0").replace(/,/g, ""));
+  const cashRaw = document.getElementById("closeCash").value;
+  const readerRaw = document.getElementById("closeReader").value;
+  const parseCloseToman = (raw) => {
+    if (typeof window.cpParseNumber !== "function") return null;
+    const trimmed = String(raw ?? "").trim();
+    if (!trimmed) return null;
+    return window.cpParseNumber(trimmed, { allowZero: true, positive: false });
+  };
+  const actualCashToman = parseCloseToman(cashRaw);
+  const actualCardReaderToman = parseCloseToman(readerRaw);
+  if (actualCashToman == null || actualCardReaderToman == null) {
+    showError("مبلغ درست نیست؛ فقط رقم بنویسید.");
+    return;
+  }
   const discrepancyExplanation = document.getElementById("closeExpl").value.trim() || null;
   await api("/api/operator/shift/close", {
     method: "POST",
@@ -1945,7 +2941,7 @@ bindClick("historyBtn", async () => {
 bindClick("exportHistoryBtn", async () => {
   const res = await fetch(`/api/operator/reports/history/export${await historyQuery()}`, { credentials: "include" });
   const text = await res.text();
-  document.getElementById("reportsOut").innerHTML = `<h3>خروجی CSV</h3><pre>${text.replace(/</g, "&lt;")}</pre>`;
+  document.getElementById("reportsOut").innerHTML = `<h3>خروجی CSV</h3><pre>${escapeHtmlText(text)}</pre>`;
 });
 
 async function refreshCafeSettingsUi() {
@@ -1989,44 +2985,24 @@ async function ss14FetchGamesForOption(mode, playerCount) {
 }
 
 async function ss14ShowGamePicker({ hint, mode, playerCount, onConfirm }) {
-  const panel = ss14EnsureGamePicker();
-  panel.classList.remove("hidden");
-  document.getElementById("ss14GamePickerHint").textContent = hint || "";
-  const select = document.getElementById("ss14GameSelect");
-  select.replaceChildren();
-  const none = document.createElement("option");
-  none.value = "";
-  none.textContent = "بدون بازی خاص";
-  select.appendChild(none);
   const games = await ss14FetchGamesForOption(mode, playerCount);
-  for (const g of games) {
-    const opt = document.createElement("option");
-    opt.value = String(g.id);
-    opt.textContent = g.name;
-    select.appendChild(opt);
-  }
-  return await new Promise((resolve) => {
-    const cleanup = () => {
-      panel.classList.add("hidden");
-      document.getElementById("ss14GameOkBtn").onclick = null;
-      document.getElementById("ss14GameCancelBtn").onclick = null;
-    };
-    document.getElementById("ss14GameCancelBtn").onclick = () => {
-      cleanup();
-      resolve(null);
-    };
-    document.getElementById("ss14GameOkBtn").onclick = async () => {
-      const raw = select.value;
-      const gameTitleId = raw === "" ? null : Number(raw);
-      cleanup();
-      try {
-        if (onConfirm) await onConfirm(gameTitleId);
-        resolve(gameTitleId);
-      } catch (_) {
-        resolve(null);
-      }
-    };
+  const picked = await cpPick({
+    title: "انتخاب بازی",
+    body: hint || "",
+    items: [
+      { id: "", title: "بدون بازی خاص", subtitle: "" },
+      ...games.map((g) => ({ id: String(g.id), title: g.name, subtitle: "", gameTitleId: g.id })),
+    ],
+    emptyText: "بازی‌ای موجود نیست.",
   });
+  if (picked == null) return null;
+  const gameTitleId = picked.id === "" ? null : Number(picked.id);
+  try {
+    if (onConfirm) await onConfirm(gameTitleId);
+  } catch (_) {
+    /* api() already surfaced the error */
+  }
+  return gameTitleId;
 }
 
 async function ss14StartConsoleStation(tile) {
@@ -2238,6 +3214,9 @@ function ss14IsAllowedRateInput(raw) {
 }
 
 function ss14ParseTomanInput(raw) {
+  if (typeof window.cpParseNumber === "function") {
+    return window.cpParseNumber(raw, { positive: true, allowSeparators: true });
+  }
   if (raw == null) return null;
   const trimmed = String(raw).trim();
   if (trimmed === "" || !ss14IsAllowedRateInput(trimmed)) return null;

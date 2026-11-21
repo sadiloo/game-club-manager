@@ -458,6 +458,7 @@ public static class PaymentAllocator
         var shares = new List<LineShare>();
         var results = new TenderResult[tenders.Count];
         var errors = new List<PaymentError>();
+
         var order = BalanceFirst(tenders);
         foreach (var index in order)
         {
@@ -650,6 +651,35 @@ public static class PaymentAllocator
                 $"Counter tenders {counterTendered} toman against rounded remainder {counterRounded}."));
         }
 
+        if (rounding.Enabled && counterExact == 0 && counterTendered == 0 && balanceApplied > 0)
+        {
+            var (roundedTotal, walletRoundDelta) = RoundPayableWhenCounterWouldPayAll(lines, exact, rounding);
+            var lift = roundedTotal - balanceApplied;
+            long walletTendered = 0;
+            foreach (var tender in tenders)
+            {
+                if (tender.Method == PaymentMethod.Wallet)
+                {
+                    walletTendered = MoneyMath.CheckedAdd(walletTendered, tender.AmountToman);
+                }
+            }
+
+            if (lift > 0 && walletTendered >= roundedTotal)
+            {
+                if (ApplyWalletRoundingLift(tenders, results, pockets, walletDebt, lift))
+                {
+                    roundingDelta = MoneyMath.CheckedAdd(roundingDelta, walletRoundDelta);
+                    balanceApplied = roundedTotal;
+                }
+                else
+                {
+                    errors.Add(new PaymentError(
+                        PaymentErrors.InsufficientWallet,
+                        $"Wallet cannot cover {lift} toman of invoice rounding."));
+                }
+            }
+        }
+
         var payable = MoneyMath.CheckedAdd(balanceApplied, counterRounded);
         var remainingWallets = new List<MemberWallet>();
         foreach (var pair in pockets)
@@ -679,6 +709,83 @@ public static class PaymentAllocator
             tenderList,
             errors,
             remainingWallets);
+    }
+
+    private static (long RoundedPayable, long RoundingDelta) RoundPayableWhenCounterWouldPayAll(
+        IReadOnlyList<PayableLine> lines,
+        long exact,
+        RoundingPolicy rounding)
+    {
+        if (!rounding.Enabled)
+        {
+            return (exact, 0);
+        }
+
+        long timeTotal = 0;
+        long otherTotal = 0;
+        for (var i = 0; i < lines.Count; i++)
+        {
+            if (lines[i].IsTimeCharge)
+            {
+                timeTotal = MoneyMath.CheckedAdd(timeTotal, lines[i].NetToman);
+            }
+            else
+            {
+                otherTotal = MoneyMath.CheckedAdd(otherTotal, lines[i].NetToman);
+            }
+        }
+
+        if (rounding.Scope == RoundingScope.TimeChargesOnly)
+        {
+            var (roundedTime, delta) = MoneyMath.Round(timeTotal, rounding);
+            return (MoneyMath.CheckedAdd(roundedTime, otherTotal), delta);
+        }
+
+        return MoneyMath.Round(exact, rounding);
+    }
+
+    private static bool ApplyWalletRoundingLift(
+        IReadOnlyList<Tender> tenders,
+        TenderResult?[] results,
+        Dictionary<string, WalletPocket> pockets,
+        DebtPolicy walletDebt,
+        long lift)
+    {
+        if (lift <= 0)
+        {
+            return true;
+        }
+
+        for (var i = 0; i < tenders.Count; i++)
+        {
+            var result = results[i];
+            if (result is not { Accepted: true, Method: PaymentMethod.Wallet })
+            {
+                continue;
+            }
+
+            var memberId = result.MemberId;
+            if (memberId is null || !pockets.TryGetValue(memberId, out var pocket))
+            {
+                continue;
+            }
+
+            if (!pocket.TrySpend(lift, walletDebt, out var updated, out var gift, out var real))
+            {
+                continue;
+            }
+
+            pockets[memberId] = updated;
+            results[i] = result with
+            {
+                AmountToman = result.AmountToman + lift,
+                GiftDrawnToman = result.GiftDrawnToman + gift,
+                RealDrawnToman = result.RealDrawnToman + real,
+            };
+            return true;
+        }
+
+        return false;
     }
 
     private static List<int> BalanceFirst(IReadOnlyList<Tender> tenders)

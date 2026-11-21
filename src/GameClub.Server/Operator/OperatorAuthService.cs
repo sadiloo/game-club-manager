@@ -16,11 +16,11 @@ public sealed class OperatorAuthService(AppDbContext db, OperatorContext context
     public async Task<OperatorUserEntity> LoginAsync(string username, string pin, CancellationToken ct)
     {
         var user = await db.OperatorUsers.FirstOrDefaultAsync(u => u.Username == username && u.IsActive, ct)
-            ?? throw new Services.ApiException(StatusCodes.Status401Unauthorized, "invalid_login", "Invalid username or PIN.");
+            ?? throw new Services.ApiException(StatusCodes.Status401Unauthorized, "invalid_login", "نام کاربری یا پین اشتباه است.");
         var result = Hasher.VerifyHashedPassword(user, user.PinHash, pin);
         if (result == PasswordVerificationResult.Failed)
         {
-            throw new Services.ApiException(StatusCodes.Status401Unauthorized, "invalid_login", "Invalid username or PIN.");
+            throw new Services.ApiException(StatusCodes.Status401Unauthorized, "invalid_login", "نام کاربری یا پین اشتباه است.");
         }
 
         context.UserId = user.Id;
@@ -70,7 +70,7 @@ public sealed class OperatorUserService(AppDbContext db, AuditService audit, Ope
         RequireManager();
         if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(pin))
         {
-            throw new Services.ApiException(StatusCodes.Status400BadRequest, "invalid_user", "Username and PIN are required.");
+            throw new Services.ApiException(StatusCodes.Status400BadRequest, "invalid_user", "نام کاربری و پین الزامی است.");
         }
 
         var user = new OperatorUserEntity { Id = Guid.NewGuid(), Username = username.Trim(), Role = role };
@@ -85,7 +85,7 @@ public sealed class OperatorUserService(AppDbContext db, AuditService audit, Ope
     {
         if (context.Role is not UserRole.Manager and not UserRole.Owner)
         {
-            throw new Services.ApiException(StatusCodes.Status403Forbidden, "forbidden", "Manager role required.");
+            throw new Services.ApiException(StatusCodes.Status403Forbidden, "forbidden", "دسترسی مدیر لازم است.");
         }
     }
 }
@@ -116,7 +116,7 @@ public sealed class DestinationCardService(AppDbContext db, AuditService audit, 
     {
         if (context.Role is not UserRole.Manager and not UserRole.Owner)
         {
-            throw new Services.ApiException(StatusCodes.Status403Forbidden, "forbidden", "Manager role required.");
+            throw new Services.ApiException(StatusCodes.Status403Forbidden, "forbidden", "دسترسی مدیر لازم است.");
         }
     }
 }

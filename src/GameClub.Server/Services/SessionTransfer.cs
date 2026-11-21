@@ -56,7 +56,7 @@ public static class SessionTransferSupport
             }
             catch (Exception ex) when (PostgresErrors.IsLockNotAvailable(ex))
             {
-                throw new ApiException(StatusCodes.Status409Conflict, "session_busy", "Session is being updated.");
+                throw new ApiException(StatusCodes.Status409Conflict, "session_busy", "جلسه در حال به‌روزرسانی است.");
             }
 
             var session = await db.Sessions
@@ -64,16 +64,16 @@ public static class SessionTransferSupport
                 .Include(s => s.Segments)
                 .Include(s => s.Pauses)
                 .FirstOrDefaultAsync(s => s.Id == sessionId, ct)
-                ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Session not found.");
+                ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "جلسه یافت نشد.");
 
             if (session.Status == SessionStatus.Closed)
             {
-                throw new ApiException(StatusCodes.Status409Conflict, "closed", "Session is closed.");
+                throw new ApiException(StatusCodes.Status409Conflict, "closed", "جلسه بسته شده است.");
             }
 
             if (expectedVersion is uint version && session.RowVersion != version)
             {
-                throw new ApiException(StatusCodes.Status409Conflict, "stale_version", "Session was updated; refresh the page.");
+                throw new ApiException(StatusCodes.Status409Conflict, "stale_version", "جلسه تغییر کرده است. صفحه تازه شد؛ دوباره تلاش کنید.");
             }
 
             EnsureTransferEligible(session);
@@ -81,7 +81,7 @@ public static class SessionTransferSupport
             var targetId = StationIdNormalizer.Normalize(rawTargetStationId);
             if (string.Equals(targetId, session.StationId, StringComparison.Ordinal))
             {
-                throw new ApiException(StatusCodes.Status400BadRequest, "same_station", "Cannot transfer to the same station.");
+                throw new ApiException(StatusCodes.Status400BadRequest, "same_station", "نمی‌توان به همان ایستگاه منتقل کرد.");
             }
 
             try
@@ -92,17 +92,17 @@ public static class SessionTransferSupport
             }
             catch (Exception ex) when (PostgresErrors.IsLockNotAvailable(ex))
             {
-                throw new ApiException(StatusCodes.Status409Conflict, "station_busy", "Target station is being updated.");
+                throw new ApiException(StatusCodes.Status409Conflict, "station_busy", "ایستگاه مقصد در حال به‌روزرسانی است.");
             }
 
             var target = await db.Stations.Include(s => s.Group).FirstOrDefaultAsync(s => s.Id == targetId, ct)
-                ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Target station not found.");
+                ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "ایستگاه مقصد یافت نشد.");
             var source = session.Station
-                ?? throw new ApiException(StatusCodes.Status409Conflict, "invalid_session", "Session station is missing.");
+                ?? throw new ApiException(StatusCodes.Status409Conflict, "invalid_session", "ایستگاه جلسه مشخص نیست.");
 
             if (source.Group?.Kind != target.Group?.Kind)
             {
-                throw new ApiException(StatusCodes.Status409Conflict, "transfer_type", "Console and PC sessions cannot be transferred to each other.");
+                throw new ApiException(StatusCodes.Status409Conflict, "transfer_type", "جلسهٔ کنسول و کامپیوتر به هم منتقل نمی‌شوند.");
             }
 
             EnsureTargetStation(target);
@@ -113,7 +113,7 @@ public static class SessionTransferSupport
 
             var sourceStationId = session.StationId;
             var openSegment = session.Segments.SingleOrDefault(s => s.EndUtc is null)
-                ?? throw new ApiException(StatusCodes.Status409Conflict, "invalid_session", "Session has no open segment.");
+                ?? throw new ApiException(StatusCodes.Status409Conflict, "invalid_session", "جلسه بخش بازی باز ندارد.");
 
             openSegment.EndUtc = now;
 
@@ -165,7 +165,7 @@ public static class SessionTransferSupport
             }
             catch (BillingException ex)
             {
-                throw new ApiException(StatusCodes.Status409Conflict, ex.Code, ex.Message);
+                throw new ApiException(StatusCodes.Status409Conflict, ex.Code, BillingExceptionUserMessages.ForCode(ex.Code));
             }
 
             var transferSegment = session.Segments.Single(s => s.EndUtc is null);
@@ -213,7 +213,7 @@ public static class SessionTransferSupport
             }
             catch (DbUpdateException ex) when (PostgresErrors.IsActiveSessionUniqueViolation(ex))
             {
-                throw new ApiException(StatusCodes.Status409Conflict, "station_busy", "Target station already has an open session.");
+                throw new ApiException(StatusCodes.Status409Conflict, "station_busy", "ایستگاه مقصد از قبل جلسهٔ باز دارد.");
             }
 
             await tx.CommitAsync(ct);
@@ -231,12 +231,12 @@ public static class SessionTransferSupport
     {
         if (session.Status is not SessionStatus.Open and not SessionStatus.Paused)
         {
-            throw new ApiException(StatusCodes.Status409Conflict, "not_transferable", "Session cannot be transferred in its current state.");
+            throw new ApiException(StatusCodes.Status409Conflict, "not_transferable", "جلسه در این وضعیت قابل انتقال نیست.");
         }
 
         if (session.PendingBill is not null)
         {
-            throw new ApiException(StatusCodes.Status409Conflict, "awaiting_payment", "Session already has an open bill.");
+            throw new ApiException(StatusCodes.Status409Conflict, "awaiting_payment", "جلسه از قبل صورتحساب باز دارد.");
         }
     }
 
@@ -244,17 +244,17 @@ public static class SessionTransferSupport
     {
         if (!target.IsActive)
         {
-            throw new ApiException(StatusCodes.Status409Conflict, "inactive", "Target station is deactivated.");
+            throw new ApiException(StatusCodes.Status409Conflict, "inactive", "ایستگاه مقصد غیرفعال است.");
         }
 
         if (target.OperationalState != StationOperationalState.Available)
         {
-            throw new ApiException(StatusCodes.Status409Conflict, "target_unavailable", "Target station cannot accept a session.");
+            throw new ApiException(StatusCodes.Status409Conflict, "target_unavailable", "ایستگاه مقصد جلسه نمی‌پذیرد.");
         }
 
         if (target.Group is null)
         {
-            throw new ApiException(StatusCodes.Status409Conflict, "no_group", "Target station has no group.");
+            throw new ApiException(StatusCodes.Status409Conflict, "no_group", "ایستگاه مقصد گروه ندارد.");
         }
     }
 
@@ -268,7 +268,7 @@ public static class SessionTransferSupport
                         || s.Status == SessionStatus.AwaitingPayment),
                 ct))
         {
-            throw new ApiException(StatusCodes.Status409Conflict, "station_busy", "Target station already has an open session.");
+            throw new ApiException(StatusCodes.Status409Conflict, "station_busy", "ایستگاه مقصد از قبل جلسهٔ باز دارد.");
         }
     }
 
@@ -293,7 +293,7 @@ public static class SessionTransferSupport
         }
         catch (BillingException ex) when (ex.Code == BillingErrors.TariffNotFound)
         {
-            throw new ApiException(StatusCodes.Status409Conflict, "tariff_not_found", ex.Message);
+            throw new ApiException(StatusCodes.Status409Conflict, "tariff_not_found", BillingExceptionUserMessages.ForCode(BillingErrors.TariffNotFound));
         }
     }
 
