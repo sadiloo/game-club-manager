@@ -22,6 +22,13 @@ function Get-ServerListenPort {
 
 $port = Get-ServerListenPort -Path $ServerJsonPath
 $ips = [System.Collections.Generic.List[string]]::new()
+if (-not (Get-Command Get-NetIPAddress -ErrorAction SilentlyContinue)) {
+    if ($Format -eq "verbose") {
+        Write-Output "PORT=$port"
+        exit 0
+    }
+    exit 0
+}
 foreach ($addr in Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue) {
     if ($addr.IPAddress -like '127.*' -or $addr.IPAddress -like '169.254.*') { continue }
     $adapter = Get-NetAdapter -InterfaceIndex $addr.InterfaceIndex -ErrorAction SilentlyContinue
