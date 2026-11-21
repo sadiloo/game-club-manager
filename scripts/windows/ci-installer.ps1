@@ -70,6 +70,11 @@ Write-Host "ci-installer: static installer rules"
 & (Join-Path $root "installer/tests/KioskInstallStatic.Tests.ps1")
 & (Join-Path $root "installer/tests/BackupDailyTehran.Tests.ps1")
 & (Join-Path $root "installer/tests/ServerWizardStatic.Tests.ps1")
+& (Join-Path $root "installer/tests/ServerFinishLanStatic.Tests.ps1")
+
+Write-Host "ci-installer: server finish LAN IPv4 probe (Get-ServerLanIPv4Addresses.ps1)"
+$lanProbe = Join-Path $root "installer/tools/Get-ServerLanIPv4Addresses.ps1"
+& $lanProbe -Format verbose | ForEach-Object { Write-Host "ci-installer: lan $_" }
 
 $expectedInno = [Version]"6.7.1"
 . (Join-Path $PSScriptRoot "Resolve-InnoSetupVersion.ps1")

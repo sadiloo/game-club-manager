@@ -41,6 +41,10 @@ ChangesAssociations=no
 [Languages]
 Name: "persian"; MessagesFile: "..\lang\Persian.isl"
 
+[CustomMessages]
+persian.inst.server.finish.ipLabel=TODO_UIUX inst.server.finish.ipLabel
+persian.inst.server.finish.dhcpNote=TODO_UIUX inst.server.finish.dhcpNote
+
 [LangOptions]
 RightToLeft=yes
 
@@ -94,6 +98,7 @@ Type: filesandordirs; Name: "{app}"
 
 [Code]
 #include "ServerWizard.inc.iss"
+#include "ServerFinish.inc.iss"
 
 function PayloadDirExists(const Dir: string): Boolean;
 begin

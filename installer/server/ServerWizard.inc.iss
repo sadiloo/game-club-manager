@@ -628,6 +628,9 @@ begin
   end;
   if (BackupDirPage <> nil) and (CurPageID = BackupDirPage.ID) then
     UpdateBackupDirWarnings;
+
+  if CurPageID = wpFinished then
+    UpdateServerFinishPage;
 end;
 
 procedure InitializeWizard;
