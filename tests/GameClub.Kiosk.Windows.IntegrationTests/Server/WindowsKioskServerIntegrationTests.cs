@@ -559,7 +559,7 @@ public sealed class WindowsKioskServerIntegrationTests
         await runtime.DisposeAsync();
     }
 
-    [SkippableFact(Timeout = 1_200_000)]
+    [SkippableFact(Timeout = 1_800_000)]
     public async Task live_server_two_outages_bill_matches_main_g2_oracle()
     {
         Skip.If(
@@ -579,6 +579,20 @@ public sealed class WindowsKioskServerIntegrationTests
             var customerId = await backend.SeedCustomerWithCredentialAsync("g2user", "pass", 500_000);
             var (deviceId, deviceKey, leasePem) = await backend.PairAsync("PC-G2");
             var kioskHttp = backend.CreateKioskHttpClient(deviceId, deviceKey);
+            var bandEdges = G2BandAlignWait.BandEdges(PilotSeed.PcNormalSpecialHours);
+            var alignNowUtc = DateTimeOffset.UtcNow;
+            var alignPlan = G2BandAlignWait.ComputePlan(alignNowUtc, bandEdges);
+            if (alignPlan.WaitMilliseconds <= 0)
+            {
+                Console.WriteLine("G2_BAND_ALIGN none");
+            }
+            else
+            {
+                Console.WriteLine(
+                    $"G2_BAND_ALIGN now={alignNowUtc:O} edge={alignPlan.TriggeringEdgeTehran:O} waitMs={alignPlan.WaitMilliseconds}");
+                await Task.Delay(TimeSpan.FromMilliseconds(alignPlan.WaitMilliseconds));
+            }
+
             var login = await kioskHttp.PostAsJsonAsync(
                 "/api/kiosk/auth/login",
                 new { loginName = "g2user", password = "pass", stationId = "PC-G2" });
@@ -688,6 +702,10 @@ public sealed class WindowsKioskServerIntegrationTests
             Assert.Equal(evidence.ExpectedBillableMinutes, evidence.CheckpointCount);
             Assert.Equal(0, evidence.DuplicateCheckpointMinuteBuckets);
             Assert.Equal(evidence.ExpectedCollectibleToman, evidence.PendingBillCollectibleToman);
+            G2BandAlignWait.AssertSameSideOfAllBandEdges(
+                PilotSeed.PcNormalSpecialHours,
+                new DateTimeOffset(evidence.SessionStartedAtUtc, TimeSpan.Zero),
+                evidence.CheckpointAtUtc);
         }
         finally
         {
