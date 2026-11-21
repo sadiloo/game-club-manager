@@ -1,6 +1,6 @@
 ; Checkpoint kiosk installer (B) — zero input pages; reboot via exit 3010 when needed (never forced).
 #ifndef AppVersion
-  #define AppVersion "UNSET"
+  #error AppVersion must be passed via /DAppVersion
 #endif
 #ifndef StagingKioskDir
   #define StagingKioskDir "..\..\artifacts\installer\stage-kiosk"
@@ -62,12 +62,6 @@ Type: filesandordirs; Name: "{pf}\Checkpoint\Guard"
 [Code]
 function InitializeSetup: Boolean;
 begin
-  if '{#AppVersion}' = 'UNSET' then
-  begin
-    MsgBox('AppVersion not defined. Build must pass /DAppVersion from Directory.Build.props.', mbError, MB_OK);
-    Result := False;
-    Exit;
-  end;
   Result := True;
 end;
 

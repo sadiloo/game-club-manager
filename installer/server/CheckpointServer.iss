@@ -1,6 +1,6 @@
 ; Checkpoint server installer (B) — full payload staged by ci-installer.ps1
 #ifndef AppVersion
-  #define AppVersion "UNSET"
+  #error AppVersion must be passed via /DAppVersion
 #endif
 #ifndef StagingServerDir
   #define StagingServerDir "..\..\artifacts\installer\stage-server"
@@ -116,12 +116,6 @@ end;
 function InitializeSetup: Boolean;
 var Installed, NewVer: String; Cmp: Integer;
 begin
-  if '{#AppVersion}' = 'UNSET' then
-  begin
-    MsgBox('AppVersion not defined. Build must pass /DAppVersion from Directory.Build.props.', mbError, MB_OK);
-    Result := False;
-    Exit;
-  end;
   Installed := GetInstalledDisplayVersion;
   NewVer := '{#AppVersion}';
   if Installed <> '' then
