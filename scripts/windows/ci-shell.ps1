@@ -103,11 +103,12 @@ if (-not $wv2) {
 
 dotnet build tests/GameClub.Shell.Windows.IntegrationTests/GameClub.Shell.Windows.IntegrationTests.csproj -c Release -f net48 --nologo
 & (Join-Path $PSScriptRoot "shell-windowshell-inventory.ps1") -Role Shell
+$filter = if ($env:GAMECLUB_SHELL_BISECT_FILTER) { $env:GAMECLUB_SHELL_BISECT_FILTER } else { "Category=WindowsShell" }
 $testExitCode = 0
 try {
     dotnet test tests/GameClub.Shell.Windows.IntegrationTests/GameClub.Shell.Windows.IntegrationTests.csproj `
       -c Release -f net48 --no-build --nologo `
-      --filter "Category=WindowsShell" `
+      --filter $filter `
       --logger "console;verbosity=normal" `
       --results-directory $artifactDir `
       --logger "trx;LogFileName=shell-windows.trx"
@@ -117,26 +118,31 @@ try {
 }
 finally {
     $shellLogsSource = Join-Path $env:LOCALAPPDATA "Checkpoint\Shell\logs"
-    if (-not (Test-Path $shellLogsSource)) {
-        throw "Shell logs directory missing (no trace visibility): $shellLogsSource"
-    }
 
-    $shellLogFiles = @(Get-ChildItem -Path $shellLogsSource -Filter "shell-*.log" -File -ErrorAction SilentlyContinue)
-    if ($shellLogFiles.Count -eq 0) {
-        throw "Shell logs directory is empty (lost trace must not look like a pass): $shellLogsSource"
+    # Rule: missing log directory → skip harvest (no throw). Filtered or checkpoint-only runs
+    # that never spin up MainWindow/WebView never create %LOCALAPPDATA%\Checkpoint\Shell\logs.
+    # Non-empty directory that exists but has no shell-*.log → still fail (shell did log, trace lost).
+    if (-not (Test-Path -LiteralPath $shellLogsSource)) {
+        Write-Host "Skipping default shell log harvest: directory not created ($shellLogsSource)."
     }
+    else {
+        $shellLogFiles = @(Get-ChildItem -Path $shellLogsSource -Filter "shell-*.log" -File -ErrorAction SilentlyContinue)
+        if ($shellLogFiles.Count -eq 0) {
+            throw "Shell logs directory is empty (lost trace must not look like a pass): $shellLogsSource"
+        }
 
-    Copy-Item -Path (Join-Path $shellLogsSource "*") -Destination $logDir -Force -ErrorAction Stop
-    Write-Host "=== SHELL-OFFLINE-TRACE / SHELL-RACE-NAV (from $shellLogsSource) ==="
-    foreach ($logFile in $shellLogFiles) {
-        $lines = Get-Content -Path $logFile.FullName -ErrorAction Stop
-        foreach ($line in $lines) {
-            if ($line -match "SHELL-OFFLINE-TRACE" -or $line -match "SHELL-RACE-NAV") {
-                Write-Host $line
+        Copy-Item -Path (Join-Path $shellLogsSource "*") -Destination $logDir -Force -ErrorAction Stop
+        Write-Host "=== SHELL-OFFLINE-TRACE / SHELL-RACE-NAV (from $shellLogsSource) ==="
+        foreach ($logFile in $shellLogFiles) {
+            $lines = Get-Content -Path $logFile.FullName -ErrorAction Stop
+            foreach ($line in $lines) {
+                if ($line -match "SHELL-OFFLINE-TRACE" -or $line -match "SHELL-RACE-NAV") {
+                    Write-Host $line
+                }
             }
         }
+        Write-Host "=== end shell trace dump ==="
     }
-    Write-Host "=== end shell trace dump ==="
 }
 
 if (Test-Path (Join-Path $env:LOCALAPPDATA "Checkpoint\Shell\window.json")) {

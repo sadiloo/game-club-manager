@@ -1,3 +1,4 @@
+using System;
 using GameClub.Shell.Shell;
 using Xunit;
 
@@ -5,12 +6,33 @@ namespace GameClub.Shell.Tests;
 
 public sealed class PanelNavigationPendingRegistryTests
 {
+    private static bool IsLoopbackPanel(string uri) =>
+        uri.Contains("127.0.0.1", StringComparison.OrdinalIgnoreCase)
+        || uri.Contains("localhost", StringComparison.OrdinalIgnoreCase);
+
+    [Fact]
+    public void oldest_pending_loopback_panel_navigation_tracks_age_by_start_time()
+    {
+        var registry = new PanelNavigationPendingRegistry();
+        var t0 = new DateTime(2026, 11, 21, 12, 0, 0, DateTimeKind.Utc);
+        registry.RecordNavigationStarting(1, "data:text/html,offline", t0);
+        registry.RecordNavigationStarting(2, "http://127.0.0.1:5000/operator/", t0.AddSeconds(-12));
+        registry.RecordNavigationStarting(3, "http://127.0.0.1:5000/operator/other", t0.AddSeconds(-5));
+
+        Assert.True(registry.TryGetOldestPendingLoopbackPanelNavigation(
+            IsLoopbackPanel,
+            t0,
+            out var age,
+            out var id));
+        Assert.Equal(2ul, id);
+        Assert.Equal(TimeSpan.FromSeconds(12), age);
+    }
     [Fact]
     public void orphan_navigation_id_completion_is_ignored_and_does_not_remove_other_entries()
     {
         var registry = new PanelNavigationPendingRegistry();
-        registry.RecordNavigationStarting(1, "http://127.0.0.1:5000/operator/");
-        registry.RecordNavigationStarting(2, "http://127.0.0.1:5000/operator/other");
+        registry.RecordNavigationStarting(1, "http://127.0.0.1:5000/operator/", DateTime.UtcNow);
+        registry.RecordNavigationStarting(2, "http://127.0.0.1:5000/operator/other", DateTime.UtcNow);
 
         Assert.False(registry.TryTakeNavigationCompleted(99, out _));
         Assert.Equal(2, registry.PendingCount);
@@ -27,8 +49,8 @@ public sealed class PanelNavigationPendingRegistryTests
     public void shared_operator_prefix_navigations_match_by_navigation_id_not_prefix()
     {
         var registry = new PanelNavigationPendingRegistry();
-        registry.RecordNavigationStarting(10, "http://127.0.0.1:5000/operator/index.html");
-        registry.RecordNavigationStarting(11, "http://127.0.0.1:5000/operator/second");
+        registry.RecordNavigationStarting(10, "http://127.0.0.1:5000/operator/index.html", DateTime.UtcNow);
+        registry.RecordNavigationStarting(11, "http://127.0.0.1:5000/operator/second", DateTime.UtcNow);
 
         Assert.True(registry.TryTakeNavigationCompleted(10, out var first));
         Assert.True(registry.TryTakeNavigationCompleted(11, out var second));
@@ -43,7 +65,7 @@ public sealed class PanelNavigationPendingRegistryTests
         var registry = new PanelNavigationPendingRegistry();
         for (ulong id = 1; id <= 20; id++)
         {
-            registry.RecordNavigationStarting(id, $"http://127.0.0.1:5000/operator/{id}");
+            registry.RecordNavigationStarting(id, $"http://127.0.0.1:5000/operator/{id}", DateTime.UtcNow);
         }
 
         Assert.Equal(20, registry.PendingCount);

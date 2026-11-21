@@ -27,54 +27,57 @@ public sealed class ShellPanelNavigationFailureTests
     public void shell_probe_ok_navigation_503_shows_panel_unavailable_without_navigation_loop()
     {
         if (!WebView2RuntimePresent()) throw new InvalidOperationException("WebView2 runtime required");
-        var root = AllocateShellDataRoot();
-        ShellPanelHttpSplitStub? stub = null;
-        try
+        ExecuteWithShellDataRoot(() =>
         {
-            stub = CreateStub(503, 0);
-            _fixture.RunAsync(async () =>
+            ShellPanelHttpSplitStub? stub = null;
+            try
             {
-                await RunProbeOkNavigationFailureScenarioAsync(stub, expectSlowTimeout: false);
-            }, TimeSpan.FromSeconds(150));
-        }
-        finally
-        {
-            stub?.Dispose();
-            CleanupShellDataRoot(root);
-        }
+                stub = CreateStub(503, 0);
+                _fixture.RunAsync(async () =>
+                {
+                    await RunProbeOkNavigationFailureScenarioAsync(stub, expectSlowTimeout: false);
+                }, TimeSpan.FromSeconds(150));
+            }
+            finally
+            {
+                stub?.Dispose();
+            }
+        });
     }
 
     [Fact]
     public void shell_probe_ok_navigation_timeout_shows_panel_unavailable_without_navigation_loop()
     {
         if (!WebView2RuntimePresent()) throw new InvalidOperationException("WebView2 runtime required");
-        var root = AllocateShellDataRoot();
-        ShellPanelHttpSplitStub? stub = null;
-        try
+        ExecuteWithShellDataRoot(() =>
         {
-            stub = CreateStub(200, 25_000);
-            _fixture.RunAsync(async () =>
+            ShellPanelHttpSplitStub? stub = null;
+            try
             {
-                await RunProbeOkNavigationFailureScenarioAsync(stub, expectSlowTimeout: true);
-            }, TimeSpan.FromSeconds(180));
-        }
-        finally
-        {
-            stub?.Dispose();
-            CleanupShellDataRoot(root);
-        }
+                stub = CreateStub(200, 25_000);
+                _fixture.RunAsync(async () =>
+                {
+                    await RunProbeOkNavigationFailureScenarioAsync(stub, expectSlowTimeout: true);
+                }, TimeSpan.FromSeconds(180));
+            }
+            finally
+            {
+                stub?.Dispose();
+            }
+        });
     }
 
     [Fact]
     public void shell_probe_ok_navigation_failure_recovers_on_confirmed_2xx_without_extra_navigations()
     {
         if (!WebView2RuntimePresent()) throw new InvalidOperationException("WebView2 runtime required");
-        var root = AllocateShellDataRoot();
-        ShellPanelHttpSplitStub? stub = null;
-        try
+        ExecuteWithShellDataRoot(() =>
         {
-            stub = CreateStub(503, 0);
-            _fixture.RunAsync(async () =>
+            ShellPanelHttpSplitStub? stub = null;
+            try
+            {
+                stub = CreateStub(503, 0);
+                _fixture.RunAsync(async () =>
             {
                 MainWindow? window = null;
                 try
@@ -121,24 +124,25 @@ public sealed class ShellPanelNavigationFailureTests
                     window?.Close();
                 }
             }, TimeSpan.FromSeconds(180));
-        }
-        finally
-        {
-            stub?.Dispose();
-            CleanupShellDataRoot(root);
-        }
+            }
+            finally
+            {
+                stub?.Dispose();
+            }
+        });
     }
 
     [Fact]
     public void shell_stopped_in_flight_operator_nav_shows_offline_data_not_about_blank()
     {
         if (!WebView2RuntimePresent()) throw new InvalidOperationException("WebView2 runtime required");
-        var root = AllocateShellDataRoot();
-        ShellPanelHttpSplitStub? stub = null;
-        try
+        ExecuteWithShellDataRoot(() =>
         {
-            stub = CreateStub(200, 25_000);
-            _fixture.RunAsync(async () =>
+            ShellPanelHttpSplitStub? stub = null;
+            try
+            {
+                stub = CreateStub(200, 25_000);
+                _fixture.RunAsync(async () =>
             {
                 MainWindow? window = null;
                 try
@@ -180,24 +184,25 @@ public sealed class ShellPanelNavigationFailureTests
                     window?.Close();
                 }
             }, TimeSpan.FromSeconds(180));
-        }
-        finally
-        {
-            stub?.Dispose();
-            CleanupShellDataRoot(root);
-        }
+            }
+            finally
+            {
+                stub?.Dispose();
+            }
+        });
     }
 
     [Fact]
     public void shell_after_stop_offline_data_nav_recovers_on_confirmed_2xx()
     {
         if (!WebView2RuntimePresent()) throw new InvalidOperationException("WebView2 runtime required");
-        var root = AllocateShellDataRoot();
-        ShellPanelHttpSplitStub? stub = null;
-        try
+        ExecuteWithShellDataRoot(() =>
         {
-            stub = CreateStub(200, 25_000);
-            _fixture.RunAsync(async () =>
+            ShellPanelHttpSplitStub? stub = null;
+            try
+            {
+                stub = CreateStub(200, 25_000);
+                _fixture.RunAsync(async () =>
             {
                 MainWindow? window = null;
                 try
@@ -250,24 +255,25 @@ public sealed class ShellPanelNavigationFailureTests
                     window?.Close();
                 }
             }, TimeSpan.FromSeconds(180));
-        }
-        finally
-        {
-            stub?.Dispose();
-            CleanupShellDataRoot(root);
-        }
+            }
+            finally
+            {
+                stub?.Dispose();
+            }
+        });
     }
 
     [Fact]
     public void shell_tray_reloads_do_not_leak_webview_handler_wiring()
     {
         if (!WebView2RuntimePresent()) throw new InvalidOperationException("WebView2 runtime required");
-        var root = AllocateShellDataRoot();
-        ShellPanelHttpSplitStub? stub = null;
-        try
+        ExecuteWithShellDataRoot(() =>
         {
-            stub = CreateStub(200, 0);
-            _fixture.RunAsync(async () =>
+            ShellPanelHttpSplitStub? stub = null;
+            try
+            {
+                stub = CreateStub(200, 0);
+                _fixture.RunAsync(async () =>
             {
                 MainWindow? window = null;
                 try
@@ -317,11 +323,30 @@ public sealed class ShellPanelNavigationFailureTests
                     window?.Close();
                 }
             }, TimeSpan.FromSeconds(180));
+            }
+            finally
+            {
+                stub?.Dispose();
+            }
+        });
+    }
+
+    private void ExecuteWithShellDataRoot(Action testBody)
+    {
+        var root = AllocateShellDataRoot();
+        var failed = false;
+        try
+        {
+            testBody();
+        }
+        catch
+        {
+            failed = true;
+            throw;
         }
         finally
         {
-            stub?.Dispose();
-            CleanupShellDataRoot(root);
+            CleanupShellDataRoot(root, failed);
         }
     }
 
@@ -467,8 +492,13 @@ public sealed class ShellPanelNavigationFailureTests
         return root;
     }
 
-    private static void CleanupShellDataRoot(string root)
+    private static void CleanupShellDataRoot(string root, bool testFailed)
     {
+        if (testFailed)
+        {
+            DumpShellDataRootOnFailure(root);
+        }
+
         Environment.SetEnvironmentVariable("CHECKPOINT_SHELL_DATA", null);
         try
         {
@@ -479,6 +509,46 @@ public sealed class ShellPanelNavigationFailureTests
         }
         catch
         {
+        }
+    }
+
+    private static void DumpShellDataRootOnFailure(string root)
+    {
+        var logsDir = Path.Combine(root, "logs");
+        if (!Directory.Exists(logsDir))
+        {
+            return;
+        }
+
+        var workspace = Environment.GetEnvironmentVariable("GITHUB_WORKSPACE");
+        if (!string.IsNullOrWhiteSpace(workspace))
+        {
+            var artifactLogs = Path.Combine(workspace, "artifacts", "shell-windows-logs");
+            var dest = Path.Combine(artifactLogs, Path.GetFileName(root));
+            try
+            {
+                Directory.CreateDirectory(dest);
+                foreach (var logPath in Directory.GetFiles(logsDir, "shell-*.log"))
+                {
+                    File.Copy(logPath, Path.Combine(dest, Path.GetFileName(logPath)), overwrite: true);
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        foreach (var logPath in Directory.GetFiles(logsDir, "shell-*.log"))
+        {
+            foreach (var line in File.ReadAllLines(logPath))
+            {
+                if (line.Contains("SHELL-OFFLINE-TRACE", StringComparison.Ordinal)
+                    || line.Contains("SHELL-RACE-NAV", StringComparison.Ordinal)
+                    || line.Contains("panel-navigate", StringComparison.Ordinal))
+                {
+                    Console.WriteLine($"SHELL-TRACE-DUMP root={Path.GetFileName(root)} {line}");
+                }
+            }
         }
     }
 

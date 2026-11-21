@@ -47,6 +47,7 @@ public partial class MainWindow : Window
     private int _pendingBrowserRecreate;
     private readonly HashSet<ulong> _blockedNavigationIds = new();
     private readonly PanelNavigationPendingRegistry _panelNavigationPending = new();
+    private bool _probeOkPanelNavTimeoutCycleConsumed;
     private Task? _exhaustedRecoveryRetryTask;
     private int _panelWebViewWireCount;
     private int _navigationCompletedHandledCount;
@@ -167,6 +168,9 @@ public partial class MainWindow : Window
                     }
 
                     TryRunningPanelProbeWhenDue();
+                }
+                else if (TryExpireProbeOkPanelNavigationTimeout(utcNow))
+                {
                 }
                 else if (HealthyRunningPanelProbePolicy.ShouldProbeOnPollerTick(
                              _runningPanelLoadFailing,
@@ -301,7 +305,7 @@ public partial class MainWindow : Window
     private void OnPanelNavigationStarting(object? sender, CoreWebView2NavigationStartingEventArgs args)
     {
         _lastNavigationUri = args.Uri;
-        _panelNavigationPending.RecordNavigationStarting(args.NavigationId, args.Uri);
+        _panelNavigationPending.RecordNavigationStarting(args.NavigationId, args.Uri, DateTime.UtcNow);
         _navigationStartingCount++;
         if (_allowOfflineDataNav
             && args.Uri.StartsWith("data:text/html", StringComparison.OrdinalIgnoreCase))
@@ -339,7 +343,6 @@ public partial class MainWindow : Window
         if (_offlinePresentInFlightState is not null)
         {
             _offlinePresentInFlightState = null;
-            _offlineShown = false;
         }
     }
 
@@ -368,6 +371,11 @@ public partial class MainWindow : Window
         }
 
         _navigationCompletedHandledCount++;
+        if (_panelNavigationPending.PendingCount == 0)
+        {
+            _probeOkPanelNavTimeoutCycleConsumed = false;
+        }
+
         var loopbackPanel = IsLoopbackPanelTarget(startUri);
 
         if (_blockedNavigationIds.Remove(e.NavigationId))
@@ -389,7 +397,7 @@ public partial class MainWindow : Window
         {
             _allowOfflineDataNav = false;
             _offlinePresentInFlightState = null;
-            if (e.IsSuccess && OfflineDataNavigationCommitted())
+            if (e.IsSuccess)
             {
                 _offlineShown = true;
             }
@@ -511,6 +519,44 @@ public partial class MainWindow : Window
         }
 
         _ = TryHealthyRunningPanelProbeCoreAsync();
+    }
+
+    private bool TryExpireProbeOkPanelNavigationTimeout(DateTime utcNow)
+    {
+        if (_runningPanelLoadFailing
+            || _offlineShown
+            || _probeOkPanelNavTimeoutCycleConsumed
+            || _panelNavigationPending.PendingCount == 0)
+        {
+            return false;
+        }
+
+        if (!_panelNavigationPending.TryGetOldestPendingLoopbackPanelNavigation(
+                IsLoopbackPanelTarget,
+                utcNow,
+                out var age,
+                out var navigationId))
+        {
+            return false;
+        }
+
+        if (age < PanelNavigationRetryBackoff.Delay2)
+        {
+            return false;
+        }
+
+        var (probeOk, probeStatus) = ProbePanelHttp();
+        if (!probeOk)
+        {
+            return false;
+        }
+
+        _probeOkPanelNavTimeoutCycleConsumed = true;
+        LogOfflineTrace(
+            "panel-nav-timeout-probe-ok",
+            $"pendingId={navigationId} ageSec={age.TotalSeconds:F0} probeStatus={probeStatus}");
+        HandleRunningPanelNavigationFailure();
+        return true;
     }
 
     private async Task TryHealthyRunningPanelProbeCoreAsync()
@@ -1166,11 +1212,6 @@ public partial class MainWindow : Window
         _lastNavigationUri = dataUri;
         LogNavigateToString(caller);
         LogRaceNav($"{caller}.NavigateData");
-        if (_panelNavigationPending.PendingCount > 0)
-        {
-            TryStopInFlightPanelNavigation();
-        }
-
         _allowOfflineDataNav = true;
         try
         {
@@ -1194,27 +1235,6 @@ public partial class MainWindow : Window
     {
         var uri = CurrentPanelUriForTrace();
         return uri.StartsWith("data:text/html", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private bool OfflineDataNavigationCommitted()
-    {
-        if (IsOfflineDataPageActive())
-        {
-            return true;
-        }
-
-        return !IsActiveOnPanelOrigin();
-    }
-
-    private void TryStopInFlightPanelNavigation()
-    {
-        try
-        {
-            PanelWebView.CoreWebView2?.Stop();
-        }
-        catch (InvalidOperationException)
-        {
-        }
     }
 
     private string CurrentPanelUriForTrace()
