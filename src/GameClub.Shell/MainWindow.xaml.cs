@@ -168,9 +168,12 @@ public partial class MainWindow : Window
 
                     TryRunningPanelProbeWhenDue();
                 }
-                else if (!_runningPanelLoadFailing && _panelNavigated && IsActiveOnPanelOrigin())
+                else if (HealthyRunningPanelProbePolicy.ShouldProbeOnPollerTick(
+                             _runningPanelLoadFailing,
+                             _panelNavigated,
+                             IsActiveOnPanelOrigin()))
                 {
-                    // Healthy running panel: poller ticks must not probe-navigate again.
+                    TryHealthyRunningPanelProbeWhenDue();
                 }
                 else if (!_runningPanelLoadFailing)
                 {
@@ -311,6 +314,13 @@ public partial class MainWindow : Window
         {
             args.Cancel = true;
             _blockedNavigationIds.Add(args.NavigationId);
+            if (args.Uri.StartsWith("data:text/html", StringComparison.OrdinalIgnoreCase))
+            {
+                _offlinePresentInFlightState = null;
+                _offlineShown = false;
+                _allowOfflineDataNav = false;
+            }
+
             if (Uri.TryCreate(args.Uri, UriKind.Absolute, out var blocked))
             {
                 var host = (blocked.Host ?? "").ToLowerInvariant();
@@ -322,6 +332,14 @@ public partial class MainWindow : Window
             {
                 ShellFileLog.Write($"navigation-blocked id={args.NavigationId} scheme=unknown host_hash8=00000000");
             }
+
+            return;
+        }
+
+        if (_offlinePresentInFlightState is not null)
+        {
+            _offlinePresentInFlightState = null;
+            _offlineShown = false;
         }
     }
 
@@ -371,7 +389,7 @@ public partial class MainWindow : Window
         {
             _allowOfflineDataNav = false;
             _offlinePresentInFlightState = null;
-            if (e.IsSuccess)
+            if (e.IsSuccess && OfflineDataNavigationCommitted())
             {
                 _offlineShown = true;
             }
@@ -382,7 +400,7 @@ public partial class MainWindow : Window
 
             LogOfflineTrace(
                 "nav-completed-offline-data",
-                $"id={e.NavigationId} IsSuccess={e.IsSuccess} webError={e.WebErrorStatus} offlineState={_currentOfflineState}");
+                $"id={e.NavigationId} IsSuccess={e.IsSuccess} webError={e.WebErrorStatus} offlineState={_currentOfflineState} offlineShown={_offlineShown}");
             return;
         }
 
@@ -463,6 +481,7 @@ public partial class MainWindow : Window
         _panelNavigated = false;
         if (!_offlineShown)
         {
+            TryStopInFlightPanelNavigation();
             _ = PresentOfflinePageAsync("panel-unavailable");
         }
         else
@@ -483,6 +502,51 @@ public partial class MainWindow : Window
         }
 
         _ = TryRunningPanelProbeCoreAsync();
+    }
+
+    private void TryHealthyRunningPanelProbeWhenDue()
+    {
+        if (_panelProbeInFlight != 0)
+        {
+            return;
+        }
+
+        _ = TryHealthyRunningPanelProbeCoreAsync();
+    }
+
+    private async Task TryHealthyRunningPanelProbeCoreAsync()
+    {
+        if (Interlocked.CompareExchange(ref _panelProbeInFlight, 1, 0) != 0)
+        {
+            ShellFileLog.Write("panel-nav-retry action=healthy-probe outcome=skipped reason=probe-in-flight");
+            return;
+        }
+
+        try
+        {
+            var (ok, statusCode) = await Task.Run(ProbePanelHttp);
+            await Dispatcher.InvokeAsync(() =>
+            {
+                if (_closed
+                    || _runningPanelLoadFailing
+                    || !_panelNavigated
+                    || !IsActiveOnPanelOrigin())
+                {
+                    return;
+                }
+
+                if (ok)
+                {
+                    return;
+                }
+
+                EnterRunningPanelLoadFailingMode(statusCode);
+            });
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _panelProbeInFlight, 0);
+        }
     }
 
     private async Task TryRunningPanelProbeCoreAsync()
@@ -568,6 +632,7 @@ public partial class MainWindow : Window
         _panelNavigated = false;
         if (!_offlineShown)
         {
+            TryStopInFlightPanelNavigation();
             _ = PresentOfflinePageAsync("panel-unavailable");
         }
     }
@@ -1103,6 +1168,11 @@ public partial class MainWindow : Window
         _lastNavigationUri = dataUri;
         LogNavigateToString(caller);
         LogRaceNav($"{caller}.NavigateData");
+        if (_panelNavigationPending.PendingCount > 0)
+        {
+            TryStopInFlightPanelNavigation();
+        }
+
         _allowOfflineDataNav = true;
         try
         {
@@ -1126,6 +1196,27 @@ public partial class MainWindow : Window
     {
         var uri = CurrentPanelUriForTrace();
         return uri.StartsWith("data:text/html", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private bool OfflineDataNavigationCommitted()
+    {
+        if (IsOfflineDataPageActive())
+        {
+            return true;
+        }
+
+        return !IsActiveOnPanelOrigin();
+    }
+
+    private void TryStopInFlightPanelNavigation()
+    {
+        try
+        {
+            PanelWebView.CoreWebView2?.Stop();
+        }
+        catch (InvalidOperationException)
+        {
+        }
     }
 
     private string CurrentPanelUriForTrace()

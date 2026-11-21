@@ -1200,6 +1200,70 @@ public sealed class ShellPlanAIntegrationTests
     }
 
     [Fact]
+    public void shell_superseded_offline_data_navigation_re_presents_without_about_blank()
+    {
+        if (!WebView2RuntimePresent()) throw new InvalidOperationException("WebView2 runtime required");
+        var root = AllocateShellDataRoot();
+        try
+        {
+            _fixture.RunAsync(async () =>
+            {
+                MainWindow? window = null;
+                try
+                {
+                    FakeShellSeams.Install();
+                    FakeShellSeams.Http.Answers = true;
+                    FakeShellSeams.Http.OperatorPageOk = false;
+                    FakeShellSeams.Service.Status = ServiceControllerStatus.Running;
+
+                    window = new MainWindow();
+                    window.Show();
+                    var wv = await WaitForPanelWebViewAsync(window, TimeSpan.FromSeconds(45));
+
+                    var offlineDeadline = DateTime.UtcNow.AddSeconds(30);
+                    while (DateTime.UtcNow < offlineDeadline && window.PanelNavigationPendingCountForTests == 0)
+                    {
+                        await Task.Delay(100);
+                    }
+
+                    FakeShellSeams.Http.OperatorPageOk = true;
+                    await window.NavigatePanelAsync();
+                    FakeShellSeams.Http.OperatorPageOk = false;
+
+                    var observeDeadline = DateTime.UtcNow.AddSeconds(90);
+                    while (DateTime.UtcNow < observeDeadline)
+                    {
+                        await Task.Delay(200);
+                        wv = window.FindName("PanelWebView") as Microsoft.Web.WebView2.Wpf.WebView2;
+                        if (wv?.CoreWebView2 is null)
+                        {
+                            continue;
+                        }
+
+                        var href = UnquoteWebViewScriptString(
+                            await wv.CoreWebView2.ExecuteScriptAsync("location.href"));
+                        Assert.NotEqual("about:blank", href, StringComparer.OrdinalIgnoreCase);
+                    }
+
+                    await WaitForPanelUnavailableOfflineAsync(wv, TimeSpan.FromSeconds(60));
+                    var finalHref = UnquoteWebViewScriptString(
+                        await wv.CoreWebView2.ExecuteScriptAsync("location.href"));
+                    Assert.StartsWith("data:", finalHref, StringComparison.OrdinalIgnoreCase);
+                }
+                finally
+                {
+                    FakeShellSeams.RestoreProduction();
+                    window?.Close();
+                }
+            }, TimeSpan.FromSeconds(150));
+        }
+        finally
+        {
+            CleanupShellDataRoot(root);
+        }
+    }
+
+    [Fact]
     public void shell_running_panel_transient_probe_ok_then_fail_avoids_offline_flash_loop()
     {
         if (!WebView2RuntimePresent()) throw new InvalidOperationException("WebView2 runtime required");
