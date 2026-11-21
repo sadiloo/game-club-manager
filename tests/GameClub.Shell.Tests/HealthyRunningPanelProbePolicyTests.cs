@@ -7,8 +7,16 @@ namespace GameClub.Shell.Tests;
 public sealed class HealthyRunningPanelProbePolicyTests
 {
     [Fact]
-    public void dispatcher_poll_interval_is_shorter_than_service_poller_tick() =>
-        Assert.True(HealthyRunningPanelProbePolicy.DispatcherPollInterval < TimeSpan.FromSeconds(5));
+    public void dispatcher_poll_interval_is_one_second() =>
+        Assert.Equal(TimeSpan.FromSeconds(1), HealthyRunningPanelProbePolicy.DispatcherPollInterval);
+
+    [Fact]
+    public void per_probe_timeout_is_at_most_one_second() =>
+        Assert.Equal(TimeSpan.FromSeconds(1), HealthyRunningPanelProbePolicy.PerProbeTimeout);
+
+    [Fact]
+    public void confirmed_failure_requires_two_consecutive_probe_failures() =>
+        Assert.Equal(2, HealthyRunningPanelProbePolicy.ConsecutiveFailuresForConfirmation);
 
     [Theory]
     [InlineData(false, true, true, true)]

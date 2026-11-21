@@ -8,11 +8,11 @@ namespace GameClub.Shell.Shell;
 /// </summary>
 internal static class HealthyRunningPanelProbePolicy
 {
-    /// <summary>
-    /// Faster than the 5s service poller so transient probe failures surface offline
-    /// within one B-1 sample interval (500ms).
-    /// </summary>
-    public static readonly TimeSpan DispatcherPollInterval = TimeSpan.FromMilliseconds(500);
+    public static readonly TimeSpan DispatcherPollInterval = TimeSpan.FromSeconds(1);
+
+    public static readonly TimeSpan PerProbeTimeout = TimeSpan.FromSeconds(1);
+
+    public const int ConsecutiveFailuresForConfirmation = 2;
 
     public static bool ShouldProbeOnPollerTick(
         bool runningPanelLoadFailing,

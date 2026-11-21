@@ -62,4 +62,38 @@ internal sealed class PanelNavigationPendingRegistry
         age = utcNow - oldestStart;
         return true;
     }
+
+    public int PruneExpiredLoopbackPanelNavigations(
+        Func<string, bool> isLoopbackPanelTarget,
+        DateTime utcNow,
+        TimeSpan deadline)
+    {
+        var removed = 0;
+        var expiredIds = new List<ulong>();
+        foreach (var pending in _pendingStartUris)
+        {
+            if (!isLoopbackPanelTarget(pending.Value.Uri))
+            {
+                continue;
+            }
+
+            if (utcNow - pending.Value.StartedUtc >= deadline)
+            {
+                expiredIds.Add(pending.Key);
+            }
+        }
+
+        foreach (var id in expiredIds)
+        {
+            _pendingStartUris.Remove(id);
+            removed++;
+        }
+
+        return removed;
+    }
+
+    public bool TryRemovePendingLoopbackNavigation(ulong navigationId)
+    {
+        return _pendingStartUris.Remove(navigationId);
+    }
 }

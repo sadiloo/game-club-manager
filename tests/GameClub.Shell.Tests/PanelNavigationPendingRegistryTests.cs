@@ -60,6 +60,52 @@ public sealed class PanelNavigationPendingRegistryTests
     }
 
     [Fact]
+    public void missing_navigation_completed_ages_out_at_deadline_so_new_panel_nav_is_not_deferred()
+    {
+        var registry = new PanelNavigationPendingRegistry();
+        var t0 = new DateTime(2026, 11, 21, 12, 0, 0, DateTimeKind.Utc);
+        registry.RecordNavigationStarting(7, "http://127.0.0.1:5000/operator/", t0);
+        var deadline = TimeSpan.FromSeconds(10);
+        var tExpire = t0.AddSeconds(10).AddMilliseconds(1);
+
+        var tMid = t0.AddSeconds(5);
+        Assert.True(registry.TryGetOldestPendingLoopbackPanelNavigation(
+            IsLoopbackPanel,
+            tMid,
+            out var youngAge,
+            out _));
+        Assert.True(
+            LoopbackPanelNavigationInFlightPolicy.ShouldDeferNewPanelNavigation(
+                hasPendingLoopbackPanelNavigation: true,
+                oldestPendingAge: youngAge,
+                pendingDeadline: deadline));
+
+        Assert.True(registry.TryGetOldestPendingLoopbackPanelNavigation(
+            IsLoopbackPanel,
+            tExpire,
+            out var age,
+            out _));
+        Assert.True(age >= deadline);
+        Assert.False(
+            LoopbackPanelNavigationInFlightPolicy.ShouldDeferNewPanelNavigation(
+                hasPendingLoopbackPanelNavigation: true,
+                oldestPendingAge: age,
+                pendingDeadline: deadline));
+
+        Assert.Equal(1, registry.PruneExpiredLoopbackPanelNavigations(IsLoopbackPanel, tExpire, deadline));
+        Assert.False(registry.TryGetOldestPendingLoopbackPanelNavigation(
+            IsLoopbackPanel,
+            tExpire,
+            out _,
+            out _));
+        Assert.False(
+            LoopbackPanelNavigationInFlightPolicy.ShouldDeferNewPanelNavigation(
+                hasPendingLoopbackPanelNavigation: false,
+                oldestPendingAge: TimeSpan.Zero,
+                pendingDeadline: deadline));
+    }
+
+    [Fact]
     public void completion_removes_entry_without_unbounded_growth()
     {
         var registry = new PanelNavigationPendingRegistry();

@@ -11,13 +11,11 @@ internal static class PendingLoopbackPanelNavigationTimeoutPolicy
     public static readonly TimeSpan Deadline = PanelNavigationRetryBackoff.Delay2;
 
     public static bool ShouldExpireInFlightNavigation(
-        bool runningPanelLoadFailing,
-        bool offlineShown,
         bool timeoutCycleConsumed,
         bool hasPendingLoopbackNavigation,
         TimeSpan oldestPendingAge)
     {
-        if (runningPanelLoadFailing || offlineShown || timeoutCycleConsumed || !hasPendingLoopbackNavigation)
+        if (timeoutCycleConsumed || !hasPendingLoopbackNavigation)
         {
             return false;
         }

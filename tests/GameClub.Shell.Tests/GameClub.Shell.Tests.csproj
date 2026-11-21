@@ -21,6 +21,7 @@
     <Compile Include="..\..\src\GameClub.Shell\Shell\RunningPanelLoadFailingPollerPolicy.cs" Link="Shell\RunningPanelLoadFailingPollerPolicy.cs" />
     <Compile Include="..\..\src\GameClub.Shell\Shell\HealthyRunningPanelProbePolicy.cs" Link="Shell\HealthyRunningPanelProbePolicy.cs" />
     <Compile Include="..\..\src\GameClub.Shell\Shell\LoopbackPanelNavigationInFlightPolicy.cs" Link="Shell\LoopbackPanelNavigationInFlightPolicy.cs" />
+    <Compile Include="..\..\src\GameClub.Shell\Shell\PanelLoopbackNavigationDispatchPolicy.cs" Link="Shell\PanelLoopbackNavigationDispatchPolicy.cs" />
     <Compile Include="..\..\src\GameClub.Shell\Shell\PendingLoopbackPanelNavigationTimeoutPolicy.cs" Link="Shell\PendingLoopbackPanelNavigationTimeoutPolicy.cs" />
     <Compile Include="..\..\src\GameClub.Shell\Shell\ShellServerVisualState.cs" Link="Shell\ShellServerVisualState.cs" />
     <Compile Include="..\..\src\GameClub.Shell\Shell\ShellPaths.cs" Link="Shell\ShellPaths.cs" />
