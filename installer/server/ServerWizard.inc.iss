@@ -1,8 +1,11 @@
+const
+  MAX_DEFAULT_PIN_PAGES = 256;
+
 var
   Manager1Page, Manager2Page, OperatorPage: TInputQueryWizardPage;
   BackupDirPage: TInputDirWizardPage;
-  DefaultPinPage1, DefaultPinPage2, DefaultPinPage3, DefaultPinPage4, DefaultPinPage5: TInputQueryWizardPage;
   BackupEmptyWarnLabel, BackupSameDriveWarnLabel: TNewStaticText;
+  M1Err0, M1Err1, M1Err2, M2Err0, M2Err1, M2Err2, OpErr0, OpErr1, OpErr2: TNewStaticText;
   Manager1User, Manager1Pin, Manager1Pin2: String;
   Manager2User, Manager2Pin, Manager2Pin2: String;
   OperatorUser, OperatorPin, OperatorPin2: String;
@@ -13,8 +16,10 @@ var
   DefaultPinsJsonPath: String;
   DefaultPinUsernames: TArrayOfString;
   DefaultPinUserCount: Integer;
-  DefaultPin1, DefaultPin1b, DefaultPin2, DefaultPin2b, DefaultPin3, DefaultPin3b: String;
-  DefaultPin4, DefaultPin4b, DefaultPin5, DefaultPin5b: String;
+  DefaultPinPageIds: array[0..MAX_DEFAULT_PIN_PAGES - 1] of Integer;
+  DefaultPinPages: array[0..MAX_DEFAULT_PIN_PAGES - 1] of TInputQueryWizardPage;
+  DefaultPinErrPin, DefaultPinErrRepeat: array[0..MAX_DEFAULT_PIN_PAGES - 1] of TNewStaticText;
+  DefaultPinStoredPins: TArrayOfString;
 
 function IsFirstInstall: Boolean;
 begin
@@ -112,16 +117,111 @@ begin
   Result := True;
 end;
 
-function ValidatePinPair(const Pin, Pin2: String; var Err: String): Boolean;
-var P: String;
+function ValidatePinPairEx(const Pin, Pin2: String; var Err: String; var ErrField: Integer): Boolean;
+var P, P2: String;
 begin
   Result := False;
+  ErrField := 1;
   P := NormalizeDigits(Pin);
+  P2 := NormalizeDigits(Pin2);
   if Trim(P) = '' then begin Err := 'رمز را وارد کنید.'; Exit; end;
   if (Length(P) < 4) or (Length(P) > 8) then begin Err := 'رمز باید ۴ تا ۸ رقم باشد.'; Exit; end;
   if IsWeakPin(P) then begin Err := 'این رمز ساده است و پذیرفته نمی‌شود.'; Exit; end;
-  if NormalizeDigits(Pin2) <> P then begin Err := 'دو رمز یکی نیستند.'; Exit; end;
+  ErrField := 2;
+  if Trim(P2) = '' then begin Err := 'رمز را دوباره وارد کنید.'; Exit; end;
+  if P2 <> P then begin Err := 'دو رمز یکی نیستند.'; Exit; end;
   Result := True;
+end;
+
+procedure ClearQuery3Errors(E0, E1, E2: TNewStaticText);
+begin
+  if E0 <> nil then begin E0.Caption := ''; E0.Visible := False; end;
+  if E1 <> nil then begin E1.Caption := ''; E1.Visible := False; end;
+  if E2 <> nil then begin E2.Caption := ''; E2.Visible := False; end;
+end;
+
+procedure ShowQuery3Error(E0, E1, E2: TNewStaticText; FieldIdx: Integer; const Msg: String);
+begin
+  ClearQuery3Errors(E0, E1, E2);
+  if FieldIdx = 0 then begin E0.Caption := Msg; E0.Visible := True; end
+  else if FieldIdx = 1 then begin E1.Caption := Msg; E1.Visible := True; end
+  else begin E2.Caption := Msg; E2.Visible := True; end;
+end;
+
+procedure AttachQuery3FieldErrors(Page: TInputQueryWizardPage; var E0, E1, E2: TNewStaticText);
+var Gap: Integer;
+begin
+  Gap := ScaleY(12);
+  Page.Edits[1].Top := Page.Edits[1].Top + Gap;
+  Page.Edits[2].Top := Page.Edits[2].Top + 2 * Gap;
+  Page.PromptLabels[1].Top := Page.Edits[1].Top - ScaleY(13);
+  Page.PromptLabels[2].Top := Page.Edits[2].Top - ScaleY(13);
+
+  E0 := TNewStaticText.Create(Page);
+  E0.Parent := Page.Surface;
+  E0.Font.Color := clRed;
+  E0.Caption := '';
+  E0.Visible := False;
+  E0.Top := Page.Edits[0].Top + Page.Edits[0].Height + 2;
+  E0.Left := Page.Edits[0].Left;
+  E0.Width := Page.Edits[0].Width;
+
+  E1 := TNewStaticText.Create(Page);
+  E1.Parent := Page.Surface;
+  E1.Font.Color := clRed;
+  E1.Caption := '';
+  E1.Visible := False;
+  E1.Top := Page.Edits[1].Top + Page.Edits[1].Height + 2;
+  E1.Left := Page.Edits[1].Left;
+  E1.Width := Page.Edits[1].Width;
+
+  E2 := TNewStaticText.Create(Page);
+  E2.Parent := Page.Surface;
+  E2.Font.Color := clRed;
+  E2.Caption := '';
+  E2.Visible := False;
+  E2.Top := Page.Edits[2].Top + Page.Edits[2].Height + 2;
+  E2.Left := Page.Edits[2].Left;
+  E2.Width := Page.Edits[2].Width;
+end;
+
+procedure AttachPinPairFieldErrors(Page: TInputQueryWizardPage; var E0, E1: TNewStaticText);
+var Gap: Integer;
+begin
+  Gap := ScaleY(12);
+  Page.Edits[1].Top := Page.Edits[1].Top + Gap;
+  Page.PromptLabels[1].Top := Page.Edits[1].Top - ScaleY(13);
+
+  E0 := TNewStaticText.Create(Page);
+  E0.Parent := Page.Surface;
+  E0.Font.Color := clRed;
+  E0.Caption := '';
+  E0.Visible := False;
+  E0.Top := Page.Edits[0].Top + Page.Edits[0].Height + 2;
+  E0.Left := Page.Edits[0].Left;
+  E0.Width := Page.Edits[0].Width;
+
+  E1 := TNewStaticText.Create(Page);
+  E1.Parent := Page.Surface;
+  E1.Font.Color := clRed;
+  E1.Caption := '';
+  E1.Visible := False;
+  E1.Top := Page.Edits[1].Top + Page.Edits[1].Height + 2;
+  E1.Left := Page.Edits[1].Left;
+  E1.Width := Page.Edits[1].Width;
+end;
+
+procedure ClearPinPairErrors(E0, E1: TNewStaticText);
+begin
+  if E0 <> nil then begin E0.Caption := ''; E0.Visible := False; end;
+  if E1 <> nil then begin E1.Caption := ''; E1.Visible := False; end;
+end;
+
+procedure ShowPinPairError(E0, E1: TNewStaticText; FieldIdx: Integer; const Msg: String);
+begin
+  ClearPinPairErrors(E0, E1);
+  if FieldIdx = 1 then begin E0.Caption := Msg; E0.Visible := True; end
+  else begin E1.Caption := Msg; E1.Visible := True; end;
 end;
 
 function DriveLetterOfPath(const P: String): String;
@@ -189,13 +289,16 @@ begin
         if Trim(Lines[I]) <> '' then
         begin
           N := GetArrayLength(DefaultPinUsernames);
+          if N >= MAX_DEFAULT_PIN_PAGES then
+          begin
+            // TODO(spec): installer supports MAX_DEFAULT_PIN_PAGES accounts per upgrade; raise if product needs more.
+            Break;
+          end;
           SetArrayLength(DefaultPinUsernames, N + 1);
           DefaultPinUsernames[N] := Trim(Lines[I]);
         end;
   end;
   DefaultPinUserCount := GetArrayLength(DefaultPinUsernames);
-  if DefaultPinUserCount > 5 then
-    DefaultPinUserCount := 5;
 end;
 
 procedure SaveDefaultPinsJson;
@@ -207,11 +310,10 @@ begin
   for I := 0 to DefaultPinUserCount - 1 do
   begin
     U := DefaultPinUsernames[I];
-    if I = 0 then P := NormalizeDigits(DefaultPin1)
-    else if I = 1 then P := NormalizeDigits(DefaultPin2)
-    else if I = 2 then P := NormalizeDigits(DefaultPin3)
-    else if I = 3 then P := NormalizeDigits(DefaultPin4)
-    else P := NormalizeDigits(DefaultPin5);
+    if I < GetArrayLength(DefaultPinStoredPins) then
+      P := DefaultPinStoredPins[I]
+    else
+      P := '';
     if I > 0 then S := S + ',' + #13#10;
     S := S + '  { "username": "' + U + '", "pin": "' + P + '" }';
   end;
@@ -228,6 +330,13 @@ begin
     Result := ExpandConstant('{param:DEFAULTPINS|}')
   else
     Result := DefaultPinsJsonPath;
+end;
+
+function UpgradeHasDefaultPinsFile(Param: String): Boolean;
+var F: String;
+begin
+  F := Trim(GetDefaultPinsFile(''));
+  Result := (F <> '') and FileExists(F);
 end;
 
 function GetInstalledDisplayVersion: String;
@@ -263,6 +372,18 @@ begin
   Result := 0;
 end;
 
+function DefaultPinPageIndex(PageID: Integer): Integer;
+var I: Integer;
+begin
+  Result := -1;
+  for I := 0 to DefaultPinUserCount - 1 do
+    if DefaultPinPageIds[I] = PageID then
+    begin
+      Result := I;
+      Exit;
+    end;
+end;
+
 function ShouldSkipDefaultPinPage(const Index: Integer): Boolean;
 begin
   Result := True;
@@ -272,6 +393,7 @@ begin
 end;
 
 function ShouldSkipPage(PageID: Integer): Boolean;
+var I: Integer;
 begin
   Result := False;
   if not IsFirstInstall then
@@ -280,11 +402,9 @@ begin
       Result := True;
     if (BackupDirPage <> nil) and (PageID = BackupDirPage.ID) then
       Result := not NeedUpgradeBackupPage;
-    if (DefaultPinPage1 <> nil) and (PageID = DefaultPinPage1.ID) then Result := ShouldSkipDefaultPinPage(0);
-    if (DefaultPinPage2 <> nil) and (PageID = DefaultPinPage2.ID) then Result := ShouldSkipDefaultPinPage(1);
-    if (DefaultPinPage3 <> nil) and (PageID = DefaultPinPage3.ID) then Result := ShouldSkipDefaultPinPage(2);
-    if (DefaultPinPage4 <> nil) and (PageID = DefaultPinPage4.ID) then Result := ShouldSkipDefaultPinPage(3);
-    if (DefaultPinPage5 <> nil) and (PageID = DefaultPinPage5.ID) then Result := ShouldSkipDefaultPinPage(4);
+    for I := 0 to DefaultPinUserCount - 1 do
+      if PageID = DefaultPinPageIds[I] then
+        Result := ShouldSkipDefaultPinPage(I);
     Exit;
   end;
   if UseSilentAccounts then
@@ -294,99 +414,199 @@ begin
   end;
 end;
 
-function ValidateDefaultPinPage(const Pin, Pin2: String): Boolean;
-var Err: String;
+function QueryOpenSessionCount(var Count: Integer; var Unknown: Boolean): Boolean;
+var
+  ScriptPath, OutFile, Line: String;
+  Lines: TArrayOfString;
+  Rc: Integer;
 begin
-  Result := ValidatePinPair(Pin, Pin2, Err);
-  if not Result then
-    MsgBox(Err, mbError, MB_OK);
+  Unknown := False;
+  Count := 0;
+  Result := False;
+  ScriptPath := ExpandConstant('{pf}\Checkpoint\Server\tools\Get-InstallerOpenSessionCount.ps1');
+  if not FileExists(ScriptPath) then
+  begin
+    Unknown := True;
+    Exit;
+  end;
+  OutFile := ExpandConstant('{tmp}\open-sessions-count.txt');
+  if Exec('cmd.exe', '/c pwsh.exe -NoProfile -ExecutionPolicy Bypass -File "' + ScriptPath + '" > "' + OutFile + '" 2>nul', '', SW_HIDE, ewWaitUntilTerminated, Rc) then
+    if LoadStringsFromFile(OutFile, Lines) and (GetArrayLength(Lines) > 0) then
+    begin
+      Line := Trim(Lines[0]);
+      if Pos('COUNT=', Line) = 1 then
+      begin
+        Count := StrToIntDef(Copy(Line, 7, Length(Line)), 0);
+        Result := True;
+        Exit;
+      end;
+      if Line = 'UNKNOWN' then
+      begin
+        Unknown := True;
+        Exit;
+      end;
+    end;
+  Unknown := True;
 end;
 
-function NextButtonClick(CurPageID: Integer): Boolean;
-var Err: String;
+function ConfirmUpgradeDespiteOpenSessions: Boolean;
+var
+  Count: Integer;
+  Unknown: Boolean;
+  Msg: String;
+  Buttons: TArrayOfString;
+  ButtonIds: TArrayOfInteger;
+  Choice: Integer;
 begin
   Result := True;
-  Err := '';
-  if CurPageID = Manager1Page.ID then
+  if IsFirstInstall or WizardSilent then Exit;
+  if ExpandConstant('{param:SKIPSESSIONCHECK|}') <> '' then Exit;
+  QueryOpenSessionCount(Count, Unknown);
+  if (not Unknown) and (Count = 0) then Exit;
+
+  SetArrayLength(Buttons, 2);
+  Buttons[0] := 'ارتقا';
+  Buttons[1] := 'انصراف';
+  SetArrayLength(ButtonIds, 2);
+  ButtonIds[0] := 1;
+  ButtonIds[1] := 2;
+
+  if Unknown then
+    Msg := 'وضعیت جلسه‌های باز معلوم نیست. باز هم ارتقا انجام شود؟'
+  else
+    Msg := Format('%d جلسهٔ باز در جریان است. با ارتقا، پنل اپراتور روی این رایانه و روی گوشی‌ها تا روشن شدن دوبارهٔ سرور باز نمی‌شود.', [Count]);
+
+  Choice := TaskDialogMsgBox('ارتقای چک‌پوینت', Msg, Buttons, ButtonIds, 1, 0, 0);
+  Result := (Choice = 1);
+end;
+
+function ValidateAccountPage(Page: TInputQueryWizardPage; E0, E1, E2: TNewStaticText;
+  var U, P, P2: String; const OtherUsers: TArrayOfString): Boolean;
+var Err: String; ErrField, I: Integer;
+begin
+  Result := True;
+  ClearQuery3Errors(E0, E1, E2);
+  U := Trim(Page.Values[0]);
+  P := Page.Values[1];
+  P2 := Page.Values[2];
+
+  if not ValidateUsername(U, Err) then
   begin
-    Manager1User := Trim(Manager1Page.Values[0]);
-    Manager1Pin := Manager1Page.Values[1];
-    Manager1Pin2 := Manager1Page.Values[2];
-    if not ValidateUsername(Manager1User, Err) then begin MsgBox(Err, mbError, MB_OK); Result := False; Exit; end;
-    if not ValidatePinPair(Manager1Pin, Manager1Pin2, Err) then begin MsgBox(Err, mbError, MB_OK); Result := False; Exit; end;
-  end
-  else if CurPageID = Manager2Page.ID then
-  begin
-    Manager2User := Trim(Manager2Page.Values[0]);
-    Manager2Pin := Manager2Page.Values[1];
-    Manager2Pin2 := Manager2Page.Values[2];
-    if not ValidateUsername(Manager2User, Err) then begin MsgBox(Err, mbError, MB_OK); Result := False; Exit; end;
-    if CompareText(Manager2User, Manager1User) = 0 then begin MsgBox('این نام کاربری برای مدیر اول انتخاب شده است.', mbError, MB_OK); Result := False; Exit; end;
-    if not ValidatePinPair(Manager2Pin, Manager2Pin2, Err) then begin MsgBox(Err, mbError, MB_OK); Result := False; Exit; end;
-  end
-  else if CurPageID = OperatorPage.ID then
-  begin
-    OperatorUser := Trim(OperatorPage.Values[0]);
-    OperatorPin := OperatorPage.Values[1];
-    OperatorPin2 := OperatorPage.Values[2];
-    if not ValidateUsername(OperatorUser, Err) then begin MsgBox(Err, mbError, MB_OK); Result := False; Exit; end;
-    if (CompareText(OperatorUser, Manager1User) = 0) or (CompareText(OperatorUser, Manager2User) = 0) then
+    ShowQuery3Error(E0, E1, E2, 0, Err);
+    Page.Edits[0].SetFocus;
+    Result := False;
+    Exit;
+  end;
+
+  for I := 0 to GetArrayLength(OtherUsers) - 1 do
+    if CompareText(U, OtherUsers[I]) = 0 then
     begin
-      MsgBox('این نام کاربری برای یکی از مدیرها انتخاب شده است.', mbError, MB_OK);
+      if I = 0 then
+        ShowQuery3Error(E0, E1, E2, 0, 'این نام کاربری برای مدیر اول انتخاب شده است.')
+      else
+        ShowQuery3Error(E0, E1, E2, 0, 'این نام کاربری برای یکی از مدیرها انتخاب شده است.');
+      Page.Edits[0].SetFocus;
       Result := False;
       Exit;
     end;
-    if not ValidatePinPair(OperatorPin, OperatorPin2, Err) then begin MsgBox(Err, mbError, MB_OK); Result := False; Exit; end;
-  end
-  else if (BackupDirPage <> nil) and (CurPageID = BackupDirPage.ID) then
-  begin
-    SecondaryBackupDir := BackupDirPage.Values[0];
-    SaveAccountsJson;
-    if Trim(SecondaryBackupDir) = '' then
-    begin
-      if MsgBox('بدون پوشهٔ دوم، فقط یک نسخه از پشتیبان روی همین دیسک می‌ماند. بعداً می‌توانید پوشه را اضافه کنید. ادامه می‌دهید؟', mbConfirmation, MB_YESNO) = IDNO then
-        Result := False;
-    end;
-  end
-  else if (DefaultPinPage1 <> nil) and (CurPageID = DefaultPinPage1.ID) then
-  begin
-    DefaultPin1 := DefaultPinPage1.Values[0]; DefaultPin1b := DefaultPinPage1.Values[1];
-    Result := ValidateDefaultPinPage(DefaultPin1, DefaultPin1b);
-  end
-  else if (DefaultPinPage2 <> nil) and (CurPageID = DefaultPinPage2.ID) then
-  begin
-    DefaultPin2 := DefaultPinPage2.Values[0]; DefaultPin2b := DefaultPinPage2.Values[1];
-    Result := ValidateDefaultPinPage(DefaultPin2, DefaultPin2b);
-  end
-  else if (DefaultPinPage3 <> nil) and (CurPageID = DefaultPinPage3.ID) then
-  begin
-    DefaultPin3 := DefaultPinPage3.Values[0]; DefaultPin3b := DefaultPinPage3.Values[1];
-    Result := ValidateDefaultPinPage(DefaultPin3, DefaultPin3b);
-  end
-  else if (DefaultPinPage4 <> nil) and (CurPageID = DefaultPinPage4.ID) then
-  begin
-    DefaultPin4 := DefaultPinPage4.Values[0]; DefaultPin4b := DefaultPinPage4.Values[1];
-    Result := ValidateDefaultPinPage(DefaultPin4, DefaultPin4b);
-  end
-  else if (DefaultPinPage5 <> nil) and (CurPageID = DefaultPinPage5.ID) then
-  begin
-    DefaultPin5 := DefaultPinPage5.Values[0]; DefaultPin5b := DefaultPinPage5.Values[1];
-    Result := ValidateDefaultPinPage(DefaultPin5, DefaultPin5b);
-  end;
 
-  if Result and (DefaultPinUserCount > 0) and not UseSilentDefaultPins then
+  if not ValidatePinPairEx(P, P2, Err, ErrField) then
   begin
-    if (DefaultPinPage5 <> nil) and (CurPageID = DefaultPinPage5.ID) then SaveDefaultPinsJson
-    else if (DefaultPinUserCount = 4) and (DefaultPinPage4 <> nil) and (CurPageID = DefaultPinPage4.ID) then SaveDefaultPinsJson
-    else if (DefaultPinUserCount = 3) and (DefaultPinPage3 <> nil) and (CurPageID = DefaultPinPage3.ID) then SaveDefaultPinsJson
-    else if (DefaultPinUserCount = 2) and (DefaultPinPage2 <> nil) and (CurPageID = DefaultPinPage2.ID) then SaveDefaultPinsJson
-    else if (DefaultPinUserCount = 1) and (DefaultPinPage1 <> nil) and (CurPageID = DefaultPinPage1.ID) then SaveDefaultPinsJson;
+    ShowQuery3Error(E0, E1, E2, ErrField, Err);
+    Page.Edits[ErrField].SetFocus;
+    Result := False;
+    Exit;
   end;
 end;
 
-procedure CurPageChanged(CurPageID: Integer);
-var BaseWelcome, Wv2Line: String;
+function ValidateDefaultPinPageAt(Index: Integer): Boolean;
+var
+  Page: TInputQueryWizardPage;
+  Err: String;
+  ErrField: Integer;
+  Pin, Pin2: String;
 begin
+  Result := False;
+  Page := DefaultPinPages[Index];
+  Pin := Page.Values[0];
+  Pin2 := Page.Values[1];
+  ClearPinPairErrors(DefaultPinErrPin[Index], DefaultPinErrRepeat[Index]);
+  if not ValidatePinPairEx(Pin, Pin2, Err, ErrField) then
+  begin
+    ShowPinPairError(DefaultPinErrPin[Index], DefaultPinErrRepeat[Index], ErrField, Err);
+    Page.Edits[ErrField - 1].SetFocus;
+    Exit;
+  end;
+  if GetArrayLength(DefaultPinStoredPins) < DefaultPinUserCount then
+    SetArrayLength(DefaultPinStoredPins, DefaultPinUserCount);
+  DefaultPinStoredPins[Index] := NormalizeDigits(Pin);
+  Result := True;
+  if Index = DefaultPinUserCount - 1 then
+    SaveDefaultPinsJson;
+end;
+
+function NextButtonClick(CurPageID: Integer): Boolean;
+var Others: TArrayOfString;
+begin
+  Result := True;
+
+  if (CurPageID = wpReady) and (not IsFirstInstall) then
+  begin
+    Result := ConfirmUpgradeDespiteOpenSessions;
+    Exit;
+  end;
+
+  if (Manager1Page <> nil) and (CurPageID = Manager1Page.ID) then
+  begin
+    SetArrayLength(Others, 0);
+    if not ValidateAccountPage(Manager1Page, M1Err0, M1Err1, M1Err2, Manager1User, Manager1Pin, Manager1Pin2, Others) then
+      Result := False;
+    Exit;
+  end;
+
+  if (Manager2Page <> nil) and (CurPageID = Manager2Page.ID) then
+  begin
+    SetArrayLength(Others, 1);
+    Others[0] := Manager1User;
+    if not ValidateAccountPage(Manager2Page, M2Err0, M2Err1, M2Err2, Manager2User, Manager2Pin, Manager2Pin2, Others) then
+      Result := False;
+    Exit;
+  end;
+
+  if (OperatorPage <> nil) and (CurPageID = OperatorPage.ID) then
+  begin
+    SetArrayLength(Others, 2);
+    Others[0] := Manager1User;
+    Others[1] := Manager2User;
+    if not ValidateAccountPage(OperatorPage, OpErr0, OpErr1, OpErr2, OperatorUser, OperatorPin, OperatorPin2, Others) then
+      Result := False;
+    Exit;
+  end;
+
+  if (BackupDirPage <> nil) and (CurPageID = BackupDirPage.ID) then
+  begin
+    SecondaryBackupDir := BackupDirPage.Values[0];
+    SaveAccountsJson;
+    Exit;
+  end;
+
+  if DefaultPinPageIndex(CurPageID) >= 0 then
+    Result := ValidateDefaultPinPageAt(DefaultPinPageIndex(CurPageID));
+end;
+
+procedure CurPageChanged(CurPageID: Integer);
+var BaseWelcome, Wv2Line: String; Idx: Integer;
+begin
+  if CurPageID = wpReady then Exit;
+
+  if (Manager1Page <> nil) and (CurPageID = Manager1Page.ID) then ClearQuery3Errors(M1Err0, M1Err1, M1Err2);
+  if (Manager2Page <> nil) and (CurPageID = Manager2Page.ID) then ClearQuery3Errors(M2Err0, M2Err1, M2Err2);
+  if (OperatorPage <> nil) and (CurPageID = OperatorPage.ID) then ClearQuery3Errors(OpErr0, OpErr1, OpErr2);
+
+  Idx := DefaultPinPageIndex(CurPageID);
+  if Idx >= 0 then
+    ClearPinPairErrors(DefaultPinErrPin[Idx], DefaultPinErrRepeat[Idx]);
+
   if CurPageID = wpWelcome then
   begin
     if IsFirstInstall then
@@ -411,7 +631,7 @@ begin
 end;
 
 procedure InitializeWizard;
-var PrevId: Integer; I: Integer; U: String;
+var PrevId: Integer; I: Integer; U: String; P: TInputQueryWizardPage;
 begin
   SilentAccountsPath := ExpandConstant('{param:ACCOUNTS|}');
   SilentDefaultPinsPath := ExpandConstant('{param:DEFAULTPINS|}');
@@ -427,18 +647,21 @@ begin
     Manager1Page.Add('نام کاربری:', False);
     Manager1Page.Add('رمز:', True);
     Manager1Page.Add('تکرار رمز:', True);
+    AttachQuery3FieldErrors(Manager1Page, M1Err0, M1Err1, M1Err2);
 
     Manager2Page := CreateInputQueryPage(Manager1Page.ID,
       'حساب مدیر دوم', 'هر مدیر حساب جدای خودش را دارد.', ' ');
     Manager2Page.Add('نام کاربری:', False);
     Manager2Page.Add('رمز:', True);
     Manager2Page.Add('تکرار رمز:', True);
+    AttachQuery3FieldErrors(Manager2Page, M2Err0, M2Err1, M2Err2);
 
     OperatorPage := CreateInputQueryPage(Manager2Page.ID,
       'حساب اپراتور', 'اپراتور با این حساب وارد پنل می‌شود.', ' ');
     OperatorPage.Add('نام کاربری:', False);
     OperatorPage.Add('رمز:', True);
     OperatorPage.Add('تکرار رمز:', True);
+    AttachQuery3FieldErrors(OperatorPage, OpErr0, OpErr1, OpErr2);
 
     BackupDirPage := CreateInputDirPage(OperatorPage.ID,
       'پوشهٔ دوم پشتیبان',
@@ -458,56 +681,20 @@ begin
   else
   begin
     LoadDefaultPinUsers;
+    SetArrayLength(DefaultPinStoredPins, DefaultPinUserCount);
     PrevId := wpWelcome;
     for I := 0 to DefaultPinUserCount - 1 do
     begin
-      if I >= 5 then Break;
       U := DefaultPinUsernames[I];
-      if I = 0 then
-      begin
-        DefaultPinPage1 := CreateInputQueryPage(PrevId,
-          'عوض کردن رمز پیش‌فرض',
-          Format('رمز حساب %s هنوز رمز پیش‌فرض است و دیگر پذیرفته نمی‌شود. یک رمز تازه بگذارید.', [U]), '');
-        DefaultPinPage1.Add('رمز تازه:', True);
-        DefaultPinPage1.Add('تکرار رمز تازه:', True);
-        PrevId := DefaultPinPage1.ID;
-      end
-      else if I = 1 then
-      begin
-        DefaultPinPage2 := CreateInputQueryPage(PrevId,
-          'عوض کردن رمز پیش‌فرض',
-          Format('رمز حساب %s هنوز رمز پیش‌فرض است و دیگر پذیرفته نمی‌شود. یک رمز تازه بگذارید.', [U]), '');
-        DefaultPinPage2.Add('رمز تازه:', True);
-        DefaultPinPage2.Add('تکرار رمز تازه:', True);
-        PrevId := DefaultPinPage2.ID;
-      end
-      else if I = 2 then
-      begin
-        DefaultPinPage3 := CreateInputQueryPage(PrevId,
-          'عوض کردن رمز پیش‌فرض',
-          Format('رمز حساب %s هنوز رمز پیش‌فرض است و دیگر پذیرفته نمی‌شود. یک رمز تازه بگذارید.', [U]), '');
-        DefaultPinPage3.Add('رمز تازه:', True);
-        DefaultPinPage3.Add('تکرار رمز تازه:', True);
-        PrevId := DefaultPinPage3.ID;
-      end
-      else if I = 3 then
-      begin
-        DefaultPinPage4 := CreateInputQueryPage(PrevId,
-          'عوض کردن رمز پیش‌فرض',
-          Format('رمز حساب %s هنوز رمز پیش‌فرض است و دیگر پذیرفته نمی‌شود. یک رمز تازه بگذارید.', [U]), '');
-        DefaultPinPage4.Add('رمز تازه:', True);
-        DefaultPinPage4.Add('تکرار رمز تازه:', True);
-        PrevId := DefaultPinPage4.ID;
-      end
-      else
-      begin
-        DefaultPinPage5 := CreateInputQueryPage(PrevId,
-          'عوض کردن رمز پیش‌فرض',
-          Format('رمز حساب %s هنوز رمز پیش‌فرض است و دیگر پذیرفته نمی‌شود. یک رمز تازه بگذارید.', [U]), '');
-        DefaultPinPage5.Add('رمز تازه:', True);
-        DefaultPinPage5.Add('تکرار رمز تازه:', True);
-        PrevId := DefaultPinPage5.ID;
-      end;
+      P := CreateInputQueryPage(PrevId,
+        'عوض کردن رمز پیش‌فرض',
+        Format('رمز حساب %s هنوز رمز پیش‌فرض است و دیگر پذیرفته نمی‌شود. یک رمز تازه بگذارید.', [U]), '');
+      P.Add('رمز تازه:', True);
+      P.Add('تکرار رمز تازه:', True);
+      AttachPinPairFieldErrors(P, DefaultPinErrPin[I], DefaultPinErrRepeat[I]);
+      DefaultPinPages[I] := P;
+      DefaultPinPageIds[I] := P.ID;
+      PrevId := P.ID;
     end;
 
     if NeedUpgradeBackupPage then

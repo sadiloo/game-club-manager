@@ -16,7 +16,7 @@ function Install-ServerSetup {
     param([string] $Exe, [string] $Accounts, [string] $FromVer)
     if ($FromVer) { $env:CHECKPOINT_UPGRADE_FROM = $FromVer }
     $proc = Start-Process -FilePath $Exe -ArgumentList @(
-        "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/ACCOUNTS=$Accounts"
+        "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/ACCOUNTS=$Accounts", "/SKIPSESSIONCHECK=1"
     ) -Wait -PassThru
     if ($proc.ExitCode -ne 0) { throw "setup exit $($proc.ExitCode) for $Exe" }
 }

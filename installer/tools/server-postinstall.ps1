@@ -1,7 +1,7 @@
 # Server installer post-install (elevated); -InstallPhase splits §1.8 status steps.
 param(
     [string] $InstallMode = "install",
-    [ValidateSet("install-all", "webview2", "database", "accounts", "services", "firewall", "backup", "start", "upgrade")]
+    [ValidateSet("install-all", "webview2", "database", "accounts", "services", "firewall", "backup", "start", "upgrade", "upgrade-pins", "upgrade-stop", "upgrade-backup", "upgrade-start")]
     [string] $InstallPhase = "install-all",
     [string] $AccountsFile = "",
     [string] $DefaultPinsFile = "",
@@ -55,24 +55,50 @@ if ($isUpgrade -and (Test-Path -LiteralPath $configPath)) {
     } | ConvertTo-Json | Set-Content -LiteralPath $stagingSecretsPath -Encoding UTF8
 }
 
-if ($InstallMode -eq "upgrade" -and (Test-Phase @("upgrade", "install-all"))) {
-    if ($DefaultPinsFile -and (Test-Path -LiteralPath $DefaultPinsFile)) {
-        & (Join-Path $PSScriptRoot "Apply-DefaultPinReplacements.ps1") -PinsFile $DefaultPinsFile -ServerExe $ServerExe
+if ($InstallMode -eq "upgrade") {
+    if (Test-Phase @("upgrade-pins", "upgrade", "install-all")) {
+        if ($DefaultPinsFile -and (Test-Path -LiteralPath $DefaultPinsFile)) {
+            & (Join-Path $PSScriptRoot "Apply-DefaultPinReplacements.ps1") -PinsFile $DefaultPinsFile -ServerExe $ServerExe
+        }
+        if ($InstallPhase -eq "upgrade-pins") { exit 0 }
     }
-    $oldVer = $env:CHECKPOINT_UPGRADE_FROM
-    if (-not $oldVer) { $oldVer = "unknown" }
-    $stamp = Get-Date -Format "yyyyMMdd-HHmm"
-    $preDump = Join-Path $backupsDir "pre-upgrade-$oldVer-$stamp.dump"
-    $env:PGPASSWORD = $dbPassword
-    $pgDump = Join-Path $pgRoot "bin\pg_dump.exe"
-    Stop-Service CheckpointServer -ErrorAction SilentlyContinue
-    & $pgDump -Fc -h 127.0.0.1 -p 5433 -U postgres -d checkpoint -f $preDump
-    if ($LASTEXITCODE -ne 0) { throw "pre-upgrade pg_dump failed" }
-    $sw = [System.Diagnostics.Stopwatch]::StartNew()
-    Start-Service CheckpointServer -ErrorAction Stop
-    $sw.Stop()
-    Add-Content -LiteralPath (Join-Path $logsDir "upgrade.log") -Value "$(Get-Date -Format o) downtimeSeconds=$([int]$sw.Elapsed.TotalSeconds) preDump=$preDump"
-    exit 0
+    if (Test-Phase @("upgrade-stop", "upgrade", "install-all")) {
+        Stop-Service CheckpointServer -ErrorAction SilentlyContinue
+        if ($InstallPhase -eq "upgrade-stop") { exit 0 }
+    }
+    if (Test-Phase @("upgrade-backup", "upgrade", "install-all")) {
+        $oldVer = $env:CHECKPOINT_UPGRADE_FROM
+        if (-not $oldVer) { $oldVer = "unknown" }
+        $stamp = Get-Date -Format "yyyyMMdd-HHmm"
+        $preDump = Join-Path $backupsDir "pre-upgrade-$oldVer-$stamp.dump"
+        $env:PGPASSWORD = $dbPassword
+        $pgDump = Join-Path $pgRoot "bin\pg_dump.exe"
+        & $pgDump -Fc -h 127.0.0.1 -p 5433 -U postgres -d checkpoint -f $preDump
+        if ($LASTEXITCODE -ne 0) { throw "pre-upgrade pg_dump failed" }
+        $env:CHECKPOINT_PREUPGRADE_DUMP = $preDump
+        if ($InstallPhase -eq "upgrade-backup") { exit 0 }
+    }
+    if (Test-Phase @("upgrade-start", "upgrade", "install-all")) {
+        if ($AccountsFile -and (Test-Path -LiteralPath $AccountsFile)) {
+            $acc = Get-Content -LiteralPath $AccountsFile -Raw | ConvertFrom-Json
+            if ($acc.secondaryBackupDir) {
+                $SecondaryBackupDir = [string]$acc.secondaryBackupDir
+                $flag = Join-Path $logsDir "backup-secondary-missing.flag"
+                if (Test-Path -LiteralPath $flag) { Remove-Item -LiteralPath $flag -Force }
+                & (Join-Path $PSScriptRoot "Register-CheckpointDailyBackup.ps1") -BackupScriptPath (Join-Path $PSScriptRoot "backup-daily.ps1") -SecondaryBackupDir $SecondaryBackupDir
+            }
+        }
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
+        Start-Service CheckpointServer -ErrorAction Stop
+        $sw.Stop()
+        $preDump = $env:CHECKPOINT_PREUPGRADE_DUMP
+        if (-not $preDump) {
+            $oldVer = if ($env:CHECKPOINT_UPGRADE_FROM) { $env:CHECKPOINT_UPGRADE_FROM } else { "unknown" }
+            $preDump = (Get-ChildItem -Path $backupsDir -Filter "pre-upgrade-$oldVer-*.dump" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1).FullName
+        }
+        Add-Content -LiteralPath (Join-Path $logsDir "upgrade.log") -Value "$(Get-Date -Format o) downtimeSeconds=$([int]$sw.Elapsed.TotalSeconds) preDump=$preDump"
+        exit 0
+    }
 }
 
 if (Test-Phase @("webview2")) {

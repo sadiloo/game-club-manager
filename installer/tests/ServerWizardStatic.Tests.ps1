@@ -30,4 +30,34 @@ Describe "Server wizard spec strings" {
     It "silent DEFAULTPINS switch (OQ-2)" {
         $script:Inc | Should -Match "DEFAULTPINS"
     }
+
+    It "upgrade StatusMsg steps (§2.2)" {
+        $script:Iss | Should -Match "در حال توقف سرور"
+        $script:Iss | Should -Match "در حال گرفتن پشتیبان پیش از ارتقا"
+        $script:Iss | Should -Match "upgrade-stop"
+        $script:Iss | Should -Match "upgrade-start"
+    }
+
+    It "inline field errors not MsgBox (§1.5)" {
+        $script:Inc | Should -Match "ShowQuery3Error"
+        $script:Inc | Should -Match "clRed"
+        $script:Inc | Should -Not -Match "MsgBox\(Err"
+    }
+
+    It "default-pin pages not capped at 5 (§2.3)" {
+        $script:Inc | Should -Match "MAX_DEFAULT_PIN_PAGES"
+        $script:Inc | Should -Not -Match "DefaultPinUserCount > 5"
+    }
+
+    It "open-sessions upgrade confirm (§2.2α)" {
+        $script:Inc | Should -Match "Get-InstallerOpenSessionCount"
+        $script:Inc | Should -Match "TaskDialogMsgBox"
+        $script:Inc | Should -Match "جلسهٔ باز در جریان است"
+    }
+
+    It "default-pins many-user fixture (§2.3)" {
+        $many = Join-Path $PSScriptRoot "..\ci\default-pins-silent-many.json"
+        $items = Get-Content -LiteralPath $many -Raw | ConvertFrom-Json
+        @($items).Count | Should -BeGreaterOrEqual 6
+    }
 }
