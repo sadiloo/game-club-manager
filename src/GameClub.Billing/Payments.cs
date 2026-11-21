@@ -410,7 +410,9 @@ public static class PaymentAllocator
         RoundingPolicy rounding,
         IReadOnlyList<MemberWallet>? wallets = null,
         DebtPolicy? walletDebt = null,
-        WalletPocket? pcBalance = null)
+        WalletPocket? pcBalance = null,
+        long cashEquivalentPayable = 0,
+        long cashEquivalentRounding = 0)
     {
         if (lines is null)
         {
@@ -644,34 +646,89 @@ public static class PaymentAllocator
             }
         }
 
-        if (counterTendered != counterRounded)
+        var deferCounterCheck = cashEquivalentPayable > 0 && counterExact == 0 && balanceApplied > 0;
+        if (counterTendered != counterRounded && !deferCounterCheck)
         {
             errors.Add(new PaymentError(
                 PaymentErrors.SumMismatch,
                 $"Counter tenders {counterTendered} toman against rounded remainder {counterRounded}."));
         }
 
-        if (rounding.Enabled && counterExact == 0 && counterTendered == 0 && balanceApplied > 0)
+        var mayLiftWalletTowardCash = cashEquivalentRounding > 0
+            && cashEquivalentPayable - cashEquivalentRounding == exact
+            && deferCounterCheck;
+        long roundingGapCounter = 0;
+        var trackingCashCollectible = false;
+        if (cashEquivalentPayable > 0 && balanceApplied > 0)
         {
-            var (roundedTotal, walletRoundDelta) = RoundPayableWhenCounterWouldPayAll(lines, exact, rounding);
-            var lift = roundedTotal - balanceApplied;
-            if (lift > 0)
+            if (mayLiftWalletTowardCash)
             {
-                if (ApplyWalletRoundingLift(tenders, results, pockets, walletDebt, lift))
+                var needTowardCash = cashEquivalentPayable - balanceApplied;
+                if (needTowardCash > 0)
                 {
-                    roundingDelta = MoneyMath.CheckedAdd(roundingDelta, walletRoundDelta);
-                    balanceApplied = roundedTotal;
+                    var drawn = ApplyWalletRoundingLift(tenders, results, pockets, walletDebt, needTowardCash)
+                        ? needTowardCash
+                        : DrawWalletTowardTarget(tenders, results, pockets, walletDebt, needTowardCash);
+                    if (drawn > 0)
+                    {
+                        balanceApplied = MoneyMath.CheckedAdd(balanceApplied, drawn);
+                    }
                 }
-                else
+            }
+
+            var shortfall = cashEquivalentPayable - balanceApplied - counterTendered;
+            if (shortfall > 0)
+            {
+                var linesCleared = true;
+                for (var i = 0; i < lines.Count; i++)
                 {
-                    errors.Add(new PaymentError(
-                        PaymentErrors.InsufficientWallet,
-                        $"Wallet cannot cover {lift} toman of invoice rounding."));
+                    if (remaining[i] > 0)
+                    {
+                        linesCleared = false;
+                        break;
+                    }
                 }
+
+                if (linesCleared)
+                {
+                    roundingGapCounter = shortfall;
+                    if (shortfall > 0)
+                    {
+                        var gapDrawn = DrawWalletTowardTarget(tenders, results, pockets, walletDebt, shortfall);
+                        if (gapDrawn > 0)
+                        {
+                            balanceApplied = MoneyMath.CheckedAdd(balanceApplied, gapDrawn);
+                            roundingGapCounter = cashEquivalentPayable - balanceApplied - counterTendered;
+                        }
+                    }
+                }
+            }
+
+            if (balanceApplied + counterTendered == cashEquivalentPayable)
+            {
+                trackingCashCollectible = true;
+                roundingDelta = cashEquivalentRounding;
+                counterExact = counterTendered;
+                counterRounded = counterTendered;
+                roundingGapCounter = 0;
+            }
+            else if (roundingGapCounter > 0)
+            {
+                counterExact = roundingGapCounter;
+                counterRounded = roundingGapCounter;
             }
         }
 
-        var payable = MoneyMath.CheckedAdd(balanceApplied, counterRounded);
+        if (roundingGapCounter > 0 && counterTendered != counterRounded)
+        {
+            errors.Add(new PaymentError(
+                PaymentErrors.SumMismatch,
+                $"Counter tenders {counterTendered} toman against rounded remainder {counterRounded}."));
+        }
+
+        var payable = trackingCashCollectible
+            ? cashEquivalentPayable
+            : MoneyMath.CheckedAdd(balanceApplied, counterRounded);
         var remainingWallets = new List<MemberWallet>();
         foreach (var pair in pockets)
         {
@@ -702,37 +759,62 @@ public static class PaymentAllocator
             remainingWallets);
     }
 
-    private static (long RoundedPayable, long RoundingDelta) RoundPayableWhenCounterWouldPayAll(
-        IReadOnlyList<PayableLine> lines,
-        long exact,
-        RoundingPolicy rounding)
+    private static long DrawWalletTowardTarget(
+        IReadOnlyList<Tender> tenders,
+        TenderResult?[] results,
+        Dictionary<string, WalletPocket> pockets,
+        DebtPolicy walletDebt,
+        long targetAmount)
     {
-        if (!rounding.Enabled)
+        if (targetAmount <= 0)
         {
-            return (exact, 0);
+            return 0;
         }
 
-        long timeTotal = 0;
-        long otherTotal = 0;
-        for (var i = 0; i < lines.Count; i++)
+        long drawn = 0;
+        for (var i = 0; i < tenders.Count; i++)
         {
-            if (lines[i].IsTimeCharge)
+            var result = results[i];
+            if (result is not { Accepted: true, Method: PaymentMethod.Wallet })
             {
-                timeTotal = MoneyMath.CheckedAdd(timeTotal, lines[i].NetToman);
+                continue;
             }
-            else
+
+            var memberId = result.MemberId;
+            if (memberId is null || !pockets.TryGetValue(memberId, out var pocket))
             {
-                otherTotal = MoneyMath.CheckedAdd(otherTotal, lines[i].NetToman);
+                continue;
             }
+
+            var need = targetAmount - drawn;
+            if (need <= 0)
+            {
+                break;
+            }
+
+            var room = pocket.SpendRoom(walletDebt);
+            var take = need < room ? need : room;
+            if (take <= 0)
+            {
+                continue;
+            }
+
+            if (!pocket.TrySpend(take, walletDebt, out var updated, out var gift, out var real))
+            {
+                continue;
+            }
+
+            pockets[memberId] = updated;
+            drawn = MoneyMath.CheckedAdd(drawn, take);
+            results[i] = result with
+            {
+                AmountToman = result.AmountToman + take,
+                GiftDrawnToman = result.GiftDrawnToman + gift,
+                RealDrawnToman = result.RealDrawnToman + real,
+            };
         }
 
-        if (rounding.Scope == RoundingScope.TimeChargesOnly)
-        {
-            var (roundedTime, delta) = MoneyMath.Round(timeTotal, rounding);
-            return (MoneyMath.CheckedAdd(roundedTime, otherTotal), delta);
-        }
-
-        return MoneyMath.Round(exact, rounding);
+        return drawn;
     }
 
     private static bool ApplyWalletRoundingLift(

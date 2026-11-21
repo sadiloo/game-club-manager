@@ -800,11 +800,21 @@ public static class InvoiceCalculator
         IReadOnlyList<Tender> tenders,
         IReadOnlyList<MemberWallet>? wallets = null,
         DebtPolicy? walletDebt = null,
-        WalletPocket? pcBalance = null)
+        WalletPocket? pcBalance = null,
+        bool walletRoundsLikeCash = true)
     {
         var priced = Calculate(request with { Rounding = RoundingPolicy.Off });
+        var cashEquivalent = walletRoundsLikeCash ? Calculate(request) : priced;
         var nets = PayableNets(request, priced.NetBeforeRoundingToman);
-        var allocation = PaymentAllocator.Allocate(nets, tenders, request.Rounding, wallets, walletDebt, pcBalance);
+        var allocation = PaymentAllocator.Allocate(
+            nets,
+            tenders,
+            request.Rounding,
+            wallets,
+            walletDebt,
+            pcBalance,
+            walletRoundsLikeCash ? cashEquivalent.PayableToman : 0,
+            walletRoundsLikeCash ? cashEquivalent.RoundingToman : 0);
         var date = TehranTime.Date(request.IssuedAt);
         var lines = new List<InvoiceLine>();
         foreach (var line in priced.Lines)

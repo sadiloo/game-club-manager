@@ -106,7 +106,13 @@ public sealed class MemberBillComposer
                 : (pcGraceWaivedPlay || pcWriteOff) && pcChargeInvoice is not null
                     ? request with { TimeCharges = CollectableTimeLines(timeLines, pcChargeInvoice) }
                     : request;
-            var (collected, alloc) = InvoiceCalculator.Collect(collectRequest, previewTenders!, wallets, debt);
+            var walletRoundsLikeCash = !pcWriteOff && !pcGraceWaivedPlay;
+            var (collected, alloc) = InvoiceCalculator.Collect(
+                collectRequest,
+                previewTenders!,
+                wallets,
+                debt,
+                walletRoundsLikeCash: walletRoundsLikeCash);
             invoice = pcWriteOff && pcChargeInvoice is not null
                 ? ComposePcOvershootInvoice(pcChargeInvoice, collected)
                 : collected;
