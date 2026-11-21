@@ -26,6 +26,32 @@ public sealed class InpageFormsPr51R4bWalletRoundingTests(GameClubWebApplication
     }
 
     [Fact]
+    public async Task wallet_typed_49500_on_49500_buffet_draws_50000_when_balance_60000()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var op = await factory.CreateOperatorClientAsync();
+        var customerId = await CreateCustomerAsync(op);
+        (await op.PostAsJsonAsync(
+            $"/api/operator/members/customers/{customerId}/wallet/top-up",
+            new { method = "Cash", amountToman = 60_000L, commandId = Guid.NewGuid() })).EnsureSuccessStatusCode();
+
+        var start = await op.PostAsync("/api/operator/buffet-only/start", null);
+        start.EnsureSuccessStatusCode();
+        var openSaleId = (await start.Content.ReadFromJsonAsync<JsonElement>())!.GetProperty("openSaleId").GetGuid();
+        await op.PutAsJsonAsync($"/api/operator/buffet-only/{openSaleId}/customer", new { customerId });
+        await op.PostAsJsonAsync(
+            $"/api/operator/buffet-only/{openSaleId}/lines",
+            new { catalogItemId = CustomServiceId, customAmountToman = 49_500L });
+        await op.PostAsync($"/api/operator/buffet-only/{openSaleId}/checkout", null);
+
+        var before = await WalletSpendableAsync(op, customerId);
+        (await op.PostAsJsonAsync(
+            $"/api/operator/buffet-only/{openSaleId}/confirm",
+            new { payments = new[] { new { method = "Wallet", amountToman = 49_500L } } })).EnsureSuccessStatusCode();
+        Assert.Equal(before - 50_000, await WalletSpendableAsync(op, customerId));
+    }
+
+    [Fact]
     public async Task wallet_pay_on_49500_buffet_bill_deducts_50000_same_rounding_as_cash()
     {
         await S3TestHelpers.ResetAsync(factory);

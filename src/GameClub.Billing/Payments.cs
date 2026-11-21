@@ -655,16 +655,7 @@ public static class PaymentAllocator
         {
             var (roundedTotal, walletRoundDelta) = RoundPayableWhenCounterWouldPayAll(lines, exact, rounding);
             var lift = roundedTotal - balanceApplied;
-            long walletTendered = 0;
-            foreach (var tender in tenders)
-            {
-                if (tender.Method == PaymentMethod.Wallet)
-                {
-                    walletTendered = MoneyMath.CheckedAdd(walletTendered, tender.AmountToman);
-                }
-            }
-
-            if (lift > 0 && walletTendered >= roundedTotal)
+            if (lift > 0)
             {
                 if (ApplyWalletRoundingLift(tenders, results, pockets, walletDebt, lift))
                 {

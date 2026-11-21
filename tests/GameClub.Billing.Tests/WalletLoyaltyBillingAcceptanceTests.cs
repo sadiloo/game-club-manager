@@ -55,6 +55,39 @@ public class WalletLoyaltyBillingAcceptanceTests
     }
 
     [Fact]
+    public void wl_scenario_buffet_full_wallet_typed_unrounded_49500_draws_50000_when_balance_covers_rounded()
+    {
+        var request = new InvoiceRequest(
+            [],
+            [new BuffetLine("custom", "خدمت", 1, 49_500)],
+            [],
+            null,
+            null,
+            DiscountPolicy.Default,
+            Step5Up,
+            T.At(2026, 6, 3, 15, 0));
+        var cashOnly = InvoiceCalculator.Calculate(request);
+        Assert.Equal(50_000, cashOnly.PayableToman);
+        var wallet60k = new MemberWallet("m", 60_000, 0);
+        var (invoiceLow, allocLow) = InvoiceCalculator.Collect(
+            request,
+            [new Tender(PaymentMethod.Wallet, 49_500, "m")],
+            [wallet60k]);
+        Assert.True(allocLow.IsValid);
+        Assert.Equal(50_000, allocLow.PayableToman);
+        Assert.Equal(50_000, allocLow.Tenders.Single().AmountToman);
+        var (invoiceHigh, allocHigh) = InvoiceCalculator.Collect(
+            request,
+            [new Tender(PaymentMethod.Wallet, 50_000, "m2")],
+            [new MemberWallet("m2", 60_000, 0)]);
+        Assert.True(allocHigh.IsValid);
+        Assert.Equal(cashOnly.PayableToman, allocHigh.PayableToman);
+        Assert.Equal(50_000, allocHigh.Tenders.Single().AmountToman);
+        Assert.Equal(50_000, invoiceLow.PayableToman);
+        Assert.Equal(50_000, invoiceHigh.PayableToman);
+    }
+
+    [Fact]
     public void wl_scenario_buffet_only_full_wallet_49500_rounds_like_cash()
     {
         var request = new InvoiceRequest(

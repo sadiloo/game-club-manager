@@ -241,7 +241,7 @@ public sealed class OperatorBillService(
                 throw new ApiException(StatusCodes.Status400BadRequest, "wallet_requires_member", "پرداخت کیف پول به عضو پیوسته نیاز دارد.");
             }
 
-            if (detail?.Allocation is not { IsValid: true } alloc)
+            if (detail is null || detail.Allocation is not { IsValid: true } alloc)
             {
                 throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", "تخصیص کیف پول انجام نشد.");
             }
@@ -260,7 +260,17 @@ public sealed class OperatorBillService(
             var tendered = payments.Sum(p => p.AmountToman);
             if (tendered != allocPayable)
             {
-                throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", "جمع پرداختی با مبلغ قابل پرداخت برابر نیست.");
+                var unrounded = detail!.UnroundedPayableToman;
+                var walletOnly = payments.All(p => OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet);
+                var singleWallet = walletOnly && payments.Count == 1;
+                var typedUnroundedFullPay = singleWallet
+                    && tendered == unrounded
+                    && allocPayable == collectibleToman
+                    && allocPayable > unrounded;
+                if (!typedUnroundedFullPay)
+                {
+                    throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", "جمع پرداختی با مبلغ قابل پرداخت برابر نیست.");
+                }
             }
 
             return;
