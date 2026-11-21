@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <RootNamespace>GameClub.Shell.Tests</RootNamespace>
+    <DefineConstants>$(DefineConstants);SHELL_UNIT_TESTS</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\..\src\GameClub.Shell\Shell\PanelNavigationOrigin.cs" Link="Shell\PanelNavigationOrigin.cs" />
+    <Compile Include="..\..\src\GameClub.Shell\Shell\WebViewProcessRecoveryPolicy.cs" Link="Shell\WebViewProcessRecoveryPolicy.cs" />
+    <Compile Include="..\..\src\GameClub.Shell\Shell\PanelNavigationRetryPolicy.cs" Link="Shell\PanelNavigationRetryPolicy.cs" />
+    <Compile Include="..\..\src\GameClub.Shell\Shell\PanelNavigationHttpOutcome.cs" Link="Shell\PanelNavigationHttpOutcome.cs" />
+    <Compile Include="..\..\src\GameClub.Shell\Shell\PanelNavigationPendingRegistry.cs" Link="Shell\PanelNavigationPendingRegistry.cs" />
+    <Compile Include="..\..\src\GameClub.Shell\Shell\PanelOfflineFlashAssert.cs" Link="Shell\PanelOfflineFlashAssert.cs" />
+    <Compile Include="..\..\src\GameClub.Shell\Shell\RunningStabilityTracker.cs" Link="Shell\RunningStabilityTracker.cs" />
+    <Compile Include="..\..\src\GameClub.Shell\Shell\RunningPanelLoadFailingPollerPolicy.cs" Link="Shell\RunningPanelLoadFailingPollerPolicy.cs" />
+    <Compile Include="..\..\src\GameClub.Shell\Shell\HealthyRunningPanelProbePolicy.cs" Link="Shell\HealthyRunningPanelProbePolicy.cs" />
+    <Compile Include="..\..\src\GameClub.Shell\Shell\LoopbackPanelNavigationInFlightPolicy.cs" Link="Shell\LoopbackPanelNavigationInFlightPolicy.cs" />
+    <Compile Include="..\..\src\GameClub.Shell\Shell\PanelLoopbackNavigationDispatchPolicy.cs" Link="Shell\PanelLoopbackNavigationDispatchPolicy.cs" />
+    <Compile Include="..\..\src\GameClub.Shell\Shell\HttpProbeRequestTimeoutPolicy.cs" Link="Shell\HttpProbeRequestTimeoutPolicy.cs" />
+    <Compile Include="..\..\src\GameClub.Shell\Shell\PendingLoopbackPanelNavigationTimeoutPolicy.cs" Link="Shell\PendingLoopbackPanelNavigationTimeoutPolicy.cs" />
+    <Compile Include="..\..\src\GameClub.Shell\Shell\PendingLoopbackPanelNavigationExpiryPolicy.cs" Link="Shell\PendingLoopbackPanelNavigationExpiryPolicy.cs" />
+    <Compile Include="..\..\src\GameClub.Shell\Shell\ShellServerVisualState.cs" Link="Shell\ShellServerVisualState.cs" />
+    <Compile Include="..\..\src\GameClub.Shell\Shell\ShellPaths.cs" Link="Shell\ShellPaths.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+
+</Project>
