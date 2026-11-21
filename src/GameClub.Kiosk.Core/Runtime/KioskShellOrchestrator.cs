@@ -88,11 +88,12 @@ public sealed class KioskShellOrchestrator
                 return phase;
             }
 
-            if (!VerifyLease(ack.Lease))
+            var leaseLog = DescribeLeaseVerify(ack.Lease);
+            if (!leaseLog.Ok)
             {
                 Phase = KioskShellPhase.LeaseExpired;
                 phase = Phase;
-                WriteHbAckLine(ack, sessionId, runtimeSid, phase, DescribeLeaseVerify(ack.Lease));
+                WriteHbAckLine(ack, sessionId, runtimeSid, phase, leaseLog);
                 return phase;
             }
 

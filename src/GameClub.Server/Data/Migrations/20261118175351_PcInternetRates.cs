@@ -167,9 +167,6 @@ namespace GameClub.Server.Data.Migrations
                       out_lines := out_lines || jsonb_build_array((
                         SELECT el FROM jsonb_array_elements(COALESCE(j->'Lines', '[]'::jsonb)) AS el
                         WHERE el->>'GroupId' = gid AND el->>'PlayMode' = 'Offline' AND (el->>'PlayerCount')::int = 1 AND (el->>'IsSpecialBand')::boolean = true LIMIT 1));
-                    ELSE
-                      out_lines := out_lines || jsonb_build_array(
-                        jsonb_build_object('GroupId', gid, 'PlayMode', 'Offline', 'PlayerCount', 1, 'IsSpecialBand', true, 'HourlyToman', day_rate + surcharge));
                     END IF;
                   END LOOP;
                   RETURN jsonb_build_object('SchemaVersion', 2, 'StepToman', step, 'Direction', dir, 'Lines', out_lines)::text;
@@ -246,6 +243,21 @@ namespace GameClub.Server.Data.Migrations
 
             migrationBuilder.Sql(
                 """
+                -- branch_rounding holds one pilot surcharge column; when pc-normal and pc-vip night-day differ, store MAX(night-day).
+                UPDATE branch_rounding
+                SET "PcSpecialBandSurchargeToman" = COALESCE((
+                    SELECT MAX(n."HourlyToman" - d."HourlyToman")
+                    FROM rate_lines d
+                    INNER JOIN rate_lines n ON n."GroupId" = d."GroupId"
+                    WHERE d."GroupId" IN ('pc-normal', 'pc-vip')
+                      AND d."PlayMode" = 'Online'
+                      AND d."PlayerCount" IS NULL
+                      AND d."IsSpecialBand" = false
+                      AND n."PlayMode" = 'Online'
+                      AND n."PlayerCount" IS NULL
+                      AND n."IsSpecialBand" = true
+                ), 20000);
+
                 CREATE OR REPLACE FUNCTION revert_pc_open_snapshot_v1(v2_json text) RETURNS text
                 LANGUAGE plpgsql AS $$
                 DECLARE
@@ -351,17 +363,6 @@ namespace GameClub.Server.Data.Migrations
                     'Lines', out_lines)::text;
                 END;
                 $$;
-
-                UPDATE branch_rounding
-                SET "PcSpecialBandSurchargeToman" = COALESCE((
-                    SELECT MAX((revert_pc_open_snapshot_v1(rcs."Json")::jsonb->>'PcSpecialBandSurchargeToman')::bigint)
-                    FROM rate_card_snapshot rcs
-                    INNER JOIN sessions s ON s."RateCardSnapshotId" = rcs."Id"
-                    INNER JOIN stations st ON s."StationId" = st."Id"
-                    INNER JOIN station_groups g ON st."GroupId" = g."Id"
-                    WHERE g."Kind" = 'Pc' AND s."Status" <> 'Closed'
-                      AND COALESCE((rcs."Json"::jsonb->>'SchemaVersion')::int, 0) = 2
-                ), 20000);
 
                 UPDATE rate_card_snapshot rcs
                 SET "Json" = revert_pc_open_snapshot_v1(rcs."Json")
