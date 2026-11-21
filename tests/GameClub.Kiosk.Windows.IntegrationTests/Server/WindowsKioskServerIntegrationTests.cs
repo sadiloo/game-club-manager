@@ -564,7 +564,7 @@ public sealed class WindowsKioskServerIntegrationTests
         await runtime.DisposeAsync();
     }
 
-    [SkippableFact(Timeout = 1_800_000)]
+    [Fact(Timeout = 1_800_000)]
     [Trait("Category", "UbuntuG2Oracle")]
     public async Task live_server_two_outages_bill_matches_main_g2_oracle()
     {

@@ -9,10 +9,11 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace GameClub.Server.Tests;
 
+[Collection("server")]
 public sealed class KioskLeaseBuildTraceTests
 {
     private static readonly Regex LeaseBuildLine = new(
-        @"^LEASE_BUILD sessionId=\S+ mode=\S+ groupId=\S+ rateSource=\S+ band=\S+ authorizedUntilUtc=.+$",
+        @"^LEASE_BUILD sessionId=\S+ mode=\S+ groupId=\S+ rateSource=\S+ band=\S+ authorizedUntilUtc=\S+$",
         RegexOptions.CultureInvariant);
 
     [Fact]

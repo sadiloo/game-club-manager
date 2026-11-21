@@ -1,4 +1,5 @@
 using GameClub.Server;
+using GameClub.Server.Kiosk;
 using GameClub.Server.TestHost;
 using GameClub.Server.Testing;
 
@@ -16,6 +17,7 @@ PcBandHarnessDiagnostics.AssertLiveTestHarnessActive(harness);
 await ServerApplication.RunAsync(hostArgs, builder =>
 {
     builder.Services.AddHostedService<LeaseKeyFingerprintStartup>();
+    builder.Services.Configure<KioskOptions>(o => o.LeaseBuildTrace = true);
     if (harness is { Enabled: true })
     {
         builder.Services.Configure<PcSpecialBandHarnessOptions>(_ =>
