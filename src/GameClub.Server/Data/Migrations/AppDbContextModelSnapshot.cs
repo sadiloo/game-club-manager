@@ -132,9 +132,6 @@ namespace GameClub.Server.Data.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
-                    b.Property<long>("PcSpecialBandSurchargeToman")
-                        .HasColumnType("bigint");
-
                     b.Property<long>("StepToman")
                         .HasColumnType("bigint");
 
@@ -1499,6 +1496,53 @@ namespace GameClub.Server.Data.Migrations
                     b.ToTable("station_groups", (string)null);
                 });
 
+            modelBuilder.Entity("GameClub.Server.Data.Entities.StationInternetStateEntity", b =>
+                {
+                    b.Property<string>("StationId")
+                        .HasColumnType("text");
+
+                    b.Property<DateTime?>("AppliedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<bool?>("AppliedOn")
+                        .HasColumnType("boolean");
+
+                    b.Property<long?>("AppliedVersion")
+                        .HasColumnType("bigint");
+
+                    b.Property<DateTime>("DesiredAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("DesiredByUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<bool>("DesiredOn")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("DesiredReason")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<long>("DesiredVersion")
+                        .HasColumnType("bigint");
+
+                    b.Property<Guid>("Epoch")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("LastError")
+                        .HasColumnType("text");
+
+                    b.Property<DateTime?>("LastReportUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("SessionId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("StationId");
+
+                    b.ToTable("station_internet_state", (string)null);
+                });
+
             modelBuilder.Entity("GameClub.Server.Data.Entities.StationKioskProfileEntity", b =>
                 {
                     b.Property<string>("StationId")
@@ -2046,6 +2090,17 @@ namespace GameClub.Server.Data.Migrations
                         .IsRequired();
 
                     b.Navigation("Group");
+                });
+
+            modelBuilder.Entity("GameClub.Server.Data.Entities.StationInternetStateEntity", b =>
+                {
+                    b.HasOne("GameClub.Server.Data.Entities.StationEntity", "Station")
+                        .WithMany()
+                        .HasForeignKey("StationId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Station");
                 });
 
             modelBuilder.Entity("GameClub.Server.Data.Entities.StationKioskProfileEntity", b =>

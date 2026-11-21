@@ -61,7 +61,7 @@ public sealed class Ss14FixR1ConsolePrepaidRecalculatorTests(GameClubWebApplicat
         };
 
         var open = session.Segments[1];
-        ConsolePrepaidRecalculator.RecalcAmountPrepaid(session, open, snapshot, nowUtc);
+        SessionPrepaidRecalculator.RecalcAmountPrepaid(session, open, snapshot, nowUtc);
         Assert.Equal(activeThroughNow + 60, session.PrepaidBookedActiveSeconds);
     }
 }

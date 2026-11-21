@@ -103,7 +103,7 @@ public sealed class WindowsGuardRegistryIntegrationTests : IDisposable
         {
             if (File.Exists(_watchdogLog))
             {
-                var log = File.ReadAllText(_watchdogLog);
+                var log = GuardWatchdogTimelineReader.ReadAllTextWithShare();
                 if (log.Contains("guard.policy_tamper", StringComparison.Ordinal))
                 {
                     guard!.Kill();
