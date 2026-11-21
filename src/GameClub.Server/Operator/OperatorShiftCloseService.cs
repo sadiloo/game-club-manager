@@ -1,6 +1,8 @@
 using System.Text.Json;
 using GameClub.Billing;
 using GameClub.Server.Data;
+using GameClub.Kiosk.Core.Admin;
+using GameClub.Server.Kiosk;
 using GameClub.Server.Data.Entities;
 using GameClub.Server.Services;
 using GameClub.Server.Time;
@@ -41,6 +43,7 @@ public sealed class OperatorShiftCloseService(
         {
             settings.ShiftsEnabled,
             settings.MultiOperatorEnabled,
+            settings.KioskFreeUseIdleMinutes,
             openShift = openShift is null
                 ? null
                 : new
@@ -68,7 +71,7 @@ public sealed class OperatorShiftCloseService(
             db.BranchCafeSettings.Add(row);
         }
 
-        var before = new { row.ShiftsEnabled, row.MultiOperatorEnabled };
+        var before = new { row.ShiftsEnabled, row.MultiOperatorEnabled, row.KioskFreeUseIdleMinutes };
         if (shiftsEnabled is bool se)
         {
             row.ShiftsEnabled = se;
@@ -79,9 +82,41 @@ public sealed class OperatorShiftCloseService(
             row.MultiOperatorEnabled = mo;
         }
 
-        await audit.AppendAsync("cafe.settings", new { before, after = new { row.ShiftsEnabled, row.MultiOperatorEnabled } }, ct);
+        await audit.AppendAsync(
+            "cafe.settings",
+            new { before, after = new { row.ShiftsEnabled, row.MultiOperatorEnabled, row.KioskFreeUseIdleMinutes } },
+            ct);
         await db.SaveChangesAsync(ct);
-        return new { row.ShiftsEnabled, row.MultiOperatorEnabled };
+        return new { row.ShiftsEnabled, row.MultiOperatorEnabled, row.KioskFreeUseIdleMinutes };
+    }
+
+    public async Task<object> UpdateKioskFreeUseIdleMinutesAsync(int kioskFreeUseIdleMinutes, CancellationToken ct)
+    {
+        if (op.Role is not UserRole.Manager and not UserRole.Owner)
+        {
+            throw new ApiException(
+                StatusCodes.Status403Forbidden,
+                KioskFreeIdleSettingCodes.Forbidden,
+                KioskOpStrings.MgrFreeIdleErrForbidden);
+        }
+
+        var validated = KioskOperatorLockService.ValidateIdleMinutes(kioskFreeUseIdleMinutes);
+
+        var row = await db.BranchCafeSettings.FirstOrDefaultAsync(ct);
+        if (row is null)
+        {
+            row = new BranchCafeSettingsEntity();
+            db.BranchCafeSettings.Add(row);
+        }
+
+        var before = row.KioskFreeUseIdleMinutes;
+        row.KioskFreeUseIdleMinutes = validated;
+        await audit.AppendAsync(
+            "cafe.settings.kiosk_free_idle",
+            new { before, after = row.KioskFreeUseIdleMinutes },
+            ct);
+        await db.SaveChangesAsync(ct);
+        return new { row.ShiftsEnabled, row.MultiOperatorEnabled, row.KioskFreeUseIdleMinutes };
     }
 
     public async Task<object> OpenShiftAsync(long openingFloatToman, CancellationToken ct)

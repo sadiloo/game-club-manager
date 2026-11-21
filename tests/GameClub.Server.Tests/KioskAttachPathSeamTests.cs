@@ -10,10 +10,10 @@ using Npgsql;
 namespace GameClub.Server.Tests;
 
 [CollectionDefinition("kiosk-attach-seam", DisableParallelization = true)]
-public sealed class KioskAttachPathSeamCollection : ICollectionFixture<GameClubWebApplicationFactory>;
+public sealed class KioskAttachPathSeamCollection : ICollectionFixture<KioskAttachPathSeamWebApplicationFactory>;
 
 [Collection("kiosk-attach-seam")]
-public sealed class KioskAttachPathSeamTests(GameClubWebApplicationFactory factory)
+public sealed class KioskAttachPathSeamTests(KioskAttachPathSeamWebApplicationFactory factory)
 {
     [Fact]
     public async Task active_session_unique_violation_on_member_start_resolves_via_attach_path()

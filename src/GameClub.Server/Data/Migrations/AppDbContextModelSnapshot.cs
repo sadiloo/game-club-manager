@@ -63,6 +63,9 @@ namespace GameClub.Server.Data.Migrations
                     b.Property<bool>("ShiftsEnabled")
                         .HasColumnType("boolean");
 
+                    b.Property<int>("KioskFreeUseIdleMinutes")
+                        .HasColumnType("integer");
+
                     b.HasKey("Id");
 
                     b.ToTable("branch_cafe_settings", (string)null);
@@ -739,6 +742,63 @@ namespace GameClub.Server.Data.Migrations
                     b.HasIndex("InvoiceId");
 
                     b.ToTable("invoice_time_lines", (string)null);
+                });
+
+            modelBuilder.Entity("GameClub.Server.Data.Entities.KioskCredentialEntity", b =>
+                {
+                    b.Property<string>("Role")
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
+                    b.Property<string>("PasswordHash")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("UpdatedByUserId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Role");
+
+                    b.ToTable("kiosk_credentials", (string)null);
+                });
+
+            modelBuilder.Entity("GameClub.Server.Data.Entities.KioskFreeUseEntity", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("EndedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("EndReason")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<string>("ActorRole")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
+                    b.Property<Guid>("KioskDeviceId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("StartedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("StationId")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("StationId", "EndedAtUtc");
+
+                    b.ToTable("kiosk_free_uses", (string)null);
                 });
 
             modelBuilder.Entity("GameClub.Server.Data.Entities.KioskDeviceEntity", b =>

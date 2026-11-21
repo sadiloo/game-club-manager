@@ -15,6 +15,7 @@ public sealed class KioskDeviceEntity
 
     public DateTime PairedAtUtc { get; set; }
 
+    /// <summary>Last kiosk contact (heartbeat or any authenticated request); exposed as <c>lastContactUtc</c> for K-OP.</summary>
     public DateTime? LastSeenUtc { get; set; }
 
     public bool IsRevoked { get; set; }

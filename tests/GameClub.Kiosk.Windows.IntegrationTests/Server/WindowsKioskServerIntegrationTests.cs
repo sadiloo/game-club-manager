@@ -67,7 +67,7 @@ public sealed class WindowsKioskServerIntegrationTests
             testHubHandler: _backend.TestHubHandler);
         runtime.BindSession(sessionId);
         await runtime.StartAsync(default);
-        await WaitForHeartbeatAdvanceAsync(_backend, deviceId, heartbeatBefore, lastSeenBefore);
+        await WaitForHeartbeatAdvanceAsync(_backend, runtime, deviceId, heartbeatBefore, lastSeenBefore);
         await runtime.DisposeAsync();
     }
 
@@ -413,7 +413,7 @@ public sealed class WindowsKioskServerIntegrationTests
             await runtime.StartAsync(default);
             await WaitUntilTransportConnectedAsync(runtime, TimeSpan.FromSeconds(45));
             var heartbeatBefore = await backend.CountHeartbeatsAsync();
-            await WaitForHeartbeatAdvanceAsync(backend, deviceId, heartbeatBefore, await backend.DeviceLastSeenUtcAsync(deviceId));
+            await WaitForHeartbeatAdvanceAsync(backend, runtime, deviceId, heartbeatBefore, await backend.DeviceLastSeenUtcAsync(deviceId));
 
             if (usesCiServer)
             {
@@ -789,30 +789,68 @@ public sealed class WindowsKioskServerIntegrationTests
         Assert.Fail("Kiosk runtime transport did not connect before timeout.");
     }
 
-    private static async Task WaitForHeartbeatAdvanceAsync(KioskIntegrationBackend backend, Guid deviceId, int heartbeatBefore, DateTime? lastSeenBefore)
+    private const int HeartbeatAdvanceRequired = 3;
+
+    // After transport is up: 3 client ticks at 5s + 15s hub/DB slack on loaded ubuntu CI (deterministic poll only).
+    private static readonly TimeSpan HeartbeatAdvanceCeiling = TimeSpan.FromSeconds(30);
+
+    private static async Task WaitForHeartbeatAdvanceAsync(
+        KioskIntegrationBackend backend,
+        KioskRuntime runtime,
+        Guid deviceId,
+        int heartbeatBefore,
+        DateTime? lastSeenBefore)
     {
-        for (var attempt = 0; attempt < 12; attempt++)
+        await WaitUntilTransportConnectedAsync(runtime, TimeSpan.FromSeconds(45));
+
+        // Factory host uses MutableClock (frozen); KioskDeviceAuthMiddleware stamps LastSeen on login HTTP.
+        // Step server time forward so hub heartbeats advance LastSeenUtc past the login contact.
+        if (backend.UsesFactoryHost)
         {
-            await Task.Delay(TimeSpan.FromSeconds(6));
-            var count = await backend.CountHeartbeatsAsync();
-            var lastSeen = await backend.DeviceLastSeenUtcAsync(deviceId);
-            if (count < heartbeatBefore + 3)
-            {
-                continue;
-            }
-
-            if (lastSeenBefore is null || !lastSeen.HasValue)
-            {
-                return;
-            }
-
-            if (lastSeen > lastSeenBefore)
-            {
-                return;
-            }
+            backend.AdvanceTestClock(TimeSpan.FromSeconds(1));
         }
 
-        Assert.Fail("Expected at least 3 advancing kiosk heartbeats on the server.");
+        var heartbeatPhaseStart = DateTime.UtcNow;
+        var deadline = heartbeatPhaseStart.Add(HeartbeatAdvanceCeiling);
+        while (DateTime.UtcNow < deadline)
+        {
+            var count = await backend.CountHeartbeatsAsync();
+            var lastSeen = await backend.DeviceLastSeenUtcAsync(deviceId);
+            if (count >= heartbeatBefore + HeartbeatAdvanceRequired
+                && (lastSeenBefore is null
+                    || !lastSeen.HasValue
+                    || (lastSeen.HasValue && lastSeen > lastSeenBefore)))
+            {
+                return;
+            }
+
+            if (backend.UsesFactoryHost)
+            {
+                backend.AdvanceTestClock(TimeSpan.FromSeconds(1));
+            }
+
+            await Task.Delay(500);
+        }
+
+        var countAfter = await backend.CountHeartbeatsAsync();
+        var lastSeenAfter = await backend.DeviceLastSeenUtcAsync(deviceId);
+        var rowSnapshots = await backend.ListHeartbeatRowsForDeviceAsync(deviceId);
+        var rowText = rowSnapshots.Count == 0
+            ? "(none)"
+            : string.Join("; ", rowSnapshots.Select(r => $"id={r.Id} utc={r.ReceivedUtc:O}"));
+        var lastSeenDelta = lastSeenBefore.HasValue && lastSeenAfter.HasValue
+            ? (lastSeenAfter.Value - lastSeenBefore.Value).TotalSeconds
+            : (double?)null;
+        Assert.Fail(
+            $"Expected at least {HeartbeatAdvanceRequired} advancing kiosk heartbeats on the server "
+            + $"(ceiling {HeartbeatAdvanceCeiling.TotalSeconds}s after transport connected). "
+            + $"count before={heartbeatBefore} after={countAfter} delta={countAfter - heartbeatBefore}; "
+            + $"lastSeen before={(lastSeenBefore.HasValue ? lastSeenBefore.Value.ToString("O") : "null")} "
+            + $"after={(lastSeenAfter.HasValue ? lastSeenAfter.Value.ToString("O") : "null")} "
+            + $"deltaSeconds={(lastSeenDelta.HasValue ? lastSeenDelta.Value.ToString("F3") : "n/a")}; "
+            + $"transportConnected={runtime.IsTransportConnected}; "
+            + $"heartbeatPhaseElapsedSeconds={(DateTime.UtcNow - heartbeatPhaseStart).TotalSeconds:F3}; "
+            + $"recentRowsForDevice={rowText}");
     }
 }
 

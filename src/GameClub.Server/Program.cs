@@ -3,6 +3,7 @@ using GameClub.Server.Hubs;
 using GameClub.Server.Kiosk;
 using GameClub.Server.Operator;
 using GameClub.Server.Services;
+using GameClub.Server.Setup;
 using GameClub.Server.Time;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -14,7 +15,13 @@ public partial class Program
 {
     public static async Task Main(string[] args)
     {
+        if (SetupCli.TryHandle(args, out var cliExit))
+        {
+            Environment.Exit(cliExit);
+        }
+
         var builder = WebApplication.CreateBuilder(args);
+        builder.Configuration.AddJsonFile(@"C:\ProgramData\Checkpoint\config\server.json", optional: true, reloadOnChange: true);
         builder.Services.AddControllers()
             .ConfigureApiBehaviorOptions(options =>
             {
@@ -85,6 +92,11 @@ public partial class Program
         builder.Services.AddScoped<GameCatalogService>();
         builder.Services.AddScoped<KioskPcPrepaidService>();
         builder.Services.AddScoped<KioskFundingGuard>();
+        builder.Services.AddSingleton<KioskSetupLockTracker>();
+        builder.Services.AddScoped<KioskCredentialService>();
+        builder.Services.AddScoped<KioskOperatorLockService>();
+        builder.Services.AddScoped<KioskFreeUseReportService>();
+        builder.Services.Configure<InstallServerOptions>(builder.Configuration.GetSection(InstallServerOptions.SectionName));
 
         var connectionString = builder.Configuration.GetConnectionString("Default")
             ?? Environment.GetEnvironmentVariable("GAMECLUB_DATABASE")
@@ -119,7 +131,7 @@ public partial class Program
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
             await db.Database.MigrateAsync();
-            await DatabaseSeed.EnsureAsync(db);
+            await DatabaseSeed.EnsureAsync(db, builder.Configuration);
             await ApplyAuditImmutabilityAsync(db);
         }
 

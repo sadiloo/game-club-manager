@@ -11,6 +11,9 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using GameClub.Billing;
+using GameClub.Kiosk.Core.Runtime;
+using GameClub.Kiosk.Core.Setup;
+using GameClub.Kiosk.Services;
 using Xunit;
 
 namespace GameClub.Kiosk.Windows.IntegrationTests.Wpf;
@@ -26,6 +29,7 @@ public sealed class WindowsKioskWpfSmokeTests
     [Fact]
     public void wpf_lock_screen_and_remaining_time_visible()
     {
+        using var isolated = WpfKioskSetupTestIsolation.CreateWithCompleteSetup();
         var artifactDir = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
             "Checkpoint",
@@ -48,7 +52,6 @@ public sealed class WindowsKioskWpfSmokeTests
                     window.UpdateLayout();
                     var lockPanel = (FrameworkElement)GetField(window, "LockPanel");
                     var status = (System.Windows.Controls.TextBlock)GetField(window, "StatusText");
-                    var playingPanel = (FrameworkElement)GetField(window, "PlayingPanel");
                     lockVisible = lockPanel.Visibility;
                     statusText = status.Text;
                     var width = (int)Math.Max(window.ActualWidth, 800);
@@ -83,6 +86,47 @@ public sealed class WindowsKioskWpfSmokeTests
         Assert.Equal(Visibility.Visible, lockVisible);
         Assert.False(string.IsNullOrWhiteSpace(statusText));
         Assert.True(new FileInfo(screenshotPath).Length > 0);
+    }
+
+    [Fact]
+    public void wpf_first_run_shows_setup_and_hides_lock_panel()
+    {
+        using var isolated = WpfKioskSetupTestIsolation.CreateWithoutSetup();
+        Visibility lockVisible = Visibility.Visible;
+        Visibility firstRunVisible = Visibility.Collapsed;
+        Exception inProcessError = null;
+
+        _wpf.RunAsync(async () =>
+        {
+            try
+            {
+                var window = new GameClub.Kiosk.MainWindow();
+                try
+                {
+                    window.Show();
+                    window.UpdateLayout();
+                    lockVisible = ((FrameworkElement)GetField(window, "LockPanel")).Visibility;
+                    firstRunVisible = ((FrameworkElement)GetField(window, "FirstRunSetup")).Visibility;
+                    await Task.CompletedTask;
+                }
+                finally
+                {
+                    window.Close();
+                }
+            }
+            catch (Exception ex)
+            {
+                inProcessError = ex;
+            }
+        }, TimeSpan.FromMinutes(1));
+
+        if (inProcessError is not null)
+        {
+            Assert.Fail(inProcessError.Message);
+        }
+
+        Assert.Equal(Visibility.Collapsed, lockVisible);
+        Assert.Equal(Visibility.Visible, firstRunVisible);
     }
 
     [Fact]
@@ -141,9 +185,9 @@ public sealed class WindowsKioskWpfSmokeTests
                     while (DateTime.UtcNow < deadline)
                     {
                         window.Dispatcher.Invoke(() => { }, DispatcherPriority.Background);
-                        var text = status.Text ?? "";
+                        var text = KioskStatusInlineApplicator.ReadCombinedText(status);
                         lastPollStatusText = text;
-                        if (text.IndexOf("left", StringComparison.OrdinalIgnoreCase) >= 0)
+                        if (text.Contains("مانده", StringComparison.Ordinal))
                         {
                             capturedStatus = text;
                             break;
@@ -184,12 +228,17 @@ public sealed class WindowsKioskWpfSmokeTests
         }
 
         Assert.False(string.IsNullOrWhiteSpace(capturedStatus), statusAssertMessage);
-        var match = Regex.Match(capturedStatus, @"~(\d{2}):(\d{2}):(\d{2})\s+left", RegexOptions.IgnoreCase);
-        Assert.True(match.Success, $"StatusText must match hh:mm:ss left pattern; got '{capturedStatus}'.");
+        Assert.Contains("مانده", capturedStatus, StringComparison.Ordinal);
+        var match = Regex.Match(
+            capturedStatus,
+            @"([\u06F0-\u06F9]{2}):([\u06F0-\u06F9]{2}):([\u06F0-\u06F9]{2})",
+            RegexOptions.CultureInvariant);
+        Assert.True(match.Success, $"StatusText must match Persian hh:mm:ss in time-left line; got '{capturedStatus}'.");
+        static int PersianDigitToInt(char c) => c - '\u06F0';
         var displayedSeconds = (int)new TimeSpan(
-            int.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture),
-            int.Parse(match.Groups[2].Value, CultureInfo.InvariantCulture),
-            int.Parse(match.Groups[3].Value, CultureInfo.InvariantCulture)).TotalSeconds;
+            PersianDigitToInt(match.Groups[1].Value[0]) * 10 + PersianDigitToInt(match.Groups[1].Value[1]),
+            PersianDigitToInt(match.Groups[2].Value[0]) * 10 + PersianDigitToInt(match.Groups[2].Value[1]),
+            PersianDigitToInt(match.Groups[3].Value[0]) * 10 + PersianDigitToInt(match.Groups[3].Value[1])).TotalSeconds;
         Assert.InRange(displayedSeconds, expectedSeconds - 1, expectedSeconds + 1);
     }
 

@@ -7,10 +7,12 @@ using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Threading;
+using GameClub.Kiosk.Core.Admin;
 using GameClub.Kiosk.Core.Catalog;
 using GameClub.Kiosk.Core.Protocol;
 using GameClub.Kiosk.Core.Runtime;
 using GameClub.Kiosk.Core.Security;
+using GameClub.Kiosk.Core.Setup;
 
 namespace GameClub.Kiosk.Services;
 
@@ -21,6 +23,7 @@ public sealed class KioskHostService : IAsyncDisposable
 
     private readonly Window _shell;
     private readonly TextBlock _status;
+    private readonly TextBlock? _loginError;
     private readonly TextBlock _balance;
     private readonly TextBlock _elapsed;
     private readonly TextBlock _freeBand;
@@ -39,10 +42,12 @@ public sealed class KioskHostService : IAsyncDisposable
     private readonly List<GameCatalogItem> _visibleGames = [];
     private SqliteCatalogCache? _catalogStore;
     private long _catalogVersion;
+    private int _credentialsVersion;
     private string _serverBase = Environment.GetEnvironmentVariable("CHECKPOINT_SERVER_URL") ?? "http://127.0.0.1:5000";
     private string _leaseVerifyPublicKeyPem = "";
     private Guid _deviceId;
     private string _deviceKey = "";
+    private string _loadedDeviceKey = "";
     private string _stationId = "";
     private Guid _sessionId;
     private Guid _locallyLockedSessionId;
@@ -52,8 +57,15 @@ public sealed class KioskHostService : IAsyncDisposable
     private bool _runCatalogOnFirstConnected;
     private bool _pairingJustFailed;
     private DateTime? _lastHeartbeatAckUtc;
+    private Guid _operatorFreeUseId;
+    private string _operatorFreeUseMessage = "";
+    private readonly KioskFreeUseIdleMonitor _freeUseIdleMonitor = new(DateTime.UtcNow);
+    private KioskFreeUseLocalState _freeUseLocal = KioskFreeUseLocalState.Load();
+    private DateTime _lastAlivePersistUtc = DateTime.MinValue;
+    private KioskAdminRole _lastAdminRole = KioskAdminRole.Operator;
     private readonly KioskHostTestSeam? _testSeam;
     private readonly KioskLoginErrorDisplayState _loginErrorState = new();
+    private string? _transientStatusErrorKey;
 
     internal int? LastLoginHttpStatus { get; private set; }
 
@@ -61,11 +73,14 @@ public sealed class KioskHostService : IAsyncDisposable
 
     internal string? LastLoginFailureKey { get; private set; }
 
+    internal KioskStatusLineState? LastPresentedStatusLineState { get; private set; }
+
     public string ServerBase => _serverBase;
 
     public KioskHostService(
         Window shell,
         TextBlock status,
+        TextBlock? loginError,
         TextBlock balance,
         TextBlock elapsed,
         TextBlock freeBand,
@@ -80,6 +95,7 @@ public sealed class KioskHostService : IAsyncDisposable
         _testSeam = testSeam;
         _shell = shell;
         _status = status;
+        _loginError = loginError;
         _balance = balance;
         _elapsed = elapsed;
         _freeBand = freeBand;
@@ -108,6 +124,9 @@ public sealed class KioskHostService : IAsyncDisposable
         }
 
         LoadDeviceState();
+        TryApplySetupServerBase();
+        ShowLockLayout();
+        _ = FinalizeInterruptedFreeUseOnBootAsync();
         if (!string.IsNullOrEmpty(_leaseVerifyPublicKeyPem))
         {
             _orchestrator.ConfigureLeaseVerifier(_leaseVerifyPublicKeyPem);
@@ -160,7 +179,9 @@ public sealed class KioskHostService : IAsyncDisposable
 
         var doc = JsonDocument.Parse(await pair.Content.ReadAsStringAsync());
         _deviceId = doc.RootElement.GetProperty("deviceId").GetGuid();
-        _deviceKey = doc.RootElement.GetProperty("deviceKey").GetString()!;
+        var newKey = doc.RootElement.GetProperty("deviceKey").GetString()!;
+        OnDeviceCredentialsChanged(newKey);
+        _deviceKey = newKey;
         _stationId = doc.RootElement.GetProperty("stationId").GetString()!;
         if (doc.RootElement.TryGetProperty("leaseVerifyPublicKeyPem", out var pem))
         {
@@ -172,26 +193,35 @@ public sealed class KioskHostService : IAsyncDisposable
         await EnsureRuntimeAsync();
         await ApplyStationProfileAsync();
         await RefreshCatalogAsync();
-        _status.Text = $"Paired to {_stationId}";
+        PresentStatusLine(KioskStatusLineState.Paired(_stationId));
         EnsureStatusUiTickRunning();
     }
 
     public void DismissLoginErrorMessage()
     {
         _loginErrorState.OnLoginUserInput();
+        ClearCustomerLoginError();
         RefreshStationStatusText();
+    }
+
+    private void PresentLoginFailure(string failureKey)
+    {
+        var text = KioskLoginUserMessages.DisplayText(failureKey);
+        _loginErrorState.SetLoginError(text);
+        ShowCustomerLoginError(text);
     }
 
     public async Task LoginAsync(string loginName, string password)
     {
         DismissLoginErrorMessage();
         LastLoginFailureKey = null;
+        _testSeam?.ResetLoginMetrics();
 
         if (_deviceId == Guid.Empty)
         {
             LastLoginFailureKey = KioskLoginUserMessages.Keys.PairBefore;
-            _loginErrorState.SetLoginError(KioskLoginUserMessages.DisplayText(LastLoginFailureKey));
-            _status.Text = _loginErrorState.ApplyUnpairedDirect();
+            PresentLoginFailure(LastLoginFailureKey);
+            PresentStatusLine(KioskStatusLineState.Unpaired());
             return;
         }
 
@@ -199,7 +229,7 @@ public sealed class KioskHostService : IAsyncDisposable
         if (emptyFieldsKey is not null)
         {
             LastLoginFailureKey = emptyFieldsKey;
-            _loginErrorState.SetLoginError(KioskLoginUserMessages.DisplayText(emptyFieldsKey));
+            PresentLoginFailure(emptyFieldsKey);
             RefreshStationStatusText();
             return;
         }
@@ -217,10 +247,12 @@ public sealed class KioskHostService : IAsyncDisposable
                 await Task.Delay(loginDelay);
             }
 
+            var payload = JsonSerializer.Serialize(new { loginName, password, stationId = _stationId });
             LoginHttpPostCount++;
+            _testSeam?.RecordLoginPostBody(payload);
             response = await _http.PostAsync(
                 $"{_serverBase}/api/kiosk/auth/login",
-                new StringContent(JsonSerializer.Serialize(new { loginName, password, stationId = _stationId }), Encoding.UTF8, "application/json"));
+                new StringContent(payload, Encoding.UTF8, "application/json"));
         }
         catch (HttpRequestException ex)
         {
@@ -229,7 +261,7 @@ public sealed class KioskHostService : IAsyncDisposable
                 null,
                 0,
                 KioskLoginUserMessages.LoginTransportFailure.Unreachable);
-            _loginErrorState.SetLoginError(KioskLoginUserMessages.DisplayText(LastLoginFailureKey));
+            PresentLoginFailure(LastLoginFailureKey);
             Trace.TraceWarning($"Kiosk login failed (unreachable): {ex.Message}");
             RefreshStationStatusText();
             return;
@@ -241,7 +273,7 @@ public sealed class KioskHostService : IAsyncDisposable
                 null,
                 0,
                 KioskLoginUserMessages.LoginTransportFailure.Timeout);
-            _loginErrorState.SetLoginError(KioskLoginUserMessages.DisplayText(LastLoginFailureKey));
+            PresentLoginFailure(LastLoginFailureKey);
             Trace.TraceWarning($"Kiosk login failed (timeout): {ex.Message}");
             RefreshStationStatusText();
             return;
@@ -250,28 +282,37 @@ public sealed class KioskHostService : IAsyncDisposable
         using (response)
         {
             LastLoginHttpStatus = (int)response.StatusCode;
+            var body = await response.Content.ReadAsStringAsync();
             if (!response.IsSuccessStatusCode)
             {
-                var body = await response.Content.ReadAsStringAsync();
                 LastLoginFailureKey = KioskLoginUserMessages.ResolveFailureKey(body, (int)response.StatusCode);
-                _loginErrorState.SetLoginError(KioskLoginUserMessages.DisplayText(LastLoginFailureKey));
+                PresentLoginFailure(LastLoginFailureKey);
                 Trace.TraceWarning($"Kiosk login failed: HTTP {(int)response.StatusCode} code={LastLoginFailureKey}");
                 RefreshStationStatusText();
                 return;
             }
+            var contentType = response.Content.Headers.ContentType?.MediaType;
+            if (!KioskLoginUserMessages.TryParseLoginSessionId(body, contentType, out var sessionId, out var failKey))
+            {
+                LastLoginFailureKey = failKey;
+                PresentLoginFailure(failKey);
+                Trace.TraceWarning("Kiosk login 200 had invalid session payload");
+                RefreshStationStatusText();
+                return;
+            }
 
-            var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
-            _sessionId = doc.RootElement.GetProperty("sessionId").GetGuid();
+            _sessionId = sessionId;
         }
 
         _loginErrorState.OnLoginUserInput();
+        ClearCustomerLoginError();
         _locallyLockedSessionId = Guid.Empty;
         _runtime.BindSession(_sessionId);
         await ApplyStationProfileAsync();
         ShowPlayingLayout();
         _uiTick.Start();
         _replayTick.Start();
-        _status.Text = $"Playing on {_stationId}";
+        PresentStatusLine(KioskStatusLineState.Playing(_stationId));
         await RefreshCatalogAsync();
     }
 
@@ -311,7 +352,9 @@ public sealed class KioskHostService : IAsyncDisposable
         }
         catch (Exception ex)
         {
-            _status.Text = $"Launch failed: {ex.Message}";
+            Trace.TraceWarning($"Kiosk launch failed: {ex.Message}");
+            _transientStatusErrorKey = KioskStatusMessages.Keys.ErrLaunch;
+            RefreshStationStatusText();
         }
     }
 
@@ -409,6 +452,16 @@ public sealed class KioskHostService : IAsyncDisposable
     private void OnHeartbeatAcknowledged(KioskHeartbeatAck ack)
     {
         _lastHeartbeatAckUtc = DateTime.UtcNow;
+        if (ack.CredentialsVersion > 0 && ack.CredentialsVersion != _credentialsVersion)
+        {
+            _credentialsVersion = ack.CredentialsVersion;
+            _ = RefreshCredentialHashesAsync();
+        }
+
+        if (ack.KioskFreeUseIdleMinutes > 0)
+        {
+            _freeUseIdleMonitor.SetIdleMinutes(ack.KioskFreeUseIdleMinutes);
+        }
         var phase = _orchestrator.OnHeartbeatAck(ack, _sessionId, _runtime.ClientMonotonicMs);
         ApplyHeartbeatDisplay(ack.Display);
         _ = DrainOfflineQueueAsync();
@@ -420,7 +473,20 @@ public sealed class KioskHostService : IAsyncDisposable
                 || ack.ManualSettle || string.Equals(ack.SessionStatus, "AwaitingPayment", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(ack.SessionStatus, "Ended", StringComparison.OrdinalIgnoreCase))
             {
-                EnterLocalLock(phase == KioskShellPhase.LeaseExpired);
+                var leaseExpired = phase == KioskShellPhase.LeaseExpired;
+                if (leaseExpired
+                    && _locallyLockedSessionId != Guid.Empty
+                    && _locallyLockedSessionId == _sessionId
+                    && string.Equals(ack.SessionStatus, "Open", StringComparison.OrdinalIgnoreCase))
+                {
+                    _localLockLeaseExpired = false;
+                    ShowLockLayout();
+                    RefreshStationStatusText();
+                }
+                else
+                {
+                    EnterLocalLock(leaseExpired);
+                }
             }
             else if (string.Equals(ack.SessionStatus, "Open", StringComparison.OrdinalIgnoreCase))
             {
@@ -526,6 +592,27 @@ public sealed class KioskHostService : IAsyncDisposable
     {
         RenderDisplay();
         _shell.Dispatcher.Invoke(RefreshStationStatusText);
+        var utc = DateTime.UtcNow;
+        if (_operatorFreeUseId != Guid.Empty && utc - _lastAlivePersistUtc >= TimeSpan.FromSeconds(30))
+        {
+            _freeUseLocal.OpenFreeUseId = _operatorFreeUseId;
+            _freeUseLocal.TouchAlive(utc);
+            _lastAlivePersistUtc = utc;
+            if (_freeUseIdleMonitor.ShouldAutoLock(utc))
+            {
+                _ = EndOperatorFreeUseAsync("auto_idle");
+                _shell.Dispatcher.Invoke(() => EnterLocalLock(leaseExpired: false));
+            }
+            else if (_freeUseIdleMonitor.TryGetWarningCountdown(utc, out var warnSec))
+            {
+                _shell.Dispatcher.Invoke(() =>
+                {
+                    _freeBand.Text = $"{_operatorFreeUseMessage}\n{_freeUseIdleMonitor.FormatWarningText(warnSec)}";
+                    _freeBand.Visibility = Visibility.Visible;
+                });
+            }
+        }
+
         if (_locallyLockedSessionId != Guid.Empty || _sessionId == Guid.Empty)
         {
             return;
@@ -582,13 +669,33 @@ public sealed class KioskHostService : IAsyncDisposable
         }
     }
 
+    private void PresentStatusLine(KioskStatusLineState state)
+    {
+        LastPresentedStatusLineState = state;
+        var transient = _transientStatusErrorKey;
+        _transientStatusErrorKey = null;
+        string? loginError = null;
+        if (state.Root == KioskStatusRootKind.Unpaired)
+        {
+            loginError = _loginErrorState.ActiveLoginError;
+        }
+        else if (_sessionId == Guid.Empty
+                 && (state.Root is KioskStatusRootKind.Locked or KioskStatusRootKind.LockedLeaseExpired))
+        {
+            loginError = _loginErrorState.ActiveLoginError;
+        }
+
+        var presentation = KioskStatusPresentationBuilder.Build(state, loginError, transient);
+        KioskStatusInlineApplicator.Apply(_status, presentation);
+    }
+
     private void RefreshStationStatusText()
     {
         if (string.IsNullOrEmpty(_stationId))
         {
             if (!string.IsNullOrEmpty(_loginErrorState.ActiveLoginError))
             {
-                _status.Text = _loginErrorState.ApplyUnpairedDirect();
+                PresentStatusLine(KioskStatusLineState.Unpaired());
             }
 
             return;
@@ -602,7 +709,7 @@ public sealed class KioskHostService : IAsyncDisposable
         if (_locallyLockedSessionId != Guid.Empty
             || (_sessionId == Guid.Empty && _lockPanel.Visibility == Visibility.Visible))
         {
-            var lockLine = KioskStationStatus.FormatLocalLockScreen(
+            var lockState = KioskStationStatus.FormatLocalLockScreenState(
                 _stationId,
                 _locallyLockedSessionId != Guid.Empty && _localLockLeaseExpired,
                 _runtime.TransportPhase,
@@ -613,14 +720,11 @@ public sealed class KioskHostService : IAsyncDisposable
                 _lastHeartbeatAckUtc,
                 DateTime.UtcNow,
                 _runtime.LastTransportErrorDetail);
-            _status.Text = _sessionId == Guid.Empty
-                ? _loginErrorState.ApplyToLockLine(lockLine)
-                : lockLine;
-
+            PresentStatusLine(lockState);
             return;
         }
 
-        _status.Text = KioskStationStatus.Resolve(
+        var resolveState = KioskStationStatus.ResolveState(
             _stationId,
             _runtime.TransportPhase,
             _runtime.IsTransportConnected,
@@ -632,6 +736,7 @@ public sealed class KioskHostService : IAsyncDisposable
             DateTime.UtcNow,
             _lastDisplay?.EstimatedRemainingSeconds,
             _runtime.LastTransportErrorDetail);
+        PresentStatusLine(resolveState);
     }
 
     private void EnterLocalLock(bool leaseExpired)
@@ -664,8 +769,12 @@ public sealed class KioskHostService : IAsyncDisposable
         }
         catch (Exception ex)
         {
+            Trace.TraceWarning($"Kiosk catalog refresh failed: {ex.Message}");
             _shell.Dispatcher.Invoke(() =>
-                _status.Text = $"Station {_stationId} — catalog refresh failed: {ex.Message}");
+            {
+                _transientStatusErrorKey = KioskStatusMessages.Keys.ErrCatalog;
+                RefreshStationStatusText();
+            });
         }
     }
 
@@ -913,6 +1022,64 @@ public sealed class KioskHostService : IAsyncDisposable
         _freeBand.Text = _lastDisplay.FreeBandText ?? "";
     }
 
+    private void TryApplySetupServerBase()
+    {
+        if (KioskLegacyDevPath.IsActive())
+        {
+            return;
+        }
+
+        var setup = new KioskSetupStore().TryLoad();
+        if (setup is { IsComplete: true } && !string.IsNullOrWhiteSpace(setup.ServerBase))
+        {
+            _serverBase = setup.ServerBase.TrimEnd('/');
+        }
+    }
+
+    private async Task RefreshCredentialHashesAsync()
+    {
+        if (_deviceId == Guid.Empty || string.IsNullOrEmpty(_stationId))
+        {
+            return;
+        }
+
+        try
+        {
+            var response = await _http.GetAsync($"{_serverBase}/api/kiosk/stations/{_stationId}/config");
+            if (!response.IsSuccessStatusCode)
+            {
+                return;
+            }
+
+            using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            var setup = new KioskSetupStore().TryLoad() ?? new KioskSetupDocument();
+            if (doc.RootElement.TryGetProperty("kioskManagerHash", out var mh) && mh.ValueKind == JsonValueKind.String)
+            {
+                setup.KioskManagerHash = mh.GetString() ?? setup.KioskManagerHash;
+            }
+
+            if (doc.RootElement.TryGetProperty("kioskOperatorHash", out var oh) && oh.ValueKind == JsonValueKind.String)
+            {
+                setup.KioskOperatorHash = oh.GetString() ?? setup.KioskOperatorHash;
+            }
+
+            if (!string.IsNullOrEmpty(setup.KioskManagerHash))
+            {
+                setup.ServerBase = _serverBase;
+                if (setup.CompletedAtUtc == default)
+                {
+                    setup.CompletedAtUtc = DateTimeOffset.UtcNow;
+                }
+
+                new KioskSetupStore().Save(setup);
+            }
+        }
+        catch
+        {
+            // keep cached hashes until next ack
+        }
+    }
+
     private void LoadDeviceState()
     {
         var path = DeviceStorePath();
@@ -924,7 +1091,9 @@ public sealed class KioskHostService : IAsyncDisposable
         var json = File.ReadAllText(path);
         var doc = JsonDocument.Parse(json);
         _deviceId = doc.RootElement.GetProperty("deviceId").GetGuid();
-        _deviceKey = doc.RootElement.GetProperty("deviceKey").GetString()!;
+        var loadedKey = doc.RootElement.GetProperty("deviceKey").GetString()!;
+        OnDeviceCredentialsChanged(loadedKey);
+        _deviceKey = loadedKey;
         _stationId = doc.RootElement.GetProperty("stationId").GetString()!;
         if (doc.RootElement.TryGetProperty("serverBase", out var savedBase))
         {
@@ -998,7 +1167,7 @@ public sealed class KioskHostService : IAsyncDisposable
     {
         if (string.IsNullOrEmpty(_stationId))
         {
-            _status.Text = "Unpaired — use operator pairing code";
+            PresentStatusLine(KioskStatusLineState.Unpaired());
             return;
         }
 
@@ -1022,7 +1191,219 @@ public sealed class KioskHostService : IAsyncDisposable
         }
         catch (Exception ex)
         {
-            _status.Text = $"Station {_stationId} — {ex.Message}";
+            Trace.TraceWarning($"Kiosk refresh failed: {ex.Message}");
+            _transientStatusErrorKey = KioskStatusMessages.Keys.ErrGeneric;
+            RefreshStationStatusText();
+        }
+    }
+
+    public async Task<string?> TryOperatorLockAsync()
+    {
+        if (_deviceId == Guid.Empty || string.IsNullOrEmpty(_stationId))
+        {
+            return "kiosk.oplock.err.unpaired";
+        }
+
+        if (_sessionId != Guid.Empty)
+        {
+            if (!KioskOperatorLockRules.CanLockOpenSessionOnline(_runtime.IsTransportConnected))
+            {
+                return KioskOperatorLockRules.OfflineSessionLockErrorKey;
+            }
+
+            var body = JsonSerializer.Serialize(new { sessionId = _sessionId });
+            var response = await _http.PostAsync(
+                $"{_serverBase}/api/kiosk/stations/{Uri.EscapeDataString(_stationId)}/operator-lock/session",
+                new StringContent(body, Encoding.UTF8, "application/json"));
+            if (!response.IsSuccessStatusCode)
+            {
+                return $"kiosk.oplock.err.http.{(int)response.StatusCode}";
+            }
+
+            _sessionId = Guid.Empty;
+            _locallyLockedSessionId = Guid.Empty;
+            EnterLocalLock(leaseExpired: false);
+            return null;
+        }
+
+        if (_operatorFreeUseId != Guid.Empty)
+        {
+            await EndOperatorFreeUseAsync("manual");
+            EnterLocalLock(leaseExpired: false);
+        }
+
+        return null;
+    }
+
+    public async Task<string?> TryOperatorUnlockAsync()
+    {
+        if (_deviceId == Guid.Empty || string.IsNullOrEmpty(_stationId))
+        {
+            return "kiosk.oplock.err.unpaired";
+        }
+
+        if (_sessionId != Guid.Empty)
+        {
+            return "kiosk.oplock.err.session_open";
+        }
+
+        if (_operatorFreeUseId != Guid.Empty)
+        {
+            return null;
+        }
+
+        if (!KioskOperatorLockRules.CanStartFreeUseOnline(_runtime.IsTransportConnected))
+        {
+            return KioskOperatorLockRules.OfflineFreeUseStartErrorKey;
+        }
+
+        var startBody = JsonSerializer.Serialize(new { actorRole = _lastAdminRole == KioskAdminRole.Manager ? "manager" : "operator" });
+        var response = await _http.PostAsync(
+            $"{_serverBase}/api/kiosk/stations/{Uri.EscapeDataString(_stationId)}/operator-lock/free-use/start",
+            new StringContent(startBody, Encoding.UTF8, "application/json"));
+        if (!response.IsSuccessStatusCode)
+        {
+            return $"kiosk.oplock.err.http.{(int)response.StatusCode}";
+        }
+
+        var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        _operatorFreeUseId = doc.RootElement.GetProperty("freeUseId").GetGuid();
+        var now = DateTime.UtcNow;
+        _freeUseLocal.OpenFreeUseId = _operatorFreeUseId;
+        _freeUseLocal.FreeUseStartedUtc = now;
+        _freeUseLocal.TouchAlive(now);
+        _lastAlivePersistUtc = now;
+        _operatorFreeUseMessage = KioskOpStrings.FreeBanner;
+        _freeUseIdleMonitor.RecordInput(now);
+        _shell.Dispatcher.Invoke(() =>
+        {
+            _freeBand.Text = _operatorFreeUseMessage;
+            _freeBand.Visibility = Visibility.Visible;
+            ShowLockLayout();
+        });
+        return null;
+    }
+
+    private async Task EndOperatorFreeUseAsync(string reason)
+    {
+        if (_operatorFreeUseId == Guid.Empty)
+        {
+            return;
+        }
+
+        var endedAt = DateTime.UtcNow;
+        var freeUseId = _operatorFreeUseId;
+        _operatorFreeUseId = Guid.Empty;
+        _operatorFreeUseMessage = "";
+        _freeUseLocal.OpenFreeUseId = null;
+        _freeUseLocal.Save();
+
+        if (_runtime.IsTransportConnected)
+        {
+            var body = JsonSerializer.Serialize(new { freeUseId, reason, endedAtUtc = endedAt });
+            await _http.PostAsync(
+                $"{_serverBase}/api/kiosk/stations/{Uri.EscapeDataString(_stationId)}/operator-lock/free-use/end",
+                new StringContent(body, Encoding.UTF8, "application/json"));
+        }
+        else if (KioskOperatorLockRules.CanEndFreeUseWhileOffline)
+        {
+            _orchestrator.EnqueueFreeUseEnd(freeUseId, reason, endedAt);
+            _replayTick.Start();
+        }
+
+        _shell.Dispatcher.Invoke(() =>
+        {
+            _freeBand.Text = "";
+            _freeBand.Visibility = Visibility.Collapsed;
+        });
+    }
+
+    public void NotifyAdminRole(KioskAdminRole role) => _lastAdminRole = role;
+
+    private void OnDeviceCredentialsChanged(string deviceKey)
+    {
+        if (string.Equals(_loadedDeviceKey, deviceKey, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _loadedDeviceKey = deviceKey;
+        _pairingJustFailed = false;
+        DismissLoginErrorMessage();
+    }
+
+    private void ShowCustomerLoginError(string message)
+    {
+        _shell.Dispatcher.Invoke(() =>
+        {
+            if (_loginError is null)
+            {
+                return;
+            }
+
+            _loginError.Text = message;
+            _loginError.Visibility = Visibility.Visible;
+        });
+    }
+
+    private void ClearCustomerLoginError()
+    {
+        _shell.Dispatcher.Invoke(() =>
+        {
+            if (_loginError is null)
+            {
+                return;
+            }
+
+            _loginError.Text = "";
+            _loginError.Visibility = Visibility.Collapsed;
+        });
+    }
+
+    private static string EventsQueuePath()
+        => Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+            "Checkpoint",
+            "kiosk",
+            "events.db");
+
+    private async Task FinalizeInterruptedFreeUseOnBootAsync()
+    {
+        _freeUseLocal = KioskFreeUseLocalState.Load();
+        if (_freeUseLocal.OpenFreeUseId is not Guid openId || openId == Guid.Empty)
+        {
+            return;
+        }
+
+        _operatorFreeUseId = openId;
+        if (KioskOfflineQueueInspect.HasPendingFreeUseEnd(EventsQueuePath(), openId))
+        {
+            _replayTick.Start();
+            await DrainOfflineQueueAsync();
+            return;
+        }
+
+        var restartEnd = KioskFreeUseBootPolicy.RestartEndUtcIfNeeded(_freeUseLocal, hasQueuedRealEnd: false);
+        if (restartEnd is null)
+        {
+            return;
+        }
+
+        var freeUseId = openId;
+        _operatorFreeUseId = Guid.Empty;
+        _freeUseLocal.OpenFreeUseId = null;
+        _freeUseLocal.Save();
+        if (_runtime.IsTransportConnected && _deviceId != Guid.Empty)
+        {
+            var body = JsonSerializer.Serialize(new { freeUseId, reason = "restart", endedAtUtc = restartEnd.Value });
+            await _http.PostAsync(
+                $"{_serverBase}/api/kiosk/stations/{Uri.EscapeDataString(_stationId)}/operator-lock/free-use/end",
+                new StringContent(body, Encoding.UTF8, "application/json"));
+        }
+        else
+        {
+            _orchestrator.EnqueueFreeUseEnd(freeUseId, "restart", restartEnd.Value);
+            _replayTick.Start();
         }
     }
 

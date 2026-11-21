@@ -17,9 +17,15 @@ public sealed class KioskController(
     KioskReconcileService reconcile,
     GameCatalogService catalog,
     KioskProfileService profiles,
+    KioskCredentialService credentials,
+    KioskOperatorLockService operatorLock,
     AppDbContext db) : ControllerBase
 {
     public sealed record PairRequest(string Code);
+
+    public sealed record OperatorLockBody(Guid SessionId);
+
+    public sealed record EndFreeUseBody(Guid FreeUseId, string? Reason, DateTime? EndedAtUtc);
 
     [HttpPost("pair")]
     public async Task<IActionResult> Pair(PairRequest body, CancellationToken ct)
@@ -30,11 +36,16 @@ public sealed class KioskController(
     {
         KioskDeviceAuthorization.EnsureStationMatches(HttpContext, stationId);
         var profile = await profiles.EnsureProfileAsync(stationId, ct);
+        var hashes = await credentials.TryGetHashesAsync(ct);
+        var credentialsVersion = await credentials.GetCredentialsVersionAsync(ct);
         return Ok(new
         {
             isTestMode = profile.IsTestMode,
             nearEndMinutes = profiles.LoadNearEndMinutes(profile),
             profile.AlertSoundId,
+            kioskManagerHash = hashes?.ManagerHash,
+            kioskOperatorHash = hashes?.OperatorHash,
+            credentialsVersion,
         });
     }
 
@@ -75,6 +86,34 @@ public sealed class KioskController(
         }
 
         return Ok(new { sessionId = session.Id, session.CustomerId, prepaidKind = session.PrepaidKind.ToString() });
+    }
+
+    [HttpPost("stations/{stationId}/operator-lock/session")]
+    public async Task<IActionResult> OperatorLockSession(string stationId, [FromBody] OperatorLockBody body, CancellationToken ct)
+    {
+        KioskDeviceAuthorization.EnsureStationMatches(HttpContext, stationId);
+        var deviceId = (Guid)HttpContext.Items["KioskDeviceId"]!;
+        await operatorLock.LockOpenSessionAsync(stationId, body.SessionId, deviceId, ct);
+        return Ok();
+    }
+
+    public sealed record StartFreeUseBody(string? ActorRole);
+
+    [HttpPost("stations/{stationId}/operator-lock/free-use/start")]
+    public async Task<IActionResult> StartFreeUse(string stationId, [FromBody] StartFreeUseBody? body, CancellationToken ct)
+    {
+        KioskDeviceAuthorization.EnsureStationMatches(HttpContext, stationId);
+        var deviceId = (Guid)HttpContext.Items["KioskDeviceId"]!;
+        var id = await operatorLock.StartFreeUseAsync(stationId, deviceId, body?.ActorRole ?? "operator", ct);
+        return Ok(new { freeUseId = id });
+    }
+
+    [HttpPost("stations/{stationId}/operator-lock/free-use/end")]
+    public async Task<IActionResult> EndFreeUse(string stationId, [FromBody] EndFreeUseBody body, CancellationToken ct)
+    {
+        KioskDeviceAuthorization.EnsureStationMatches(HttpContext, stationId);
+        await operatorLock.EndFreeUseAsync(stationId, body.FreeUseId, body.Reason ?? "manual", body.EndedAtUtc, ct);
+        return Ok();
     }
 
     [HttpPost("devices/events")]
