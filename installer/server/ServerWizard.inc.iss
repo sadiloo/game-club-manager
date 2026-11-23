@@ -457,7 +457,6 @@ var
   Unknown: Boolean;
   Msg: String;
   Buttons: TArrayOfString;
-  ButtonIds: TArrayOfInteger;
   Choice: Integer;
 begin
   Result := True;
@@ -469,17 +468,14 @@ begin
   SetArrayLength(Buttons, 2);
   Buttons[0] := 'ارتقا';
   Buttons[1] := 'انصراف';
-  SetArrayLength(ButtonIds, 2);
-  ButtonIds[0] := 1;
-  ButtonIds[1] := 2;
 
   if Unknown then
     Msg := 'وضعیت جلسه‌های باز معلوم نیست. باز هم ارتقا انجام شود؟'
   else
     Msg := Format('%1 جلسهٔ باز در جریان است. با ارتقا، پنل اپراتور روی این رایانه و روی گوشی‌ها تا روشن شدن دوبارهٔ سرور باز نمی‌شود.', [IntToStr(Count)]);
 
-  Choice := TaskDialogMsgBox('ارتقای چک‌پوینت', Msg, Buttons, ButtonIds, 1, 0, 0);
-  Result := (Choice = 1);
+  Choice := TaskDialogMsgBox('ارتقای چک‌پوینت', Msg, mbConfirmation, MB_YESNO, Buttons, 0);
+  Result := (Choice = IDYES);
 end;
 
 function ValidateAccountPage(Page: TInputQueryWizardPage; E0, E1, E2: TNewStaticText;
