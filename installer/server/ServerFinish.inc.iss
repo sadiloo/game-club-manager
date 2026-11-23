@@ -1,6 +1,6 @@
 const
-  CM_SERVER_FINISH_IP_LABEL = 'inst.server.finish.ipLabel';
-  CM_SERVER_FINISH_DHCP_NOTE = 'inst.server.finish.dhcpNote';
+  CM_SERVER_FINISH_IP_LABEL = 'inst_server_finish_ipLabel';
+  CM_SERVER_FINISH_DHCP_NOTE = 'inst_server_finish_dhcpNote';
 
 procedure CollectLanIPv4Addresses(var Ips: TArrayOfString; var Port: String);
 var

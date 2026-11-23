@@ -9,10 +9,10 @@ if (-not (Test-Path -LiteralPath $tools)) {
     throw "Get-ServerLanIPv4Addresses.ps1 missing"
 }
 if ($iss -notmatch 'inst\.server\.finish\.ipLabel') {
-    throw "CheckpointServer.iss missing CustomMessage inst.server.finish.ipLabel"
+    throw "CheckpointServer.iss missing CustomMessage inst_server_finish_ipLabel"
 }
 if ($iss -notmatch 'inst\.server\.finish\.dhcpNote') {
-    throw "CheckpointServer.iss missing CustomMessage inst.server.finish.dhcpNote"
+    throw "CheckpointServer.iss missing CustomMessage inst_server_finish_dhcpNote"
 }
 if ($iss -notmatch 'TODO_UIUX inst\.server\.finish\.ipLabel') {
     throw "ipLabel CustomMessage must use TODO_UIUX placeholder"

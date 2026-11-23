@@ -42,8 +42,8 @@ ChangesAssociations=no
 Name: "persian"; MessagesFile: "..\lang\Persian.isl"
 
 [CustomMessages]
-persian.inst.server.finish.ipLabel=TODO_UIUX inst.server.finish.ipLabel
-persian.inst.server.finish.dhcpNote=TODO_UIUX inst.server.finish.dhcpNote
+persian.inst_server_finish_ipLabel=TODO_UIUX inst.server.finish.ipLabel
+persian.inst_server_finish_dhcpNote=TODO_UIUX inst.server.finish.dhcpNote
 
 [LangOptions]
 RightToLeft=yes
