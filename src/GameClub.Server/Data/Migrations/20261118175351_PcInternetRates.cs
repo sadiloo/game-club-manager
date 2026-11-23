@@ -235,15 +235,14 @@ namespace GameClub.Server.Data.Migrations
 
             migrationBuilder.Sql(
                 """
-                -- Emergency Down only: legacy branch_rounding has one PcSpecialBandSurchargeToman; it cannot hold
-                -- per-group surcharges. When pc-normal and pc-vip night-day differ, store MAX(night-day); re-Up may
-                -- re-price nights from that single value (accepted loss on rollback).
+                -- Emergency Down only: legacy branch_rounding has one PcSpecialBandSurchargeToman; brief §164 uses
+                -- pc-normal online night-day gap only (not the largest gap across PC groups).
                 UPDATE branch_rounding
                 SET "PcSpecialBandSurchargeToman" = COALESCE((
-                    SELECT MAX(n."HourlyToman" - d."HourlyToman")
+                    SELECT n."HourlyToman" - d."HourlyToman"
                     FROM rate_lines d
                     INNER JOIN rate_lines n ON n."GroupId" = d."GroupId"
-                    WHERE d."GroupId" IN ('pc-normal', 'pc-vip')
+                    WHERE d."GroupId" = 'pc-normal'
                       AND d."PlayMode" = 'Online'
                       AND d."PlayerCount" IS NULL
                       AND d."IsSpecialBand" = false
@@ -268,28 +267,30 @@ namespace GameClub.Server.Data.Migrations
                     RETURN v2_json;
                   END IF;
                   SELECT COALESCE(
-                    (SELECT MAX((night_e->>'HourlyToman')::bigint - (day_e->>'HourlyToman')::bigint)
+                    (SELECT (night_e->>'HourlyToman')::bigint - (day_e->>'HourlyToman')::bigint
                      FROM jsonb_array_elements(COALESCE(j->'Lines', '[]'::jsonb)) day_e
                      INNER JOIN jsonb_array_elements(COALESCE(j->'Lines', '[]'::jsonb)) night_e
                        ON night_e->>'GroupId' = day_e->>'GroupId'
-                     WHERE day_e->>'GroupId' IN ('pc-normal', 'pc-vip')
+                     WHERE day_e->>'GroupId' = 'pc-normal'
                        AND day_e->>'PlayMode' = 'Online'
                        AND day_e->>'PlayerCount' IS NULL
                        AND NOT (day_e->>'IsSpecialBand')::boolean
                        AND night_e->>'PlayMode' = 'Online'
                        AND night_e->>'PlayerCount' IS NULL
-                       AND (night_e->>'IsSpecialBand')::boolean),
-                    (SELECT MAX((night_e->>'HourlyToman')::bigint - (day_e->>'HourlyToman')::bigint)
+                       AND (night_e->>'IsSpecialBand')::boolean
+                     LIMIT 1),
+                    (SELECT (night_e->>'HourlyToman')::bigint - (day_e->>'HourlyToman')::bigint
                      FROM jsonb_array_elements(COALESCE(j->'Lines', '[]'::jsonb)) day_e
                      INNER JOIN jsonb_array_elements(COALESCE(j->'Lines', '[]'::jsonb)) night_e
                        ON night_e->>'GroupId' = day_e->>'GroupId'
-                     WHERE day_e->>'GroupId' IN ('pc-normal', 'pc-vip')
+                     WHERE day_e->>'GroupId' = 'pc-normal'
                        AND day_e->>'PlayMode' = 'Online'
                        AND day_e->>'PlayerCount' IS NULL
                        AND NOT (day_e->>'IsSpecialBand')::boolean
                        AND night_e->>'PlayMode' = 'Offline'
                        AND (night_e->>'PlayerCount')::int = 1
-                       AND (night_e->>'IsSpecialBand')::boolean),
+                       AND (night_e->>'IsSpecialBand')::boolean
+                     LIMIT 1),
                     20000
                   ) INTO surcharge;
 

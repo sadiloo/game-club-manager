@@ -66,7 +66,7 @@ if ($existing.Count -gt 0) {{
   $existing | Remove-NetFirewallRule -ErrorAction Stop
 }}
 New-NetFirewallRule -DisplayName ""$group - Server"" -Group $group -Direction Outbound -Action Allow -Protocol TCP -RemoteAddress $ips -RemotePort $port | Out-Null
-New-NetFirewallRule -DisplayName ""$group - DHCP"" -Group $group -Direction Outbound -Action Allow -Protocol UDP -RemotePort 67-68 | Out-Null
+{InternetFirewallDhcpAllowRule.NewNetFirewallRuleInvocation}
 if ('{extra}' -ne '') {{
   foreach ($p in '{extra}'.Split(';')) {{
     if ($p) {{ New-NetFirewallRule -DisplayName ""$group - $p"" -Group $group -Direction Outbound -Action Allow -Program $p | Out-Null }}

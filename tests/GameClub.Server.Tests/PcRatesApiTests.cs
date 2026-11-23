@@ -37,6 +37,19 @@ public sealed class PcRatesApiTests(GameClubWebApplicationFactory factory)
     }
 
     [Fact]
+    public async Task PcRates_Manager_rejects_zero_online_day_rate()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var mgr = await factory.CreateOperatorClientAsync("manager", "1234");
+        var res = await mgr.PutAsJsonAsync(
+            $"/api/operator/pc-rates/{PilotSeed.PcNormalGroupId}",
+            new { onlineDay = 0L, onlineNight = 100_000L, offlineDay = 60_000L, offlineNight = 80_000L });
+        Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
+        var body = await res.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("invalid_rate", body.GetProperty("code").GetString());
+    }
+
+    [Fact]
     public async Task PcRates_Manager_put_empty_body_returns_400_persian()
     {
         await S3TestHelpers.ResetAsync(factory);

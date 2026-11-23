@@ -576,14 +576,19 @@ public sealed class KioskCheckpointCoordinator(
             var prev = await db.StationInternetStates.AsNoTracking()
                 .FirstOrDefaultAsync(s => s.StationId == device.StationId, ct);
             var prevVersion = prev?.AppliedVersion;
-            var applied = await internetStates.ApplyReportAsync(
-                device.StationId,
-                internetApplied.Epoch,
-                internetApplied.Version,
-                internetApplied.On,
-                internetApplied.AppliedAtUtc,
-                internetApplied.Error,
-                ct);
+            var boundSession = prev?.SessionId;
+            var sessionMismatch = boundSession is Guid bound
+                && sessionId is Guid heartbeatSession
+                && heartbeatSession != bound;
+            var applied = !sessionMismatch
+                && await internetStates.ApplyReportAsync(
+                    device.StationId,
+                    internetApplied.Epoch,
+                    internetApplied.Version,
+                    internetApplied.On,
+                    internetApplied.AppliedAtUtc,
+                    internetApplied.Error,
+                    ct);
             if (applied && prevVersion != internetApplied.Version)
             {
                 var action = string.IsNullOrEmpty(internetApplied.Error) ? "internet.applied" : "internet.apply_failed";

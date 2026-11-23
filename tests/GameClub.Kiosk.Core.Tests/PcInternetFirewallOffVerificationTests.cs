@@ -6,6 +6,16 @@ namespace GameClub.Kiosk.Core.Tests;
 [Trait("Category", "PcInternetFirewall")]
 public sealed class PcInternetFirewallOffVerificationTests
 {
+    [Fact]
+    public void internet_off_dhcp_rule_is_udp_local_68_to_remote_67_only()
+    {
+        var line = InternetFirewallDhcpAllowRule.NewNetFirewallRuleInvocation;
+        Assert.Contains("-Protocol UDP", line, StringComparison.Ordinal);
+        Assert.Contains("-LocalPort 68", line, StringComparison.Ordinal);
+        Assert.Contains("-RemotePort 67", line, StringComparison.Ordinal);
+        Assert.DoesNotContain("67-68", line, StringComparison.Ordinal);
+        Assert.DoesNotContain("-Direction Inbound", line, StringComparison.Ordinal);
+    }
     private static readonly bool[] BoolValues = [false, true];
 
     [Fact]

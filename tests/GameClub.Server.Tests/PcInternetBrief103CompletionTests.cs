@@ -495,23 +495,54 @@ public sealed class PcInternetBrief103CompletionTests(GameClubWebApplicationFact
         var api = factory.CreateClientWithKey();
         await S3TestHelpers.RegisterPc(api, "PC-HBIGN", PilotSeed.PcNormalGroupId);
         factory.Clock.SetTehran(2026, 6, 2, 12, 0);
-        await S3TestHelpers.StartSession(api, "PC-HBIGN");
+        var sessionId = await S3TestHelpers.StartSession(api, "PC-HBIGN");
         var deviceId = await SeedKioskDeviceAsync("PC-HBIGN");
         using var scope = factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         var row = await db.StationInternetStates.SingleAsync(s => s.StationId == "PC-HBIGN");
         row.AppliedVersion = 5;
+        row.AppliedOn = true;
+        row.SessionId = sessionId;
+        var goodEpoch = row.Epoch;
         await db.SaveChangesAsync();
         var coordinator = scope.ServiceProvider.GetRequiredService<KioskCheckpointCoordinator>();
-        var staleEpoch = Guid.NewGuid();
-        await coordinator.OnHeartbeatAsync(deviceId, null, 0, new KioskInternetAppliedReport
+        var at = factory.Clock.UtcNow.UtcDateTime;
+
+        async Task AssertInternetStateAndAuditFrozenAsync()
         {
-            Epoch = staleEpoch,
+            var fresh = await db.StationInternetStates.AsNoTracking().SingleAsync(s => s.StationId == "PC-HBIGN");
+            Assert.Equal(5, fresh.AppliedVersion);
+            Assert.True(fresh.AppliedOn);
+            Assert.Equal(goodEpoch, fresh.Epoch);
+            Assert.Empty(await db.AuditLog.Where(a => a.Action == "internet.applied" || a.Action == "internet.apply_failed").ToListAsync());
+        }
+
+        await coordinator.OnHeartbeatAsync(deviceId, sessionId, 0, new KioskInternetAppliedReport
+        {
+            Epoch = Guid.NewGuid(),
             Version = 6,
             On = true,
-            AppliedAtUtc = factory.Clock.UtcNow.UtcDateTime,
+            AppliedAtUtc = at,
         }, CancellationToken.None);
-        Assert.Empty(await db.AuditLog.Where(a => a.Action == "internet.applied" || a.Action == "internet.apply_failed").ToListAsync());
+        await AssertInternetStateAndAuditFrozenAsync();
+
+        await coordinator.OnHeartbeatAsync(deviceId, Guid.NewGuid(), 0, new KioskInternetAppliedReport
+        {
+            Epoch = goodEpoch,
+            Version = 6,
+            On = false,
+            AppliedAtUtc = at,
+        }, CancellationToken.None);
+        await AssertInternetStateAndAuditFrozenAsync();
+
+        await coordinator.OnHeartbeatAsync(deviceId, sessionId, 0, new KioskInternetAppliedReport
+        {
+            Epoch = goodEpoch,
+            Version = 5,
+            On = false,
+            AppliedAtUtc = at,
+        }, CancellationToken.None);
+        await AssertInternetStateAndAuditFrozenAsync();
     }
 
     [Fact]

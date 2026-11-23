@@ -396,13 +396,14 @@ public sealed class PcInternetRatesMigrationTests(GameClubWebApplicationFactory 
                 WHERE "GroupId"='pc-normal' AND "PlayMode"='Online' AND "PlayerCount" IS NULL AND "IsSpecialBand";
                 UPDATE rate_lines SET "HourlyToman" = 120000
                 WHERE "GroupId"='pc-vip' AND "PlayMode"='Online' AND "PlayerCount" IS NULL AND NOT "IsSpecialBand";
-                UPDATE rate_lines SET "HourlyToman" = 145000
+                UPDATE rate_lines SET "HourlyToman" = 180000
                 WHERE "GroupId"='pc-vip' AND "PlayMode"='Online' AND "PlayerCount" IS NULL AND "IsSpecialBand";
                 """);
             db.GetService<IMigrator>().Migrate(PrePcInternetMigration);
+            const long pcNormalNightDayGap = 130_000 - 90_000;
             var preSurcharge = await db.Database.SqlQueryRaw<long>(
                 """SELECT "PcSpecialBandSurchargeToman" AS "Value" FROM branch_rounding LIMIT 1""").SingleAsync();
-            Assert.Equal(40_000, preSurcharge);
+            Assert.Equal(pcNormalNightDayGap, preSurcharge);
             await db.Database.MigrateAsync();
             var vipNight = await db.RateLines.SingleAsync(r =>
                 r.GroupId == PilotSeed.PcVipGroupId && r.IsSpecialBand && r.PlayMode == nameof(PlayMode.Online));
