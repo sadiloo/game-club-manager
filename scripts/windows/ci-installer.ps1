@@ -115,28 +115,43 @@ function Get-IsccPeVersions([string]$isccPath) {
 
 function Get-IsccBannerText([string]$isccPath) {
     if (-not (Test-Path -LiteralPath $isccPath)) { return $null }
-    $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = $isccPath
-    $psi.Arguments = ""
-    $psi.RedirectStandardOutput = $true
-    $psi.RedirectStandardError = $true
-    $psi.UseShellExecute = $false
-    $psi.CreateNoWindow = $true
-    $proc = [System.Diagnostics.Process]::Start($psi)
-    if ($null -eq $proc) {
-        return (& cmd.exe /c "`"$isccPath`" 2>&1" | Out-String)
+
+    $probeIss = Join-Path $env:TEMP ("gcm-inno-banner-" + [Guid]::NewGuid().ToString("N") + ".iss")
+    try {
+        $probeBody = @"
+[Setup]
+AppId={{00000000-0000-0000-0000-00000000BANN}}
+AppName=BannerProbe
+AppVersion=0.0.0
+DefaultDirName={tmp}
+OutputDir=.
+OutputBaseFilename=banner-probe
+DisableProgramGroupPage=yes
+DisableDirPage=yes
+DisableReadyPage=yes
+DisableFinishedPage=yes
+Compression=none
+"@
+        Set-Content -LiteralPath $probeIss -Value $probeBody -Encoding ASCII
+
+        foreach ($arg in @(
+                "/?",
+                "/Q `"$probeIss`""
+            )) {
+            $cmd = "`"$isccPath`" $arg 2>&1"
+            $merged = (& cmd.exe /c $cmd | Out-String)
+            if ($merged -match '(?m)Compiler engine version:\s*Inno Setup') {
+                return $merged
+            }
+        }
+
+        throw "iscc banner probe produced no Compiler engine version line"
     }
-    $stdout = $proc.StandardOutput.ReadToEnd()
-    $stderr = $proc.StandardError.ReadToEnd()
-    if (-not $proc.WaitForExit(15000)) {
-        try { $proc.Kill() } catch { }
-        throw "iscc banner probe timed out"
+    finally {
+        if (Test-Path -LiteralPath $probeIss) {
+            Remove-Item -LiteralPath $probeIss -Force -ErrorAction SilentlyContinue
+        }
     }
-    $merged = $stdout + $stderr
-    if ([string]::IsNullOrWhiteSpace($merged)) {
-        return (& cmd.exe /c "`"$isccPath`" 2>&1" | Out-String)
-    }
-    return $merged
 }
 
 $pathIsccShim = Get-Command iscc.exe -ErrorAction SilentlyContinue
