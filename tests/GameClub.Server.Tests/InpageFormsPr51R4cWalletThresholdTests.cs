@@ -161,5 +161,103 @@ public sealed class InpageFormsPr51R4cWalletThresholdTests(GameClubWebApplicatio
             });
         preview.EnsureSuccessStatusCode();
         Assert.Equal(5_000, BillCollectible(await preview.Content.ReadFromJsonAsync<JsonElement>()));
+        var before = await WalletSpendableAsync(op, customerId);
+        (await op.PostAsJsonAsync(
+            $"/api/operator/buffet-only/{openSaleId}/confirm",
+            new
+            {
+                payments = new[]
+                {
+                    new { method = "Wallet", amountToman = 1_000L },
+                    new { method = "Cash", amountToman = 4_000L },
+                },
+            })).EnsureSuccessStatusCode();
+        Assert.Equal(before - 1_000, await WalletSpendableAsync(op, customerId));
+    }
+
+    [Fact]
+    public async Task buffet_mixed_5000_wallet_1000_cash_5000_rejected_wallet_uncharged()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var op = await factory.CreateOperatorClientAsync();
+        var customerId = await CreateCustomerAsync(op);
+        (await op.PostAsJsonAsync(
+            $"/api/operator/members/customers/{customerId}/wallet/top-up",
+            new { method = "Cash", amountToman = 50_000L, commandId = Guid.NewGuid() })).EnsureSuccessStatusCode();
+        var before = await WalletSpendableAsync(op, customerId);
+        var openSaleId = await OpenCustomBuffetAsync(op, customerId, 5_000L);
+        var confirm = await op.PostAsJsonAsync(
+            $"/api/operator/buffet-only/{openSaleId}/confirm",
+            new
+            {
+                payments = new[]
+                {
+                    new { method = "Wallet", amountToman = 1_000L },
+                    new { method = "Cash", amountToman = 5_000L },
+                },
+            });
+        Assert.Equal(HttpStatusCode.BadRequest, confirm.StatusCode);
+        Assert.Equal(before, await WalletSpendableAsync(op, customerId));
+        using var scope = factory.Services.CreateScope();
+        Assert.Equal(0, await scope.ServiceProvider.GetRequiredService<AppDbContext>().Invoices.CountAsync());
+    }
+
+    [Fact]
+    public async Task buffet_mixed_12000_wallet_1000_cash_14000_accepted_collectible_15000()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var op = await factory.CreateOperatorClientAsync();
+        var customerId = await CreateCustomerAsync(op);
+        (await op.PostAsJsonAsync(
+            $"/api/operator/members/customers/{customerId}/wallet/top-up",
+            new { method = "Cash", amountToman = 50_000L, commandId = Guid.NewGuid() })).EnsureSuccessStatusCode();
+        var openSaleId = await OpenCustomBuffetAsync(op, customerId, 12_000L);
+        var preview = await op.PostAsJsonAsync(
+            $"/api/operator/buffet-only/{openSaleId}/bill/preview",
+            new
+            {
+                payments = new[]
+                {
+                    new { method = "Wallet", amountToman = 1_000L },
+                    new { method = "Cash", amountToman = 14_000L },
+                },
+            });
+        preview.EnsureSuccessStatusCode();
+        Assert.Equal(15_000, BillCollectible(await preview.Content.ReadFromJsonAsync<JsonElement>()));
+        (await op.PostAsJsonAsync(
+            $"/api/operator/buffet-only/{openSaleId}/confirm",
+            new
+            {
+                payments = new[]
+                {
+                    new { method = "Wallet", amountToman = 1_000L },
+                    new { method = "Cash", amountToman = 14_000L },
+                },
+            })).EnsureSuccessStatusCode();
+    }
+
+    [Fact]
+    public async Task buffet_mixed_12000_wallet_1000_cash_15000_rejected_wallet_uncharged()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var op = await factory.CreateOperatorClientAsync();
+        var customerId = await CreateCustomerAsync(op);
+        (await op.PostAsJsonAsync(
+            $"/api/operator/members/customers/{customerId}/wallet/top-up",
+            new { method = "Cash", amountToman = 50_000L, commandId = Guid.NewGuid() })).EnsureSuccessStatusCode();
+        var before = await WalletSpendableAsync(op, customerId);
+        var openSaleId = await OpenCustomBuffetAsync(op, customerId, 12_000L);
+        var confirm = await op.PostAsJsonAsync(
+            $"/api/operator/buffet-only/{openSaleId}/confirm",
+            new
+            {
+                payments = new[]
+                {
+                    new { method = "Wallet", amountToman = 1_000L },
+                    new { method = "Cash", amountToman = 15_000L },
+                },
+            });
+        Assert.Equal(HttpStatusCode.BadRequest, confirm.StatusCode);
+        Assert.Equal(before, await WalletSpendableAsync(op, customerId));
     }
 }

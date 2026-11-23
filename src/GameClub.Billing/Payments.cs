@@ -713,16 +713,38 @@ public static class PaymentAllocator
             }
         }
 
-        var matchesCashCollectible = cashEquivalentPayable > 0
-            && balanceApplied + counterTendered == cashEquivalentPayable;
-        if (counterTendered != counterRounded && !deferCounterCheck && !matchesCashCollectible)
+        var walletLikeCashMixed = cashEquivalentPayable > 0 && balanceApplied > 0 && counterTendered > 0;
+        var allNonTime = true;
+        for (var i = 0; i < lines.Count; i++)
+        {
+            if (lines[i].IsTimeCharge)
+            {
+                allNonTime = false;
+                break;
+            }
+        }
+
+        var enforceTwinCounter = walletLikeCashMixed
+            && allNonTime
+            && balanceApplied + counterExact == exact
+            && (cashEquivalentPayable == exact || cashEquivalentPayable == exact + cashEquivalentRounding);
+        if (enforceTwinCounter)
+        {
+            var requiredCounter = cashEquivalentPayable - balanceApplied;
+            if (counterTendered != requiredCounter)
+            {
+                errors.Add(new PaymentError(
+                    PaymentErrors.SumMismatch,
+                    $"Counter tenders {counterTendered} toman against rounded remainder {requiredCounter}."));
+            }
+        }
+        else if (roundingGapCounter > 0 && counterTendered != counterRounded)
         {
             errors.Add(new PaymentError(
                 PaymentErrors.SumMismatch,
                 $"Counter tenders {counterTendered} toman against rounded remainder {counterRounded}."));
         }
-
-        if (roundingGapCounter > 0 && counterTendered != counterRounded)
+        else if (counterTendered != counterRounded && !deferCounterCheck)
         {
             errors.Add(new PaymentError(
                 PaymentErrors.SumMismatch,
