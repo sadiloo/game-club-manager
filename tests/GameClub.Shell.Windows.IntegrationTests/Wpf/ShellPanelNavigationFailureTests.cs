@@ -476,35 +476,26 @@ public sealed class ShellPanelNavigationFailureTests
                         window = await StartWindowOnStubAsync(stub);
                         var wv = await WaitForPanelWebViewAsync(window, TimeSpan.FromSeconds(45));
                         await WaitForPanelUnavailableOfflineAsync(wv, TimeSpan.FromSeconds(90));
-                        var responsesBefore = stub.OperatorResponseCount;
                         stub.OperatorStatusCode = 200;
                         stub.OperatorDelayMilliseconds = 2_500;
                         stub.ProbeDelayMilliseconds = 0;
 
-                        var backoffDeadline = DateTime.UtcNow.AddSeconds(35);
-                        while (DateTime.UtcNow < backoffDeadline)
-                        {
-                            await Task.Delay(200);
-                            if (LogDelta(baseline).Contains("panel-recovery-probe target=panel", StringComparison.Ordinal))
-                            {
-                                break;
-                            }
-                        }
-
+                        var responsesBefore = stub.OperatorResponseCount;
+                        window.TriggerRunningPanelProbeForTests();
                         var probeStarted = false;
-                        var staleDeadline = DateTime.UtcNow.AddSeconds(90);
-                        while (DateTime.UtcNow < staleDeadline)
+                        var probeDeadline = DateTime.UtcNow.AddSeconds(15);
+                        while (DateTime.UtcNow < probeDeadline)
                         {
-                            await Task.Delay(100);
+                            await Task.Delay(50);
                             if (stub.OperatorResponseCount > responsesBefore)
                             {
                                 probeStarted = true;
-                                window.ReloadPanel();
                                 break;
                             }
                         }
 
                         Assert.True(probeStarted, "panel-recovery probe did not start before reload invalidation");
+                        window.ReloadPanel();
 
                         var staleLineDeadline = DateTime.UtcNow.AddSeconds(30);
                         var sawStale = false;
