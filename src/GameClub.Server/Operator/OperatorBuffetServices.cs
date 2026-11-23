@@ -446,7 +446,7 @@ public sealed class OperatorBuffetSaleService(
                 OperatorPaymentMethods.Parse(p.Method),
                 p.AmountToman,
                 OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet ? sale.CustomerId?.ToString() : null)).ToList();
-            var amounts = await calculator.ComputeBuffetOnlyAsync(sale.Lines, sale.CustomerId, tenders, innerCt);
+            var amounts = await calculator.ComputeBuffetOnlyAsync(sale.Lines, sale.CustomerId, tenders, innerCt, effective);
             bill.UnroundedPayableToman = amounts.UnroundedPayableToman;
             bill.RoundingToman = amounts.RoundingToman;
             bill.CollectibleToman = amounts.CollectibleToman;
@@ -481,13 +481,19 @@ public sealed class OperatorBuffetSaleService(
             OperatorPaymentMethods.Parse(p.Method),
             p.AmountToman,
             OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet ? sale.CustomerId?.ToString() : null)).ToList();
-        var amounts = await calculator.ComputeBuffetOnlyAsync(sale.Lines, sale.CustomerId, tenders, ct);
+        var amounts = await calculator.ComputeBuffetOnlyAsync(sale.Lines, sale.CustomerId, tenders, ct, effective);
         var walletShort = await bills.GetWalletShortRemainderSnapshotAsync(sale.CustomerId, amounts.CollectibleToman, null, ct);
         return new
         {
             openSaleId = sale.Id,
             lines = OpenSaleMapper.ToDtos(sale.Lines),
             linkedCustomer = CustomerMapper.ToLinkedChip(sale.Customer),
+            unroundedPayableToman = amounts.UnroundedPayableToman,
+            roundingToman = amounts.RoundingToman,
+            collectibleToman = amounts.CollectibleToman,
+            timeGrossToman = amounts.TimeGrossToman,
+            buffetGrossToman = amounts.BuffetGrossToman,
+            servicesGrossToman = amounts.ServicesGrossToman,
             bill = new
             {
                 unroundedPayableToman = amounts.UnroundedPayableToman,
@@ -498,6 +504,7 @@ public sealed class OperatorBuffetSaleService(
                 servicesGrossToman = amounts.ServicesGrossToman,
                 walletShortRemainder = OperatorBillService.ToWalletShortRemainderDto(walletShort),
             },
+            walletShortRemainder = OperatorBillService.ToWalletShortRemainderDto(walletShort),
         };
     }
 

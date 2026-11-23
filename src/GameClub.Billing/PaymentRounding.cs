@@ -11,6 +11,9 @@ public sealed record PaymentRoundingSettings
 
     public bool AllowWalletShortBalanceDebt { get; init; } = true;
 
+    /// <summary>F05 explicit cash short-remainder: no wallet debt draw; rounding may still apply.</summary>
+    public bool BlockWalletDebtDraw { get; init; }
+
     public static PaymentRoundingSettings Default { get; } = new();
 }
 

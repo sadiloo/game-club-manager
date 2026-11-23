@@ -161,8 +161,21 @@ internal static class S3TestHelpers
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         await db.Database.ExecuteSqlRawAsync(TruncateSql);
         await DatabaseSeed.EnsureAsync(db);
+        await ResetBranchRoundingDefaultsAsync(db);
         await EnsureCatalogCategoryTwoForTestsAsync(db);
         await EnsureOwnerUserForTestsAsync(db);
+    }
+
+    private static async Task ResetBranchRoundingDefaultsAsync(AppDbContext db)
+    {
+        var rounding = await db.BranchRounding.SingleAsync();
+        rounding.RoundingEnabled = true;
+        rounding.StepToman = 5_000;
+        rounding.Direction = "Up";
+        rounding.ApplyToWallet = true;
+        rounding.WalletMinBillToman = 5_000;
+        rounding.AllowWalletShortBalanceDebt = true;
+        await db.SaveChangesAsync();
     }
 
     /// <summary>Test fixture only — Owner role for brief correction_exceeds_balance checks.</summary>

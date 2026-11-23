@@ -74,21 +74,68 @@ public static class WalletShortRemainderSupport
         WalletShortRemainderSnapshot snapshot,
         string? shortRemainderMethod)
     {
-        if (!snapshot.Applies)
+        if (!snapshot.Applies || string.IsNullOrWhiteSpace(shortRemainderMethod))
         {
             return;
         }
 
-        if (string.Equals(shortRemainderMethod, "Debt", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(shortRemainderMethod, "Debt", StringComparison.OrdinalIgnoreCase)
+            && !snapshot.DebtRemainderAllowed)
         {
-            if (!snapshot.DebtRemainderAllowed)
-            {
-                throw new ApiException(
-                    StatusCodes.Status400BadRequest,
-                    "payment_invalid",
-                    "جمع پرداختی با مبلغ قابل دریافت برابر نیست.");
-            }
+            throw new ApiException(
+                StatusCodes.Status400BadRequest,
+                "payment_invalid",
+                "جمع پرداختی با مبلغ قابل دریافت برابر نیست.");
         }
+    }
+
+    public static void ValidateWalletShortBalancePolicy(
+        WalletShortRemainderSnapshot snapshot,
+        bool allowWalletShortBalanceDebt,
+        OperatorBillService.PaymentInput? walletPayment)
+    {
+        if (walletPayment is null)
+        {
+            return;
+        }
+
+        ValidateShortRemainderChoice(snapshot, walletPayment.ShortRemainderMethod);
+
+        if (allowWalletShortBalanceDebt)
+        {
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(walletPayment.ShortRemainderMethod)
+            && string.Equals(walletPayment.ShortRemainderMethod, "Debt", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ApiException(
+                StatusCodes.Status400BadRequest,
+                "payment_invalid",
+                "جمع پرداختی با مبلغ قابل دریافت برابر نیست.");
+        }
+
+        if (snapshot.Applies && walletPayment.AmountToman > snapshot.WalletAutoDrawToman)
+        {
+            throw new ApiException(
+                StatusCodes.Status400BadRequest,
+                "payment_invalid",
+                "جمع پرداختی با مبلغ قابل دریافت برابر نیست.");
+        }
+    }
+
+    public static PaymentRoundingSettings AdjustPaymentRoundingForShortCashChoice(
+        PaymentRoundingSettings settings,
+        IReadOnlyList<OperatorBillService.PaymentInput>? payments)
+    {
+        var wallet = payments?.FirstOrDefault(p => p.Method.Equals("Wallet", StringComparison.OrdinalIgnoreCase));
+        if (wallet is not null
+            && string.Equals(wallet.ShortRemainderMethod, "Cash", StringComparison.OrdinalIgnoreCase))
+        {
+            return settings with { BlockWalletDebtDraw = true };
+        }
+
+        return settings;
     }
 
     public static List<OperatorBillService.PaymentInput> NormalizeWalletShortPayments(
@@ -96,11 +143,6 @@ public static class WalletShortRemainderSupport
         WalletShortRemainderSnapshot snapshot,
         long collectibleToman)
     {
-        if (!snapshot.Applies)
-        {
-            return payments.ToList();
-        }
-
         var list = new List<OperatorBillService.PaymentInput>();
         var walletHandled = false;
         foreach (var p in payments)
@@ -108,14 +150,25 @@ public static class WalletShortRemainderSupport
             if (p.Method.Equals("Wallet", StringComparison.OrdinalIgnoreCase) && !walletHandled)
             {
                 walletHandled = true;
-                var method = p.ShortRemainderMethod ?? "Cash";
-                if (string.Equals(method, "Debt", StringComparison.OrdinalIgnoreCase))
+                if (string.IsNullOrWhiteSpace(p.ShortRemainderMethod))
+                {
+                    list.Add(p);
+                    continue;
+                }
+
+                if (!snapshot.Applies)
+                {
+                    list.Add(p);
+                    continue;
+                }
+
+                if (string.Equals(p.ShortRemainderMethod, "Debt", StringComparison.OrdinalIgnoreCase))
                 {
                     list.Add(p with { AmountToman = collectibleToman });
                 }
                 else
                 {
-                    list.Add(p with { AmountToman = snapshot.WalletAutoDrawToman });
+                    list.Add(p);
                 }
             }
             else
