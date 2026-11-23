@@ -1195,6 +1195,10 @@ public sealed class DatabaseSeed
                 Id = 1,
                 StepToman = 5_000,
                 Direction = "Up",
+                RoundingEnabled = true,
+                ApplyToWallet = true,
+                WalletMinBillToman = WalletPaymentRounding.CashLikeThresholdToman,
+                AllowWalletShortBalanceDebt = true,
                 PcSpecialBandSurchargeToman = RateConfigService.DefaultPcSpecialBandSurchargeToman,
             });
         }

@@ -156,12 +156,7 @@ public sealed class RateConfigService(AppDbContext db, AuditService audit)
         long HourlyToman);
 
     private static RoundingPolicy BuildRounding(BranchRoundingEntity row)
-    {
-        var direction = row.Direction.Equals("Down", StringComparison.OrdinalIgnoreCase)
-            ? RoundingDirection.Down
-            : RoundingDirection.Up;
-        return RoundingPolicy.Create(row.StepToman, direction, RoundingScope.WholeInvoice);
-    }
+        => RoundingSettingsService.BuildRoundingPolicy(row);
 
     private static RateCard BuildCard(IReadOnlyList<RateLineEntity> lines, long pcSpecialSurchargeToman)
     {

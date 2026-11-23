@@ -807,14 +807,18 @@ public static class InvoiceCalculator
         IReadOnlyList<MemberWallet>? wallets = null,
         DebtPolicy? walletDebt = null,
         WalletPocket? pcBalance = null,
-        bool walletRoundsLikeCash = true)
+        bool walletRoundsLikeCash = true,
+        PaymentRoundingSettings? roundingSettings = null)
     {
+        roundingSettings ??= PaymentRoundingSettings.Default;
         var priced = Calculate(request with { Rounding = RoundingPolicy.Off });
         var unroundedPayable = priced.NetBeforeRoundingToman;
-        var subThreshold = unroundedPayable < WalletPaymentRounding.CashLikeThresholdToman;
-        var effectiveRounding = subThreshold ? RoundingPolicy.Off : request.Rounding;
-        var walletLikeCash = walletRoundsLikeCash && !subThreshold;
-        var cashEquivalent = walletLikeCash ? Calculate(request with { Rounding = effectiveRounding }) : priced;
+        var resolved = PaymentRounding.Resolve(unroundedPayable, request.Rounding, roundingSettings, walletRoundsLikeCash);
+        var effectiveRounding = resolved.EffectiveRounding;
+        var walletLikeCash = resolved.WalletRoundsLikeCash;
+        var cashEquivalent = walletLikeCash
+            ? Calculate(request with { Rounding = resolved.BranchRounding })
+            : priced;
         var nets = PayableNets(request, priced.NetBeforeRoundingToman);
         var allocation = PaymentAllocator.Allocate(
             nets,
@@ -824,7 +828,8 @@ public static class InvoiceCalculator
             walletDebt,
             pcBalance,
             walletLikeCash ? cashEquivalent.PayableToman : 0,
-            walletLikeCash ? cashEquivalent.RoundingToman : 0);
+            walletLikeCash ? cashEquivalent.RoundingToman : 0,
+            roundingSettings.AllowWalletShortBalanceDebt);
         var date = TehranTime.Date(request.IssuedAt);
         var lines = new List<InvoiceLine>();
         foreach (var line in priced.Lines)

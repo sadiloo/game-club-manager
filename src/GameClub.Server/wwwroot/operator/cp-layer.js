@@ -590,9 +590,30 @@
     };
   }
 
+  function setCpFieldDisabled(session, name, disabled) {
+    const wrap = session.fieldEls[`${name}:wrap`];
+    const control = session.fieldEls[name];
+    if (!wrap) return;
+    wrap.setAttribute("aria-disabled", disabled ? "true" : "false");
+    if (control) {
+      if (control.role === "switch") {
+        control.disabled = disabled;
+        control.tabIndex = disabled ? -1 : 0;
+      } else {
+        control.disabled = disabled;
+      }
+    }
+    if (wrap.tagName === "FIELDSET") {
+      wrap.querySelectorAll("input").forEach((inp) => {
+        inp.disabled = disabled;
+      });
+    }
+  }
+
   function buildMoneyInput(field, session) {
     const wrap = document.createElement("label");
     wrap.className = "cp-field";
+    wrap.dataset.cpFieldWrap = field.name || "value";
     const lbl = document.createElement("span");
     lbl.textContent = field.label + (field.required === false ? " (اختیاری)" : "");
     wrap.appendChild(lbl);
@@ -622,6 +643,7 @@
     }
     session.fieldEls[field.name || "value"] = input;
     session.fieldEls[`${field.name || "value"}:err`] = err;
+    session.fieldEls[`${field.name || "value"}:wrap`] = wrap;
     return { wrap, input, err };
   }
 
@@ -722,9 +744,53 @@
                 w.appendChild(sel);
                 host.appendChild(w);
                 session.fieldEls[field.name] = sel;
+              } else if (field.kind === "switch") {
+                const row = document.createElement("div");
+                row.className = "cp-field cp-switch-row";
+                row.dataset.cpFieldWrap = field.name;
+                const head = document.createElement("div");
+                head.className = "cp-switch-head";
+                const lbl = document.createElement("span");
+                lbl.className = "cp-switch-label";
+                lbl.textContent = field.label || "";
+                const btn = document.createElement("button");
+                btn.type = "button";
+                btn.className = "cp-switch";
+                btn.setAttribute("role", "switch");
+                btn.setAttribute("aria-checked", field.value ? "true" : "false");
+                btn.dataset.cpField = field.name;
+                btn.dir = "ltr";
+                const on = !!field.value;
+                btn.setAttribute("aria-labelledby", `cp-sw-lbl-${field.name}`);
+                lbl.id = `cp-sw-lbl-${field.name}`;
+                const toggle = () => {
+                  const next = btn.getAttribute("aria-checked") !== "true";
+                  btn.setAttribute("aria-checked", next ? "true" : "false");
+                  if (typeof field.onChange === "function") field.onChange(session, next);
+                  else if (typeof spec.onFieldChange === "function") spec.onFieldChange(session, field.name, next);
+                };
+                btn.addEventListener("click", toggle);
+                btn.addEventListener("keydown", (e) => {
+                  if (e.key === " " || e.key === "Enter") {
+                    e.preventDefault();
+                    toggle();
+                  }
+                });
+                head.append(lbl, btn);
+                row.appendChild(head);
+                if (field.help) {
+                  const h = document.createElement("span");
+                  h.className = "cp-help";
+                  h.textContent = field.help;
+                  row.appendChild(h);
+                }
+                host.appendChild(row);
+                session.fieldEls[field.name] = btn;
+                session.fieldEls[`${field.name}:wrap`] = row;
               } else if (field.kind === "radio") {
                 const w = document.createElement("fieldset");
                 w.className = "cp-field cp-radio";
+                w.dataset.cpFieldWrap = field.name;
                 const leg = document.createElement("legend");
                 leg.textContent = field.label;
                 w.appendChild(leg);
@@ -741,6 +807,7 @@
                 }
                 host.appendChild(w);
                 session.fieldEls[field.name] = w;
+                session.fieldEls[`${field.name}:wrap`] = w;
               } else if (field.kind === "checkbox") {
                 const lab = document.createElement("label");
                 lab.className = "cp-field cp-check";
@@ -776,7 +843,14 @@
             if (session.busy || session._submitInFlight) return;
             const values = {};
             const errs = {};
+            const initials = spec.initialValues || {};
             for (const field of spec.fields || []) {
+              const wrap = session.fieldEls[`${field.name}:wrap`];
+              const rowDisabled = wrap?.getAttribute("aria-disabled") === "true";
+              if (rowDisabled && field.name in initials) {
+                values[field.name] = initials[field.name];
+                continue;
+              }
               if (field.kind === "money") {
                 const input = session.fieldEls[field.name];
                 const r = readMoneyField(input, field);
@@ -800,6 +874,8 @@
                 else values[field.name] = checked.value;
               } else if (field.kind === "checkbox") {
                 values[field.name] = session.fieldEls[field.name].checked;
+              } else if (field.kind === "switch") {
+                values[field.name] = session.fieldEls[field.name].getAttribute("aria-checked") === "true";
               } else if (field.kind === "custom" && typeof field.read === "function") {
                 const r = field.read(session);
                 if (r && r.errors) Object.assign(errs, r.errors);
@@ -821,9 +897,12 @@
           };
 
           render();
+          if (typeof spec.afterRender === "function") spec.afterRender(session);
         }),
     );
   }
+
+  window.cpSetFieldDisabled = setCpFieldDisabled;
 
   async function cpForm(opts) {
     return openForm(opts);

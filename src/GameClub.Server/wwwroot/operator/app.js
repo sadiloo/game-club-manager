@@ -2,6 +2,7 @@ let selectedSessionId = null;
 let selectedTile = null;
 let currentRole = "Operator";
 let paymentDraft = [];
+let lastWalletShortRemainder = null;
 let destinationCards = [];
 let catalog = [];
 let buffetOpenSaleId = null;
@@ -39,6 +40,36 @@ const CP_TEXT = {
     },
     errDays: "دست‌کم ۱ روز.",
     errPercent: "درصد تولد باید بین ۰ و ۱۰۰ باشد.",
+  },
+  f20: {
+    title: "رند کردن مبلغ",
+    save: "ذخیره",
+    saved: "تنظیم رند کردن ذخیره شد.",
+    settingsBtn: "رند کردن مبلغ",
+    enabled: "رند کردن مبلغ فاکتور",
+    enabledHelp: "اگر روشن باشد، مبلغ قابل دریافت رند می‌شود.",
+    step: "گام رند کردن (تومان)",
+    stepHelp: "مبلغ به مضرب این عدد رند می‌شود، مثلاً ۵٬۰۰۰.",
+    applyWallet: "رند کردن پرداخت از کیف پول",
+    applyWalletHelp: "اگر خاموش باشد، پرداخت از کیف پول رند نمی‌شود.",
+    walletBelow: "رند نکردن پرداخت کیف پول کمتر از (تومان)",
+    walletBelowHelp: "پرداخت از کیف پول کمتر از این مبلغ رند نمی‌شود.",
+    debtRemainder: "ثبت باقی‌مانده به‌صورت نسیه",
+    debtRemainderHelp:
+      "اگر موجودی کیف پول کم باشد، اپراتور باقی‌مانده را نقد یا نسیه می‌گیرد. اگر خاموش باشد، باقی‌مانده فقط نقد است.",
+    direction: "جهت رند کردن",
+    directionHelp: "رو به بالا مبلغ را بیشتر می‌کند و رو به پایین کمتر.",
+    directionUp: "رو به بالا",
+    directionDown: "رو به پایین",
+    debtFloorBlocks: "خالی یا ۰ یعنی نسیه ممنوع. فقط برای کنسول و میز.",
+  },
+  f11: {
+    help: "خالی یا ۰ یعنی نسیه ممنوع. فقط برای کنسول و میز.",
+  },
+  f05: {
+    shortDebt: "نسیه",
+    remainCash: "پرداخت نقد",
+    remainLabel: "باقی‌مانده: {n} تومان",
   },
   f14: {
     title: "جدول سطح‌ها",
@@ -753,6 +784,7 @@ function renderBuffetOnlyCheckoutBill(sale) {
     saleLines: sale.lines ?? [],
     segments: [],
     linkedCustomer: sale.linkedCustomer,
+    walletShortRemainder: b.walletShortRemainder,
   });
 }
 
@@ -872,21 +904,28 @@ async function resolveLinkedCustomerForWallet() {
   return null;
 }
 
-async function refreshBillPreview() {
-  if (!paymentDraft.length) return;
-  const payments = paymentDraft.map((line) => ({
+function paymentDraftForApi() {
+  return paymentDraft.map((line) => ({
     method: line.method,
     amountToman: line.amountToman,
     destinationCardId: line.destinationCardId,
     reference: line.reference,
+    shortRemainderMethod: line.shortRemainderMethod,
   }));
+}
+
+async function refreshBillPreview() {
+  if (!paymentDraft.length) return;
+  const payments = paymentDraftForApi();
   try {
     if (billTarget === "buffet-only" && buffetOpenSaleId) {
       const res = await api(`/api/operator/buffet-only/${buffetOpenSaleId}/bill/preview`, {
         method: "POST",
         body: JSON.stringify({ payments }),
       });
+      if (res.bill?.walletShortRemainder) lastWalletShortRemainder = res.bill.walletShortRemainder;
       renderBuffetOnlyCheckoutBill(res);
+      renderPaymentLines();
       return;
     }
     if (selectedSessionId) {
@@ -894,7 +933,9 @@ async function refreshBillPreview() {
         method: "POST",
         body: JSON.stringify({ payments }),
       });
+      if (bill.walletShortRemainder) lastWalletShortRemainder = bill.walletShortRemainder;
       renderBill(bill);
+      renderPaymentLines();
     }
   } catch (_) {}
 }
@@ -1561,6 +1602,7 @@ function renderBill(bill) {
   renderBillSaleLines(bill.saleLines);
   renderCustomerChip(bill.linkedCustomer);
   lastCollectibleToman = bill.collectibleToman ?? 0;
+  if (bill.walletShortRemainder) lastWalletShortRemainder = bill.walletShortRemainder;
   const changeEl = document.getElementById("cashChange");
   if (changeEl) {
     const cash = cashTendered();
@@ -1570,9 +1612,76 @@ function renderBill(bill) {
   }
 }
 
-function renderPaymentLines() {
+async function walletShortRemainderGroupVisible() {
+  const rounding = await loadBranchRoundingSettings();
+  if (rounding && rounding.allowWalletShortBalanceDebt === false) return false;
+  return !!(lastWalletShortRemainder && lastWalletShortRemainder.applies);
+}
+
+function syncShortRemainderCashLine() {
+  const wallet = paymentDraft.find((l) => l.method === "Wallet" && l.shortRemainder);
+  if (!wallet) return;
+  const remainder = wallet.shortRemainderToman ?? lastWalletShortRemainder?.remainderToman ?? 0;
+  paymentDraft = paymentDraft.filter((l) => !(l.method === "Cash" && l.forShortRemainder));
+  if (wallet.shortRemainderMethod === "Cash" && remainder > 0) {
+    paymentDraft.push({ method: "Cash", amountToman: remainder, forShortRemainder: true });
+  }
+}
+
+function renderWalletShortRemainderGroup(walletIdx) {
+  const line = paymentDraft[walletIdx];
+  const wr = lastWalletShortRemainder;
+  const remainder = line.shortRemainderToman ?? wr?.remainderToman ?? 0;
+  const box = document.createElement("fieldset");
+  box.className = "cp-field cp-radio pay-remainder-group";
+  const leg = document.createElement("legend");
+  leg.textContent = cpTextFormat(CP_TEXT.f05.remainLabel, {
+    n: (remainder || 0).toLocaleString("fa-IR"),
+  });
+  box.appendChild(leg);
+  const mkOpt = (value, label, disabled) => {
+    const lab = document.createElement("label");
+    lab.className = "cp-radio-row";
+    if (disabled) lab.setAttribute("aria-disabled", "true");
+    const inp = document.createElement("input");
+    inp.type = "radio";
+    inp.name = `walletShortRemainder-${walletIdx}`;
+    inp.value = value;
+    inp.disabled = disabled;
+    inp.checked = (line.shortRemainderMethod || "Cash") === value;
+    inp.onchange = () => {
+      line.shortRemainderMethod = value;
+      syncShortRemainderCashLine();
+      renderPaymentLines();
+      refreshBillPreview().catch(() => {});
+    };
+    lab.append(inp, document.createTextNode(label));
+    box.appendChild(lab);
+  };
+  mkOpt("Cash", CP_TEXT.f05.remainCash, false);
+  const debtAllowed = wr?.debtRemainderAllowed === true;
+  mkOpt("Debt", CP_TEXT.f05.shortDebt, !debtAllowed);
+  if (!debtAllowed) {
+    const hint = document.createElement("span");
+    hint.className = "cp-help";
+    hint.textContent = CP_TEXT.f11.help;
+    box.appendChild(hint);
+  }
+  return box;
+}
+
+async function renderPaymentLines() {
   const box = document.getElementById("paymentLines");
   box.replaceChildren();
+  const groupVisible = await walletShortRemainderGroupVisible();
+  if (!groupVisible) {
+    paymentDraft
+      .filter((l) => l.method === "Wallet" && l.shortRemainder)
+      .forEach((l) => {
+        l.shortRemainderMethod = "Cash";
+      });
+    syncShortRemainderCashLine();
+  }
   paymentDraft.forEach((line, idx) => {
     const row = document.createElement("div");
     row.className = "pay-line";
@@ -1581,12 +1690,18 @@ function renderPaymentLines() {
     del.type = "button";
     del.textContent = "حذف";
     del.onclick = () => {
+      if (line.method === "Wallet" && line.shortRemainder) {
+        paymentDraft = paymentDraft.filter((l) => !(l.forShortRemainder && l.method === "Cash"));
+      }
       paymentDraft.splice(idx, 1);
       renderPaymentLines();
       refreshBillPreview().catch(() => {});
     };
     row.appendChild(del);
     box.appendChild(row);
+    if (line.method === "Wallet" && line.shortRemainder && groupVisible) {
+      box.appendChild(renderWalletShortRemainderGroup(idx));
+    }
   });
   if (paymentDraft.length > 0) {
     refreshBillPreview().catch(() => {});
@@ -1780,6 +1895,7 @@ document.getElementById("openBillBtn").onclick = async () => {
 
 async function addPaymentLineSimple(method, title, label) {
   const remain = paymentRemainingToman();
+  const defaultAmount = remain > 0 ? remain : undefined;
   const amount = await cpPrompt({
     title,
     confirmLabel: "افزودن",
@@ -1787,7 +1903,7 @@ async function addPaymentLineSimple(method, title, label) {
     field: {
       kind: "money",
       label,
-      value: remain > 0 ? remain : undefined,
+      value: defaultAmount,
       positive: true,
     },
     validate: null,
@@ -1854,7 +1970,32 @@ document.getElementById("addWalletLineBtn").onclick = async () => {
     showError("برای پرداخت کیف پول، عضو را پیوند دهید.");
     return;
   }
+  if (paymentDraft.some((l) => l.method === "Wallet")) {
+    cpToast({ tone: "error", text: "خط کیف پول از قبل اضافه شده است." });
+    return;
+  }
   renderCustomerChip(linked);
+  const collectible = lastCollectibleToman;
+  const w = await api(`/api/operator/members/customers/${linked.id}/wallet`, { background: true });
+  const positiveOnly = Math.max(0, (w.realToman || 0) + (w.giftToman || 0));
+  const wr = lastWalletShortRemainder;
+  const short =
+    wr?.applies === true ||
+    (collectible > 0 && positiveOnly > 0 && positiveOnly < collectible);
+  if (short) {
+    const autoDraw = wr?.walletAutoDrawToman ?? positiveOnly;
+    const remainder = wr?.remainderToman ?? Math.max(0, collectible - positiveOnly);
+    paymentDraft.push({
+      method: "Wallet",
+      amountToman: autoDraw,
+      shortRemainder: true,
+      shortRemainderMethod: "Cash",
+      shortRemainderToman: remainder,
+    });
+    syncShortRemainderCashLine();
+    renderPaymentLines();
+    return;
+  }
   await addPaymentLineSimple("Wallet", "پرداخت کیف پول", "مبلغ کیف پول (تومان)");
 };
 
@@ -1867,8 +2008,9 @@ document.getElementById("surchargeBtn").onclick = async () => {
 };
 
 document.getElementById("confirmBtn").onclick = async () => {
+  syncShortRemainderCashLine();
   let collectible;
-  let payments = paymentDraft;
+  let payments = paymentDraftForApi();
   if (billTarget === "buffet-only" && buffetOpenSaleId) {
     const detail = await api(`/api/operator/buffet-only/${buffetOpenSaleId}`);
     collectible = detail.bill?.collectibleToman ?? 0;
@@ -2404,6 +2546,127 @@ bindClick("mgrLadderBtn", async () => {
               : CP_TEXT.f14.err.saveFail;
         throw Object.assign(new Error(msg), { code: e?.code, message: msg });
       }
+    },
+  });
+  if (values == null) return;
+});
+
+let branchRoundingSettingsCache = null;
+
+async function loadBranchRoundingSettings(force) {
+  if (force) branchRoundingSettingsCache = null;
+  if (!branchRoundingSettingsCache) {
+    try {
+      branchRoundingSettingsCache = await api("/api/operator/settings/rounding", { background: true });
+    } catch (_) {
+      branchRoundingSettingsCache = null;
+    }
+  }
+  return branchRoundingSettingsCache;
+}
+
+function syncRoundingFormDeps(session) {
+  const enabled = session.fieldEls.enabled?.getAttribute("aria-checked") === "true";
+  const applyWallet = session.fieldEls.applyToWallet?.getAttribute("aria-checked") === "true";
+  if (typeof window.cpSetFieldDisabled === "function") {
+    window.cpSetFieldDisabled(session, "stepToman", !enabled);
+    window.cpSetFieldDisabled(session, "direction", !enabled);
+    window.cpSetFieldDisabled(session, "applyToWallet", !enabled);
+    window.cpSetFieldDisabled(session, "walletMinBillToman", !enabled || !applyWallet);
+  }
+}
+
+bindClick("mgrRoundingBtn", async () => {
+  const cur = (await api("/api/operator/settings/rounding")) || {};
+  const initialValues = {
+    enabled: cur.enabled !== false,
+    stepToman: cur.stepToman ?? 5_000,
+    direction: cur.direction === "Down" ? "Down" : "Up",
+    applyToWallet: cur.applyToWallet !== false,
+    walletMinBillToman: cur.walletMinBillToman ?? 5_000,
+    allowWalletShortBalanceDebt: cur.allowWalletShortBalanceDebt !== false,
+  };
+  const values = await cpForm({
+    title: CP_TEXT.f20.title,
+    confirmLabel: CP_TEXT.f20.save,
+    initialValues,
+    onFieldChange: (session) => syncRoundingFormDeps(session),
+    afterRender: (session) => syncRoundingFormDeps(session),
+    fields: [
+      {
+        name: "enabled",
+        kind: "switch",
+        label: CP_TEXT.f20.enabled,
+        help: CP_TEXT.f20.enabledHelp,
+        value: initialValues.enabled,
+      },
+      {
+        name: "stepToman",
+        kind: "money",
+        label: CP_TEXT.f20.step,
+        help: CP_TEXT.f20.stepHelp,
+        value: cur.stepToman ?? "",
+        positive: true,
+      },
+      {
+        name: "direction",
+        kind: "radio",
+        label: CP_TEXT.f20.direction,
+        value: initialValues.direction,
+        options: [
+          { value: "Up", label: CP_TEXT.f20.directionUp },
+          { value: "Down", label: CP_TEXT.f20.directionDown },
+        ],
+      },
+      {
+        name: "applyToWallet",
+        kind: "switch",
+        label: CP_TEXT.f20.applyWallet,
+        help: CP_TEXT.f20.applyWalletHelp,
+        value: initialValues.applyToWallet,
+      },
+      {
+        name: "walletMinBillToman",
+        kind: "money",
+        label: CP_TEXT.f20.walletBelow,
+        help: CP_TEXT.f20.walletBelowHelp,
+        value: initialValues.walletMinBillToman,
+        allowZero: true,
+        positive: false,
+      },
+      {
+        name: "allowWalletShortBalanceDebt",
+        kind: "switch",
+        label: CP_TEXT.f20.debtRemainder,
+        help: CP_TEXT.f20.debtRemainderHelp,
+        value: initialValues.allowWalletShortBalanceDebt,
+      },
+    ],
+    validate: (v) => {
+      const errs = {};
+      if (v.enabled !== false) {
+        if (!v.stepToman || v.stepToman <= 0) errs.stepToman = "مبلغ باید عدد صحیح مثبت باشد.";
+        if (v.applyToWallet !== false && v.walletMinBillToman == null) {
+          errs.walletMinBillToman = "مبلغ را وارد کنید.";
+        }
+      }
+      return Object.keys(errs).length ? errs : null;
+    },
+    mapApiError: (e) => (e && e.code === "invalid_rounding" ? { stepToman: "مبلغ باید عدد صحیح مثبت باشد." } : null),
+    onSubmit: async (v) => {
+      await api("/api/operator/settings/rounding", {
+        method: "PUT",
+        body: JSON.stringify({
+          enabled: !!v.enabled,
+          stepToman: v.stepToman,
+          direction: v.direction === "Down" ? "Down" : "Up",
+          applyToWallet: !!v.applyToWallet,
+          walletMinBillToman: v.walletMinBillToman ?? 0,
+          allowWalletShortBalanceDebt: !!v.allowWalletShortBalanceDebt,
+        }),
+      });
+      branchRoundingSettingsCache = null;
+      cpToast({ tone: "success", text: CP_TEXT.f20.saved });
     },
   });
   if (values == null) return;

@@ -68,6 +68,23 @@
     .cp-money-row { display: flex; align-items: center; border: 1px solid #78859a; border-radius: 12px; padding: 0 12px; }
     .cp-money-row input { flex: 1; border: none; min-height: 46px; font-size: 1rem; }
     .cp-suffix { color: #556173; margin-inline-start: 8px; }
+    .cp-help { display: block; color: #556173; font-size: 0.85rem; margin-top: 4px; }
+    .cp-switch-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; min-height: 46px; }
+    .cp-switch-label { flex: 1; min-width: 0; }
+    .cp-switch {
+      flex: 0 0 44px; width: 44px; height: 24px; border-radius: 12px; border: none; padding: 0;
+      background: #78859a; position: relative; cursor: pointer;
+    }
+    .cp-switch[aria-checked="true"] { background: #4e32c2; }
+    .cp-switch:disabled, .cp-field[aria-disabled="true"] input, .cp-field[aria-disabled="true"] .cp-switch {
+      opacity: 0.55; cursor: not-allowed;
+    }
+    .cp-switch::after {
+      content: ""; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%;
+      background: #fff; transition: transform 150ms ease;
+    }
+    .cp-switch[aria-checked="true"]::after { transform: translateX(20px); }
+    @media (prefers-reduced-motion: reduce) { .cp-switch::after { transition: none; } }
     .cp-radio-row { display: flex; align-items: center; gap: 8px; min-height: 48px; padding: 4px 8px; border-radius: 8px; }
     .cp-pick-row { display: block; width: 100%; text-align: right; min-height: 48px; margin: 4px 0; border: 1px solid #c5cedc; border-radius: 8px; background: #e8eef8; padding: 8px; cursor: pointer; overflow-wrap: anywhere; }
     .cp-pick-list { max-height: 50vh; overflow: auto; }
@@ -198,6 +215,7 @@
       <button id="mgrCustBirthdayBtn" type="button">تاریخ تولد عضو</button>
       <button id="mgrGiftCapBtn" type="button">سقف هدیه اپراتور</button>
       <button id="mgrDiscountCapBtn" type="button">سقف تخفیف ترکیبی</button>
+      <button id="mgrRoundingBtn" type="button">رند کردن مبلغ</button>
       <button id="mgrCorrectionsBtn" type="button">اصلاح‌های شارژ</button>
     </section>
 

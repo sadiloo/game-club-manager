@@ -435,8 +435,14 @@ public sealed class OperatorBuffetSaleService(
             var bill = sale.PendingBill
                 ?? await db.PendingBills.FirstOrDefaultAsync(b => b.OpenSaleId == sale.Id, innerCt)
                 ?? throw new ApiException(StatusCodes.Status409Conflict, "no_bill", "صورتحسابی در انتظار تأیید نیست.");
-            await bills.LockMemberWalletRowIfNeededAsync(sale.CustomerId, payments, innerCt);
-            var tenders = payments.Select(p => new Tender(
+            var effective = await bills.PreparePaymentsForAllocationAsync(
+                sale.CustomerId,
+                bill.CollectibleToman,
+                null,
+                payments,
+                innerCt);
+            await bills.LockMemberWalletRowIfNeededAsync(sale.CustomerId, effective, innerCt);
+            var tenders = effective.Select(p => new Tender(
                 OperatorPaymentMethods.Parse(p.Method),
                 p.AmountToman,
                 OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet ? sale.CustomerId?.ToString() : null)).ToList();
@@ -444,9 +450,9 @@ public sealed class OperatorBuffetSaleService(
             bill.UnroundedPayableToman = amounts.UnroundedPayableToman;
             bill.RoundingToman = amounts.RoundingToman;
             bill.CollectibleToman = amounts.CollectibleToman;
-            bills.ValidatePayments(amounts.CollectibleToman, payments, amounts.Detail, sale.CustomerId);
+            bills.ValidatePayments(amounts.CollectibleToman, effective, amounts.Detail, sale.CustomerId);
             await db.Entry(sale).Collection(o => o.Lines).Query().Include(l => l.CatalogItem).LoadAsync(innerCt);
-            var invoice = await closer.FinalizeBuffetOnlyAsync(sale, bill, payments, amounts, innerCt);
+            var invoice = await closer.FinalizeBuffetOnlyAsync(sale, bill, effective, amounts, innerCt);
             await audit.AppendAsync("buffet_only.confirm", new { openSaleId, invoice.Number, invoice.CollectibleToman }, innerCt);
             return invoice;
         }, ct);
@@ -465,11 +471,18 @@ public sealed class OperatorBuffetSaleService(
             ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "فروش بوفهٔ مستقل یافت نشد.");
         var bill = sale.PendingBill
             ?? throw new ApiException(StatusCodes.Status409Conflict, "no_bill", "برای این فروش صورتحسابی نیست.");
-        var tenders = payments.Select(p => new Tender(
+        var effective = await bills.PreparePaymentsForAllocationAsync(
+            sale.CustomerId,
+            bill.CollectibleToman,
+            null,
+            payments,
+            ct);
+        var tenders = effective.Select(p => new Tender(
             OperatorPaymentMethods.Parse(p.Method),
             p.AmountToman,
             OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet ? sale.CustomerId?.ToString() : null)).ToList();
         var amounts = await calculator.ComputeBuffetOnlyAsync(sale.Lines, sale.CustomerId, tenders, ct);
+        var walletShort = await bills.GetWalletShortRemainderSnapshotAsync(sale.CustomerId, amounts.CollectibleToman, null, ct);
         return new
         {
             openSaleId = sale.Id,
@@ -483,6 +496,7 @@ public sealed class OperatorBuffetSaleService(
                 timeGrossToman = amounts.TimeGrossToman,
                 buffetGrossToman = amounts.BuffetGrossToman,
                 servicesGrossToman = amounts.ServicesGrossToman,
+                walletShortRemainder = OperatorBillService.ToWalletShortRemainderDto(walletShort),
             },
         };
     }
@@ -496,6 +510,9 @@ public sealed class OperatorBuffetSaleService(
             .FirstOrDefaultAsync(o => o.Id == openSaleId && o.IsBuffetOnly, ct)
             ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "فروش بوفهٔ مستقل یافت نشد.");
         var bill = sale.PendingBill;
+        var walletShort = bill is null
+            ? new WalletShortRemainderSnapshot(false, 0, 0, false)
+            : await bills.GetWalletShortRemainderSnapshotAsync(sale.CustomerId, bill.CollectibleToman, null, ct);
         return new
         {
             openSaleId = sale.Id,
@@ -509,6 +526,7 @@ public sealed class OperatorBuffetSaleService(
                 bill.TimeGrossToman,
                 bill.BuffetGrossToman,
                 bill.ServicesGrossToman,
+                walletShortRemainder = OperatorBillService.ToWalletShortRemainderDto(walletShort),
             },
         };
     }

@@ -412,7 +412,8 @@ public static class PaymentAllocator
         DebtPolicy? walletDebt = null,
         WalletPocket? pcBalance = null,
         long cashEquivalentPayable = 0,
-        long cashEquivalentRounding = 0)
+        long cashEquivalentRounding = 0,
+        bool allowWalletShortBalanceDebt = true)
     {
         if (lines is null)
         {
@@ -567,7 +568,11 @@ public static class PaymentAllocator
 
             var debtWant = offer - positiveDraw;
             var debtDraw = debtWant < nonPcLeft ? debtWant : nonPcLeft;
-            if (debtDraw > debtRoom)
+            if (!allowWalletShortBalanceDebt)
+            {
+                debtDraw = 0;
+            }
+            else if (debtDraw > debtRoom)
             {
                 debtDraw = debtRoom;
             }
@@ -664,7 +669,7 @@ public static class PaymentAllocator
             if (mayLiftWalletTowardCash)
             {
                 var needTowardCash = cashEquivalentPayable - balanceApplied;
-                if (needTowardCash > 0)
+                if (needTowardCash > 0 && allowWalletShortBalanceDebt)
                 {
                     var drawn = ApplyWalletRoundingLift(tenders, results, pockets, walletDebt, needTowardCash)
                         ? needTowardCash
@@ -694,7 +699,9 @@ public static class PaymentAllocator
                     roundingGapCounter = shortfall;
                     if (shortfall > 0)
                     {
-                        var gapDrawn = DrawWalletTowardTarget(tenders, results, pockets, walletDebt, shortfall);
+                        var gapDrawn = allowWalletShortBalanceDebt
+                            ? DrawWalletTowardTarget(tenders, results, pockets, walletDebt, shortfall)
+                            : 0;
                         if (gapDrawn > 0)
                         {
                             balanceApplied = MoneyMath.CheckedAdd(balanceApplied, gapDrawn);

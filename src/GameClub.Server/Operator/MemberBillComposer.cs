@@ -34,7 +34,8 @@ public sealed class MemberBillComposer
         BranchMemberSettingsEntity settings,
         StationKind stationKind,
         IReadOnlyList<Tender>? previewTenders = null,
-        bool applyMemberPricing = true)
+        bool applyMemberPricing = true,
+        PaymentRoundingSettings? paymentRounding = null)
     {
         var ladder = MemberSettingsMapper.LoadLadder(settings);
         var pricing = customerId is null || member is null || !applyMemberPricing
@@ -80,6 +81,7 @@ public sealed class MemberBillComposer
         }
 
         var issuedAt = TimeMapping.ToTehran(billedToUtc);
+        var roundingPolicy = rates.Rounding;
         var request = new InvoiceRequest(
             timeLines,
             buffet,
@@ -87,8 +89,9 @@ public sealed class MemberBillComposer
             pricing,
             null,
             discountPolicy,
-            rates.Rounding,
+            roundingPolicy,
             issuedAt);
+        paymentRounding ??= PaymentRoundingSettings.Default;
 
         AllocationResult? allocation = null;
         Invoice invoice;
@@ -112,7 +115,8 @@ public sealed class MemberBillComposer
                 previewTenders!,
                 wallets,
                 debt,
-                walletRoundsLikeCash: walletRoundsLikeCash);
+                walletRoundsLikeCash: walletRoundsLikeCash,
+                roundingSettings: paymentRounding);
             invoice = pcWriteOff && pcChargeInvoice is not null
                 ? ComposePcOvershootInvoice(pcChargeInvoice, collected)
                 : collected;
@@ -168,7 +172,8 @@ public sealed class MemberBillComposer
         Guid? customerId,
         CustomerMemberEntity? member,
         BranchMemberSettingsEntity settings,
-        IReadOnlyList<Tender>? previewTenders = null)
+        IReadOnlyList<Tender>? previewTenders = null,
+        PaymentRoundingSettings? paymentRounding = null)
     {
         var ladder = MemberSettingsMapper.LoadLadder(settings);
         var pricing = customerId is null || member is null ? null : MemberSettingsMapper.BuildPricing(member, settings, ladder);
@@ -176,6 +181,7 @@ public sealed class MemberBillComposer
         var buffet = OpenSaleMapper.ToBuffetLines(saleLines);
         var services = OpenSaleMapper.ToServiceLines(saleLines);
         var issuedAt = TehranTime.Ensure(DateTimeOffset.UtcNow);
+        paymentRounding ??= PaymentRoundingSettings.Default;
         var request = new InvoiceRequest([], buffet, services, pricing, null, discountPolicy, rates.Rounding, issuedAt);
 
         AllocationResult? allocation = null;
@@ -184,7 +190,7 @@ public sealed class MemberBillComposer
         {
             var wallets = new[] { MemberWalletMapper.ToMemberWallet(cid, member) };
             var debt = MemberSettingsMapper.LoadDebtPolicy(settings);
-            var (collected, alloc) = InvoiceCalculator.Collect(request, tenders, wallets, debt);
+            var (collected, alloc) = InvoiceCalculator.Collect(request, tenders, wallets, debt, roundingSettings: paymentRounding);
             invoice = collected;
             allocation = alloc;
         }

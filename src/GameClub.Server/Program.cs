@@ -61,6 +61,7 @@ public partial class Program
         builder.Services.AddSingleton<OperatorPolicies>();
         builder.Services.Configure<DeadPcSweepOptions>(builder.Configuration.GetSection(DeadPcSweepOptions.SectionName));
         builder.Services.AddScoped<RateConfigService>();
+        builder.Services.AddScoped<RoundingSettingsService>();
         builder.Services.AddScoped<AuditService>();
         builder.Services.AddScoped<StationService>();
         builder.Services.AddScoped<GameTariffService>();

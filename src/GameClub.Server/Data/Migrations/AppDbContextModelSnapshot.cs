@@ -128,6 +128,12 @@ namespace GameClub.Server.Data.Migrations
 
                     NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
 
+                    b.Property<bool>("AllowWalletShortBalanceDebt")
+                        .HasColumnType("boolean");
+
+                    b.Property<bool>("ApplyToWallet")
+                        .HasColumnType("boolean");
+
                     b.Property<string>("Direction")
                         .IsRequired()
                         .HasColumnType("text");
@@ -135,7 +141,13 @@ namespace GameClub.Server.Data.Migrations
                     b.Property<long>("PcSpecialBandSurchargeToman")
                         .HasColumnType("bigint");
 
+                    b.Property<bool>("RoundingEnabled")
+                        .HasColumnType("boolean");
+
                     b.Property<long>("StepToman")
+                        .HasColumnType("bigint");
+
+                    b.Property<long>("WalletMinBillToman")
                         .HasColumnType("bigint");
 
                     b.HasKey("Id");

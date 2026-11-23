@@ -23,6 +23,7 @@ public sealed record BillAmounts(
 public sealed class BillCalculator(
     SessionBilling billing,
     RateConfigService rates,
+    RoundingSettingsService roundingSettings,
     OperatorMemberContext memberContext)
 {
     public async Task<BillAmounts> ComputeAsync(
@@ -49,7 +50,7 @@ public sealed class BillCalculator(
         IReadOnlyList<Tender>? previewTenders,
         CancellationToken ct)
     {
-        var snapshot = await rates.LoadAsync(ct);
+        var snapshot = await SnapshotForPaymentAsync(ct);
         var settings = await memberContext.LoadSettingsAsync(ct);
         CustomerMemberEntity? member = null;
         if (customerId is Guid id)
@@ -57,7 +58,8 @@ public sealed class BillCalculator(
             member = await memberContext.EnsureMemberAsync(id, ct);
         }
 
-        return ToBillAmounts(MemberBillComposer.ComputeBuffetOnly(saleLines, snapshot, customerId, member, settings, previewTenders));
+        var (_, paymentRounding) = await roundingSettings.LoadForPaymentAsync(ct);
+        return ToBillAmounts(MemberBillComposer.ComputeBuffetOnly(saleLines, snapshot, customerId, member, settings, previewTenders, paymentRounding));
     }
 
     public async Task<BillAmounts> ComputeWithTendersAsync(
@@ -85,9 +87,11 @@ public sealed class BillCalculator(
         IReadOnlyList<Tender> previewTenders,
         CancellationToken ct)
     {
-        var snapshot = session.RateCardSnapshotId != 0
+        var rawSnapshot = session.RateCardSnapshotId != 0
             ? await rates.LoadSnapshotAsync(session.RateCardSnapshotId, ct)
             : await rates.LoadAsync(ct);
+        var (roundingPolicy, paymentRounding) = await roundingSettings.LoadForPaymentAsync(ct);
+        var snapshot = rawSnapshot with { Rounding = roundingPolicy };
         var charge = billing.BuildCharge(session, endUtc, snapshot);
         var settings = await memberContext.LoadSettingsAsync(ct);
         CustomerMemberEntity? member = null;
@@ -109,7 +113,15 @@ public sealed class BillCalculator(
             settings,
             stationKind,
             previewTenders.Count > 0 ? previewTenders : null,
-            applyPricing);
+            applyPricing,
+            paymentRounding);
+    }
+
+    private async Task<BranchRatesSnapshot> SnapshotForPaymentAsync(CancellationToken ct)
+    {
+        var snapshot = await rates.LoadAsync(ct);
+        var (roundingPolicy, _) = await roundingSettings.LoadForPaymentAsync(ct);
+        return snapshot with { Rounding = roundingPolicy };
     }
 
     private static BillAmounts ToBillAmounts(MemberBillResult result)
@@ -189,6 +201,45 @@ public sealed class OperatorBillService(
             var memberId = method == PaymentMethod.Wallet ? customerId?.ToString() : null;
             return new Tender(method, p.AmountToman, memberId);
         }).ToList();
+
+    public static object ToWalletShortRemainderDto(WalletShortRemainderSnapshot snapshot)
+        => new
+        {
+            applies = snapshot.Applies,
+            remainderToman = snapshot.RemainderToman,
+            walletAutoDrawToman = snapshot.WalletAutoDrawToman,
+            debtRemainderAllowed = snapshot.DebtRemainderAllowed,
+        };
+
+    public async Task<WalletShortRemainderSnapshot> GetWalletShortRemainderSnapshotAsync(
+        Guid? customerId,
+        long collectibleToman,
+        StationKind? stationKind,
+        CancellationToken ct)
+    {
+        var settings = await memberContext.LoadSettingsAsync(ct);
+        var rounding = await db.BranchRounding.AsNoTracking().SingleAsync(ct);
+        CustomerMemberEntity? member = null;
+        if (customerId is Guid id)
+        {
+            member = await db.CustomerMembers.AsNoTracking().FirstOrDefaultAsync(m => m.CustomerId == id, ct);
+        }
+
+        return WalletShortRemainderSupport.Compute(collectibleToman, member, settings, rounding, stationKind);
+    }
+
+    public async Task<IReadOnlyList<PaymentInput>> PreparePaymentsForAllocationAsync(
+        Guid? customerId,
+        long collectibleToman,
+        StationKind? stationKind,
+        IReadOnlyList<PaymentInput> payments,
+        CancellationToken ct)
+    {
+        var snapshot = await GetWalletShortRemainderSnapshotAsync(customerId, collectibleToman, stationKind, ct);
+        var wallet = payments.FirstOrDefault(p => p.Method.Equals("Wallet", StringComparison.OrdinalIgnoreCase));
+        WalletShortRemainderSupport.ValidateShortRemainderChoice(snapshot, wallet?.ShortRemainderMethod);
+        return WalletShortRemainderSupport.NormalizeWalletShortPayments(payments, snapshot, collectibleToman);
+    }
 
     public void ValidatePayments(
         long collectibleToman,
@@ -312,7 +363,12 @@ public sealed class OperatorBillService(
         bill.ServicesGrossToman = amounts.ServicesGrossToman;
     }
 
-    public sealed record PaymentInput(string Method, long AmountToman, string? DestinationCardId, string? Reference);
+    public sealed record PaymentInput(
+        string Method,
+        long AmountToman,
+        string? DestinationCardId = null,
+        string? Reference = null,
+        string? ShortRemainderMethod = null);
 
     public async Task<PendingBillEntity> OpenConsoleBillAsync(Guid sessionId, CancellationToken ct)
     {
@@ -539,8 +595,15 @@ public sealed class OperatorBillService(
             }
 
             var saleLines = await LoadSaleLinesAsync(session.Id, innerCt);
-            await LockMemberWalletRowIfNeededAsync(session.CustomerId, payments, innerCt);
-            var tenders = ToTenders(payments, session.CustomerId);
+            var stationKind = session.Station?.Group?.Kind;
+            var effective = await PreparePaymentsForAllocationAsync(
+                session.CustomerId,
+                bill.CollectibleToman,
+                stationKind,
+                payments,
+                innerCt);
+            await LockMemberWalletRowIfNeededAsync(session.CustomerId, effective, innerCt);
+            var tenders = ToTenders(effective, session.CustomerId);
             var amounts = await calculator.ComputeWithTendersAsync(
                 session,
                 bill.FrozenAtUtc,
@@ -548,9 +611,9 @@ public sealed class OperatorBillService(
                 saleLines,
                 tenders,
                 innerCt);
-            ValidatePayments(amounts.CollectibleToman, payments, amounts.Detail, session.CustomerId);
+            ValidatePayments(amounts.CollectibleToman, effective, amounts.Detail, session.CustomerId);
 
-            var invoice = await closer.FinalizeFromPendingAsync(session, bill, payments, amounts, innerCt);
+            var invoice = await closer.FinalizeFromPendingAsync(session, bill, effective, amounts, innerCt);
             await audit.AppendAsync("bill.confirm", new { sessionId, invoiceNumber = invoice.Number, collectible = invoice.CollectibleToman }, innerCt);
             return invoice;
         }, ct);
@@ -649,13 +712,25 @@ public sealed class OperatorBillService(
             .Where(o => o.SessionId == sessionId)
             .SelectMany(o => o.Lines)
             .ToListAsync(ct);
-        var tenders = ToTenders(payments, session.CustomerId);
+        var stationKind = session.Station?.Group?.Kind;
+        var effective = await PreparePaymentsForAllocationAsync(
+            session.CustomerId,
+            bill.CollectibleToman,
+            stationKind,
+            payments,
+            ct);
+        var tenders = ToTenders(effective, session.CustomerId);
         var amounts = await calculator.ComputeWithTendersAsync(
             session,
             bill.FrozenAtUtc,
             bill.SurchargeToman,
             saleLines,
             tenders,
+            ct);
+        var walletShort = await GetWalletShortRemainderSnapshotAsync(
+            session.CustomerId,
+            amounts.CollectibleToman,
+            stationKind,
             ct);
         var charge = await billing.BuildChargeAsync(session, bill.FrozenAtUtc, ct);
         var snapshot = session.RateCardSnapshotId != 0
@@ -711,6 +786,7 @@ public sealed class OperatorBillService(
             stopReason = bill.StopReason,
             segments,
             linkedCustomer = CustomerMapper.ToLinkedChip(session.Customer),
+            walletShortRemainder = ToWalletShortRemainderDto(walletShort),
         };
     }
 
@@ -781,6 +857,11 @@ public sealed class OperatorBillService(
             stopReason = bill.StopReason,
             segments,
             linkedCustomer = CustomerMapper.ToLinkedChip(session.Customer),
+            walletShortRemainder = ToWalletShortRemainderDto(await GetWalletShortRemainderSnapshotAsync(
+                session.CustomerId,
+                bill.CollectibleToman,
+                session.Station?.Group?.Kind,
+                ct)),
         };
     }
 
