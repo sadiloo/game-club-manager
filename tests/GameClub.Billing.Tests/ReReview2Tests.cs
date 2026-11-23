@@ -120,6 +120,7 @@ public class ReReview2Tests
     [Fact]
     public void R2_4_collect_rounds_only_the_counter_remainder()
     {
+        // owner ruling 2026-11-24 R4c Q3 (whole bill rounded once)
         var issued = T.At(2026, 6, 2, 12, 0);
         var request = new InvoiceRequest(
             [new TimeChargeLine("time", 149_850, null, null, null)],
@@ -134,17 +135,20 @@ public class ReReview2Tests
         var split = new Tender[]
         {
             new(PaymentMethod.Wallet, 50_001, "m"),
-            new(PaymentMethod.Cash, 100_000),
+            new(PaymentMethod.Cash, 99_999),
         };
         var wallets = new MemberWallet[] { new("m", 50_001, 0) };
         var preview = InvoiceCalculator.Calculate(request, split, wallets);
         var (mixed, allocation) = InvoiceCalculator.Collect(
             request,
-            [new Tender(PaymentMethod.Wallet, 50_001, "m"), new Tender(PaymentMethod.Cash, 100_000)],
+            [new Tender(PaymentMethod.Wallet, 50_001, "m"), new Tender(PaymentMethod.Cash, 99_999)],
             [new MemberWallet("m", 50_001, 0)]);
         Assert.True(allocation.IsValid, allocation.Errors.FirstOrDefault()?.Message);
-        Assert.Equal(150_001, preview.PayableToman);
-        Assert.Equal(150_001, allocation.PayableToman);
+        Assert.Equal(150_000, preview.PayableToman);
+        Assert.Equal(150_000, allocation.PayableToman);
+        Assert.Equal(150, allocation.RoundingToman);
+        Assert.Equal(50_001, allocation.Tenders.First(t => t.Method == PaymentMethod.Wallet).AmountToman);
+        Assert.Equal(99_999, allocation.Tenders.First(t => t.Method == PaymentMethod.Cash).AmountToman);
         Assert.Equal(preview.PayableToman, mixed.PayableToman);
         Assert.Equal(allocation.PayableToman, mixed.PayableToman);
     }

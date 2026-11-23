@@ -321,8 +321,9 @@ public class WalletLoyaltyBillingAcceptanceTests
     }
 
     [Fact]
-    public void wl_scenario_04_mixed_wallet_50001_counter_rounds_to_150001()
+    public void wl_scenario_04_mixed_wallet_50001_counter_rounds_to_150000()
     {
+        // owner ruling 2026-11-24 R4c Q3 (whole bill rounded once)
         var request = new InvoiceRequest(
             [new TimeChargeLine("time", 149_850, CafeFixture.Ps5, new LocalDate(2026, 6, 3), DayOfWeek.Tuesday)],
             [],
@@ -332,13 +333,15 @@ public class WalletLoyaltyBillingAcceptanceTests
             DiscountPolicy.Default,
             Step5Up,
             T.At(2026, 6, 3, 15, 0));
-        var preview = new[] { new Tender(PaymentMethod.Wallet, 50_001, "m"), new Tender(PaymentMethod.Cash, 100_000) };
-        var (previewInvoice, previewAlloc) = InvoiceCalculator.Collect(request, preview, [new MemberWallet("m", 50_001, 0)]);
-        var (confirmInvoice, confirmAlloc) = InvoiceCalculator.Collect(request, preview, [new MemberWallet("m", 50_001, 0)]);
+        var tenders = new[] { new Tender(PaymentMethod.Wallet, 50_001, "m"), new Tender(PaymentMethod.Cash, 99_999) };
+        var (previewInvoice, previewAlloc) = InvoiceCalculator.Collect(request, tenders, [new MemberWallet("m", 50_001, 0)]);
+        var (confirmInvoice, confirmAlloc) = InvoiceCalculator.Collect(request, tenders, [new MemberWallet("m", 50_001, 0)]);
         Assert.True(previewAlloc.IsValid);
         Assert.Equal(previewAlloc.PayableToman, confirmAlloc.PayableToman);
-        Assert.Equal(150_001, confirmAlloc.PayableToman);
-        Assert.Equal(151, confirmAlloc.RoundingToman);
+        Assert.Equal(150_000, confirmAlloc.PayableToman);
+        Assert.Equal(150, confirmAlloc.RoundingToman);
+        Assert.Equal(50_001, confirmAlloc.Tenders.First(t => t.Method == PaymentMethod.Wallet).AmountToman);
+        Assert.Equal(99_999, confirmAlloc.Tenders.First(t => t.Method == PaymentMethod.Cash).AmountToman);
     }
 
     [Fact]

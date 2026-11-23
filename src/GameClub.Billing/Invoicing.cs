@@ -797,9 +797,9 @@ public static class InvoiceCalculator
     }
 
     /// <summary>
-    /// One rounding path. Per-line nets are taken after grace and discounts, balance tenders
-    /// pay those nets exactly, and only the counter remainder is rounded. The invoice payable
-    /// is the allocator payable, so a wallet plus cash cannot disagree with the invoice preview.
+    /// One rounding path. Mixed wallet+cash at or above the cash-like threshold rounds the
+    /// whole invoice once and sets cash to rounded total minus wallet; below the threshold the
+    /// mixed net is exact with no cash-remainder rounding. Cash-only paths are unchanged.
     /// </summary>
     public static (Invoice Invoice, AllocationResult Allocation) Collect(
         InvoiceRequest request,
@@ -811,7 +811,6 @@ public static class InvoiceCalculator
     {
         var priced = Calculate(request with { Rounding = RoundingPolicy.Off });
         var unroundedPayable = priced.NetBeforeRoundingToman;
-        // TODO_OWNER: mixed wallet+cash under CashLikeThresholdToman — pending ruling (3,000 / 5,000 / 6,000)
         var subThreshold = unroundedPayable < WalletPaymentRounding.CashLikeThresholdToman;
         var walletLikeCash = walletRoundsLikeCash && !subThreshold;
         var cashEquivalent = walletLikeCash ? Calculate(request) : priced;
@@ -824,7 +823,8 @@ public static class InvoiceCalculator
             walletDebt,
             pcBalance,
             walletLikeCash ? cashEquivalent.PayableToman : 0,
-            walletLikeCash ? cashEquivalent.RoundingToman : 0);
+            walletLikeCash ? cashEquivalent.RoundingToman : 0,
+            subThreshold);
         var date = TehranTime.Date(request.IssuedAt);
         var lines = new List<InvoiceLine>();
         foreach (var line in priced.Lines)

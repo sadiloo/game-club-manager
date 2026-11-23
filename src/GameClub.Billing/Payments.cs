@@ -382,8 +382,10 @@ public sealed record PayableLine(string? GroupId, bool IsPcTime, bool IsTimeChar
 public sealed record LineShare(int LineIndex, int TenderIndex, PaymentMethod Method, long AmountToman);
 
 /// <summary>
-/// Exact balance shares, then one rounding of the counter remainder.
-/// Wallet and PC amounts are never rounded. A zero counter remainder is not lifted to the step.
+/// Exact balance shares, then collection. Wallet and PC amounts are never rounded.
+/// Mixed wallet+cash uses one bill-level total: under the cash-like threshold the net is exact;
+/// at or above, the whole invoice rounds once and cash is the rounded total minus wallet.
+/// Cash-only and wallet-only keep their existing paths.
 /// </summary>
 public sealed record AllocationResult(
     bool IsValid,
@@ -412,7 +414,8 @@ public static class PaymentAllocator
         DebtPolicy? walletDebt = null,
         WalletPocket? pcBalance = null,
         long cashEquivalentPayable = 0,
-        long cashEquivalentRounding = 0)
+        long cashEquivalentRounding = 0,
+        bool billBelowCashLikeThreshold = false)
     {
         if (lines is null)
         {
@@ -611,9 +614,30 @@ public static class PaymentAllocator
         }
 
         var counterExact = MoneyMath.CheckedAdd(counterTime, counterOther);
+
+        long balanceApplied = 0;
+        foreach (var result in results)
+        {
+            if (result is null || !result.Accepted)
+            {
+                continue;
+            }
+
+            if (result.Method is not PaymentMethod.Cash
+                and not PaymentMethod.CardReader
+                and not PaymentMethod.CardToCard)
+            {
+                balanceApplied = MoneyMath.CheckedAdd(balanceApplied, result.AmountToman);
+            }
+        }
+
+        var mixedWalletCashRemainder = balanceApplied > 0 && counterExact > 0;
+        var wholeBillMixed = mixedWalletCashRemainder
+            && (billBelowCashLikeThreshold || cashEquivalentPayable > 0);
+
         long roundingDelta = 0;
         long counterRounded = counterExact;
-        if (rounding.Enabled && counterExact > 0)
+        if (rounding.Enabled && counterExact > 0 && !wholeBillMixed)
         {
             if (rounding.Scope == RoundingScope.TimeChargesOnly)
             {
@@ -627,7 +651,6 @@ public static class PaymentAllocator
             }
         }
 
-        long balanceApplied = 0;
         long counterTendered = 0;
         foreach (var result in results)
         {
@@ -639,10 +662,6 @@ public static class PaymentAllocator
             if (result.Method is PaymentMethod.Cash or PaymentMethod.CardReader or PaymentMethod.CardToCard)
             {
                 counterTendered = MoneyMath.CheckedAdd(counterTendered, result.AmountToman);
-            }
-            else
-            {
-                balanceApplied = MoneyMath.CheckedAdd(balanceApplied, result.AmountToman);
             }
         }
 
@@ -713,25 +732,18 @@ public static class PaymentAllocator
             }
         }
 
-        var walletLikeCashMixed = cashEquivalentPayable > 0 && balanceApplied > 0 && counterTendered > 0;
-        var allNonTime = true;
-        for (var i = 0; i < lines.Count; i++)
+        var mixedCollectiblePayable = billBelowCashLikeThreshold ? exact : cashEquivalentPayable;
+        var mixedCollectibleRounding = billBelowCashLikeThreshold ? 0L : cashEquivalentRounding;
+        if (wholeBillMixed && counterTendered > 0)
         {
-            if (lines[i].IsTimeCharge)
+            var requiredCounter = mixedCollectiblePayable - balanceApplied;
+            if (counterTendered == requiredCounter)
             {
-                allNonTime = false;
-                break;
+                trackingCashCollectible = true;
+                roundingDelta = mixedCollectibleRounding;
+                counterRounded = requiredCounter;
             }
-        }
-
-        var enforceTwinCounter = walletLikeCashMixed
-            && allNonTime
-            && balanceApplied + counterExact == exact
-            && (cashEquivalentPayable == exact || cashEquivalentPayable == exact + cashEquivalentRounding);
-        if (enforceTwinCounter)
-        {
-            var requiredCounter = cashEquivalentPayable - balanceApplied;
-            if (counterTendered != requiredCounter)
+            else
             {
                 errors.Add(new PaymentError(
                     PaymentErrors.SumMismatch,
@@ -752,7 +764,7 @@ public static class PaymentAllocator
         }
 
         var payable = trackingCashCollectible
-            ? cashEquivalentPayable
+            ? mixedCollectiblePayable
             : MoneyMath.CheckedAdd(balanceApplied, counterRounded);
         var remainingWallets = new List<MemberWallet>();
         foreach (var pair in pockets)
