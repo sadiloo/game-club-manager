@@ -307,6 +307,10 @@ internal sealed class KioskIntegrationBackend
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
             var checkpointCount = await db.Checkpoints.CountAsync(c => c.SessionId == sessionId);
             var factoryOfflineAuditCount = await db.AuditLog.CountAsync(a => a.Action == "kiosk.offline_segment");
+            var sessionStartedAt = await db.Sessions
+                .Where(s => s.Id == sessionId)
+                .Select(s => s.StartedAtUtc)
+                .SingleAsync();
             var checkpointMinMax = await db.Checkpoints
                 .Where(c => c.SessionId == sessionId)
                 .Select(c => new { c.AtUtc })
@@ -321,6 +325,7 @@ internal sealed class KioskIntegrationBackend
                 .SumAsync(b => b.CollectibleToman);
             return G2BillingEvidence.Build(
                 sessionId,
+                sessionStartedAt,
                 checkpointCount,
                 factoryOfflineAuditCount,
                 checkpointMinMax.Select(c => c.AtUtc),
@@ -343,6 +348,16 @@ internal sealed class KioskIntegrationBackend
         await using (var cmd = new NpgsqlCommand("""SELECT COUNT(*)::int FROM audit_log WHERE "Action" = 'kiosk.offline_segment'""", conn))
         {
             offlineAuditCount = (int)(await cmd.ExecuteScalarAsync() ?? 0);
+        }
+
+        DateTime sessionStartedAt;
+        await using (var cmd = new NpgsqlCommand(
+            """SELECT "StartedAtUtc" FROM sessions WHERE "Id" = @id""",
+            conn))
+        {
+            cmd.Parameters.AddWithValue("id", sessionId);
+            sessionStartedAt = (DateTime)(await cmd.ExecuteScalarAsync()
+                ?? throw new InvalidOperationException("session start missing"));
         }
 
         var ats = new List<DateTime>();
@@ -381,7 +396,15 @@ internal sealed class KioskIntegrationBackend
             billTotal = Convert.ToInt64(await cmd.ExecuteScalarAsync() ?? 0L);
         }
 
-        return G2BillingEvidence.Build(sessionId, checkpoints, offlineAuditCount, ats, hourly, billTotal, oraclePoweredSpanSeconds);
+        return G2BillingEvidence.Build(
+            sessionId,
+            sessionStartedAt,
+            checkpoints,
+            offlineAuditCount,
+            ats,
+            hourly,
+            billTotal,
+            oraclePoweredSpanSeconds);
         }
     }
 
@@ -489,7 +512,9 @@ internal sealed class KioskIntegrationBackend
 
 internal sealed record G2BillingEvidence(
     Guid SessionId,
+    DateTime SessionStartedAtUtc,
     int CheckpointCount,
+    IReadOnlyList<DateTime> CheckpointAtUtc,
     int OfflineSegmentAuditCount,
     string OfflineSegmentMinuteSpan,
     long PcNormalOfflineHourlyToman,
@@ -500,6 +525,7 @@ internal sealed record G2BillingEvidence(
 {
     public static G2BillingEvidence Build(
         Guid sessionId,
+        DateTime sessionStartedAtUtc,
         int checkpointCount,
         int offlineAudits,
         IEnumerable<DateTime> checkpointTimes,
@@ -522,7 +548,9 @@ internal sealed record G2BillingEvidence(
             .Count(g => g.Count() > 1);
         return new(
             sessionId,
+            sessionStartedAtUtc,
             checkpointCount,
+            ordered,
             offlineAudits,
             span,
             hourlyToman,
