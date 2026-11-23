@@ -28,6 +28,11 @@ internal sealed class StubAlignedHttpProbeSeam : IHttpProbeSeam
             statusCode = (int)response.StatusCode;
             return statusCode is >= 200 and < 300;
         }
+        catch (WebException ex) when (ex.Response is HttpWebResponse errorResponse)
+        {
+            statusCode = (int)errorResponse.StatusCode;
+            return false;
+        }
         catch
         {
             return false;
@@ -44,6 +49,11 @@ internal sealed class StubAlignedHttpProbeSeam : IHttpProbeSeam
             using var response = (HttpWebResponse)request.GetResponse();
             statusCode = (int)response.StatusCode;
             return statusCode is >= 200 and < 300;
+        }
+        catch (WebException ex) when (ex.Response is HttpWebResponse errorResponse)
+        {
+            statusCode = (int)errorResponse.StatusCode;
+            return false;
         }
         catch
         {

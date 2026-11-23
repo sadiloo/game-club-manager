@@ -11,7 +11,7 @@ public sealed class HealthyRunningPanelProbePolicyTests
         Assert.Equal(TimeSpan.FromSeconds(1), HealthyRunningPanelProbePolicy.DispatcherPollInterval);
 
     [Fact]
-    public void per_probe_timeout_is_at_most_one_second() =>
+    public void per_probe_timeout_is_at_most_three_seconds() =>
         Assert.Equal(TimeSpan.FromSeconds(3), HealthyRunningPanelProbePolicy.PerProbeTimeout);
 
     [Fact]

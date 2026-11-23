@@ -118,8 +118,8 @@ try {
 finally {
     $shellLogsSource = Join-Path $env:LOCALAPPDATA "Checkpoint\Shell\logs"
 
-    # Rule: missing log directory → skip harvest (no throw). Filtered or checkpoint-only runs
-    # that never spin up MainWindow/WebView never create %LOCALAPPDATA%\Checkpoint\Shell\logs.
+    # Rule: missing log directory → fail loudly. Filtered runs that never start MainWindow may skip
+    # creating %LOCALAPPDATA%\Checkpoint\Shell\logs only when CI passes an explicit test filter.
     # Non-empty directory that exists but has no shell-*.log → still fail (shell did log, trace lost).
     if (-not (Test-Path -LiteralPath $shellLogsSource)) {
         throw "Shell logs directory is missing (lost trace must not look like a pass): $shellLogsSource"

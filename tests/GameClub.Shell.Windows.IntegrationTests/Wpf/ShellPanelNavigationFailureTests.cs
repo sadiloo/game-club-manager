@@ -1,5 +1,6 @@
 #if NET48
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.ServiceProcess;
@@ -391,6 +392,335 @@ public sealed class ShellPanelNavigationFailureTests
     }
 
     [Fact]
+    public void shell_panel_recovery_probe_logs_503_not_zero_with_production_http_seam()
+    {
+        if (!WebView2RuntimePresent()) throw new InvalidOperationException("WebView2 runtime required");
+        ExecuteWithShellDataRoot(() =>
+        {
+            ShellPanelHttpSplitStub? stub = null;
+            try
+            {
+                stub = CreateStub(503, 0);
+                _fixture.RunAsync(async () =>
+                {
+                    MainWindow? window = null;
+                    try
+                    {
+                        ShellFileLog.Write("shell-probe-503-status-baseline");
+                        var baseline = Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log")
+                            .Select(File.ReadAllText)
+                            .Aggregate("", string.Concat);
+                        window = await StartWindowOnStubWithProductionProbeAsync(stub);
+                        var wv = await WaitForPanelWebViewAsync(window, TimeSpan.FromSeconds(45));
+                        await WaitForPanelUnavailableOfflineAsync(wv, TimeSpan.FromSeconds(90));
+
+                        var deadline = DateTime.UtcNow.AddSeconds(90);
+                        string? recovery503Line = null;
+                        while (DateTime.UtcNow < deadline)
+                        {
+                            await Task.Delay(300);
+                            var log = Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log")
+                                .Select(File.ReadAllText)
+                                .Aggregate("", string.Concat);
+                            var delta = baseline.Length == 0 ? log : log.Replace(baseline, "");
+                            recovery503Line = delta.Split('\n').FirstOrDefault(l =>
+                                l.Contains("panel-recovery-probe", StringComparison.Ordinal)
+                                && l.Contains("status=503", StringComparison.Ordinal)
+                                && l.Contains("outcome=fail", StringComparison.Ordinal));
+                            if (recovery503Line is not null)
+                            {
+                                break;
+                            }
+                        }
+
+                        Assert.False(string.IsNullOrEmpty(recovery503Line));
+                        var finalDelta = LogDelta(baseline);
+                        Assert.DoesNotContain(
+                            "panel-recovery-probe target=panel status=0 outcome=fail",
+                            finalDelta,
+                            StringComparison.Ordinal);
+                    }
+                    finally
+                    {
+                        RestoreStubSeams();
+                        window?.Close();
+                    }
+                }, TimeSpan.FromSeconds(180));
+            }
+            finally
+            {
+                stub?.Dispose();
+            }
+        });
+    }
+
+    [Fact]
+    public void shell_recovery_probe_in_flight_reload_logs_stale_generation_without_navigate_panel()
+    {
+        if (!WebView2RuntimePresent()) throw new InvalidOperationException("WebView2 runtime required");
+        ExecuteWithShellDataRoot(() =>
+        {
+            ShellPanelHttpSplitStub? stub = null;
+            try
+            {
+                stub = CreateStub(503, 0);
+                _fixture.RunAsync(async () =>
+                {
+                    MainWindow? window = null;
+                    try
+                    {
+                        ShellFileLog.Write("shell-stale-probe-baseline");
+                        var baseline = Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log")
+                            .Select(File.ReadAllText)
+                            .Aggregate("", string.Concat);
+                        window = await StartWindowOnStubAsync(stub);
+                        var wv = await WaitForPanelWebViewAsync(window, TimeSpan.FromSeconds(45));
+                        await WaitForPanelUnavailableOfflineAsync(wv, TimeSpan.FromSeconds(90));
+                        var navBefore = window.NavigationStartingCount;
+
+                        var responsesBefore = stub.OperatorResponseCount;
+                        stub.OperatorStatusCode = 200;
+                        stub.OperatorDelayMilliseconds = 6_000;
+
+                        var probeStarted = false;
+                        var staleDeadline = DateTime.UtcNow.AddSeconds(45);
+                        while (DateTime.UtcNow < staleDeadline)
+                        {
+                            await Task.Delay(100);
+                            if (stub.OperatorResponseCount > responsesBefore)
+                            {
+                                probeStarted = true;
+                                window.ReloadPanel();
+                                break;
+                            }
+                        }
+
+                        Assert.True(probeStarted, "recovery probe did not start before reload invalidation");
+
+                        var staleLineDeadline = DateTime.UtcNow.AddSeconds(30);
+                        var sawStale = false;
+                        while (DateTime.UtcNow < staleLineDeadline)
+                        {
+                            await Task.Delay(200);
+                            var delta = LogDelta(baseline);
+                            if (delta.Contains("reason=stale-probe-generation", StringComparison.Ordinal))
+                            {
+                                sawStale = true;
+                                break;
+                            }
+                        }
+
+                        Assert.True(sawStale, "expected stale-probe-generation after reload during in-flight probe");
+                        Assert.Equal(navBefore, window.NavigationStartingCount);
+                        var afterDelta = LogDelta(baseline);
+                        Assert.DoesNotContain(
+                            "panel-navigate caller=NavigatePanel",
+                            afterDelta,
+                            StringComparison.Ordinal);
+                    }
+                    finally
+                    {
+                        RestoreStubSeams();
+                        window?.Close();
+                    }
+                }, TimeSpan.FromSeconds(150));
+            }
+            finally
+            {
+                stub?.Dispose();
+            }
+        });
+    }
+
+    [Fact]
+    public void shell_exhausted_long_retry_stays_offline_when_panel_probe_returns_503()
+    {
+        if (!WebView2RuntimePresent()) throw new InvalidOperationException("WebView2 runtime required");
+        ExecuteWithShellDataRoot(() =>
+        {
+            ShellPanelHttpSplitStub? stub = null;
+            try
+            {
+                stub = CreateStub(200, 0);
+                _fixture.RunAsync(async () =>
+                {
+                    MainWindow? window = null;
+                    try
+                    {
+                        ShellFileLog.Write("shell-exhausted-503-baseline");
+                        var baseline = Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log")
+                            .Select(File.ReadAllText)
+                            .Aggregate("", string.Concat);
+                        window = await StartWindowOnStubAsync(stub);
+                        var wv = await WaitForPanelWebViewAsync(window, TimeSpan.FromSeconds(45));
+                        await WaitForOperatorPanelAsync(wv, TimeSpan.FromSeconds(45));
+                        stub.OperatorStatusCode = 503;
+                        stub.OperatorDelayMilliseconds = 0;
+                        wv = await DriveToProcessRecoveryExhaustedAsync(window, wv, baseline);
+                        await WaitForExhaustedOfflinePageAsync(wv, TimeSpan.FromSeconds(45));
+
+                        var postExhausted = LogDelta(baseline);
+                        var exhaustedMark = postExhausted.IndexOf(
+                            "attempt=exhausted outcome=offline-page",
+                            StringComparison.Ordinal);
+                        Assert.True(exhaustedMark >= 0);
+                        var exhaustedTail = postExhausted[exhaustedMark..];
+
+                        var measureStart = DateTime.UtcNow;
+                        var samples = new List<PanelOfflineFlashAssert.FlashSample>();
+                        var measureDeadline = measureStart.AddSeconds(75);
+                        var sawStayOffline = false;
+                        while (DateTime.UtcNow < measureDeadline)
+                        {
+                            await Task.Delay(PanelOfflineFlashAssert.DefaultSampleIntervalMilliseconds);
+                            wv = window.FindName("PanelWebView") as Microsoft.Web.WebView2.Wpf.WebView2;
+                            var elapsedMs = (int)(DateTime.UtcNow - measureStart).TotalMilliseconds;
+                            if (wv?.CoreWebView2 is null)
+                            {
+                                samples.Add(new PanelOfflineFlashAssert.FlashSample(
+                                    PanelOfflineFlashAssert.SampleViewKind.NoWebView,
+                                    elapsedMs));
+                                continue;
+                            }
+
+                            var sampleJson = UnquoteWebViewScriptString(
+                                await wv.CoreWebView2.ExecuteScriptAsync(
+                                    "JSON.stringify({protocol: location.protocol, offline: document.documentElement.getAttribute('data-shell-offline-page')})"));
+                            using var doc = JsonDocument.Parse(sampleJson);
+                            var protocol = doc.RootElement.GetProperty("protocol").GetString() ?? "";
+                            var offlineAttr = doc.RootElement.GetProperty("offline").GetString();
+                            var isOffline = protocol == "data:" && offlineAttr == "1";
+                            samples.Add(new PanelOfflineFlashAssert.FlashSample(
+                                isOffline
+                                    ? PanelOfflineFlashAssert.SampleViewKind.Offline
+                                    : PanelOfflineFlashAssert.SampleViewKind.NonOffline,
+                                elapsedMs));
+
+                            if (LogDelta(baseline)[exhaustedMark..].Contains(
+                                    "action=stay-offline",
+                                    StringComparison.Ordinal))
+                            {
+                                sawStayOffline = true;
+                            }
+                        }
+
+                        Assert.True(sawStayOffline, "expected at least one exhausted stay-offline probe outcome");
+                        var tailAfterMeasure = LogDelta(baseline)[exhaustedMark..];
+                        Assert.DoesNotContain("caller=ExhaustedRecover", tailAfterMeasure, StringComparison.Ordinal);
+                        Assert.DoesNotContain(
+                            "outcome=exhausted-long-retry action=panel-navigate",
+                            exhaustedTail,
+                            StringComparison.Ordinal);
+                        Assert.DoesNotContain(
+                            "outcome=reload",
+                            tailAfterMeasure,
+                            StringComparison.Ordinal);
+                        var flash = PanelOfflineFlashAssert.Evaluate(samples);
+                        Assert.True(flash.Passes, $"exhausted 503 anti-flash: {flash.FailureReason}");
+                    }
+                    finally
+                    {
+                        RestoreStubSeams();
+                        window?.Close();
+                    }
+                }, TimeSpan.FromSeconds(240));
+            }
+            finally
+            {
+                stub?.Dispose();
+            }
+        });
+    }
+
+    [Fact]
+    public void shell_exhausted_long_retry_navigates_once_when_panel_probe_returns_2xx()
+    {
+        if (!WebView2RuntimePresent()) throw new InvalidOperationException("WebView2 runtime required");
+        ExecuteWithShellDataRoot(() =>
+        {
+            ShellPanelHttpSplitStub? stub = null;
+            try
+            {
+                stub = CreateStub(200, 0);
+                _fixture.RunAsync(async () =>
+                {
+                    MainWindow? window = null;
+                    try
+                    {
+                        ShellFileLog.Write("shell-exhausted-2xx-baseline");
+                        var baseline = Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log")
+                            .Select(File.ReadAllText)
+                            .Aggregate("", string.Concat);
+                        window = await StartWindowOnStubAsync(stub);
+                        var wv = await WaitForPanelWebViewAsync(window, TimeSpan.FromSeconds(45));
+                        await WaitForOperatorPanelAsync(wv, TimeSpan.FromSeconds(45));
+                        stub.OperatorStatusCode = 503;
+                        stub.OperatorDelayMilliseconds = 0;
+                        wv = await DriveToProcessRecoveryExhaustedAsync(window, wv, baseline);
+                        await WaitForExhaustedOfflinePageAsync(wv, TimeSpan.FromSeconds(45));
+
+                        var pendingDeadline = DateTime.UtcNow.AddSeconds(15);
+                        while (DateTime.UtcNow < pendingDeadline)
+                        {
+                            await Task.Delay(200);
+                            if (LogDelta(baseline).Contains(
+                                    "exhausted-long-retry delaySec=60 outcome=pending",
+                                    StringComparison.Ordinal))
+                            {
+                                break;
+                            }
+                        }
+
+                        stub.OperatorStatusCode = 200;
+                        stub.OperatorDelayMilliseconds = 0;
+                        var recoverDeadline = DateTime.UtcNow.AddSeconds(75);
+                        var panelOk = false;
+                        while (DateTime.UtcNow < recoverDeadline)
+                        {
+                            await Task.Delay(300);
+                            wv = window.FindName("PanelWebView") as Microsoft.Web.WebView2.Wpf.WebView2;
+                            if (wv?.CoreWebView2 is null)
+                            {
+                                continue;
+                            }
+
+                            var loc = UnquoteWebViewScriptString(
+                                await wv.CoreWebView2.ExecuteScriptAsync(
+                                    "location.pathname + '|' + document.readyState"));
+                            if (loc.StartsWith("/operator/", StringComparison.OrdinalIgnoreCase)
+                                && loc.EndsWith("|complete", StringComparison.Ordinal))
+                            {
+                                panelOk = true;
+                                break;
+                            }
+                        }
+
+                        Assert.True(panelOk, "panel did not load after exhausted 2xx-gated navigation");
+                        var delta = LogDelta(baseline);
+                        Assert.Contains(
+                            "action=panel-navigate",
+                            delta,
+                            StringComparison.Ordinal);
+                        Assert.Equal(
+                            1,
+                            delta.Split('\n').Count(l =>
+                                l.Contains("panel-navigate caller=ExhaustedRecover", StringComparison.Ordinal)));
+                    }
+                    finally
+                    {
+                        RestoreStubSeams();
+                        window?.Close();
+                    }
+                }, TimeSpan.FromSeconds(240));
+            }
+            finally
+            {
+                stub?.Dispose();
+            }
+        });
+    }
+
+    [Fact]
     public void shell_tray_reloads_do_not_leak_webview_handler_wiring()
     {
         if (!WebView2RuntimePresent()) throw new InvalidOperationException("WebView2 runtime required");
@@ -554,6 +884,129 @@ public sealed class ShellPanelNavigationFailureTests
         window.Show();
         await Task.Delay(1);
         return window;
+    }
+
+    private static async Task<MainWindow> StartWindowOnStubWithProductionProbeAsync(ShellPanelHttpSplitStub stub)
+    {
+        FakeShellSeams.Install();
+        FakeShellSeams.Service.Status = ServiceControllerStatus.Running;
+        FakeShellSeams.Http.Answers = true;
+        ShellSeams.HttpProbe = new ProductionHttpProbeSeam();
+        ShellSeams.PanelOriginOverride = stub.PanelOrigin;
+        ShellSeams.PanelNavigationUrlOverride = stub.OperatorUrl;
+        ShellSeams.HttpProbeUrlOverride = stub.ProbeUrl;
+
+        var window = new MainWindow();
+        window.Show();
+        await Task.Delay(1);
+        return window;
+    }
+
+    private static string LogDelta(string baseline) =>
+        baseline.Length == 0
+            ? Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log").Select(File.ReadAllText).Aggregate("", string.Concat)
+            : Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log").Select(File.ReadAllText).Aggregate("", string.Concat)
+                .Replace(baseline, "");
+
+    private static async Task<Microsoft.Web.WebView2.Wpf.WebView2> DriveToProcessRecoveryExhaustedAsync(
+        MainWindow window,
+        Microsoft.Web.WebView2.Wpf.WebView2 wv,
+        string logBaseline)
+    {
+        for (var attempt = 1; attempt <= 3; attempt++)
+        {
+            await ShellRendererCrashHarness.TriggerAsync(wv.CoreWebView2!);
+            var deadline = DateTime.UtcNow.AddSeconds(30);
+            while (DateTime.UtcNow < deadline)
+            {
+                await Task.Delay(200);
+                var delta = LogDelta(logBaseline);
+                if (delta.Contains($"attempt={attempt} ", StringComparison.Ordinal)
+                    && delta.Contains("outcome=reload", StringComparison.Ordinal))
+                {
+                    break;
+                }
+            }
+
+            wv = await RefreshPanelWebViewAsync(window, TimeSpan.FromSeconds(15));
+        }
+
+        await ShellRendererCrashHarness.TriggerAsync(wv.CoreWebView2!);
+        var exhaustedDeadline = DateTime.UtcNow.AddSeconds(30);
+        while (DateTime.UtcNow < exhaustedDeadline)
+        {
+            await Task.Delay(200);
+            if (LogDelta(logBaseline).Contains("attempt=exhausted outcome=offline-page", StringComparison.Ordinal))
+            {
+                break;
+            }
+        }
+
+        return await RefreshPanelWebViewAsync(window, TimeSpan.FromSeconds(15));
+    }
+
+    private static async Task<Microsoft.Web.WebView2.Wpf.WebView2> RefreshPanelWebViewAsync(
+        MainWindow window,
+        TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow.Add(timeout);
+        while (DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(200);
+            var wv = window.FindName("PanelWebView") as Microsoft.Web.WebView2.Wpf.WebView2;
+            if (wv?.CoreWebView2 is not null)
+            {
+                return wv;
+            }
+        }
+
+        throw new InvalidOperationException("Panel WebView2 did not become ready after process recovery");
+    }
+
+    private static async Task WaitForOperatorPanelAsync(
+        Microsoft.Web.WebView2.Wpf.WebView2 wv,
+        TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow.Add(timeout);
+        while (DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(300);
+            var loc = UnquoteWebViewScriptString(
+                await wv.CoreWebView2.ExecuteScriptAsync(
+                    "location.pathname + '|' + document.readyState"));
+            if (loc.StartsWith("/operator/", StringComparison.OrdinalIgnoreCase)
+                && loc.EndsWith("|complete", StringComparison.Ordinal))
+            {
+                return;
+            }
+        }
+
+        throw new InvalidOperationException("Operator panel did not load on stub");
+    }
+
+    private static async Task WaitForExhaustedOfflinePageAsync(
+        Microsoft.Web.WebView2.Wpf.WebView2 wv,
+        TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow.Add(timeout);
+        while (DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(300);
+            var sample = UnquoteWebViewScriptString(
+                await wv.CoreWebView2.ExecuteScriptAsync(
+                    "JSON.stringify({protocol: location.protocol, offline: document.documentElement.getAttribute('data-shell-offline-page'), title: (document.getElementById('title') || {}).innerText || ''})"));
+            using var doc = JsonDocument.Parse(sample);
+            var protocol = doc.RootElement.GetProperty("protocol").GetString() ?? "";
+            var offlineAttr = doc.RootElement.GetProperty("offline").GetString();
+            var title = doc.RootElement.GetProperty("title").GetString() ?? "";
+            if (protocol == "data:" && offlineAttr == "1"
+                && title.Contains("پنل اپراتور از کار افتاد", StringComparison.Ordinal))
+            {
+                return;
+            }
+        }
+
+        throw new InvalidOperationException("Exhausted offline page did not appear");
     }
 
     private static void RestoreStubSeams()

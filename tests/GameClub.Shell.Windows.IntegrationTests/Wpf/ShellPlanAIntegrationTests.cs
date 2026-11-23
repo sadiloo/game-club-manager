@@ -1054,6 +1054,31 @@ public sealed class ShellPlanAIntegrationTests
                                     && l.Contains("outcome=ok", StringComparison.Ordinal));
                     Assert.Equal(navigateLines.Count, probeOkBeforeNav);
                     Assert.DoesNotContain("panel-navigate caller=RunningRecover", delta, StringComparison.Ordinal);
+                    Assert.Equal(
+                        0,
+                        delta.Split('\n').Count(l => l.Contains("RunningRecover attempt=", StringComparison.Ordinal)));
+                    Assert.Equal(
+                        0,
+                        delta.Split('\n').Count(l => l.Contains("caller=RunningRecover", StringComparison.Ordinal)));
+                    Assert.DoesNotContain(
+                        "attempt=exhausted outcome=offline-page",
+                        delta,
+                        StringComparison.Ordinal);
+                    Assert.DoesNotContain(
+                        "outcome=exhausted-long-retry",
+                        delta,
+                        StringComparison.Ordinal);
+                    Assert.DoesNotContain(
+                        "webview-recovery-exhausted",
+                        delta,
+                        StringComparison.Ordinal);
+                    foreach (var sample in samples)
+                    {
+                        Assert.NotEqual(
+                            PanelOfflineFlashAssert.SampleViewKind.NonOffline,
+                            sample.ViewKind);
+                    }
+
                     var flash = PanelOfflineFlashAssert.Evaluate(samples);
                     Assert.True(
                         flash.Passes,
