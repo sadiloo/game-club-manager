@@ -1388,17 +1388,40 @@ public sealed class ShellPlanAIntegrationTests
                             continue;
                         }
 
-                        var sample = UnquoteWebViewScriptString(
+                        var rawSample = UnquoteWebViewScriptString(
                             await wv.CoreWebView2.ExecuteScriptAsync(
                                 "JSON.stringify({protocol: location.protocol, offline: document.documentElement.getAttribute('data-shell-offline-page'), path: location.pathname})"));
-                        using var doc = JsonDocument.Parse(sample);
-                        var protocol = doc.RootElement.GetProperty("protocol").GetString() ?? "";
-                        var offlineAttr = doc.RootElement.GetProperty("offline").GetString();
-                        var isOfflineView = protocol == "data:" && offlineAttr == "1";
-                        var viewKind = isOfflineView
-                            ? PanelOfflineFlashAssert.SampleViewKind.Offline
-                            : PanelOfflineFlashAssert.SampleViewKind.NonOffline;
-                        flapSamples.Add(new PanelOfflineFlashAssert.FlashSample(viewKind, elapsedMs));
+                        if (string.IsNullOrWhiteSpace(rawSample))
+                        {
+                            flapSamples.Add(new PanelOfflineFlashAssert.FlashSample(
+                                PanelOfflineFlashAssert.SampleViewKind.NoWebView,
+                                elapsedMs));
+                            continue;
+                        }
+
+                        JsonDocument doc;
+                        try
+                        {
+                            doc = JsonDocument.Parse(rawSample);
+                        }
+                        catch (JsonException)
+                        {
+                            flapSamples.Add(new PanelOfflineFlashAssert.FlashSample(
+                                PanelOfflineFlashAssert.SampleViewKind.NoWebView,
+                                elapsedMs));
+                            continue;
+                        }
+
+                        using (doc)
+                        {
+                            var protocol = doc.RootElement.GetProperty("protocol").GetString() ?? "";
+                            var offlineAttr = doc.RootElement.GetProperty("offline").GetString();
+                            var isOfflineView = protocol == "data:" && offlineAttr == "1";
+                            var viewKind = isOfflineView
+                                ? PanelOfflineFlashAssert.SampleViewKind.Offline
+                                : PanelOfflineFlashAssert.SampleViewKind.NonOffline;
+                            flapSamples.Add(new PanelOfflineFlashAssert.FlashSample(viewKind, elapsedMs));
+                        }
                     }
 
                     var flapLog = Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log")

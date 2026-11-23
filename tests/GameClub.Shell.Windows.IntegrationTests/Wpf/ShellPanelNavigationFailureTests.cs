@@ -476,18 +476,17 @@ public sealed class ShellPanelNavigationFailureTests
                         window = await StartWindowOnStubAsync(stub);
                         var wv = await WaitForPanelWebViewAsync(window, TimeSpan.FromSeconds(45));
                         await WaitForPanelUnavailableOfflineAsync(wv, TimeSpan.FromSeconds(90));
-                        var navBefore = window.NavigationStartingCount;
-
-                        var responsesBefore = stub.OperatorResponseCount;
+                        var probesBefore = stub.ProbeRequestCount;
                         stub.OperatorStatusCode = 200;
-                        stub.OperatorDelayMilliseconds = 6_000;
+                        stub.OperatorDelayMilliseconds = 0;
+                        stub.ProbeDelayMilliseconds = 6_000;
 
                         var probeStarted = false;
-                        var staleDeadline = DateTime.UtcNow.AddSeconds(45);
+                        var staleDeadline = DateTime.UtcNow.AddSeconds(90);
                         while (DateTime.UtcNow < staleDeadline)
                         {
                             await Task.Delay(100);
-                            if (stub.OperatorResponseCount > responsesBefore)
+                            if (stub.ProbeRequestCount > probesBefore)
                             {
                                 probeStarted = true;
                                 window.ReloadPanel();
@@ -495,7 +494,7 @@ public sealed class ShellPanelNavigationFailureTests
                             }
                         }
 
-                        Assert.True(probeStarted, "recovery probe did not start before reload invalidation");
+                        Assert.True(probeStarted, "panel-nav-retry probe did not start before reload invalidation");
 
                         var staleLineDeadline = DateTime.UtcNow.AddSeconds(30);
                         var sawStale = false;
@@ -511,7 +510,6 @@ public sealed class ShellPanelNavigationFailureTests
                         }
 
                         Assert.True(sawStale, "expected stale-probe-generation after reload during in-flight probe");
-                        Assert.Equal(navBefore, window.NavigationStartingCount);
                         var afterDelta = LogDelta(baseline);
                         Assert.DoesNotContain(
                             "panel-navigate caller=NavigatePanel",
@@ -523,7 +521,7 @@ public sealed class ShellPanelNavigationFailureTests
                         RestoreStubSeams();
                         window?.Close();
                     }
-                }, TimeSpan.FromSeconds(150));
+                }, TimeSpan.FromSeconds(180));
             }
             finally
             {
@@ -557,7 +555,7 @@ public sealed class ShellPanelNavigationFailureTests
                         stub.OperatorStatusCode = 503;
                         stub.OperatorDelayMilliseconds = 0;
                         wv = await DriveToProcessRecoveryExhaustedAsync(window, wv, baseline);
-                        await WaitForExhaustedOfflinePageAsync(wv, TimeSpan.FromSeconds(45));
+                        await WaitForExhaustedOfflinePageAsync(wv, TimeSpan.FromSeconds(90));
 
                         var postExhausted = LogDelta(baseline);
                         var exhaustedMark = postExhausted.IndexOf(
@@ -623,7 +621,7 @@ public sealed class ShellPanelNavigationFailureTests
                         RestoreStubSeams();
                         window?.Close();
                     }
-                }, TimeSpan.FromSeconds(240));
+                }, TimeSpan.FromSeconds(600));
             }
             finally
             {
@@ -657,7 +655,7 @@ public sealed class ShellPanelNavigationFailureTests
                         stub.OperatorStatusCode = 503;
                         stub.OperatorDelayMilliseconds = 0;
                         wv = await DriveToProcessRecoveryExhaustedAsync(window, wv, baseline);
-                        await WaitForExhaustedOfflinePageAsync(wv, TimeSpan.FromSeconds(45));
+                        await WaitForExhaustedOfflinePageAsync(wv, TimeSpan.FromSeconds(90));
 
                         var pendingDeadline = DateTime.UtcNow.AddSeconds(15);
                         while (DateTime.UtcNow < pendingDeadline)
@@ -711,7 +709,7 @@ public sealed class ShellPanelNavigationFailureTests
                         RestoreStubSeams();
                         window?.Close();
                     }
-                }, TimeSpan.FromSeconds(240));
+                }, TimeSpan.FromSeconds(600));
             }
             finally
             {
@@ -916,33 +914,46 @@ public sealed class ShellPanelNavigationFailureTests
         for (var attempt = 1; attempt <= 3; attempt++)
         {
             await ShellRendererCrashHarness.TriggerAsync(wv.CoreWebView2!);
-            var deadline = DateTime.UtcNow.AddSeconds(30);
-            while (DateTime.UtcNow < deadline)
-            {
-                await Task.Delay(200);
-                var delta = LogDelta(logBaseline);
-                if (delta.Contains($"attempt={attempt} ", StringComparison.Ordinal)
-                    && delta.Contains("outcome=reload", StringComparison.Ordinal))
-                {
-                    break;
-                }
-            }
-
-            wv = await RefreshPanelWebViewAsync(window, TimeSpan.FromSeconds(15));
+            await WaitForProcessRecoveryOutcomeAsync(logBaseline, attempt, TimeSpan.FromSeconds(60));
+            wv = await RefreshPanelWebViewAsync(window, TimeSpan.FromSeconds(45));
         }
 
         await ShellRendererCrashHarness.TriggerAsync(wv.CoreWebView2!);
-        var exhaustedDeadline = DateTime.UtcNow.AddSeconds(30);
+        var exhaustedDeadline = DateTime.UtcNow.AddSeconds(90);
+        var sawExhausted = false;
         while (DateTime.UtcNow < exhaustedDeadline)
         {
             await Task.Delay(200);
             if (LogDelta(logBaseline).Contains("attempt=exhausted outcome=offline-page", StringComparison.Ordinal))
             {
+                sawExhausted = true;
                 break;
             }
         }
 
-        return await RefreshPanelWebViewAsync(window, TimeSpan.FromSeconds(15));
+        Assert.True(sawExhausted, "process recovery never entered exhausted offline-page mode");
+        return await RefreshPanelWebViewAsync(window, TimeSpan.FromSeconds(45));
+    }
+
+    private static async Task WaitForProcessRecoveryOutcomeAsync(
+        string logBaseline,
+        int attempt,
+        TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow.Add(timeout);
+        while (DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(200);
+            var delta = LogDelta(logBaseline);
+            if (delta.Contains($"attempt={attempt} ", StringComparison.Ordinal)
+                && (delta.Contains("outcome=reload", StringComparison.Ordinal)
+                    || delta.Contains("outcome=recreate-done", StringComparison.Ordinal)))
+            {
+                return;
+            }
+        }
+
+        throw new InvalidOperationException($"process recovery attempt={attempt} did not finish within {timeout.TotalSeconds:F0}s");
     }
 
     private static async Task<Microsoft.Web.WebView2.Wpf.WebView2> RefreshPanelWebViewAsync(

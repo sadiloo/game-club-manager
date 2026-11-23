@@ -40,9 +40,15 @@ internal sealed class ShellPanelHttpSplitStub : IDisposable
 
     public int OperatorDelayMilliseconds { get; set; }
 
+    public int ProbeDelayMilliseconds { get; set; }
+
     private int _operatorResponseCount;
 
     public int OperatorResponseCount => _operatorResponseCount;
+
+    private int _probeRequestCount;
+
+    public int ProbeRequestCount => _probeRequestCount;
 
     public int ProbeSuccessCount
     {
@@ -204,11 +210,12 @@ internal sealed class ShellPanelHttpSplitStub : IDisposable
             var path = ctx.Request.Url?.AbsolutePath ?? "";
             if (path.StartsWith("/shell-probe", StringComparison.OrdinalIgnoreCase))
             {
+                Interlocked.Increment(ref _probeRequestCount);
                 await WriteHtmlResponseAsync(
                     ctx.Response,
                     200,
                     "<html><body>probe ok</body></html>",
-                    0,
+                    ProbeDelayMilliseconds,
                     ct);
                 lock (_telemetryLock)
                 {
