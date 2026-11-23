@@ -85,7 +85,7 @@ public sealed class WalletLoyaltyFixRound1Tests(GameClubWebApplicationFactory fa
     }
 
     [Fact]
-    public async Task round1_b1_bill_preview_matches_planned_wallet_payable()
+    public async Task round1_b1_wallet_preview_collectible_matches_cash_95000_on_91667()
     {
         await S3TestHelpers.ResetAsync(factory);
         var op = await OpAsync();
@@ -102,7 +102,7 @@ public sealed class WalletLoyaltyFixRound1Tests(GameClubWebApplicationFactory fa
             new { payments = new[] { new { method = "Wallet", amountToman = 91_667L } } });
         preview.EnsureSuccessStatusCode();
         var body = await preview.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>();
-        Assert.Equal(91_667, body.GetProperty("collectibleToman").GetInt64());
+        Assert.Equal(95_000, body.GetProperty("collectibleToman").GetInt64());
     }
 
     [Fact]
