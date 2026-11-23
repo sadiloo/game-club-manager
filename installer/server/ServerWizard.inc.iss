@@ -727,7 +727,7 @@ begin
     DefaultPinsJsonPath := SilentDefaultPinsPath;
 end;
 
-function UpdateReadyMemo(Space, NewLine, MemoUserInfoInfo, MemoUserInfoRecommended, MemoProgramInfo: String): String;
+function UpdateReadyMemo(Space, NewLine, MemoUserInfoInfo, MemoDirInfo, MemoTypeInfo, MemoComponentsInfo, MemoGroupInfo, MemoTasksInfo: String): String;
 var Wv2Line, FolderLine: String;
 begin
   if not FileExists(ExpandConstant('{reg:HKLM\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5},pv')) then
@@ -748,7 +748,12 @@ begin
       Wv2Line;
   end
   else
-    Result := MemoProgramInfo;
+    Result :=
+      MemoDirInfo + NewLine + NewLine +
+      MemoTypeInfo + NewLine + NewLine +
+      MemoComponentsInfo + NewLine + NewLine +
+      MemoGroupInfo + NewLine + NewLine +
+      MemoTasksInfo;
 end;
 
 procedure CurInstallProgressChanged(CurProgress, MaxProgress: Integer);
