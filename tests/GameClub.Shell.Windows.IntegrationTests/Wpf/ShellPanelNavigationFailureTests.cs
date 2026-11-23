@@ -564,7 +564,7 @@ public sealed class ShellPanelNavigationFailureTests
                             "attempt=exhausted outcome=offline-page",
                             StringComparison.Ordinal);
                         Assert.True(exhaustedMark >= 0);
-                        var exhaustedTail = postExhausted[exhaustedMark..];
+                        var exhaustedTail = postExhausted.Substring(exhaustedMark);
 
                         var measureStart = DateTime.UtcNow;
                         var samples = new List<PanelOfflineFlashAssert.FlashSample>();
@@ -596,7 +596,7 @@ public sealed class ShellPanelNavigationFailureTests
                                     : PanelOfflineFlashAssert.SampleViewKind.NonOffline,
                                 elapsedMs));
 
-                            if (LogDelta(baseline)[exhaustedMark..].Contains(
+                            if (LogDelta(baseline).Substring(exhaustedMark).Contains(
                                     "action=stay-offline",
                                     StringComparison.Ordinal))
                             {
@@ -605,7 +605,7 @@ public sealed class ShellPanelNavigationFailureTests
                         }
 
                         Assert.True(sawStayOffline, "expected at least one exhausted stay-offline probe outcome");
-                        var tailAfterMeasure = LogDelta(baseline)[exhaustedMark..];
+                        var tailAfterMeasure = LogDelta(baseline).Substring(exhaustedMark);
                         Assert.DoesNotContain("caller=ExhaustedRecover", tailAfterMeasure, StringComparison.Ordinal);
                         Assert.DoesNotContain(
                             "outcome=exhausted-long-retry action=panel-navigate",
