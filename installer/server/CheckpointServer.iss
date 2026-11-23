@@ -97,8 +97,8 @@ Filename: "netsh.exe"; Parameters: "advfirewall firewall delete rule name=""Chec
 Type: filesandordirs; Name: "{app}"
 
 [Code]
-#include "ServerWizard.inc.iss"
 #include "ServerFinish.inc.iss"
+#include "ServerWizard.inc.iss"
 
 function PayloadDirExists(const Dir: string): Boolean;
 begin
