@@ -1,4 +1,4 @@
-# Kiosk installer post-install (elevated). setup.json / admin-lock.json ACL via Guard writes — R8b (hook only).
+﻿# Kiosk installer post-install (elevated). setup.json / admin-lock.json ACL via Guard writes — R8b (hook only).
 param(
     [string] $KioskDir = "C:\Program Files\Checkpoint\Kiosk",
     [string] $GuardDir = "C:\Program Files\Checkpoint\Guard",

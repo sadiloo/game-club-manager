@@ -1,4 +1,4 @@
-# First-install PostgreSQL init for Checkpoint (port 5433, localhost only).
+﻿# First-install PostgreSQL init for Checkpoint (port 5433, localhost only).
 param(
     [string] $PgRoot = "C:\Program Files\Checkpoint\PostgreSQL",
     [string] $PgData = "C:\ProgramData\Checkpoint\pgdata",

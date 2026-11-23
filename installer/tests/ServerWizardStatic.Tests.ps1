@@ -1,4 +1,4 @@
-Describe "Server wizard spec strings" {
+﻿Describe "Server wizard spec strings" {
     BeforeAll {
         $script:IncPath = (Resolve-Path (Join-Path $PSScriptRoot "..\server\ServerWizard.inc.iss")).Path
         $script:IssPath = (Resolve-Path (Join-Path $PSScriptRoot "..\server\CheckpointServer.iss")).Path

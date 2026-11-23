@@ -1,4 +1,4 @@
-# Parse Checkpoint server.json ConnectionStrings:Default into pg/libpq arguments (DEF-5/6).
+﻿# Parse Checkpoint server.json ConnectionStrings:Default into pg/libpq arguments (DEF-5/6).
 function Read-CheckpointServerJsonConfig {
     param(
         [Parameter(Mandatory)][string]$ServerJsonPath

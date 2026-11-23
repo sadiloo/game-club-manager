@@ -1,4 +1,4 @@
-$ErrorActionPreference = "Stop"
+﻿$ErrorActionPreference = "Stop"
 
 function Get-InstallerServerJson {
     $path = "C:\ProgramData\Checkpoint\config\server.json"

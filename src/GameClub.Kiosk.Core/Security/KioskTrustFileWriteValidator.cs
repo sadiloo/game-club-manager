@@ -58,8 +58,8 @@ public static class KioskTrustFileWriteValidator
         var trimmed = fileName!.Trim();
         if (trimmed.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0
             || trimmed.IndexOf("..", StringComparison.Ordinal) >= 0
-            || trimmed.IndexOf('/', StringComparison.Ordinal) >= 0
-            || trimmed.IndexOf('\\', StringComparison.Ordinal) >= 0
+            || trimmed.IndexOf('/') >= 0
+            || trimmed.IndexOf('\\') >= 0
             || Path.IsPathRooted(trimmed))
         {
             return false;

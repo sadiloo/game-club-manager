@@ -1,4 +1,4 @@
-# DEF-7: Persian.isl [Messages] keys must match Inno Setup 6.7.1 Default.isl exactly.
+﻿# DEF-7: Persian.isl [Messages] keys must match Inno Setup 6.7.1 Default.isl exactly.
 $ErrorActionPreference = "Stop"
 $root = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 

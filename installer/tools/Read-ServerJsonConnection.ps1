@@ -1,4 +1,4 @@
-# Parse ConnectionStrings:Default from server.json for pg tools (not Npgsql connection string format).
+﻿# Parse ConnectionStrings:Default from server.json for pg tools (not Npgsql connection string format).
 param(
     [string] $ServerJsonPath = "C:\ProgramData\Checkpoint\config\server.json"
 )

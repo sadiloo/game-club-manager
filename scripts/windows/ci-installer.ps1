@@ -1,4 +1,4 @@
-# windows-2022 installer job driver — build installers and run B-1..B-13 (B).
+﻿# windows-2022 installer job driver — build installers and run B-1..B-13 (B).
 $ErrorActionPreference = "Stop"
 $root = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 Set-Location $root

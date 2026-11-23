@@ -1,4 +1,4 @@
-# Shared helpers for Checkpoint installers (B).
+﻿# Shared helpers for Checkpoint installers (B).
 $ErrorActionPreference = "Stop"
 
 function Get-CheckpointRepoRoot {

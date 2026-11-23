@@ -1,4 +1,4 @@
-# B-3: 09:00 Asia/Tehran maps to explicit UTC StartBoundary (portable).
+﻿# B-3: 09:00 Asia/Tehran maps to explicit UTC StartBoundary (portable).
 $ErrorActionPreference = "Stop"
 $root = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 Import-Module (Join-Path $root "installer/tools/CheckpointInstall.Common.psm1") -Force

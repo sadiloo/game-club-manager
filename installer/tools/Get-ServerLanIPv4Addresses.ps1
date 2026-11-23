@@ -1,4 +1,4 @@
-# Enumerate current LAN IPv4 addresses on up, non-loopback adapters (server installer finish page + CI).
+﻿# Enumerate current LAN IPv4 addresses on up, non-loopback adapters (server installer finish page + CI).
 param(
     [string] $ServerJsonPath = "$env:ProgramData\Checkpoint\config\server.json",
     [ValidateSet("ips", "verbose")]

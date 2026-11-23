@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string] $ServerSetup,
     [string] $AccountsFile,
     [string] $LogsDir

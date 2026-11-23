@@ -1,4 +1,4 @@
-$ErrorActionPreference = "Stop"
+﻿$ErrorActionPreference = "Stop"
 $root = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 $iss = Get-Content -LiteralPath (Join-Path $root "installer/server/CheckpointServer.iss") -Raw
 $finish = Get-Content -LiteralPath (Join-Path $root "installer/server/ServerFinish.inc.iss") -Raw

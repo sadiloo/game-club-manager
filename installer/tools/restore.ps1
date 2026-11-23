@@ -1,4 +1,4 @@
-# Checkpoint server restore helper (B). Persian guidance on console; no UI.
+﻿# Checkpoint server restore helper (B). Persian guidance on console; no UI.
 param(
     [Parameter(Mandatory)][string]$DumpPath,
     [string]$ServerJsonPath = "$env:ProgramData\Checkpoint\config\server.json"

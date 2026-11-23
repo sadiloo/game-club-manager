@@ -1,4 +1,4 @@
-# Apply default-pin replacements during upgrade (OQ-2); pins never logged.
+﻿# Apply default-pin replacements during upgrade (OQ-2); pins never logged.
 param(
     [Parameter(Mandatory)][string]$PinsFile,
     [string]$ServerExe = "C:\Program Files\Checkpoint\Server\GameClub.Server.exe"

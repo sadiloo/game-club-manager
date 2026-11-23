@@ -1,4 +1,4 @@
-# B-5 static: kiosk .iss has no input pages; no forced shutdown /r
+﻿# B-5 static: kiosk .iss has no input pages; no forced shutdown /r
 $ErrorActionPreference = "Stop"
 $root = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 $iss = Join-Path $root "installer/kiosk/CheckpointKiosk.iss"

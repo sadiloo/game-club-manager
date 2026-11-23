@@ -1,4 +1,4 @@
-$ErrorActionPreference = "Stop"
+﻿$ErrorActionPreference = "Stop"
 if (-not ($IsWindows -or $env:OS -eq 'Windows_NT')) {
     Write-Host "SKIP KioskTrustFileAcl (Windows only)"
     exit 0

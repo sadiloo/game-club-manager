@@ -1,4 +1,4 @@
-$ErrorActionPreference = "Stop"
+﻿$ErrorActionPreference = "Stop"
 $root = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 . (Join-Path $root "installer\tools\CheckpointDbConfig.ps1")
 $goldenRestore = Join-Path $root "installer\tools\restore.ps1"

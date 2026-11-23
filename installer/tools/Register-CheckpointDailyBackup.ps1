@@ -1,4 +1,4 @@
-# Register CheckpointDailyBackup at 09:00 Asia/Tehran (B-3).
+﻿# Register CheckpointDailyBackup at 09:00 Asia/Tehran (B-3).
 param(
     [string] $BackupScriptPath,
     [string] $SecondaryBackupDir = ""

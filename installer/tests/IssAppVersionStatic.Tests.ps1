@@ -1,4 +1,4 @@
-# ISCC must receive /DAppVersion — no silent default in .iss preprocessor.
+﻿# ISCC must receive /DAppVersion — no silent default in .iss preprocessor.
 $ErrorActionPreference = "Stop"
 $installerRoot = Split-Path $PSScriptRoot -Parent
 $paths = @(

@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string] $KioskSetup,
     [string] $LogsDir
 )

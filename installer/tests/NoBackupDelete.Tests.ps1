@@ -1,4 +1,4 @@
-# Static: backup/restore scripts and installers must never delete dumps, pgdata or backups (DEF-4).
+﻿# Static: backup/restore scripts and installers must never delete dumps, pgdata or backups (DEF-4).
 $ErrorActionPreference = "Stop"
 $root = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 

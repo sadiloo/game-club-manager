@@ -1,4 +1,4 @@
-# Download and verify PostgreSQL (trimmed) and WebView2 offline payloads for CI / staging.
+﻿# Download and verify PostgreSQL (trimmed) and WebView2 offline payloads for CI / staging.
 param(
     [string] $CacheDir = "",
     [switch] $SkipIfPresent

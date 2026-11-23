@@ -1,4 +1,4 @@
-# §2.2α: query GET /api/local/open-sessions (existing server API). stdout: COUNT=<n>, UNKNOWN, or NOKEY.
+﻿# §2.2α: query GET /api/local/open-sessions (existing server API). stdout: COUNT=<n>, UNKNOWN, or NOKEY.
 param(
     [string] $ServerJsonPath = "C:\ProgramData\Checkpoint\config\server.json",
     [string] $BaseUrl = "http://127.0.0.1:5000"

@@ -1,4 +1,4 @@
-# Server installer post-install (elevated); -InstallPhase splits §1.8 status steps.
+﻿# Server installer post-install (elevated); -InstallPhase splits §1.8 status steps.
 param(
     [string] $InstallMode = "install",
     [ValidateSet("install-all", "webview2", "database", "accounts", "services", "firewall", "backup", "start", "upgrade", "upgrade-pins", "upgrade-stop", "upgrade-backup", "upgrade-start")]
