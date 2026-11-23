@@ -149,7 +149,8 @@ function Set-KioskTrustFileAcl {
                 $kioskSid, 'Read', 'None', 'None', 'Allow')))
         $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
                 $kioskSid, 'Write,Delete,WriteData,AppendData,ChangePermissions,TakeOwnership', 'None', 'None', 'Deny')))
-        [System.IO.File]::SetAccessControl($path, $acl)
+        $fileInfo = New-Object System.IO.FileInfo($path)
+        $fileInfo.SetAccessControl($acl)
     }
 
     $dirAcl = New-Object System.Security.AccessControl.DirectorySecurity
@@ -161,7 +162,8 @@ function Set-KioskTrustFileAcl {
             $adminSid, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')))
     $dirAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
             $kioskSid, 'ReadAndExecute,ListDirectory,Read', 'ContainerInherit,ObjectInherit', 'None', 'Allow')))
-    [System.IO.Directory]::SetAccessControl($Root, $dirAcl)
+    $dirInfo = New-Object System.IO.DirectoryInfo($Root)
+    $dirInfo.SetAccessControl($dirAcl)
 }
 
 function Get-CheckpointIranTimeZone {
