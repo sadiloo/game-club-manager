@@ -21,7 +21,7 @@ public sealed class RunningFlapBackoffResetTests
             stability.Observe(
                 running ? ShellServerVisualState.Running : ShellServerVisualState.Stopped,
                 utc);
-            if (stability.IsRunningStable(utc))
+            if (stability.TryConsumeStableRunningResetEdge(utc))
             {
                 if (retry.FailureCount > 0)
                 {

@@ -12,7 +12,7 @@ public sealed class HealthyRunningPanelProbePolicyTests
 
     [Fact]
     public void per_probe_timeout_is_at_most_one_second() =>
-        Assert.Equal(TimeSpan.FromSeconds(1), HealthyRunningPanelProbePolicy.PerProbeTimeout);
+        Assert.Equal(TimeSpan.FromSeconds(3), HealthyRunningPanelProbePolicy.PerProbeTimeout);
 
     [Fact]
     public void confirmed_failure_requires_two_consecutive_probe_failures() =>

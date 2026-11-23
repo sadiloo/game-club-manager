@@ -10,6 +10,7 @@ internal static class RunningStabilityPolicy
 internal sealed class RunningStabilityTracker
 {
     private DateTime? _runningSinceUtc;
+    private bool _stableResetEdgeArmed = true;
 
     public void Observe(ShellServerVisualState state, DateTime utcNow)
     {
@@ -34,5 +35,27 @@ internal sealed class RunningStabilityTracker
     public void Reset()
     {
         _runningSinceUtc = null;
+        _stableResetEdgeArmed = true;
+    }
+
+    /// <summary>
+    /// Returns true once per stable-running episode (first tick at or after 60s continuous Running).
+    /// Re-arms when Running is lost.
+    /// </summary>
+    public bool TryConsumeStableRunningResetEdge(DateTime utcNow)
+    {
+        if (!IsRunningStable(utcNow))
+        {
+            _stableResetEdgeArmed = true;
+            return false;
+        }
+
+        if (!_stableResetEdgeArmed)
+        {
+            return false;
+        }
+
+        _stableResetEdgeArmed = false;
+        return true;
     }
 }

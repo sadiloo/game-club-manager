@@ -122,7 +122,7 @@ finally {
     # that never spin up MainWindow/WebView never create %LOCALAPPDATA%\Checkpoint\Shell\logs.
     # Non-empty directory that exists but has no shell-*.log → still fail (shell did log, trace lost).
     if (-not (Test-Path -LiteralPath $shellLogsSource)) {
-        Write-Host "Skipping default shell log harvest: directory not created ($shellLogsSource)."
+        throw "Shell logs directory is missing (lost trace must not look like a pass): $shellLogsSource"
     }
     else {
         $shellLogFiles = @(Get-ChildItem -Path $shellLogsSource -Filter "shell-*.log" -File -ErrorAction SilentlyContinue)

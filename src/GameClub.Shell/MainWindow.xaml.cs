@@ -105,13 +105,9 @@ public partial class MainWindow : Window
             _lastObservedVisualState = snap.VisualState;
             var utcNow = DateTime.UtcNow;
             _runningStabilityTracker.Observe(snap.VisualState, utcNow);
-            if (_runningStabilityTracker.IsRunningStable(utcNow))
+            if (_runningStabilityTracker.TryConsumeStableRunningResetEdge(utcNow))
             {
                 _panelNavRetryPolicy.Reset();
-                if (snap.VisualState == ShellServerVisualState.Running)
-                {
-                    _runningPanelLoadFailing = false;
-                }
             }
 
             if (snap.VisualState == ShellServerVisualState.Running && _webViewReady)
@@ -135,19 +131,7 @@ public partial class MainWindow : Window
                         return;
                     }
 
-                    var runningRecoverAttempt = _processRecoveryPolicy.RecordAttemptAndGetIndex(utcNow);
-                    ShellFileLog.Write(
-                        $"RunningRecover attempt={runningRecoverAttempt} outcome=pending");
-
-                    _offlineShown = false;
-                    _currentOfflineState = null;
-                    _offlinePresentInFlightState = null;
-                    _allowOfflineDataNav = false;
-                    var recoverUri = new Uri(ShellSeams.ResolvePanelUrl());
-                    if (!TryStartLoopbackPanelNavigation("RunningRecover", recoverUri))
-                    {
-                        return;
-                    }
+                    _ = TryRunningRecoverViaProbeAsync(utcNow);
                 }
                 else if (RunningPanelLoadFailingPollerPolicy.Applies(_runningPanelLoadFailing, _offlineShown))
                 {
@@ -752,6 +736,7 @@ public partial class MainWindow : Window
             return;
         }
 
+        var generationAtProbeStart = PanelProbeNavigateGeneration.CaptureForProbe();
         try
         {
             var attempt = _panelNavRetryPolicy.FailureCount + 1;
@@ -776,7 +761,8 @@ public partial class MainWindow : Window
                 $"panel-recovery-probe target=panel status={statusCode} outcome=ok");
             ShellFileLog.Write(
                 $"panel-nav-retry attempt={attempt} nextDelaySec=0 action=probe outcome=ok status={statusCode}");
-            await Dispatcher.InvokeAsync(() => NavigatePanelFromProbe());
+            var probeGeneration = generationAtProbeStart;
+            await Dispatcher.InvokeAsync(() => NavigatePanelFromProbe(probeGeneration));
         }
         finally
         {
@@ -826,12 +812,13 @@ public partial class MainWindow : Window
             return;
         }
 
+        var generationAtProbeStart = PanelProbeNavigateGeneration.CaptureForProbe();
         try
         {
             var (ok, statusCode) = await Task.Run(ProbePanelHttp);
             if (ok)
             {
-                NavigatePanelFromProbe();
+                NavigatePanelFromProbe(generationAtProbeStart);
                 return;
             }
 
@@ -861,8 +848,15 @@ public partial class MainWindow : Window
         }
     }
 
-    private void NavigatePanelFromProbe()
+    private void NavigatePanelFromProbe(int probeGeneration)
     {
+        if (!PanelProbeNavigateGeneration.IsProbeNavigateStillValid(probeGeneration))
+        {
+            ShellFileLog.Write(
+                $"panel-nav-retry action=probe outcome=skipped reason=stale-probe-generation captured={probeGeneration}");
+            return;
+        }
+
         if (_closed || !_webViewReady)
         {
             return;
@@ -875,6 +869,65 @@ public partial class MainWindow : Window
 
         var uri = new Uri(ShellSeams.ResolvePanelUrl());
         TryStartLoopbackPanelNavigation("NavigatePanel", uri);
+    }
+
+    private async Task TryRunningRecoverViaProbeAsync(DateTime utcNow)
+    {
+        if (Interlocked.CompareExchange(ref _panelProbeInFlight, 1, 0) != 0)
+        {
+            ShellFileLog.Write("RunningRecover outcome=skipped reason=probe-in-flight");
+            return;
+        }
+
+        var runningRecoverAttempt = _processRecoveryPolicy.RecordAttemptAndGetIndex(utcNow);
+        var generationAtProbeStart = PanelProbeNavigateGeneration.CaptureForProbe();
+        ShellFileLog.Write($"RunningRecover attempt={runningRecoverAttempt} outcome=pending");
+        try
+        {
+            var (ok, statusCode) = await Task.Run(ProbePanelRecoveryHttp).ConfigureAwait(false);
+            await Dispatcher.InvokeAsync(() =>
+            {
+                if (_closed
+                    || !_offlineShown
+                    || _runningPanelLoadFailing
+                    || _processRecoveryExhaustedMode
+                    || _poller?.Current.VisualState != ShellServerVisualState.Running)
+                {
+                    return;
+                }
+
+                if (!ok)
+                {
+                    ShellFileLog.Write(
+                        $"RunningRecover attempt={runningRecoverAttempt} outcome=fail status={statusCode}");
+                    ShellFileLog.Write(
+                        $"panel-recovery-probe target=panel status={statusCode} outcome=fail caller=RunningRecover");
+                    return;
+                }
+
+                if (!PanelProbeNavigateGeneration.IsProbeNavigateStillValid(generationAtProbeStart))
+                {
+                    ShellFileLog.Write(
+                        $"RunningRecover attempt={runningRecoverAttempt} outcome=skipped reason=stale-probe-generation");
+                    return;
+                }
+
+                ShellFileLog.Write(
+                    $"panel-recovery-probe target=panel status={statusCode} outcome=ok caller=RunningRecover");
+                ShellFileLog.Write(
+                    $"RunningRecover attempt={runningRecoverAttempt} outcome=ok status={statusCode}");
+                _offlineShown = false;
+                _currentOfflineState = null;
+                _offlinePresentInFlightState = null;
+                _allowOfflineDataNav = false;
+                var recoverUri = new Uri(ShellSeams.ResolvePanelUrl());
+                TryStartLoopbackPanelNavigation("RunningRecover", recoverUri);
+            });
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _panelProbeInFlight, 0);
+        }
     }
 
     private void RestoreRunningPanelOfflineView()
@@ -1103,6 +1156,7 @@ public partial class MainWindow : Window
                 {
                     if (!_closed && PanelWebView.CoreWebView2 is not null)
                     {
+                        PanelProbeNavigateGeneration.Invalidate();
                         PanelWebView.CoreWebView2.Reload();
                     }
                 });
@@ -1144,25 +1198,32 @@ public partial class MainWindow : Window
                 return;
             }
 
-            ShellFileLog.Write(
-                $"webview-process-failed attempt={attempt} outcome=exhausted-long-retry action=reload");
-            try
+            var generationAtProbeStart = PanelProbeNavigateGeneration.CaptureForProbe();
+            var (probeOk, probeStatus) = await Task.Run(ProbePanelRecoveryHttp).ConfigureAwait(false);
+            if (probeOk
+                && PanelProbeNavigateGeneration.IsProbeNavigateStillValid(generationAtProbeStart))
             {
+                ShellFileLog.Write(
+                    $"webview-process-failed attempt={attempt} outcome=exhausted-long-retry action=panel-navigate status={probeStatus}");
                 await Dispatcher.InvokeAsync(() =>
                 {
-                    if (!_closed && PanelWebView.CoreWebView2 is not null)
+                    if (_closed || _poller?.Current.VisualState != ShellServerVisualState.Running)
                     {
-                        PanelWebView.CoreWebView2.Reload();
+                        return;
                     }
-                    else if (!_closed)
-                    {
-                        _ = PresentOfflinePageAsync(ResolveExhaustedOfflineState());
-                    }
+
+                    _offlineShown = false;
+                    _currentOfflineState = null;
+                    _offlinePresentInFlightState = null;
+                    _allowOfflineDataNav = false;
+                    var uri = new Uri(ShellSeams.ResolvePanelUrl());
+                    TryStartLoopbackPanelNavigation("ExhaustedRecover", uri);
                 });
             }
-            catch
+            else
             {
-                await Dispatcher.InvokeAsync(new Action(ShowOfflineAfterProcessRecoveryExhausted));
+                ShellFileLog.Write(
+                    $"webview-process-failed attempt={attempt} outcome=exhausted-long-retry action=stay-offline status={probeStatus}");
             }
         }
     }
@@ -1379,6 +1440,11 @@ public partial class MainWindow : Window
             return false;
         }
 
+        if (!string.Equals(caller, "NavigatePanel", StringComparison.Ordinal))
+        {
+            PanelProbeNavigateGeneration.Invalidate();
+        }
+
         var utcNow = DateTime.UtcNow;
         var deadline = PendingLoopbackPanelNavigationTimeoutPolicy.Deadline;
         if (TryConfirmTimedOutLoopbackPanelNavigation(utcNow, fromTimer: false))
@@ -1582,6 +1648,7 @@ public partial class MainWindow : Window
 
         try
         {
+            PanelProbeNavigateGeneration.Invalidate();
             LogRaceNav("ReloadPanel");
             PanelWebView.CoreWebView2?.Reload();
         }

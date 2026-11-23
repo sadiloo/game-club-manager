@@ -6,7 +6,7 @@ internal static class HttpProbeRequestTimeoutPolicy
 {
     public const int StandardMilliseconds = 3000;
 
-    public const int HealthyProbeMilliseconds = 1000;
+    public const int HealthyProbeMilliseconds = 3000;
 
     public static void Apply(WebRequest request, int timeoutMilliseconds)
     {

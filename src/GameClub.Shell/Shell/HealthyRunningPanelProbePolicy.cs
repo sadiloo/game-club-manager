@@ -10,7 +10,7 @@ internal static class HealthyRunningPanelProbePolicy
 {
     public static readonly TimeSpan DispatcherPollInterval = TimeSpan.FromSeconds(1);
 
-    public static readonly TimeSpan PerProbeTimeout = TimeSpan.FromSeconds(1);
+    public static readonly TimeSpan PerProbeTimeout = TimeSpan.FromSeconds(3);
 
     public const int ConsecutiveFailuresForConfirmation = 2;
 

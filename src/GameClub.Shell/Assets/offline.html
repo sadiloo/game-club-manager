@@ -32,6 +32,8 @@
       } else if (state === "webview-recovery-exhausted") {
         title.textContent = "پنل اپراتور از کار افتاد";
         body.textContent = "روی آیکن چک‌پوینت کنار ساعت راست‌کلیک کنید و از منو «بازخوانی» را بزنید.";
+        document.getElementById("countdown").textContent = "";
+        return;
       }
       var n = 5;
       var cd = document.getElementById("countdown");

@@ -11,9 +11,9 @@ public sealed class WebViewProcessRecoveryExhaustedRetryTests
     public void after_fast_budget_exhausted_backoff_stays_sixty_seconds_indefinitely()
     {
         var policy = new WebViewProcessRecoveryPolicy();
-        Assert.Equal(WebViewProcessRecoveryBackoff.ExhaustedRetryDelay, policy.GetBackoffForAttempt(4));
-        Assert.Equal(WebViewProcessRecoveryBackoff.ExhaustedRetryDelay, policy.GetBackoffForAttempt(5));
-        Assert.Equal(WebViewProcessRecoveryBackoff.ExhaustedRetryDelay, policy.GetBackoffForAttempt(10));
+        Assert.Equal(TimeSpan.FromSeconds(60), policy.GetBackoffForAttempt(4));
+        Assert.Equal(TimeSpan.FromSeconds(60), policy.GetBackoffForAttempt(5));
+        Assert.Equal(TimeSpan.FromSeconds(60), policy.GetBackoffForAttempt(10));
     }
 
     [Fact]
@@ -37,6 +37,10 @@ public sealed class WebViewProcessRecoveryExhaustedRetryTests
         Assert.Contains("data-shell-offline-page=\"1\"", html, StringComparison.Ordinal);
         Assert.Contains("webview-recovery-exhausted", html, StringComparison.Ordinal);
         Assert.Contains("بازخوانی", html, StringComparison.Ordinal);
+        Assert.Contains("webview-recovery-exhausted", html, StringComparison.Ordinal);
+        var exhaustedIndex = html.IndexOf("webview-recovery-exhausted", StringComparison.Ordinal);
+        var scriptTail = html[exhaustedIndex..];
+        Assert.Contains("return;", scriptTail, StringComparison.Ordinal);
     }
 
 }

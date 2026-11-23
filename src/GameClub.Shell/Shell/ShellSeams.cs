@@ -208,7 +208,12 @@ public sealed class ProductionHttpProbeSeam : IHttpProbeSeam
             HttpProbeRequestTimeoutPolicy.Apply(request, timeoutMilliseconds);
             using var response = (System.Net.HttpWebResponse)request.GetResponse();
             statusCode = (int)response.StatusCode;
-            return statusCode == 200;
+            return statusCode is >= 200 and < 300;
+        }
+        catch (System.Net.WebException ex) when (ex.Response is System.Net.HttpWebResponse errorResponse)
+        {
+            statusCode = (int)errorResponse.StatusCode;
+            return false;
         }
         catch
         {
@@ -225,7 +230,12 @@ public sealed class ProductionHttpProbeSeam : IHttpProbeSeam
             HttpProbeRequestTimeoutPolicy.Apply(request, timeoutMilliseconds);
             using var response = (System.Net.HttpWebResponse)request.GetResponse();
             statusCode = (int)response.StatusCode;
-            return statusCode == 200;
+            return statusCode is >= 200 and < 300;
+        }
+        catch (System.Net.WebException ex) when (ex.Response is System.Net.HttpWebResponse errorResponse)
+        {
+            statusCode = (int)errorResponse.StatusCode;
+            return false;
         }
         catch
         {

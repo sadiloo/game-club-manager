@@ -18,7 +18,7 @@ public sealed class WebViewProcessRecoveryRunningRecoverTests
 
         Assert.False(policy.CanRetryFast(t0.AddSeconds(3)));
         Assert.Equal(3, policy.AttemptCountInWindow(t0.AddSeconds(3)));
-        Assert.Equal(WebViewProcessRecoveryBackoff.ExhaustedRetryDelay, policy.GetBackoffForAttempt(4));
+        Assert.Equal(TimeSpan.FromSeconds(60), policy.GetBackoffForAttempt(4));
         Assert.True(policy.CanRetry(t0.AddSeconds(3)));
     }
 
@@ -32,7 +32,7 @@ public sealed class WebViewProcessRecoveryRunningRecoverTests
         policy.RecordAttemptAndGetIndex(t0.AddSeconds(4));
 
         Assert.False(policy.CanRetryFast(t0.AddSeconds(5)));
-        Assert.Equal(WebViewProcessRecoveryBackoff.ExhaustedRetryDelay, policy.GetBackoffForAttempt(4));
-        Assert.Equal(WebViewProcessRecoveryBackoff.ExhaustedRetryDelay, policy.GetBackoffForAttempt(5));
+        Assert.Equal(TimeSpan.FromSeconds(60), policy.GetBackoffForAttempt(4));
+        Assert.Equal(TimeSpan.FromSeconds(60), policy.GetBackoffForAttempt(5));
     }
 }

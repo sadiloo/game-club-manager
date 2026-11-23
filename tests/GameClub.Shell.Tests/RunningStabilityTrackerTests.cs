@@ -16,6 +16,22 @@ public sealed class RunningStabilityTrackerTests
     }
 
     [Fact]
+    public void stable_running_reset_edge_fires_once_per_episode_not_every_tick()
+    {
+        var tracker = new RunningStabilityTracker();
+        var t0 = new DateTime(2026, 3, 1, 12, 0, 0, DateTimeKind.Utc);
+        tracker.Observe(ShellServerVisualState.Running, t0);
+        var at60 = t0.AddSeconds(60);
+        Assert.True(tracker.TryConsumeStableRunningResetEdge(at60));
+        Assert.False(tracker.TryConsumeStableRunningResetEdge(at60.AddSeconds(5)));
+        Assert.False(tracker.TryConsumeStableRunningResetEdge(at60.AddSeconds(300)));
+        tracker.Observe(ShellServerVisualState.Stopped, at60.AddSeconds(301));
+        tracker.Observe(ShellServerVisualState.Running, at60.AddSeconds(310));
+        var nextStable = at60.AddSeconds(310).AddSeconds(60);
+        Assert.True(tracker.TryConsumeStableRunningResetEdge(nextStable));
+    }
+
+    [Fact]
     public void five_minute_running_flap_resets_stability_before_sixty_seconds()
     {
         var tracker = new RunningStabilityTracker();

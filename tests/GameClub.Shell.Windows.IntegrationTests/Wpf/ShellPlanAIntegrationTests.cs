@@ -979,6 +979,100 @@ public sealed class ShellPlanAIntegrationTests
     }
 
     [Fact]
+    public void shell_running_stable_503_two_minutes_has_no_ungated_panel_navigation()
+    {
+        if (!WebView2RuntimePresent()) throw new InvalidOperationException("WebView2 runtime required");
+        var root = AllocateShellDataRoot();
+        try
+        {
+            _fixture.RunAsync(async () =>
+            {
+                MainWindow? window = null;
+                try
+                {
+                    FakeShellSeams.Install();
+                    FakeShellSeams.Http.Answers = true;
+                    FakeShellSeams.Http.OperatorPageOk = false;
+                    FakeShellSeams.Service.Status = ServiceControllerStatus.Running;
+
+                    window = new MainWindow();
+                    window.Show();
+                    var wv = await WaitForPanelWebViewAsync(window, TimeSpan.FromSeconds(45));
+                    await WaitForPanelUnavailableOfflineAsync(wv, TimeSpan.FromSeconds(90));
+
+                    ShellFileLog.Write("shell-r27e-b1-two-minute-baseline");
+                    var baseline = Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log")
+                        .Select(File.ReadAllText)
+                        .Aggregate("", string.Concat);
+
+                    var measureStart = DateTime.UtcNow;
+                    var measureDeadline = measureStart.AddSeconds(125);
+                    var samples = new List<PanelOfflineFlashAssert.FlashSample>();
+                    while (DateTime.UtcNow < measureDeadline)
+                    {
+                        await Task.Delay(PanelOfflineFlashAssert.DefaultSampleIntervalMilliseconds);
+                        Assert.Equal(ShellServerVisualState.Running, window.PollerVisualStateForTests);
+                        wv = window.FindName("PanelWebView") as Microsoft.Web.WebView2.Wpf.WebView2;
+                        var elapsedMs = (int)(DateTime.UtcNow - measureStart).TotalMilliseconds;
+                        if (wv?.CoreWebView2 is null)
+                        {
+                            samples.Add(new PanelOfflineFlashAssert.FlashSample(
+                                PanelOfflineFlashAssert.SampleViewKind.NoWebView,
+                                elapsedMs));
+                            continue;
+                        }
+
+                        var sample = UnquoteWebViewScriptString(
+                            await wv.CoreWebView2.ExecuteScriptAsync(
+                                "JSON.stringify({protocol: location.protocol, offline: document.documentElement.getAttribute('data-shell-offline-page')})"));
+                        using var doc = JsonDocument.Parse(sample);
+                        var protocol = doc.RootElement.GetProperty("protocol").GetString() ?? "";
+                        var offlineAttr = doc.RootElement.GetProperty("offline").GetString();
+                        var isOfflineView = protocol == "data:" && offlineAttr == "1";
+                        samples.Add(new PanelOfflineFlashAssert.FlashSample(
+                            isOfflineView
+                                ? PanelOfflineFlashAssert.SampleViewKind.Offline
+                                : PanelOfflineFlashAssert.SampleViewKind.NonOffline,
+                            elapsedMs));
+                    }
+
+                    var measureLog = Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log")
+                        .Select(File.ReadAllText)
+                        .Aggregate("", string.Concat);
+                    var delta = baseline.Length == 0 ? measureLog : measureLog.Replace(baseline, "");
+                    var navigateLines = delta.Split('\n')
+                        .Where(l => l.Contains("panel-navigate caller=", StringComparison.Ordinal))
+                        .Where(l => !l.Contains("caller=PresentOffline", StringComparison.Ordinal))
+                        .ToList();
+                    foreach (var navLine in navigateLines)
+                    {
+                        Assert.Contains("caller=NavigatePanel", navLine, StringComparison.Ordinal);
+                    }
+
+                    var probeOkBeforeNav = delta.Split('\n')
+                        .Count(l => l.Contains("panel-recovery-probe", StringComparison.Ordinal)
+                                    && l.Contains("outcome=ok", StringComparison.Ordinal));
+                    Assert.Equal(navigateLines.Count, probeOkBeforeNav);
+                    Assert.DoesNotContain("panel-navigate caller=RunningRecover", delta, StringComparison.Ordinal);
+                    var flash = PanelOfflineFlashAssert.Evaluate(samples);
+                    Assert.True(
+                        flash.Passes,
+                        $"B-1 two-minute 503: {flash.FailureReason} total={flash.TotalSamples} offline={flash.OfflineSamples}");
+                }
+                finally
+                {
+                    FakeShellSeams.RestoreProduction();
+                    window?.Close();
+                }
+            }, TimeSpan.FromSeconds(240));
+        }
+        finally
+        {
+            CleanupShellDataRoot(root);
+        }
+    }
+
+    [Fact]
     public void shell_running_panel_recovers_exactly_once_when_probe_turns_healthy()
     {
         if (!WebView2RuntimePresent()) throw new InvalidOperationException("WebView2 runtime required");

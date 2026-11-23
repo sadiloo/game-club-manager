@@ -10,10 +10,10 @@ public sealed class WebViewProcessRecoveryPolicyTests
     public void process_recovery_backoff_follows_one_five_fifteen_seconds()
     {
         var policy = new WebViewProcessRecoveryPolicy();
-        Assert.Equal(WebViewProcessRecoveryBackoff.Delay1, policy.GetBackoffForAttempt(1));
-        Assert.Equal(WebViewProcessRecoveryBackoff.Delay2, policy.GetBackoffForAttempt(2));
-        Assert.Equal(WebViewProcessRecoveryBackoff.Delay3, policy.GetBackoffForAttempt(3));
-        Assert.Equal(WebViewProcessRecoveryBackoff.ExhaustedRetryDelay, policy.GetBackoffForAttempt(4));
+        Assert.Equal(TimeSpan.FromSeconds(1), policy.GetBackoffForAttempt(1));
+        Assert.Equal(TimeSpan.FromSeconds(5), policy.GetBackoffForAttempt(2));
+        Assert.Equal(TimeSpan.FromSeconds(15), policy.GetBackoffForAttempt(3));
+        Assert.Equal(TimeSpan.FromSeconds(60), policy.GetBackoffForAttempt(4));
     }
 
     [Fact]
@@ -41,7 +41,7 @@ public sealed class WebViewProcessRecoveryPolicyTests
         policy.RecordAttemptAndGetIndex(t0.AddSeconds(1));
         policy.RecordAttemptAndGetIndex(t0.AddSeconds(2));
         Assert.False(policy.CanRetryFast(t0.AddSeconds(3)));
-        var afterWindow = t0.Add(WebViewProcessRecoveryBackoff.RollingWindow).AddSeconds(5);
+        var afterWindow = t0.Add(TimeSpan.FromMinutes(5)).AddSeconds(5);
         Assert.Equal(0, policy.AttemptCountInWindow(afterWindow));
         Assert.True(policy.CanRetryFast(afterWindow));
     }
