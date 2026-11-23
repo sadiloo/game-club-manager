@@ -136,7 +136,6 @@ function Set-KioskTrustFileAcl {
             [System.IO.File]::WriteAllText($path, '')
         }
 
-        $item = Get-Item -LiteralPath $path -Force
         $owner = New-Object System.Security.Principal.NTAccount 'NT AUTHORITY\SYSTEM'
         $acl = New-Object System.Security.AccessControl.FileSecurity
         $acl.SetOwner($owner)
@@ -150,10 +149,9 @@ function Set-KioskTrustFileAcl {
                 $kioskSid, 'Read', 'None', 'None', 'Allow')))
         $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
                 $kioskSid, 'Write,Delete,WriteData,AppendData,ChangePermissions,TakeOwnership', 'None', 'None', 'Deny')))
-        $item.SetAccessControl($acl)
+        [System.IO.File]::SetAccessControl($path, $acl)
     }
 
-    $dir = Get-Item -LiteralPath $Root -Force
     $dirAcl = New-Object System.Security.AccessControl.DirectorySecurity
     $dirAcl.SetOwner((New-Object System.Security.Principal.NTAccount 'NT AUTHORITY\SYSTEM'))
     $dirAcl.SetAccessRuleProtection($true, $false)
@@ -163,7 +161,7 @@ function Set-KioskTrustFileAcl {
             $adminSid, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')))
     $dirAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
             $kioskSid, 'ReadAndExecute,ListDirectory,Read', 'ContainerInherit,ObjectInherit', 'None', 'Allow')))
-    $dir.SetAccessControl($dirAcl)
+    [System.IO.Directory]::SetAccessControl($Root, $dirAcl)
 }
 
 function Get-CheckpointIranTimeZone {
