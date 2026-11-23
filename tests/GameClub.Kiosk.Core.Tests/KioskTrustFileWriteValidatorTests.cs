@@ -24,7 +24,7 @@ public sealed class KioskTrustFileWriteValidatorTests
     [InlineData("../admin-lock.json")]
     [InlineData("setup.json\\extra")]
     [InlineData("C:\\temp\\setup.json")]
-  public void writer_rejects_non_canonical_file_names(string fileName)
+    public void writer_rejects_non_canonical_file_names(string fileName)
     {
         var err = KioskTrustFileWriteValidator.ValidatePayload(KioskSid, KioskSid, fileName, "{}");
         Assert.Equal("invalid_file_name", err);
