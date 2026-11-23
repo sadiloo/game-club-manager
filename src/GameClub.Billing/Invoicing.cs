@@ -392,6 +392,12 @@ public sealed record Invoice(
     public long GrossToman => TimeGrossToman + BuffetGrossToman + ServicesGrossToman;
 }
 
+/// <summary>At or above <see cref="CashLikeThresholdToman"/>, wallet payment rounds like cash using the same rounding path as counter payment.</summary>
+public static class WalletPaymentRounding
+{
+    public const long CashLikeThresholdToman = 5_000;
+}
+
 public static class InvoiceCalculator
 {
     public static Invoice Calculate(InvoiceRequest request, IReadOnlyList<Tender> tenders, IReadOnlyList<MemberWallet>? wallets = null)
@@ -804,17 +810,21 @@ public static class InvoiceCalculator
         bool walletRoundsLikeCash = true)
     {
         var priced = Calculate(request with { Rounding = RoundingPolicy.Off });
-        var cashEquivalent = walletRoundsLikeCash ? Calculate(request) : priced;
+        var unroundedPayable = priced.NetBeforeRoundingToman;
+        var subThreshold = unroundedPayable < WalletPaymentRounding.CashLikeThresholdToman;
+        var effectiveRounding = subThreshold ? RoundingPolicy.Off : request.Rounding;
+        var walletLikeCash = walletRoundsLikeCash && !subThreshold;
+        var cashEquivalent = walletLikeCash ? Calculate(request with { Rounding = effectiveRounding }) : priced;
         var nets = PayableNets(request, priced.NetBeforeRoundingToman);
         var allocation = PaymentAllocator.Allocate(
             nets,
             tenders,
-            request.Rounding,
+            effectiveRounding,
             wallets,
             walletDebt,
             pcBalance,
-            walletRoundsLikeCash ? cashEquivalent.PayableToman : 0,
-            walletRoundsLikeCash ? cashEquivalent.RoundingToman : 0);
+            walletLikeCash ? cashEquivalent.PayableToman : 0,
+            walletLikeCash ? cashEquivalent.RoundingToman : 0);
         var date = TehranTime.Date(request.IssuedAt);
         var lines = new List<InvoiceLine>();
         foreach (var line in priced.Lines)

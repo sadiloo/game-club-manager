@@ -163,6 +163,80 @@ public class WalletLoyaltyBillingAcceptanceTests
     }
 
     [Fact]
+    public void wl_scenario_wallet_buffet_4999_under_threshold_exact_deduction()
+    {
+        var request = new InvoiceRequest(
+            [],
+            [new BuffetLine("custom", "خدمت", 1, 4_999)],
+            [],
+            null,
+            null,
+            DiscountPolicy.Default,
+            Step5Up,
+            T.At(2026, 6, 3, 15, 0));
+        var cashOnly = InvoiceCalculator.Calculate(request);
+        Assert.Equal(5_000, cashOnly.PayableToman);
+        var (invoice, alloc) = InvoiceCalculator.Collect(
+            request,
+            [new Tender(PaymentMethod.Wallet, 4_999, "m")],
+            [new MemberWallet("m", 10_000, 0)]);
+        Assert.True(alloc.IsValid);
+        Assert.Equal(4_999, alloc.PayableToman);
+        Assert.Equal(0, alloc.RoundingToman);
+        Assert.Equal(4_999, invoice.PayableToman);
+        Assert.Equal(4_999, alloc.Tenders.Single().AmountToman);
+    }
+
+    [Theory]
+    [InlineData(5_000L)]
+    [InlineData(5_001L)]
+    public void wl_scenario_wallet_buffet_at_threshold_rounds_like_cash(long net)
+    {
+        var request = new InvoiceRequest(
+            [],
+            [new BuffetLine("custom", "خدمت", 1, net)],
+            [],
+            null,
+            null,
+            DiscountPolicy.Default,
+            Step5Up,
+            T.At(2026, 6, 3, 15, 0));
+        var cashOnly = InvoiceCalculator.Calculate(request);
+        var (invoice, alloc) = InvoiceCalculator.Collect(
+            request,
+            [new Tender(PaymentMethod.Wallet, net, "m")],
+            [new MemberWallet("m", cashOnly.PayableToman, 0)]);
+        Assert.True(alloc.IsValid);
+        Assert.Equal(cashOnly.PayableToman, alloc.PayableToman);
+        Assert.Equal(cashOnly.RoundingToman, alloc.RoundingToman);
+        Assert.Equal(cashOnly.PayableToman, invoice.PayableToman);
+        Assert.Equal(cashOnly.PayableToman, alloc.Tenders.Single().AmountToman);
+    }
+
+    [Fact]
+    public void wl_scenario_wallet_buffet_3000_balance_1000_plus_cash_2000_under_threshold()
+    {
+        var request = new InvoiceRequest(
+            [],
+            [new BuffetLine("custom", "خدمت", 1, 3_000)],
+            [],
+            null,
+            null,
+            DiscountPolicy.Default,
+            Step5Up,
+            T.At(2026, 6, 3, 15, 0));
+        var (invoice, alloc) = InvoiceCalculator.Collect(
+            request,
+            [new Tender(PaymentMethod.Wallet, 1_000, "m"), new Tender(PaymentMethod.Cash, 2_000)],
+            [new MemberWallet("m", 1_000, 0)]);
+        Assert.True(alloc.IsValid);
+        Assert.Equal(3_000, alloc.PayableToman);
+        Assert.Equal(0, alloc.RoundingToman);
+        Assert.Equal(3_000, invoice.PayableToman);
+        Assert.Equal(1_000, alloc.Tenders.First(t => t.Method == PaymentMethod.Wallet).AmountToman);
+    }
+
+    [Fact]
     public void wl_scenario_buffet_only_full_wallet_49500_rounds_like_cash()
     {
         var request = new InvoiceRequest(
