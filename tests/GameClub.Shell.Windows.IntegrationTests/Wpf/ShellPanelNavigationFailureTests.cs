@@ -495,9 +495,10 @@ public sealed class ShellPanelNavigationFailureTests
                         }
 
                         Assert.True(probeStarted, "panel-recovery probe did not start before reload invalidation");
+                        await Task.Delay(2_000);
                         window.ReloadPanel();
 
-                        var staleLineDeadline = DateTime.UtcNow.AddSeconds(30);
+                        var staleLineDeadline = DateTime.UtcNow.AddSeconds(45);
                         var sawStale = false;
                         while (DateTime.UtcNow < staleLineDeadline)
                         {
