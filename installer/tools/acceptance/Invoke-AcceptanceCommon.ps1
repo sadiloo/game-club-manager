@@ -12,6 +12,36 @@ function Get-InstallerApiHeaders {
     return @{ "X-Api-Key" = $key }
 }
 
+function Assert-InstallerServerServicesRunning {
+    foreach ($svc in @("CheckpointPostgres", "CheckpointServer")) {
+        $s = Get-Service $svc -ErrorAction Stop
+        if ($s.Status -ne "Running") {
+            throw "installer acceptance: $svc not Running (Status=$($s.Status))"
+        }
+    }
+}
+
+function Wait-InstallerServerApiPort {
+    param([int] $TimeoutSeconds = 120)
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    while ([DateTime]::UtcNow -lt $deadline) {
+        $client = $null
+        try {
+            $client = New-Object System.Net.Sockets.TcpClient
+            $connect = $client.BeginConnect("127.0.0.1", 5000, $null, $null)
+            if ($connect.AsyncWaitHandle.WaitOne(1000) -and $client.Connected) {
+                $client.EndConnect($connect)
+                return
+            }
+        } catch {
+            # wait until deadline
+        } finally {
+            if ($null -ne $client) { $client.Dispose() }
+        }
+    }
+    throw "installer acceptance: TCP 127.0.0.1:5000 not accepting connections within ${TimeoutSeconds}s"
+}
+
 function New-InstallerOperatorClient {
     param([string] $Username, [string] $Pin)
     $session = New-Object Microsoft.PowerShell.Commands.WebRequestSession

@@ -19,6 +19,8 @@ function Install-ServerSetup {
         "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/ACCOUNTS=$Accounts", "/SKIPSESSIONCHECK=1"
     ) -Wait -PassThru
     if ($proc.ExitCode -ne 0) { throw "setup exit $($proc.ExitCode) for $Exe" }
+    Assert-InstallerServerServicesRunning
+    Wait-InstallerServerApiPort
 }
 
 $withOpen = $Mode -eq "WithOpenSessions"
