@@ -27,7 +27,7 @@ public sealed class KioskFixR3AcceptanceTests(GameClubWebApplicationFactory fact
         await using (var rateScope = factory.Services.CreateAsyncScope())
         {
             var db = rateScope.ServiceProvider.GetRequiredService<AppDbContext>();
-            await db.Database.ExecuteSqlRawAsync("UPDATE rate_lines SET \"HourlyToman\" = 480000 WHERE \"GroupId\" = 'pc-normal' AND \"PlayerCount\" = 1");
+            await db.Database.ExecuteSqlRawAsync("UPDATE rate_lines SET \"HourlyToman\" = 480000 WHERE \"GroupId\" = 'pc-normal' AND \"PlayMode\" = 'Online' AND \"PlayerCount\" IS NULL");
         }
 
         factory.Clock.SetTehran(2026, 6, 3, 14, 0);
@@ -72,7 +72,7 @@ public sealed class KioskFixR3AcceptanceTests(GameClubWebApplicationFactory fact
         await using (var scope = factory.Services.CreateAsyncScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            await db.Database.ExecuteSqlRawAsync("UPDATE rate_lines SET \"HourlyToman\" = 80000 WHERE \"GroupId\" = 'pc-normal' AND \"PlayerCount\" = 1");
+            await db.Database.ExecuteSqlRawAsync("UPDATE rate_lines SET \"HourlyToman\" = 80000 WHERE \"GroupId\" = 'pc-normal' AND \"PlayMode\" = 'Online' AND \"PlayerCount\" IS NULL");
             var customer = new CustomerEntity { Id = Guid.NewGuid(), Name = "Wal", Mobile = "09121111111", CreatedAtUtc = DateTime.UtcNow };
             db.Customers.Add(customer);
             db.CustomerMembers.Add(new CustomerMemberEntity { CustomerId = customer.Id, RealToman = 80_000 });
@@ -142,7 +142,7 @@ public sealed class KioskFixR3AcceptanceTests(GameClubWebApplicationFactory fact
         await using (var scope = factory.Services.CreateAsyncScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            await db.Database.ExecuteSqlRawAsync("UPDATE rate_lines SET \"HourlyToman\" = 80000 WHERE \"GroupId\" = 'pc-normal' AND \"PlayerCount\" = 1");
+            await db.Database.ExecuteSqlRawAsync("UPDATE rate_lines SET \"HourlyToman\" = 80000 WHERE \"GroupId\" = 'pc-normal' AND \"PlayMode\" = 'Online' AND \"PlayerCount\" IS NULL");
             var customer = new CustomerEntity { Id = Guid.NewGuid(), Name = "Grace", Mobile = "09125555555", CreatedAtUtc = DateTime.UtcNow };
             db.Customers.Add(customer);
             db.CustomerMembers.Add(new CustomerMemberEntity { CustomerId = customer.Id, RealToman = 500 });
@@ -181,7 +181,7 @@ public sealed class KioskFixR3AcceptanceTests(GameClubWebApplicationFactory fact
         await using (var setup = factory.Services.CreateAsyncScope())
         {
             var db0 = setup.ServiceProvider.GetRequiredService<AppDbContext>();
-            await db0.Database.ExecuteSqlRawAsync("UPDATE rate_lines SET \"HourlyToman\" = 60000 WHERE \"GroupId\" = 'pc-normal' AND \"PlayerCount\" = 1");
+            await db0.Database.ExecuteSqlRawAsync("UPDATE rate_lines SET \"HourlyToman\" = 60000 WHERE \"GroupId\" = 'pc-normal' AND \"PlayMode\" = 'Online' AND \"PlayerCount\" IS NULL");
             var customer = new CustomerEntity { Id = Guid.NewGuid(), Name = "Over", Mobile = "09126666660", CreatedAtUtc = DateTime.UtcNow };
             db0.Customers.Add(customer);
             db0.CustomerMembers.Add(new CustomerMemberEntity { CustomerId = customer.Id, RealToman = 500 });
@@ -209,7 +209,7 @@ public sealed class KioskFixR3AcceptanceTests(GameClubWebApplicationFactory fact
                 EndUtc = session.StartedAtUtc.AddMinutes(3),
                 StationId = session.StationId,
                 GroupId = session.Station!.GroupId,
-                Mode = PlayMode.Offline,
+                Mode = PlayMode.Online,
                 PlayerCount = 1,
                 Kind = StationKind.Pc,
             });

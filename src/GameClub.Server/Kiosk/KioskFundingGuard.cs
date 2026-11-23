@@ -31,7 +31,7 @@ public sealed class KioskFundingGuard(
         var station = await db.Stations.Include(s => s.Group).FirstAsync(s => s.Id == StationIdNormalizer.Normalize(stationId), ct);
         var groupId = station.GroupId ?? PilotSeed.PcNormalGroupId;
         var at = clock.UtcNow;
-        var estimate = CustomerPlay.Estimate(account, groupId, PlayMode.Offline, 1, at, snapshot.Card);
+        var estimate = CustomerPlay.Estimate(account, groupId, PlayMode.Online, 1, at, snapshot.Card);
         if (estimate.BlockedByDebt)
         {
             throw new ApiException(StatusCodes.Status403Forbidden, "debt_blocked", "PC play is blocked by shared wallet debt.");
@@ -41,10 +41,10 @@ public sealed class KioskFundingGuard(
         {
             if (estimate.RateIsFree)
             {
-                var boundary = KioskPlayEstimate.NextPaidBandStart(snapshot.Card, groupId, PlayMode.Offline, 1, at);
+                var boundary = KioskPlayEstimate.NextPaidBandStart(snapshot.Card, groupId, PlayMode.Online, 1, at);
                 if (boundary is not null)
                 {
-                    var post = CustomerPlay.Estimate(account, groupId, PlayMode.Offline, 1, boundary.Value, snapshot.Card);
+                    var post = CustomerPlay.Estimate(account, groupId, PlayMode.Online, 1, boundary.Value, snapshot.Card);
                     if (post.TotalMinutes > 0)
                     {
                         return;

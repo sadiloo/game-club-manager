@@ -31,7 +31,7 @@ public sealed class B5MoneyOnlyProbeTests(ITestOutputHelper output)
         var s = T.At(2026, 6, 2, 23, 50);
         var end = T.At(2026, 6, 3, 0, 20);
         var ch207 = SessionPricer.Price(
-            new Session("x", [new PlaySegment("a", s, end, "st", PilotSeed.PcVipGroupId, PlayMode.Offline, 1, StationKind.Pc)]),
+            new Session("x", [new PlaySegment("a", s, end, "st", PilotSeed.PcVipGroupId, PlayMode.Online, 1, StationKind.Pc)]),
             PilotSeed.CreateCard(),
             policy: G(1));
         var st207 = AccountSettlement.Settle(ch207, new PcAccount("m", 20_499), G(1));
@@ -60,7 +60,7 @@ public sealed class B5MoneyOnlyProbeTests(ITestOutputHelper output)
 
         var sv = T.At(2026, 6, 2, 23, 25);
         var ch213 = SessionPricer.Price(
-            new Session("x", [new PlaySegment("a", sv, sv.AddMinutes(34), "st", PilotSeed.PcVipGroupId, PlayMode.Offline, 1)]),
+            new Session("x", [new PlaySegment("a", sv, sv.AddMinutes(34), "st", PilotSeed.PcVipGroupId, PlayMode.Online, 1)]),
             PilotSeed.CreateCard(),
             policy: G(1));
         var r213 = CustomerPlay.Settle(
@@ -80,7 +80,7 @@ public sealed class B5MoneyOnlyProbeTests(ITestOutputHelper output)
 
         var sd = T.At(2026, 6, 2, 10, 0);
         var ch213d = SessionPricer.Price(
-            new Session("x", [new PlaySegment("a", sd, sd.AddMinutes(34), "st", PilotSeed.PcVipGroupId, PlayMode.Offline, 1)]),
+            new Session("x", [new PlaySegment("a", sd, sd.AddMinutes(34), "st", PilotSeed.PcVipGroupId, PlayMode.Online, 1)]),
             PilotSeed.CreateCard(),
             policy: G(1));
         var r213d = CustomerPlay.Settle(

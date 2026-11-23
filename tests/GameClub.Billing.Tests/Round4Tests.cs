@@ -68,7 +68,7 @@ public class Round4Tests
         var policy = new BillingPolicy(5, PartialUnitMode.Ceiling, RateRemainderMode.Nearest);
         var start = T.At(2026, 6, 2, 10, 0);
         var played = SessionPricer.Price(new Session("s", [
-            new PlaySegment("a", start, TehranTime.AddSeconds(start, 1), "pc-1", PilotSeed.PcNormalGroupId, PlayMode.Offline, 1, StationKind.Pc),
+            new PlaySegment("a", start, TehranTime.AddSeconds(start, 1), "pc-1", PilotSeed.PcNormalGroupId, PlayMode.Online, 1, StationKind.Pc),
         ]), PilotSeed.CreateCard(), policy: policy);
         var account = new CustomerAccount("m", WalletSettings.Shared, new WalletPocket(5_000, 0), new WalletPocket(0, 0));
         var play = CustomerPlay.Settle(played, account, billing: policy);
@@ -89,7 +89,7 @@ public class Round4Tests
         var policy = new BillingPolicy(5, PartialUnitMode.Ceiling, RateRemainderMode.Nearest);
         var start = T.At(2026, 6, 2, 10, 0);
         var played = SessionPricer.Price(new Session("s", [
-            new PlaySegment("a", start, start.AddMinutes(15), "pc-1", PilotSeed.PcNormalGroupId, PlayMode.Offline, 1, StationKind.Pc),
+            new PlaySegment("a", start, start.AddMinutes(15), "pc-1", PilotSeed.PcNormalGroupId, PlayMode.Online, 1, StationKind.Pc),
         ]), PilotSeed.CreateCard(), policy: policy);
         var account = new CustomerAccount("m", WalletSettings.Shared, new WalletPocket(5_000, 0), new WalletPocket(0, 0));
         var play = CustomerPlay.Settle(played, account, billing: policy);
@@ -167,6 +167,6 @@ public class Round4Tests
 
     private static SessionCharge Play(RateCard card, string group, DateTimeOffset start, DateTimeOffset end)
         => SessionPricer.Price(new Session("s", [
-            new PlaySegment("a", start, end, "st", group, PlayMode.Offline, 1, StationKind.Pc),
+            new PlaySegment("a", start, end, "st", group, PlayMode.Online, 1, StationKind.Pc),
         ]), card);
 }

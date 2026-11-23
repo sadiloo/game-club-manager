@@ -172,7 +172,19 @@ public sealed class SessionBilling(AppDbContext db, RateConfigService rates)
         var segments = new List<PlaySegment>();
         foreach (var seg in session.Segments.OrderBy(s => s.StartUtc))
         {
-            var end = seg.EndUtc ?? endUtc;
+            var rawEnd = seg.EndUtc ?? endUtc;
+            var end = rawEnd;
+            var startUtc = seg.StartUtc;
+            if (seg.Kind == StationKind.Pc)
+            {
+                end = SessionPrepaidRecalculator.TrimPcSegmentEnd(seg, rawEnd, endUtc);
+                startUtc = SessionPrepaidRecalculator.TrimPcSegmentStart(seg, end, endUtc);
+                if (end <= startUtc)
+                {
+                    continue;
+                }
+            }
+
             string? gameDisplayName = null;
             if (seg.GameTitleId is int gameId)
             {
@@ -188,7 +200,7 @@ public sealed class SessionBilling(AppDbContext db, RateConfigService rates)
 
             segments.Add(new PlaySegment(
                 seg.SegmentKey,
-                TimeMapping.ToTehran(seg.StartUtc),
+                TimeMapping.ToTehran(startUtc),
                 TimeMapping.ToTehran(end),
                 seg.StationId,
                 seg.GroupId,
@@ -476,6 +488,7 @@ public sealed class SessionService(
     GameTariffService gameTariff,
     OperatorBillService operatorBills,
     Operator.OperatorShiftGate shiftGate,
+    StationInternetStateService internetStates,
     IOperatorPanelNotifier panelNotifier)
 {
     public Task<SessionGameChangeResult> ChangeGameAsync(
@@ -510,10 +523,31 @@ public sealed class SessionService(
             audit,
             billing,
             rates,
+            internetStates,
             panelNotifier,
             sessionId,
             targetStationId,
             markSourceBroken,
+            expectedVersion,
+            commandId,
+            ct);
+
+    public Task<SessionInternetChangeResult> ChangeInternetAsync(
+        Guid sessionId,
+        bool on,
+        uint? expectedVersion,
+        Guid commandId,
+        CancellationToken ct)
+        => SessionInternetSupport.ChangeInternetAsync(
+            db,
+            clock,
+            audit,
+            billing,
+            rates,
+            internetStates,
+            panelNotifier,
+            sessionId,
+            on,
             expectedVersion,
             commandId,
             ct);
@@ -588,6 +622,12 @@ public sealed class SessionService(
                 throw new ApiException(StatusCodes.Status400BadRequest, "invalid_players", "Player count must be 1–4.");
             }
 
+            if (station.Group.Kind == StationKind.Pc)
+            {
+                mode = PlayMode.Online;
+                playerCount = 1;
+            }
+
             var startUtc = clock.UtcNow.UtcDateTime;
             var rateSnapshot = await rates.CreateSnapshotEntityAsync(ct);
 
@@ -632,6 +672,18 @@ public sealed class SessionService(
             session.Segments.Add(firstSegment);
 
             db.Sessions.Add(session);
+            if (station.Group.Kind == StationKind.Pc)
+            {
+                await internetStates.BumpDesiredAsync(
+                    station.Id,
+                    desiredOn: true,
+                    startUtc,
+                    userId: null,
+                    "session_start",
+                    session.Id,
+                    ct);
+            }
+
             try
             {
                 await audit.AppendAsync("session.start", new { sessionId = session.Id, stationId = station.Id, playerCount, mode = mode.ToString() }, ct);
@@ -877,7 +929,7 @@ public sealed class SessionService(
             }
 
             openSegment.EndUtc = now;
-            var nextKey = ((char)('a' + session.Segments.Count)).ToString();
+            var nextKey = SegmentKeySupport.Allocate(session.Segments.Count);
             var newSegment = new PlaySegmentEntity
             {
                 SegmentKey = nextKey,
@@ -898,7 +950,7 @@ public sealed class SessionService(
             session.PlayerCount = playerCount;
 
             var snapshot = await rates.LoadSnapshotAsync(session.RateCardSnapshotId, innerCt);
-            ConsolePrepaidRecalculator.RecalcAmountPrepaid(session, newSegment, snapshot, now);
+            SessionPrepaidRecalculator.RecalcAmountPrepaid(session, newSegment, snapshot, now);
             await audit.AppendAsync("session.player_count", new { sessionId, playerCount }, innerCt);
         }, ct);
 
@@ -1195,7 +1247,6 @@ public sealed class DatabaseSeed
                 Id = 1,
                 StepToman = 5_000,
                 Direction = "Up",
-                PcSpecialBandSurchargeToman = RateConfigService.DefaultPcSpecialBandSurchargeToman,
             });
         }
 

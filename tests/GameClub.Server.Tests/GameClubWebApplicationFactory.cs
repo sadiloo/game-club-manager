@@ -2,8 +2,10 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using GameClub.Server.Data;
 using GameClub.Server.Data.Entities;
+using GameClub.Server.Kiosk;
 using GameClub.Server.Operator;
 using GameClub.Server.Services;
+using GameClub.Server.Testing;
 using GameClub.Server.Time;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -17,7 +19,10 @@ namespace GameClub.Server.Tests;
 
 public class GameClubWebApplicationFactory : WebApplicationFactory<Program>
 {
-    public MutableClock Clock { get; } = new(DateTimeOffset.UtcNow);
+    public TestMutableClock Clock { get; } = new(DateTimeOffset.UtcNow);
+
+  /// <summary>When set, registers harness PC special-band times on the test host only.</summary>
+    public PcSpecialBandHarnessOptions? HarnessPcSpecialBand { get; set; }
 
     /// <summary>
     /// When false (default), the test host does not run periodic dead-PC sweeps.
@@ -26,6 +31,9 @@ public class GameClubWebApplicationFactory : WebApplicationFactory<Program>
     public bool DeadPcBackgroundSweepEnabled { get; set; }
 
     public string ConnectionString { get; private set; } = "";
+
+    /// <summary>When true, KioskLeaseService emits LEASE_BUILD diagnostic lines (test harness only).</summary>
+    public bool KioskLeaseBuildTrace { get; set; }
 
     /// <summary>When set, <see cref="SaveTitleSecondSaveFaultInterceptor"/> faults the second SaveChanges in the request.</summary>
     internal SaveTitleSaveFaultGate? SaveTitleSaveFaultGate { get; set; }
@@ -62,8 +70,25 @@ public class GameClubWebApplicationFactory : WebApplicationFactory<Program>
         builder.UseSetting("ConnectionStrings:Default", ConnectionString);
         builder.UseSetting($"{DeadPcSweepOptions.SectionName}:SweepIntervalSeconds", "1");
         builder.UseSetting("OperatorSessionSecret", "test-operator-secret");
+        if (KioskLeaseBuildTrace)
+        {
+            builder.UseSetting($"{KioskOptions.SectionName}:LeaseBuildTrace", "true");
+        }
+
         builder.ConfigureServices(services =>
         {
+            if (HarnessPcSpecialBand is { Enabled: true } band)
+            {
+                services.Configure<PcSpecialBandHarnessOptions>(options =>
+                {
+                    options.Enabled = true;
+                    options.PcNormalStart = band.PcNormalStart;
+                    options.PcNormalEnd = band.PcNormalEnd;
+                    options.PcVipStart = band.PcVipStart;
+                    options.PcVipEnd = band.PcVipEnd;
+                });
+            }
+
             services.RemoveAll<IClock>();
             services.AddSingleton<IClock>(Clock);
             services.AddSingleton(_ => this);
@@ -104,12 +129,26 @@ internal static class S3TestHelpers
         TRUNCATE wallet_topup_corrections, invoice_member_effects, loyalty_hour_ledger, wallet_ledger, pending_wallet_topups, customer_members, branch_member_settings, branch_cafe_settings, close_records, shifts, invoice_catalog_lines, open_sale_lines, open_sales, catalog_items, catalog_categories RESTART IDENTITY CASCADE;
         TRUNCATE kiosk_heartbeats, kiosk_devices, kiosk_pairing_codes, kiosk_lease_signing_keys, customer_credentials, game_catalog_entries, game_catalog_categories, station_kiosk_profiles RESTART IDENTITY CASCADE;
         TRUNCATE game_rate_lines, game_titles RESTART IDENTITY CASCADE;
+        DO $truncate$
+        BEGIN
+          IF to_regclass('public.station_internet_state') IS NOT NULL THEN
+            EXECUTE 'TRUNCATE station_internet_state RESTART IDENTITY CASCADE';
+          END IF;
+        END
+        $truncate$;
         TRUNCATE session_commands, rejected_card_to_card, payment_lines, pending_bills, audit_log, checkpoints, pause_intervals, play_segments, invoices, sessions, customers, rate_card_snapshot, stations, destination_cards RESTART IDENTITY CASCADE;
         TRUNCATE operator_users RESTART IDENTITY CASCADE;
         SELECT setval('invoice_number_seq', 1, false);
         UPDATE invoice_number_sequence SET "NextNumber" = 1;
+        DELETE FROM rate_lines WHERE "GroupId" IN ('pc-normal', 'pc-vip') AND "PlayMode" = 'Offline';
         UPDATE rate_lines SET "HourlyToman" = 80000
-          WHERE "GroupId" = 'pc-normal' AND "IsSpecialBand" = false AND "PlayMode" = 'Offline' AND "PlayerCount" = 1;
+          WHERE "GroupId" = 'pc-normal' AND "IsSpecialBand" = false AND "PlayMode" = 'Online' AND "PlayerCount" IS NULL;
+        UPDATE rate_lines SET "HourlyToman" = 100000
+          WHERE "GroupId" = 'pc-normal' AND "IsSpecialBand" = true AND "PlayMode" = 'Online' AND "PlayerCount" IS NULL;
+        UPDATE rate_lines SET "HourlyToman" = 110000
+          WHERE "GroupId" = 'pc-vip' AND "IsSpecialBand" = false AND "PlayMode" = 'Online' AND "PlayerCount" IS NULL;
+        UPDATE rate_lines SET "HourlyToman" = 130000
+          WHERE "GroupId" = 'pc-vip' AND "IsSpecialBand" = true AND "PlayMode" = 'Online' AND "PlayerCount" IS NULL;
         """;
 
     public static async Task ResetAsync(GameClubWebApplicationFactory factory)
@@ -131,10 +170,17 @@ internal static class S3TestHelpers
             return;
         }
 
-        var owner = new OperatorUserEntity { Id = Guid.NewGuid(), Username = "owner", Role = UserRole.Owner };
-        owner.PinHash = OperatorAuthService.HashPin(owner, "5678");
-        db.OperatorUsers.Add(owner);
-        await db.SaveChangesAsync();
+        try
+        {
+            var owner = new OperatorUserEntity { Id = Guid.NewGuid(), Username = "owner", Role = UserRole.Owner };
+            owner.PinHash = OperatorAuthService.HashPin(owner, "5678");
+            db.OperatorUsers.Add(owner);
+            await db.SaveChangesAsync();
+        }
+        catch (Microsoft.EntityFrameworkCore.DbUpdateException ex)
+            when (ex.InnerException is Npgsql.PostgresException { SqlState: "23505" })
+        {
+        }
     }
 
     /// <summary>Test fixture only — category id 2 for operator catalog PUT (freeze PC-5 / case 8).</summary>
