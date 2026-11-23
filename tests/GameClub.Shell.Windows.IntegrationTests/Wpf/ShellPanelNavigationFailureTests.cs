@@ -561,9 +561,9 @@ public sealed class ShellPanelNavigationFailureTests
 
                         var postExhausted = LogDelta(baseline);
                         var exhaustedMark = postExhausted.IndexOf(
-                            "attempt=exhausted outcome=offline-page",
+                            "offlineState=webview-recovery-exhausted",
                             StringComparison.Ordinal);
-                        Assert.True(exhaustedMark >= 0);
+                        Assert.True(exhaustedMark >= 0, "exhausted offline page was not presented");
                         var exhaustedTail = postExhausted.Substring(exhaustedMark);
 
                         var measureStart = DateTime.UtcNow;
