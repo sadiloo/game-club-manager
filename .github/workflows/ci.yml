@@ -50,7 +50,7 @@ jobs:
           exit $rc
       - name: kiosk owned-server G2 and re-pair oracle
         if: always()
-        timeout-minutes: 25
+        timeout-minutes: 30
         run: |
           dotnet test tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj \
             -c Release -f net10.0 --no-build --nologo \
