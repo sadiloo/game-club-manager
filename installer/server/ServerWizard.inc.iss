@@ -491,7 +491,7 @@ begin
   if not ValidateUsername(U, Err) then
   begin
     ShowQuery3Error(E0, E1, E2, 0, Err);
-    Page.Edits[0].SetFocus;
+    WizardForm.ActiveControl := Page.Edits[0];
     Result := False;
     Exit;
   end;
@@ -503,7 +503,7 @@ begin
         ShowQuery3Error(E0, E1, E2, 0, 'این نام کاربری برای مدیر اول انتخاب شده است.')
       else
         ShowQuery3Error(E0, E1, E2, 0, 'این نام کاربری برای یکی از مدیرها انتخاب شده است.');
-      Page.Edits[0].SetFocus;
+      WizardForm.ActiveControl := Page.Edits[0];
       Result := False;
       Exit;
     end;
@@ -511,7 +511,7 @@ begin
   if not ValidatePinPairEx(P, P2, Err, ErrField) then
   begin
     ShowQuery3Error(E0, E1, E2, ErrField, Err);
-    Page.Edits[ErrField].SetFocus;
+    WizardForm.ActiveControl := Page.Edits[ErrField];
     Result := False;
     Exit;
   end;
@@ -532,7 +532,7 @@ begin
   if not ValidatePinPairEx(Pin, Pin2, Err, ErrField) then
   begin
     ShowPinPairError(DefaultPinErrPin[Index], DefaultPinErrRepeat[Index], ErrField, Err);
-    Page.Edits[ErrField - 1].SetFocus;
+    WizardForm.ActiveControl := Page.Edits[ErrField - 1];
     Exit;
   end;
   if GetArrayLength(DefaultPinStoredPins) < DefaultPinUserCount then
