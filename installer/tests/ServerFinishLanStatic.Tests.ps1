@@ -8,10 +8,10 @@ $tools = Join-Path $root "installer/tools/Get-ServerLanIPv4Addresses.ps1"
 if (-not (Test-Path -LiteralPath $tools)) {
     throw "Get-ServerLanIPv4Addresses.ps1 missing"
 }
-if ($iss -notmatch 'inst\.server\.finish\.ipLabel') {
+if ($iss -notmatch 'inst_server_finish_ipLabel') {
     throw "CheckpointServer.iss missing CustomMessage inst_server_finish_ipLabel"
 }
-if ($iss -notmatch 'inst\.server\.finish\.dhcpNote') {
+if ($iss -notmatch 'inst_server_finish_dhcpNote') {
     throw "CheckpointServer.iss missing CustomMessage inst_server_finish_dhcpNote"
 }
 if ($iss -notmatch 'TODO_UIUX inst\.server\.finish\.ipLabel') {
