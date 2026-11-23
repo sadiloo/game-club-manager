@@ -124,7 +124,7 @@ public static class WalletShortRemainderSupport
         }
     }
 
-    public static PaymentRoundingSettings AdjustPaymentRoundingForShortCashChoice(
+    public static PaymentRoundingSettings ApplyExplicitCashRemainderFlags(
         PaymentRoundingSettings settings,
         IReadOnlyList<OperatorBillService.PaymentInput>? payments)
     {
@@ -132,10 +132,38 @@ public static class WalletShortRemainderSupport
         if (wallet is not null
             && string.Equals(wallet.ShortRemainderMethod, "Cash", StringComparison.OrdinalIgnoreCase))
         {
-            return settings with { BlockWalletDebtDraw = true };
+            return settings with { SuppressWalletDebtDraw = true };
         }
 
         return settings;
+    }
+
+    public static void ValidateExplicitCashShortRemainder(
+        WalletShortRemainderSnapshot snapshot,
+        IReadOnlyList<OperatorBillService.PaymentInput> payments)
+    {
+        if (!snapshot.Applies)
+        {
+            return;
+        }
+
+        var wallet = payments.FirstOrDefault(p => p.Method.Equals("Wallet", StringComparison.OrdinalIgnoreCase));
+        if (wallet is null
+            || !string.Equals(wallet.ShortRemainderMethod, "Cash", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        var cashTotal = payments
+            .Where(p => p.Method.Equals("Cash", StringComparison.OrdinalIgnoreCase))
+            .Sum(p => p.AmountToman);
+        if (cashTotal != snapshot.RemainderToman)
+        {
+            throw new ApiException(
+                StatusCodes.Status400BadRequest,
+                "payment_invalid",
+                "جمع پرداختی با مبلغ قابل دریافت برابر نیست.");
+        }
     }
 
     public static List<OperatorBillService.PaymentInput> NormalizeWalletShortPayments(
@@ -168,7 +196,7 @@ public static class WalletShortRemainderSupport
                 }
                 else
                 {
-                    list.Add(p);
+                    list.Add(p with { AmountToman = snapshot.WalletAutoDrawToman });
                 }
             }
             else

@@ -60,7 +60,7 @@ public sealed class BillCalculator(
         }
 
         var (_, paymentRounding) = await roundingSettings.LoadForPaymentAsync(ct);
-        paymentRounding = WalletShortRemainderSupport.AdjustPaymentRoundingForShortCashChoice(paymentRounding, paymentInputs);
+        paymentRounding = WalletShortRemainderSupport.ApplyExplicitCashRemainderFlags(paymentRounding, paymentInputs);
         return ToBillAmounts(MemberBillComposer.ComputeBuffetOnly(saleLines, snapshot, customerId, member, settings, previewTenders, paymentRounding));
     }
 
@@ -96,7 +96,7 @@ public sealed class BillCalculator(
             : await rates.LoadAsync(ct);
         var snapshot = await roundingSettings.ResolveRatesForSessionBillAsync(rawSnapshot, ct);
         var (_, paymentRounding) = await roundingSettings.LoadForPaymentAsync(ct);
-        paymentRounding = WalletShortRemainderSupport.AdjustPaymentRoundingForShortCashChoice(paymentRounding, paymentInputs);
+        paymentRounding = WalletShortRemainderSupport.ApplyExplicitCashRemainderFlags(paymentRounding, paymentInputs);
         var charge = billing.BuildCharge(session, endUtc, snapshot);
         var settings = await memberContext.LoadSettingsAsync(ct);
         CustomerMemberEntity? member = null;
@@ -246,7 +246,9 @@ public sealed class OperatorBillService(
             snapshot,
             rounding.AllowWalletShortBalanceDebt,
             wallet);
-        return WalletShortRemainderSupport.NormalizeWalletShortPayments(payments, snapshot, collectibleToman);
+        var normalized = WalletShortRemainderSupport.NormalizeWalletShortPayments(payments, snapshot, collectibleToman);
+        WalletShortRemainderSupport.ValidateExplicitCashShortRemainder(snapshot, normalized);
+        return normalized;
     }
 
     public void ValidatePayments(

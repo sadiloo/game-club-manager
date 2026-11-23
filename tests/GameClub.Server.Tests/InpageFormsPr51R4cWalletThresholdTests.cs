@@ -68,7 +68,7 @@ public sealed class InpageFormsPr51R4cWalletThresholdTests(GameClubWebApplicatio
             new { payments = new[] { new { method = "Wallet", amountToman = 4_999L } } });
         preview.EnsureSuccessStatusCode();
         var previewBody = await preview.Content.ReadFromJsonAsync<JsonElement>();
-        Assert.Equal(4_999, previewBody!.GetProperty("collectibleToman").GetInt64());
+        Assert.Equal(4_999, previewBody!.GetProperty("bill").GetProperty("collectibleToman").GetInt64());
         var before = await WalletSpendableAsync(op, customerId);
         (await op.PostAsJsonAsync(
             $"/api/operator/buffet-only/{openSaleId}/confirm",
@@ -97,7 +97,7 @@ public sealed class InpageFormsPr51R4cWalletThresholdTests(GameClubWebApplicatio
             $"/api/operator/buffet-only/{openSaleId}/bill/preview",
             new { payments = new[] { new { method = "Wallet", amountToman = net } } });
         preview.EnsureSuccessStatusCode();
-        Assert.Equal(expected, (await preview.Content.ReadFromJsonAsync<JsonElement>())!.GetProperty("collectibleToman").GetInt64());
+        Assert.Equal(expected, (await preview.Content.ReadFromJsonAsync<JsonElement>())!.GetProperty("bill").GetProperty("collectibleToman").GetInt64());
         var before = await WalletSpendableAsync(op, customerId);
         (await op.PostAsJsonAsync(
             $"/api/operator/buffet-only/{openSaleId}/confirm",
@@ -135,7 +135,7 @@ public sealed class InpageFormsPr51R4cWalletThresholdTests(GameClubWebApplicatio
                 },
             });
         preview.EnsureSuccessStatusCode();
-        Assert.Equal(3_000, (await preview.Content.ReadFromJsonAsync<JsonElement>())!.GetProperty("collectibleToman").GetInt64());
+        Assert.Equal(3_000, (await preview.Content.ReadFromJsonAsync<JsonElement>())!.GetProperty("bill").GetProperty("collectibleToman").GetInt64());
         (await op.PostAsJsonAsync(
             $"/api/operator/buffet-only/{openSaleId}/confirm",
             new

@@ -829,7 +829,8 @@ public static class InvoiceCalculator
             pcBalance,
             walletLikeCash ? cashEquivalent.PayableToman : 0,
             walletLikeCash ? cashEquivalent.RoundingToman : 0,
-            roundingSettings.AllowWalletShortBalanceDebt && !roundingSettings.BlockWalletDebtDraw);
+            roundingSettings.AllowWalletShortBalanceDebt,
+            roundingSettings.SuppressWalletDebtDraw);
         var date = TehranTime.Date(request.IssuedAt);
         var lines = new List<InvoiceLine>();
         foreach (var line in priced.Lines)

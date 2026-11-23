@@ -488,12 +488,6 @@ public sealed class OperatorBuffetSaleService(
             openSaleId = sale.Id,
             lines = OpenSaleMapper.ToDtos(sale.Lines),
             linkedCustomer = CustomerMapper.ToLinkedChip(sale.Customer),
-            unroundedPayableToman = amounts.UnroundedPayableToman,
-            roundingToman = amounts.RoundingToman,
-            collectibleToman = amounts.CollectibleToman,
-            timeGrossToman = amounts.TimeGrossToman,
-            buffetGrossToman = amounts.BuffetGrossToman,
-            servicesGrossToman = amounts.ServicesGrossToman,
             bill = new
             {
                 unroundedPayableToman = amounts.UnroundedPayableToman,
@@ -504,7 +498,6 @@ public sealed class OperatorBuffetSaleService(
                 servicesGrossToman = amounts.ServicesGrossToman,
                 walletShortRemainder = OperatorBillService.ToWalletShortRemainderDto(walletShort),
             },
-            walletShortRemainder = OperatorBillService.ToWalletShortRemainderDto(walletShort),
         };
     }
 

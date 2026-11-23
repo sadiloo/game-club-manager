@@ -113,6 +113,20 @@ public sealed class Pr51R5RoundingSettingsTests
     }
 
     [Fact]
+    public void allow_debt_false_still_lifts_wallet_to_rounded_collectible()
+    {
+        var request = BuffetRequest(49_500);
+        var settings = Defaults with { AllowWalletShortBalanceDebt = false };
+        var (_, alloc) = InvoiceCalculator.Collect(
+            request,
+            [new Tender(PaymentMethod.Wallet, 49_500, "m")],
+            [new MemberWallet("m", 60_000, 0)],
+            roundingSettings: settings);
+        Assert.True(alloc.IsValid);
+        Assert.Equal(50_000, alloc.PayableToman);
+    }
+
+    [Fact]
     public void allow_debt_false_rejects_wallet_debt_remainder_for_rounding_gap()
     {
         var request = BuffetRequest(49_500);

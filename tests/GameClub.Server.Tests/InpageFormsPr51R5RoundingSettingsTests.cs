@@ -192,7 +192,48 @@ public sealed class InpageFormsPr51R5RoundingSettingsTests(GameClubWebApplicatio
     }
 
     [Fact]
-    public async Task short_remainder_49700_cash_remainder_explicit_method_no_debt()
+    public async Task short_remainder_49700_cash_300_explicit_method_invoice_and_received_cash()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var manager = await factory.CreateOperatorClientAsync("manager", "1234");
+        var op = await factory.CreateOperatorClientAsync();
+        factory.Clock.SetTehran(2026, 6, 3, 14, 0);
+        await S3TestHelpers.EnableShiftsAsync(manager, true);
+        await S3TestHelpers.OpenShiftAsync(op, 0);
+        await manager.PutAsJsonAsync("/api/operator/members/settings/debt-floor", new { floorToman = -50_000L });
+        var customerId = await CreateCustomerAsync(op);
+        (await op.PostAsJsonAsync(
+            $"/api/operator/members/customers/{customerId}/wallet/top-up",
+            new { method = "CardReader", amountToman = 49_700L, commandId = Guid.NewGuid() })).EnsureSuccessStatusCode();
+        var openSaleId = await BuffetOpenAsync(op, customerId, 49_500L);
+        const string json = """
+            {"payments":[
+            {"method":"Wallet","amountToman":49700,"shortRemainderMethod":"Cash"},
+            {"method":"Cash","amountToman":300}]}
+            """;
+        var content = new StringContent(json, Encoding.UTF8, "application/json");
+        var preview = await op.PostAsync($"/api/operator/buffet-only/{openSaleId}/bill/preview", content);
+        preview.EnsureSuccessStatusCode();
+        Assert.Equal(50_000, (await preview.Content.ReadFromJsonAsync<JsonElement>())!.GetProperty("bill").GetProperty("collectibleToman").GetInt64());
+        (await op.PostAsync($"/api/operator/buffet-only/{openSaleId}/confirm", new StringContent(json, Encoding.UTF8, "application/json"))).EnsureSuccessStatusCode();
+        Assert.Equal(0, await WalletSpendableAsync(op, customerId));
+        using (var scope = factory.Services.CreateScope())
+        {
+            var invoice = await scope.ServiceProvider.GetRequiredService<AppDbContext>().Invoices.AsNoTracking().SingleAsync();
+            Assert.Equal(50_000, invoice.CollectibleToman);
+        }
+        (await op.PostAsJsonAsync("/api/operator/shift/close", new
+        {
+            workingDay = new { year = 2026, month = 6, day = 3 },
+            actualCashToman = 300L,
+            actualCardReaderToman = 49_700L,
+        })).EnsureSuccessStatusCode();
+        var income = await manager.GetFromJsonAsync<JsonElement>("/api/operator/reports/income/daily?year=2026&month=6&day=3");
+        Assert.Equal(300, income.GetProperty("receivedCashToman").GetInt64());
+    }
+
+    [Fact]
+    public async Task explicit_cash_wrong_wallet_and_cash_amounts_rejected_400()
     {
         await S3TestHelpers.ResetAsync(factory);
         var manager = await factory.CreateOperatorClientAsync("manager", "1234");
@@ -202,18 +243,64 @@ public sealed class InpageFormsPr51R5RoundingSettingsTests(GameClubWebApplicatio
         (await op.PostAsJsonAsync(
             $"/api/operator/members/customers/{customerId}/wallet/top-up",
             new { method = "Cash", amountToman = 49_700L, commandId = Guid.NewGuid() })).EnsureSuccessStatusCode();
+        var before = await WalletSpendableAsync(op, customerId);
         var openSaleId = await BuffetOpenAsync(op, customerId, 49_500L);
         const string json = """
             {"payments":[
             {"method":"Wallet","amountToman":49500,"shortRemainderMethod":"Cash"},
             {"method":"Cash","amountToman":500}]}
             """;
-        var content = new StringContent(json, Encoding.UTF8, "application/json");
-        var preview = await op.PostAsync($"/api/operator/buffet-only/{openSaleId}/bill/preview", content);
-        preview.EnsureSuccessStatusCode();
-        Assert.Equal(50_000, (await preview.Content.ReadFromJsonAsync<JsonElement>())!.GetProperty("bill").GetProperty("collectibleToman").GetInt64());
-        (await op.PostAsync($"/api/operator/buffet-only/{openSaleId}/confirm", new StringContent(json, Encoding.UTF8, "application/json"))).EnsureSuccessStatusCode();
-        Assert.Equal(200, await WalletSpendableAsync(op, customerId));
+        var confirm = await op.PostAsync(
+            $"/api/operator/buffet-only/{openSaleId}/confirm",
+            new StringContent(json, Encoding.UTF8, "application/json"));
+        Assert.Equal(HttpStatusCode.BadRequest, confirm.StatusCode);
+        Assert.Equal(before, await WalletSpendableAsync(op, customerId));
+        using var scope = factory.Services.CreateScope();
+        Assert.Equal(0, await scope.ServiceProvider.GetRequiredService<AppDbContext>().Invoices.CountAsync());
+    }
+
+    [Fact]
+    public async Task allow_debt_false_wallet_50000_over_positive_balance_rejected_server_guard()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var manager = await factory.CreateOperatorClientAsync("manager", "1234");
+        var op = await factory.CreateOperatorClientAsync();
+        await PutRoundingAsync(manager, DefaultRoundingBody(allowWalletShortBalanceDebt: false));
+        await manager.PutAsJsonAsync("/api/operator/members/settings/debt-floor", new { floorToman = -50_000L });
+        var customerId = await CreateCustomerAsync(op);
+        (await op.PostAsJsonAsync(
+            $"/api/operator/members/customers/{customerId}/wallet/top-up",
+            new { method = "Cash", amountToman = 49_700L, commandId = Guid.NewGuid() })).EnsureSuccessStatusCode();
+        var before = await WalletSpendableAsync(op, customerId);
+        var openSaleId = await BuffetOpenAsync(op, customerId, 49_500L);
+        var confirm = await op.PostAsJsonAsync(
+            $"/api/operator/buffet-only/{openSaleId}/confirm",
+            new { payments = new[] { new { method = "Wallet", amountToman = 50_000L } } });
+        Assert.Equal(HttpStatusCode.BadRequest, confirm.StatusCode);
+        Assert.Equal(before, await WalletSpendableAsync(op, customerId));
+        using var scope = factory.Services.CreateScope();
+        Assert.Equal(0, await scope.ServiceProvider.GetRequiredService<AppDbContext>().Invoices.CountAsync());
+    }
+
+    [Fact]
+    public async Task allow_debt_false_wallet_49500_no_method_still_lifts_to_50000_like_defaults()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var manager = await factory.CreateOperatorClientAsync("manager", "1234");
+        var op = await factory.CreateOperatorClientAsync();
+        await PutRoundingAsync(manager, DefaultRoundingBody(allowWalletShortBalanceDebt: false));
+        var customerId = await CreateCustomerAsync(op);
+        (await op.PostAsJsonAsync(
+            $"/api/operator/members/customers/{customerId}/wallet/top-up",
+            new { method = "Cash", amountToman = 60_000L, commandId = Guid.NewGuid() })).EnsureSuccessStatusCode();
+        var openSaleId = await BuffetOpenAsync(op, customerId, 49_500L);
+        (await op.PostAsJsonAsync(
+            $"/api/operator/buffet-only/{openSaleId}/confirm",
+            new { payments = new[] { new { method = "Wallet", amountToman = 49_500L } } })).EnsureSuccessStatusCode();
+        Assert.Equal(10_000, await WalletSpendableAsync(op, customerId));
+        using var scope = factory.Services.CreateScope();
+        var invoice = await scope.ServiceProvider.GetRequiredService<AppDbContext>().Invoices.AsNoTracking().SingleAsync();
+        Assert.Equal(50_000, invoice.CollectibleToman);
     }
 
     [Fact]

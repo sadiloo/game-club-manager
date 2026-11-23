@@ -413,7 +413,8 @@ public static class PaymentAllocator
         WalletPocket? pcBalance = null,
         long cashEquivalentPayable = 0,
         long cashEquivalentRounding = 0,
-        bool allowWalletShortBalanceDebt = true)
+        bool allowWalletShortBalanceDebt = true,
+        bool suppressWalletDebtDraw = false)
     {
         if (lines is null)
         {
@@ -661,7 +662,8 @@ public static class PaymentAllocator
 
         var mayLiftWalletTowardCash = cashEquivalentRounding > 0
             && cashEquivalentPayable - cashEquivalentRounding == exact
-            && deferCounterCheck;
+            && deferCounterCheck
+            && counterTendered == 0;
         long roundingGapCounter = 0;
         var trackingCashCollectible = false;
         if (cashEquivalentPayable > 0 && balanceApplied > 0)
@@ -669,11 +671,12 @@ public static class PaymentAllocator
             if (mayLiftWalletTowardCash)
             {
                 var needTowardCash = cashEquivalentPayable - balanceApplied;
-                if (needTowardCash > 0 && allowWalletShortBalanceDebt)
+                if (needTowardCash > 0)
                 {
-                    var drawn = ApplyWalletRoundingLift(tenders, results, pockets, walletDebt, needTowardCash)
+                    var liftDebt = suppressWalletDebtDraw || !allowWalletShortBalanceDebt ? DebtPolicy.None : walletDebt;
+                    var drawn = ApplyWalletRoundingLift(tenders, results, pockets, liftDebt, needTowardCash)
                         ? needTowardCash
-                        : DrawWalletTowardTarget(tenders, results, pockets, walletDebt, needTowardCash);
+                        : DrawWalletTowardTarget(tenders, results, pockets, liftDebt, needTowardCash);
                     if (drawn > 0)
                     {
                         balanceApplied = MoneyMath.CheckedAdd(balanceApplied, drawn);
@@ -699,9 +702,8 @@ public static class PaymentAllocator
                     roundingGapCounter = shortfall;
                     if (shortfall > 0)
                     {
-                        var gapDrawn = allowWalletShortBalanceDebt
-                            ? DrawWalletTowardTarget(tenders, results, pockets, walletDebt, shortfall)
-                            : 0;
+                        var gapDebt = suppressWalletDebtDraw || !allowWalletShortBalanceDebt ? DebtPolicy.None : walletDebt;
+                        var gapDrawn = DrawWalletTowardTarget(tenders, results, pockets, gapDebt, shortfall);
                         if (gapDrawn > 0)
                         {
                             balanceApplied = MoneyMath.CheckedAdd(balanceApplied, gapDrawn);
