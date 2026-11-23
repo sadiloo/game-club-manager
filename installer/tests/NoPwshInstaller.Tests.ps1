@@ -13,6 +13,7 @@ foreach ($path in $paths) {
         $files = Get-ChildItem -Path $path -Recurse -File -Include *.iss, *.ps1, *.psm1
     }
     foreach ($f in $files) {
+        if ($f.Name -ieq 'NoPwshInstaller.Tests.ps1') { continue }
         if (Select-String -LiteralPath $f.FullName -Pattern '\bpwsh\b' -Quiet) {
             $offenders += $f.FullName
         }

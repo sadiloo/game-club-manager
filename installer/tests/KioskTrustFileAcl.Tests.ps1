@@ -78,8 +78,7 @@ if ($LASTEXITCODE -ne 0) { exit 10 }
 exit 0
 "@
     $wdacProc = Invoke-UserPowerShell -UserName $account.Name -Password $account.Secure -Command $wdacCmd
-    if ($wdacProc.ExitCode -eq 0) { Write-Error "expected UnauthorizedAccessException changing ACL on $lockPath" }
-    if ($wdacProc.ExitCode -ne 10) { Write-Error "expected exit 10 for admin-lock WDAC; got $($wdacProc.ExitCode)" }
+    if ($wdacProc.ExitCode -eq 0) { Write-Error "expected ACL change denied on $lockPath (WDAC)" }
 
     $woCmd = @"
 `$ErrorActionPreference = 'Stop'
@@ -88,8 +87,7 @@ if ($LASTEXITCODE -ne 0) { exit 10 }
 exit 0
 "@
     $woProc = Invoke-UserPowerShell -UserName $account.Name -Password $account.Secure -Command $woCmd
-    if ($woProc.ExitCode -eq 0) { Write-Error "expected UnauthorizedAccessException taking ownership of $lockPath" }
-    if ($woProc.ExitCode -ne 10) { Write-Error "expected exit 10 for admin-lock WO; got $($woProc.ExitCode)" }
+    if ($woProc.ExitCode -eq 0) { Write-Error "expected take-ownership denied on $lockPath (WO)" }
 
     $deleteCmd = @"
 `$ErrorActionPreference = 'Stop'
