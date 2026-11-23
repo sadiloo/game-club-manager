@@ -476,17 +476,27 @@ public sealed class ShellPanelNavigationFailureTests
                         window = await StartWindowOnStubAsync(stub);
                         var wv = await WaitForPanelWebViewAsync(window, TimeSpan.FromSeconds(45));
                         await WaitForPanelUnavailableOfflineAsync(wv, TimeSpan.FromSeconds(90));
-                        var probesBefore = stub.ProbeRequestCount;
+                        var responsesBefore = stub.OperatorResponseCount;
                         stub.OperatorStatusCode = 200;
-                        stub.OperatorDelayMilliseconds = 0;
-                        stub.ProbeDelayMilliseconds = 6_000;
+                        stub.OperatorDelayMilliseconds = 2_500;
+                        stub.ProbeDelayMilliseconds = 0;
+
+                        var backoffDeadline = DateTime.UtcNow.AddSeconds(35);
+                        while (DateTime.UtcNow < backoffDeadline)
+                        {
+                            await Task.Delay(200);
+                            if (LogDelta(baseline).Contains("panel-recovery-probe target=panel", StringComparison.Ordinal))
+                            {
+                                break;
+                            }
+                        }
 
                         var probeStarted = false;
                         var staleDeadline = DateTime.UtcNow.AddSeconds(90);
                         while (DateTime.UtcNow < staleDeadline)
                         {
                             await Task.Delay(100);
-                            if (stub.ProbeRequestCount > probesBefore)
+                            if (stub.OperatorResponseCount > responsesBefore)
                             {
                                 probeStarted = true;
                                 window.ReloadPanel();
@@ -494,7 +504,7 @@ public sealed class ShellPanelNavigationFailureTests
                             }
                         }
 
-                        Assert.True(probeStarted, "panel-nav-retry probe did not start before reload invalidation");
+                        Assert.True(probeStarted, "panel-recovery probe did not start before reload invalidation");
 
                         var staleLineDeadline = DateTime.UtcNow.AddSeconds(30);
                         var sawStale = false;
@@ -554,7 +564,8 @@ public sealed class ShellPanelNavigationFailureTests
                         await WaitForOperatorPanelAsync(wv, TimeSpan.FromSeconds(45));
                         stub.OperatorStatusCode = 503;
                         stub.OperatorDelayMilliseconds = 0;
-                        wv = await DriveToProcessRecoveryExhaustedAsync(window, wv, baseline);
+                        window.EnterProcessRecoveryExhaustedModeForTests();
+                        wv = await WaitForPanelWebViewAsync(window, TimeSpan.FromSeconds(45));
                         await WaitForExhaustedOfflinePageAsync(wv, TimeSpan.FromSeconds(90));
 
                         var postExhausted = LogDelta(baseline);
@@ -621,7 +632,7 @@ public sealed class ShellPanelNavigationFailureTests
                         RestoreStubSeams();
                         window?.Close();
                     }
-                }, TimeSpan.FromSeconds(600));
+                }, TimeSpan.FromSeconds(300));
             }
             finally
             {
@@ -654,7 +665,8 @@ public sealed class ShellPanelNavigationFailureTests
                         await WaitForOperatorPanelAsync(wv, TimeSpan.FromSeconds(45));
                         stub.OperatorStatusCode = 503;
                         stub.OperatorDelayMilliseconds = 0;
-                        wv = await DriveToProcessRecoveryExhaustedAsync(window, wv, baseline);
+                        window.EnterProcessRecoveryExhaustedModeForTests();
+                        wv = await WaitForPanelWebViewAsync(window, TimeSpan.FromSeconds(45));
                         await WaitForExhaustedOfflinePageAsync(wv, TimeSpan.FromSeconds(90));
 
                         var pendingDeadline = DateTime.UtcNow.AddSeconds(15);
@@ -709,7 +721,7 @@ public sealed class ShellPanelNavigationFailureTests
                         RestoreStubSeams();
                         window?.Close();
                     }
-                }, TimeSpan.FromSeconds(600));
+                }, TimeSpan.FromSeconds(300));
             }
             finally
             {

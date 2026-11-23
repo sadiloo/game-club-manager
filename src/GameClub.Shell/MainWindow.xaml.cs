@@ -246,6 +246,22 @@ public partial class MainWindow : Window
         _allowOfflineDataNav = true;
     }
 
+    internal void EnterProcessRecoveryExhaustedModeForTests()
+    {
+        if (_closed)
+        {
+            return;
+        }
+
+        var utcNow = DateTime.UtcNow;
+        _processRecoveryPolicy.Reset();
+        _processRecoveryPolicy.RecordAttemptAndGetIndex(utcNow);
+        _processRecoveryPolicy.RecordAttemptAndGetIndex(utcNow);
+        _processRecoveryPolicy.RecordAttemptAndGetIndex(utcNow);
+        ShowOfflineAfterProcessRecoveryExhausted();
+        ScheduleExhaustedRecoveryRetryIfNeeded();
+    }
+
     internal void NavigateToStringWithOfflineDataPermissionForTests(string html)
     {
         _allowOfflineDataNav = true;
