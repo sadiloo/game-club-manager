@@ -109,7 +109,7 @@ public static class WalletShortRemainderSupport
         long unroundedPayableToman,
         IReadOnlyList<OperatorBillService.PaymentInput> payments)
     {
-        if (!snapshot.Applies)
+        if (!snapshot.Applies || snapshot.DebtRemainderAllowed)
         {
             return;
         }
@@ -134,13 +134,20 @@ public static class WalletShortRemainderSupport
             return;
         }
 
-        if (wallet.AmountToman != snapshot.WalletAutoDrawToman || cashTotal != snapshot.RemainderToman)
+        if (wallet.AmountToman == snapshot.WalletAutoDrawToman && cashTotal == snapshot.RemainderToman)
         {
-            throw new ApiException(
-                StatusCodes.Status400BadRequest,
-                "payment_invalid",
-                "جمع پرداختی با مبلغ قابل دریافت برابر نیست.");
+            return;
         }
+
+        if (wallet.AmountToman + cashTotal != collectibleToman)
+        {
+            return;
+        }
+
+        throw new ApiException(
+            StatusCodes.Status400BadRequest,
+            "payment_invalid",
+            "جمع پرداختی با مبلغ قابل دریافت برابر نیست.");
     }
 
     public static void ValidateExplicitCashShortRemainder(

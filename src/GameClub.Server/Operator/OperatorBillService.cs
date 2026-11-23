@@ -380,6 +380,102 @@ public sealed class OperatorBillService(
         }
     }
 
+    public sealed record PaymentPreviewResult(
+        BillAmounts Amounts,
+        IReadOnlyList<PaymentInput> Effective,
+        long CollectibleToman);
+
+    public static long ResolvePreviewCollectibleToman(
+        PendingBillEntity bill,
+        BillAmounts amounts,
+        IReadOnlyList<PaymentInput> effective)
+    {
+        var tendered = effective.Sum(p => p.AmountToman);
+        return tendered > bill.CollectibleToman ? bill.CollectibleToman : amounts.CollectibleToman;
+    }
+
+    public void EnsurePreviewMatchesConfirmValidation(
+        PendingBillEntity bill,
+        BillAmounts amounts,
+        IReadOnlyList<PaymentInput> effective,
+        Guid? customerId)
+    {
+        try
+        {
+            ValidatePayments(amounts.CollectibleToman, effective, amounts.Detail, customerId);
+        }
+        catch (ApiException)
+        {
+            if (AllowsOverTenderPreview(bill, amounts, effective))
+            {
+                return;
+            }
+
+            throw;
+        }
+    }
+
+    private static bool AllowsOverTenderPreview(
+        PendingBillEntity bill,
+        BillAmounts amounts,
+        IReadOnlyList<PaymentInput> effective)
+    {
+        if (amounts.Detail?.Allocation is { IsValid: false })
+        {
+            return false;
+        }
+
+        var tendered = effective.Sum(p => p.AmountToman);
+        return tendered > bill.CollectibleToman;
+    }
+
+    public async Task<PaymentPreviewResult> BuildBuffetPaymentPreviewAsync(
+        OpenSaleEntity sale,
+        PendingBillEntity bill,
+        IReadOnlyList<PaymentInput> payments,
+        CancellationToken ct)
+    {
+        var effective = await PreparePaymentsForAllocationAsync(
+            sale.CustomerId,
+            bill.CollectibleToman,
+            bill.UnroundedPayableToman,
+            null,
+            payments,
+            ct);
+        var tenders = ToTenders(effective, sale.CustomerId);
+        var amounts = await calculator.ComputeBuffetOnlyAsync(sale.Lines, sale.CustomerId, tenders, ct, effective);
+        EnsurePreviewMatchesConfirmValidation(bill, amounts, effective, sale.CustomerId);
+        return new PaymentPreviewResult(amounts, effective, ResolvePreviewCollectibleToman(bill, amounts, effective));
+    }
+
+    public async Task<PaymentPreviewResult> BuildSessionPaymentPreviewAsync(
+        PlaySessionEntity session,
+        PendingBillEntity bill,
+        IReadOnlyList<OpenSaleLineEntity> saleLines,
+        IReadOnlyList<PaymentInput> payments,
+        CancellationToken ct)
+    {
+        var stationKind = session.Station?.Group?.Kind;
+        var effective = await PreparePaymentsForAllocationAsync(
+            session.CustomerId,
+            bill.CollectibleToman,
+            bill.UnroundedPayableToman,
+            stationKind,
+            payments,
+            ct);
+        var tenders = ToTenders(effective, session.CustomerId);
+        var amounts = await calculator.ComputeWithTendersAsync(
+            session,
+            bill.FrozenAtUtc,
+            bill.SurchargeToman,
+            saleLines,
+            tenders,
+            ct,
+            effective);
+        EnsurePreviewMatchesConfirmValidation(bill, amounts, effective, session.CustomerId);
+        return new PaymentPreviewResult(amounts, effective, ResolvePreviewCollectibleToman(bill, amounts, effective));
+    }
+
     private async Task<IReadOnlyList<OpenSaleLineEntity>> LoadSaleLinesAsync(Guid sessionId, CancellationToken ct)
     {
         var sale = await db.OpenSales.AsNoTracking()
@@ -636,6 +732,7 @@ public sealed class OperatorBillService(
             var effective = await PreparePaymentsForAllocationAsync(
                 session.CustomerId,
                 bill.CollectibleToman,
+                bill.UnroundedPayableToman,
                 stationKind,
                 payments,
                 innerCt);
@@ -751,24 +848,11 @@ public sealed class OperatorBillService(
             .SelectMany(o => o.Lines)
             .ToListAsync(ct);
         var stationKind = session.Station?.Group?.Kind;
-        var effective = await PreparePaymentsForAllocationAsync(
-            session.CustomerId,
-            bill.CollectibleToman,
-            stationKind,
-            payments,
-            ct);
-        var tenders = ToTenders(effective, session.CustomerId);
-        var amounts = await calculator.ComputeWithTendersAsync(
-            session,
-            bill.FrozenAtUtc,
-            bill.SurchargeToman,
-            saleLines,
-            tenders,
-            ct,
-            effective);
+        var preview = await BuildSessionPaymentPreviewAsync(session, bill, saleLines, payments, ct);
+        var amounts = preview.Amounts;
         var walletShort = await GetWalletShortRemainderSnapshotAsync(
             session.CustomerId,
-            amounts.CollectibleToman,
+            preview.CollectibleToman,
             stationKind,
             ct);
         var charge = await billing.BuildChargeAsync(session, bill.FrozenAtUtc, ct);
@@ -810,7 +894,7 @@ public sealed class OperatorBillService(
             groupId = session.Station!.GroupId,
             unroundedPayableToman = amounts.UnroundedPayableToman,
             roundingToman = amounts.RoundingToman,
-            collectibleToman = amounts.CollectibleToman,
+            collectibleToman = preview.CollectibleToman,
             surchargeToman = bill.SurchargeToman,
             timeGrossToman = amounts.TimeGrossToman,
             buffetGrossToman = amounts.BuffetGrossToman,

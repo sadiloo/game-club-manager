@@ -472,23 +472,8 @@ public sealed class OperatorBuffetSaleService(
             ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "فروش بوفهٔ مستقل یافت نشد.");
         var bill = sale.PendingBill
             ?? throw new ApiException(StatusCodes.Status409Conflict, "no_bill", "برای این فروش صورتحسابی نیست.");
-        var effective = await bills.PreparePaymentsForAllocationAsync(
-            sale.CustomerId,
-            bill.CollectibleToman,
-            bill.UnroundedPayableToman,
-            null,
-            payments,
-            ct);
-        var tenders = effective.Select(p => new Tender(
-            OperatorPaymentMethods.Parse(p.Method),
-            p.AmountToman,
-            OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet ? sale.CustomerId?.ToString() : null)).ToList();
-        var amounts = await calculator.ComputeBuffetOnlyAsync(sale.Lines, sale.CustomerId, tenders, ct, effective);
-        var tendered = effective.Sum(p => p.AmountToman);
-        var collectibleToman = tendered > bill.CollectibleToman
-            ? bill.CollectibleToman
-            : amounts.CollectibleToman;
-        var walletShort = await bills.GetWalletShortRemainderSnapshotAsync(sale.CustomerId, collectibleToman, null, ct);
+        var preview = await bills.BuildBuffetPaymentPreviewAsync(sale, bill, payments, ct);
+        var walletShort = await bills.GetWalletShortRemainderSnapshotAsync(sale.CustomerId, preview.CollectibleToman, null, ct);
         return new
         {
             openSaleId = sale.Id,
@@ -496,12 +481,12 @@ public sealed class OperatorBuffetSaleService(
             linkedCustomer = CustomerMapper.ToLinkedChip(sale.Customer),
             bill = new
             {
-                unroundedPayableToman = amounts.UnroundedPayableToman,
-                roundingToman = amounts.RoundingToman,
-                collectibleToman,
-                timeGrossToman = amounts.TimeGrossToman,
-                buffetGrossToman = amounts.BuffetGrossToman,
-                servicesGrossToman = amounts.ServicesGrossToman,
+                unroundedPayableToman = preview.Amounts.UnroundedPayableToman,
+                roundingToman = preview.Amounts.RoundingToman,
+                collectibleToman = preview.CollectibleToman,
+                timeGrossToman = preview.Amounts.TimeGrossToman,
+                buffetGrossToman = preview.Amounts.BuffetGrossToman,
+                servicesGrossToman = preview.Amounts.ServicesGrossToman,
                 walletShortRemainder = OperatorBillService.ToWalletShortRemainderDto(walletShort),
             },
         };

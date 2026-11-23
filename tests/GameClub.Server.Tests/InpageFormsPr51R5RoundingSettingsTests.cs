@@ -179,7 +179,7 @@ public sealed class InpageFormsPr51R5RoundingSettingsTests(GameClubWebApplicatio
     }
 
     [Fact]
-    public async Task allow_debt_false_rejects_explicit_debt_method_even_with_floor()
+    public async Task f05_scenario_a07_allow_debt_false_explicit_debt_preview_and_confirm_400()
     {
         await S3TestHelpers.ResetAsync(factory);
         var manager = await factory.CreateOperatorClientAsync("manager", "1234");
@@ -191,20 +191,17 @@ public sealed class InpageFormsPr51R5RoundingSettingsTests(GameClubWebApplicatio
             $"/api/operator/members/customers/{customerId}/wallet/top-up",
             new { method = "Cash", amountToman = 49_700L, commandId = Guid.NewGuid() })).EnsureSuccessStatusCode();
         var openSaleId = await BuffetOpenAsync(op, customerId, 49_500L);
-        var confirm = await op.PostAsJsonAsync(
-            $"/api/operator/buffet-only/{openSaleId}/confirm",
-            new
-            {
-                payments = new[]
-                {
-                    new { method = "Wallet", amountToman = 49_700L, shortRemainderMethod = "Debt" },
-                },
-            });
+        var body = new { payments = new[] { new { method = "Wallet", amountToman = 49_700L, shortRemainderMethod = "Debt" } } };
+        var preview = await op.PostAsJsonAsync($"/api/operator/buffet-only/{openSaleId}/bill/preview", body);
+        Assert.Equal(HttpStatusCode.BadRequest, preview.StatusCode);
+        AssertPaymentInvalid(await ReadJsonAsync(preview));
+        var confirm = await op.PostAsJsonAsync($"/api/operator/buffet-only/{openSaleId}/confirm", body);
         Assert.Equal(HttpStatusCode.BadRequest, confirm.StatusCode);
+        AssertPaymentInvalid(await ReadJsonAsync(confirm));
     }
 
     [Fact]
-    public async Task short_remainder_debt_rejected_when_f11_blocks_debt()
+    public async Task f05_scenario_s08_explicit_debt_preview_and_confirm_rejected_when_disallowed()
     {
         await S3TestHelpers.ResetAsync(factory);
         var manager = await factory.CreateOperatorClientAsync("manager", "1234");
@@ -215,16 +212,19 @@ public sealed class InpageFormsPr51R5RoundingSettingsTests(GameClubWebApplicatio
             $"/api/operator/members/customers/{customerId}/wallet/top-up",
             new { method = "Cash", amountToman = 49_700L, commandId = Guid.NewGuid() })).EnsureSuccessStatusCode();
         var openSaleId = await BuffetOpenAsync(op, customerId, 49_500L);
-        var confirm = await op.PostAsJsonAsync(
-            $"/api/operator/buffet-only/{openSaleId}/confirm",
-            new
+        var body = new
+        {
+            payments = new[]
             {
-                payments = new[]
-                {
-                    new { method = "Wallet", amountToman = 49_700L, shortRemainderMethod = "Debt" },
-                },
-            });
+                new { method = "Wallet", amountToman = 49_700L, shortRemainderMethod = "Debt" },
+            },
+        };
+        var preview = await op.PostAsJsonAsync($"/api/operator/buffet-only/{openSaleId}/bill/preview", body);
+        Assert.Equal(HttpStatusCode.BadRequest, preview.StatusCode);
+        AssertPaymentInvalid(await ReadJsonAsync(preview));
+        var confirm = await op.PostAsJsonAsync($"/api/operator/buffet-only/{openSaleId}/confirm", body);
         Assert.Equal(HttpStatusCode.BadRequest, confirm.StatusCode);
+        AssertPaymentInvalid(await ReadJsonAsync(confirm));
     }
 
     [Fact]
@@ -316,6 +316,7 @@ public sealed class InpageFormsPr51R5RoundingSettingsTests(GameClubWebApplicatio
                     new { method = "Cash", amountToman = 400L },
                 },
             })).EnsureSuccessStatusCode();
+        Assert.Equal(10_400, await WalletSpendableAsync(op, customerId));
         await AssertBuffetPaymentLinesAsync(factory, 49_600, 50_000);
     }
 
@@ -404,7 +405,7 @@ public sealed class InpageFormsPr51R5RoundingSettingsTests(GameClubWebApplicatio
     }
 
     [Fact]
-    public async Task explicit_cash_wrong_wallet_and_cash_amounts_rejected_400()
+    public async Task f05_scenario_s17_explicit_cash_wrong_amounts_preview_and_confirm_400()
     {
         await S3TestHelpers.ResetAsync(factory);
         var manager = await factory.CreateOperatorClientAsync("manager", "1234");
@@ -421,6 +422,11 @@ public sealed class InpageFormsPr51R5RoundingSettingsTests(GameClubWebApplicatio
             {"method":"Wallet","amountToman":49500,"shortRemainderMethod":"Cash"},
             {"method":"Cash","amountToman":500}]}
             """;
+        var preview = await op.PostAsync(
+            $"/api/operator/buffet-only/{openSaleId}/bill/preview",
+            new StringContent(json, Encoding.UTF8, "application/json"));
+        Assert.Equal(HttpStatusCode.BadRequest, preview.StatusCode);
+        AssertPaymentInvalid(await ReadJsonAsync(preview));
         var confirm = await op.PostAsync(
             $"/api/operator/buffet-only/{openSaleId}/confirm",
             new StringContent(json, Encoding.UTF8, "application/json"));
@@ -432,7 +438,7 @@ public sealed class InpageFormsPr51R5RoundingSettingsTests(GameClubWebApplicatio
     }
 
     [Fact]
-    public async Task allow_debt_false_wallet_50000_over_positive_balance_rejected_by_allocator()
+    public async Task f05_scenario_a02_allow_debt_false_preview_and_confirm_reject_wallet_50000()
     {
         await S3TestHelpers.ResetAsync(factory);
         var manager = await factory.CreateOperatorClientAsync("manager", "1234");
@@ -445,9 +451,11 @@ public sealed class InpageFormsPr51R5RoundingSettingsTests(GameClubWebApplicatio
             new { method = "Cash", amountToman = 49_700L, commandId = Guid.NewGuid() })).EnsureSuccessStatusCode();
         var before = await WalletSpendableAsync(op, customerId);
         var openSaleId = await BuffetOpenAsync(op, customerId, 49_500L);
-        var confirm = await op.PostAsJsonAsync(
-            $"/api/operator/buffet-only/{openSaleId}/confirm",
-            new { payments = new[] { new { method = "Wallet", amountToman = 50_000L } } });
+        var body = new { payments = new[] { new { method = "Wallet", amountToman = 50_000L } } };
+        var preview = await op.PostAsJsonAsync($"/api/operator/buffet-only/{openSaleId}/bill/preview", body);
+        Assert.Equal(HttpStatusCode.BadRequest, preview.StatusCode);
+        AssertPaymentInvalid(await ReadJsonAsync(preview));
+        var confirm = await op.PostAsJsonAsync($"/api/operator/buffet-only/{openSaleId}/confirm", body);
         Assert.Equal(HttpStatusCode.BadRequest, confirm.StatusCode);
         var err = await ReadJsonAsync(confirm);
         Assert.Equal("payment_invalid", err.GetProperty("code").GetString());
