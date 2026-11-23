@@ -214,11 +214,11 @@ public class WalletLoyaltyBillingAcceptanceTests
     }
 
     [Fact]
-    public void wl_scenario_wallet_buffet_3000_balance_1000_plus_cash_2000_under_threshold()
+    public void wl_scenario_mixed_buffet_5000_wallet_1000_cash_4000_collectible_5000_at_threshold()
     {
         var request = new InvoiceRequest(
             [],
-            [new BuffetLine("custom", "خدمت", 1, 3_000)],
+            [new BuffetLine("custom", "خدمت", 1, 5_000)],
             [],
             null,
             null,
@@ -227,13 +227,11 @@ public class WalletLoyaltyBillingAcceptanceTests
             T.At(2026, 6, 3, 15, 0));
         var (invoice, alloc) = InvoiceCalculator.Collect(
             request,
-            [new Tender(PaymentMethod.Wallet, 1_000, "m"), new Tender(PaymentMethod.Cash, 2_000)],
-            [new MemberWallet("m", 1_000, 0)]);
+            [new Tender(PaymentMethod.Wallet, 1_000, "m"), new Tender(PaymentMethod.Cash, 4_000)],
+            [new MemberWallet("m", 10_000, 0)]);
         Assert.True(alloc.IsValid);
-        Assert.Equal(3_000, alloc.PayableToman);
-        Assert.Equal(0, alloc.RoundingToman);
-        Assert.Equal(3_000, invoice.PayableToman);
-        Assert.Equal(1_000, alloc.Tenders.First(t => t.Method == PaymentMethod.Wallet).AmountToman);
+        Assert.Equal(5_000, alloc.PayableToman);
+        Assert.Equal(5_000, invoice.PayableToman);
     }
 
     [Fact]

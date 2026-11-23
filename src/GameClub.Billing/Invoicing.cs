@@ -811,15 +811,15 @@ public static class InvoiceCalculator
     {
         var priced = Calculate(request with { Rounding = RoundingPolicy.Off });
         var unroundedPayable = priced.NetBeforeRoundingToman;
+        // TODO_OWNER: mixed wallet+cash under CashLikeThresholdToman — pending ruling (3,000 / 5,000 / 6,000)
         var subThreshold = unroundedPayable < WalletPaymentRounding.CashLikeThresholdToman;
-        var effectiveRounding = subThreshold ? RoundingPolicy.Off : request.Rounding;
         var walletLikeCash = walletRoundsLikeCash && !subThreshold;
-        var cashEquivalent = walletLikeCash ? Calculate(request with { Rounding = effectiveRounding }) : priced;
+        var cashEquivalent = walletLikeCash ? Calculate(request) : priced;
         var nets = PayableNets(request, priced.NetBeforeRoundingToman);
         var allocation = PaymentAllocator.Allocate(
             nets,
             tenders,
-            effectiveRounding,
+            request.Rounding,
             wallets,
             walletDebt,
             pcBalance,

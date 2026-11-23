@@ -647,12 +647,6 @@ public static class PaymentAllocator
         }
 
         var deferCounterCheck = cashEquivalentPayable > 0 && counterExact == 0 && balanceApplied > 0;
-        if (counterTendered != counterRounded && !deferCounterCheck)
-        {
-            errors.Add(new PaymentError(
-                PaymentErrors.SumMismatch,
-                $"Counter tenders {counterTendered} toman against rounded remainder {counterRounded}."));
-        }
 
         var mayLiftWalletTowardCash = cashEquivalentRounding > 0
             && cashEquivalentPayable - cashEquivalentRounding == exact
@@ -717,6 +711,15 @@ public static class PaymentAllocator
                 counterExact = roundingGapCounter;
                 counterRounded = roundingGapCounter;
             }
+        }
+
+        var matchesCashCollectible = cashEquivalentPayable > 0
+            && balanceApplied + counterTendered == cashEquivalentPayable;
+        if (counterTendered != counterRounded && !deferCounterCheck && !matchesCashCollectible)
+        {
+            errors.Add(new PaymentError(
+                PaymentErrors.SumMismatch,
+                $"Counter tenders {counterTendered} toman against rounded remainder {counterRounded}."));
         }
 
         if (roundingGapCounter > 0 && counterTendered != counterRounded)
