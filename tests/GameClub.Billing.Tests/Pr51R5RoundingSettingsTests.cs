@@ -141,6 +141,20 @@ public sealed class Pr51R5RoundingSettingsTests
     }
 
     [Fact]
+    public void f05_scenario_s2_mixed_wallet_tender_equals_offer_not_lifted()
+    {
+        var (_, alloc) = InvoiceCalculator.Collect(
+            BuffetRequest(49_500),
+            [new Tender(PaymentMethod.Wallet, 49_500, "m"), new Tender(PaymentMethod.Cash, 500)],
+            [new MemberWallet("m", 60_000, 0)],
+            roundingSettings: Defaults);
+        Assert.True(alloc.IsValid);
+        Assert.Equal(50_000, alloc.PayableToman);
+        Assert.Equal(49_500, alloc.Tenders.Single(t => t.Method == PaymentMethod.Wallet).AmountToman);
+        Assert.Equal(500, alloc.Tenders.Single(t => t.Method == PaymentMethod.Cash).AmountToman);
+    }
+
+    [Fact]
     public void allow_debt_false_cash_remainder_ok_for_rounding_gap()
     {
         var request = BuffetRequest(49_500);

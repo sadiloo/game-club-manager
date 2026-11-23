@@ -235,6 +235,7 @@ public sealed class OperatorBillService(
     public async Task<IReadOnlyList<PaymentInput>> PreparePaymentsForAllocationAsync(
         Guid? customerId,
         long collectibleToman,
+        long unroundedPayableToman,
         StationKind? stationKind,
         IReadOnlyList<PaymentInput> payments,
         CancellationToken ct)
@@ -242,14 +243,40 @@ public sealed class OperatorBillService(
         var rounding = await db.BranchRounding.AsNoTracking().SingleAsync(ct);
         var snapshot = await GetWalletShortRemainderSnapshotAsync(customerId, collectibleToman, stationKind, ct);
         var wallet = payments.FirstOrDefault(p => p.Method.Equals("Wallet", StringComparison.OrdinalIgnoreCase));
-        WalletShortRemainderSupport.ValidateWalletShortBalancePolicy(
-            snapshot,
-            rounding.AllowWalletShortBalanceDebt,
-            wallet);
+        WalletShortRemainderSupport.ValidateShortRemainderChoice(snapshot, wallet?.ShortRemainderMethod);
+        if (!rounding.AllowWalletShortBalanceDebt
+            && wallet is not null
+            && string.Equals(wallet.ShortRemainderMethod, "Debt", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ApiException(
+                StatusCodes.Status400BadRequest,
+                "payment_invalid",
+                "جمع پرداختی با مبلغ قابل دریافت برابر نیست.");
+        }
+
         var normalized = WalletShortRemainderSupport.NormalizeWalletShortPayments(payments, snapshot, collectibleToman);
+        WalletShortRemainderSupport.ValidateNoMethodShortWalletCashSplit(
+            snapshot,
+            collectibleToman,
+            unroundedPayableToman,
+            normalized);
         WalletShortRemainderSupport.ValidateExplicitCashShortRemainder(snapshot, normalized);
         return normalized;
     }
+
+    public Task<IReadOnlyList<PaymentInput>> PreparePaymentsForAllocationAsync(
+        Guid? customerId,
+        long collectibleToman,
+        StationKind? stationKind,
+        IReadOnlyList<PaymentInput> payments,
+        CancellationToken ct)
+        => PreparePaymentsForAllocationAsync(
+            customerId,
+            collectibleToman,
+            collectibleToman,
+            stationKind,
+            payments,
+            ct);
 
     public void ValidatePayments(
         long collectibleToman,

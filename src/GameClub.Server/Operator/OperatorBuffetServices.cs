@@ -438,6 +438,7 @@ public sealed class OperatorBuffetSaleService(
             var effective = await bills.PreparePaymentsForAllocationAsync(
                 sale.CustomerId,
                 bill.CollectibleToman,
+                bill.UnroundedPayableToman,
                 null,
                 payments,
                 innerCt);
@@ -474,6 +475,7 @@ public sealed class OperatorBuffetSaleService(
         var effective = await bills.PreparePaymentsForAllocationAsync(
             sale.CustomerId,
             bill.CollectibleToman,
+            bill.UnroundedPayableToman,
             null,
             payments,
             ct);
@@ -482,7 +484,11 @@ public sealed class OperatorBuffetSaleService(
             p.AmountToman,
             OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet ? sale.CustomerId?.ToString() : null)).ToList();
         var amounts = await calculator.ComputeBuffetOnlyAsync(sale.Lines, sale.CustomerId, tenders, ct, effective);
-        var walletShort = await bills.GetWalletShortRemainderSnapshotAsync(sale.CustomerId, amounts.CollectibleToman, null, ct);
+        var tendered = effective.Sum(p => p.AmountToman);
+        var collectibleToman = tendered > bill.CollectibleToman
+            ? bill.CollectibleToman
+            : amounts.CollectibleToman;
+        var walletShort = await bills.GetWalletShortRemainderSnapshotAsync(sale.CustomerId, collectibleToman, null, ct);
         return new
         {
             openSaleId = sale.Id,
@@ -492,7 +498,7 @@ public sealed class OperatorBuffetSaleService(
             {
                 unroundedPayableToman = amounts.UnroundedPayableToman,
                 roundingToman = amounts.RoundingToman,
-                collectibleToman = amounts.CollectibleToman,
+                collectibleToman,
                 timeGrossToman = amounts.TimeGrossToman,
                 buffetGrossToman = amounts.BuffetGrossToman,
                 servicesGrossToman = amounts.ServicesGrossToman,

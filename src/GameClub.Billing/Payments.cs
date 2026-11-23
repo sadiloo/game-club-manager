@@ -803,6 +803,17 @@ public static class PaymentAllocator
 
             var room = pocket.SpendRoom(walletDebt);
             var take = need < room ? need : room;
+            var tenderCap = tenders[i].AmountToman - result.AmountToman;
+            if (tenderCap <= 0)
+            {
+                continue;
+            }
+
+            if (take > tenderCap)
+            {
+                take = tenderCap;
+            }
+
             if (take <= 0)
             {
                 continue;

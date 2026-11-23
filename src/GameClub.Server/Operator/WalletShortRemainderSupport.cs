@@ -89,41 +89,6 @@ public static class WalletShortRemainderSupport
         }
     }
 
-    public static void ValidateWalletShortBalancePolicy(
-        WalletShortRemainderSnapshot snapshot,
-        bool allowWalletShortBalanceDebt,
-        OperatorBillService.PaymentInput? walletPayment)
-    {
-        if (walletPayment is null)
-        {
-            return;
-        }
-
-        ValidateShortRemainderChoice(snapshot, walletPayment.ShortRemainderMethod);
-
-        if (allowWalletShortBalanceDebt)
-        {
-            return;
-        }
-
-        if (!string.IsNullOrWhiteSpace(walletPayment.ShortRemainderMethod)
-            && string.Equals(walletPayment.ShortRemainderMethod, "Debt", StringComparison.OrdinalIgnoreCase))
-        {
-            throw new ApiException(
-                StatusCodes.Status400BadRequest,
-                "payment_invalid",
-                "جمع پرداختی با مبلغ قابل دریافت برابر نیست.");
-        }
-
-        if (snapshot.Applies && walletPayment.AmountToman > snapshot.WalletAutoDrawToman)
-        {
-            throw new ApiException(
-                StatusCodes.Status400BadRequest,
-                "payment_invalid",
-                "جمع پرداختی با مبلغ قابل دریافت برابر نیست.");
-        }
-    }
-
     public static PaymentRoundingSettings ApplyExplicitCashRemainderFlags(
         PaymentRoundingSettings settings,
         IReadOnlyList<OperatorBillService.PaymentInput>? payments)
@@ -136,6 +101,46 @@ public static class WalletShortRemainderSupport
         }
 
         return settings;
+    }
+
+    public static void ValidateNoMethodShortWalletCashSplit(
+        WalletShortRemainderSnapshot snapshot,
+        long collectibleToman,
+        long unroundedPayableToman,
+        IReadOnlyList<OperatorBillService.PaymentInput> payments)
+    {
+        if (!snapshot.Applies)
+        {
+            return;
+        }
+
+        var roundingOnlyGap = collectibleToman - unroundedPayableToman;
+        if (roundingOnlyGap <= 0 || snapshot.RemainderToman > roundingOnlyGap)
+        {
+            return;
+        }
+
+        var wallet = payments.FirstOrDefault(p => p.Method.Equals("Wallet", StringComparison.OrdinalIgnoreCase));
+        if (wallet is null || !string.IsNullOrWhiteSpace(wallet.ShortRemainderMethod))
+        {
+            return;
+        }
+
+        var cashTotal = payments
+            .Where(p => p.Method.Equals("Cash", StringComparison.OrdinalIgnoreCase))
+            .Sum(p => p.AmountToman);
+        if (cashTotal <= 0)
+        {
+            return;
+        }
+
+        if (wallet.AmountToman != snapshot.WalletAutoDrawToman || cashTotal != snapshot.RemainderToman)
+        {
+            throw new ApiException(
+                StatusCodes.Status400BadRequest,
+                "payment_invalid",
+                "جمع پرداختی با مبلغ قابل دریافت برابر نیست.");
+        }
     }
 
     public static void ValidateExplicitCashShortRemainder(
