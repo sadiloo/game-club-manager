@@ -118,16 +118,13 @@ function Set-KioskTrustFileAcl {
     $kioskSid = $null
     try {
         $kioskSid = (New-Object System.Security.Principal.NTAccount($KioskAccount)).Translate(
-            [System.Security.Principal.SecurityIdentifier])
+            [System.Security.Principal.SecurityIdentifier]).Value
     }
     catch {
         $msg = "Set-KioskTrustFileAcl: failed to resolve SID for kiosk account '$KioskAccount': $($_.Exception.Message)"
         Write-Error $msg
         throw $msg
     }
-
-  $systemSid = New-Object System.Security.Principal.SecurityIdentifier 'S-1-5-18'
-    $adminSid = New-Object System.Security.Principal.SecurityIdentifier 'S-1-5-32-544'
 
     $trustNames = @('setup.json', 'admin-lock.json')
     foreach ($name in $trustNames) {
@@ -136,34 +133,19 @@ function Set-KioskTrustFileAcl {
             [System.IO.File]::WriteAllText($path, '')
         }
 
-        $owner = New-Object System.Security.Principal.NTAccount 'NT AUTHORITY\SYSTEM'
-        $acl = New-Object System.Security.AccessControl.FileSecurity
-        $acl.SetOwner($owner)
-        $acl.SetAccessRuleProtection($true, $false)
-
-        $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
-                $systemSid, 'FullControl', 'None', 'None', 'Allow')))
-        $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
-                $adminSid, 'FullControl', 'None', 'None', 'Allow')))
-        $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
-                $kioskSid, 'Read', 'None', 'None', 'Allow')))
-        $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
-                $kioskSid, 'Write,Delete,WriteData,AppendData,ChangePermissions,TakeOwnership', 'None', 'None', 'Deny')))
-        $fileInfo = New-Object System.IO.FileInfo($path)
-        $fileInfo.SetAccessControl($acl)
+        icacls $path /setowner "NT AUTHORITY\SYSTEM" | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "icacls setowner failed for $path" }
+        icacls $path /inheritance:r `
+            /grant:r "SYSTEM:(F)" "Administrators:(F)" "${KioskAccount}:(R)" `
+            /deny "${KioskAccount}:(W,D,WDAC,WO)" | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "icacls failed for $path" }
     }
 
-    $dirAcl = New-Object System.Security.AccessControl.DirectorySecurity
-    $dirAcl.SetOwner((New-Object System.Security.Principal.NTAccount 'NT AUTHORITY\SYSTEM'))
-    $dirAcl.SetAccessRuleProtection($true, $false)
-    $dirAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
-            $systemSid, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')))
-    $dirAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
-            $adminSid, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')))
-    $dirAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
-            $kioskSid, 'ReadAndExecute,ListDirectory,Read', 'ContainerInherit,ObjectInherit', 'None', 'Allow')))
-    $dirInfo = New-Object System.IO.DirectoryInfo($Root)
-    $dirInfo.SetAccessControl($dirAcl)
+    icacls $Root /setowner "NT AUTHORITY\SYSTEM" | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "icacls setowner failed for $Root" }
+    icacls $Root /inheritance:r `
+        /grant:r "SYSTEM:(OI)(CI)(F)" "Administrators:(OI)(CI)(F)" "${KioskAccount}:(OI)(CI)(RX)" | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "icacls failed for directory $Root" }
 }
 
 function Get-CheckpointIranTimeZone {
