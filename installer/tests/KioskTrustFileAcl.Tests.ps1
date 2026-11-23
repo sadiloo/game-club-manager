@@ -46,8 +46,10 @@ try {
 try {
   Set-Content -LiteralPath '$setupLit' -Value 'tampered' -Encoding UTF8
   exit 0
-} catch [System.UnauthorizedAccessException] {
-  exit 10
+} catch [System.UnauthorizedAccessException] { exit 10 }
+catch [System.IO.IOException] {
+  if (`$_.Exception.Message -match '(?i)denied|unauthorized') { exit 10 }
+  exit 1
 }
 "@
     $writeProc = Invoke-UserPowerShell -UserName $account.Name -Password $account.Secure -Command $writeCmd
@@ -57,11 +59,9 @@ try {
     $deleteCmd = @"
 `$ErrorActionPreference = 'Stop'
 try {
-  Remove-Item -LiteralPath '$lockLit' -Force
+  [System.IO.File]::Delete('$lockLit')
   exit 0
-} catch [System.UnauthorizedAccessException] {
-  exit 10
-}
+} catch [System.UnauthorizedAccessException] { exit 10 }
 "@
     $delProc = Invoke-UserPowerShell -UserName $account.Name -Password $account.Secure -Command $deleteCmd
     if ($delProc.ExitCode -eq 0) { Write-Error "expected UnauthorizedAccessException deleting $lockPath" }
@@ -70,11 +70,9 @@ try {
     $replaceCmd = @"
 `$ErrorActionPreference = 'Stop'
 try {
-  Move-Item -LiteralPath '$lockLit' -Destination (Join-Path (Split-Path '$lockLit') 'moved-lock.json') -Force
+  [System.IO.File]::Move('$lockLit', (Join-Path (Split-Path '$lockLit') 'moved-lock.json'))
   exit 0
-} catch [System.UnauthorizedAccessException] {
-  exit 10
-}
+} catch [System.UnauthorizedAccessException] { exit 10 }
 "@
     $repProc = Invoke-UserPowerShell -UserName $account.Name -Password $account.Secure -Command $replaceCmd
     if ($repProc.ExitCode -eq 0) { Write-Error "expected UnauthorizedAccessException replacing $lockPath" }
