@@ -340,10 +340,12 @@ begin
 end;
 
 function GetInstalledDisplayVersion: String;
-const
-  UninstallKey = 'SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{8E5E6B2E-6B6D-4F5B-9D9A-4F4E7F8F6B6D}_is1';
-  UninstallKeyWow = 'SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\{8E5E6B2E-6B6D-4F5B-9D9A-4F4E7F8F6B6D}_is1';
+var
+  UninstallKey: String;
+  UninstallKeyWow: String;
 begin
+  UninstallKey := 'SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{8E5E6B2E-6B6D-4F5B-9D9A-4F4E7F8F6B6D}_is1';
+  UninstallKeyWow := 'SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\{8E5E6B2E-6B6D-4F5B-9D9A-4F4E7F8F6B6D}_is1';
   if not RegQueryStringValue(HKLM, UninstallKey, 'DisplayVersion', Result) then
     if not RegQueryStringValue(HKLM, UninstallKeyWow, 'DisplayVersion', Result) then
       Result := '';
