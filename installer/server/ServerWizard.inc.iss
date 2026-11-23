@@ -671,12 +671,12 @@ begin
     BackupEmptyWarnLabel := TNewStaticText.Create(BackupDirPage);
     BackupEmptyWarnLabel.Parent := BackupDirPage.Surface;
     BackupEmptyWarnLabel.Caption := 'بدون پوشهٔ دوم، فقط یک نسخه از پشتیبان روی همین دیسک می‌ماند. بعداً می‌توانید پوشه را اضافه کنید.';
-    BackupEmptyWarnLabel.Font.Color := clOrange;
+    BackupEmptyWarnLabel.Font.Color := $0000A5FF;
     BackupEmptyWarnLabel.Visible := False;
     BackupSameDriveWarnLabel := TNewStaticText.Create(BackupDirPage);
     BackupSameDriveWarnLabel.Parent := BackupDirPage.Surface;
     BackupSameDriveWarnLabel.Caption := 'این پوشه روی همان دیسک پشتیبان اصلی است. اگر این دیسک خراب شود، هر دو از دست می‌روند.';
-    BackupSameDriveWarnLabel.Font.Color := clOrange;
+    BackupSameDriveWarnLabel.Font.Color := $0000A5FF;
     BackupSameDriveWarnLabel.Visible := False;
   end
   else
@@ -713,12 +713,12 @@ begin
       BackupEmptyWarnLabel := TNewStaticText.Create(BackupDirPage);
       BackupEmptyWarnLabel.Parent := BackupDirPage.Surface;
       BackupEmptyWarnLabel.Caption := 'بدون پوشهٔ دوم، فقط یک نسخه از پشتیبان روی همین دیسک می‌ماند. بعداً می‌توانید پوشه را اضافه کنید.';
-      BackupEmptyWarnLabel.Font.Color := clOrange;
+      BackupEmptyWarnLabel.Font.Color := $0000A5FF;
       BackupEmptyWarnLabel.Visible := False;
       BackupSameDriveWarnLabel := TNewStaticText.Create(BackupDirPage);
       BackupSameDriveWarnLabel.Parent := BackupDirPage.Surface;
       BackupSameDriveWarnLabel.Caption := 'این پوشه روی همان دیسک پشتیبان اصلی است. اگر این دیسک خراب شود، هر دو از دست می‌روند.';
-      BackupSameDriveWarnLabel.Font.Color := clOrange;
+      BackupSameDriveWarnLabel.Font.Color := $0000A5FF;
       BackupSameDriveWarnLabel.Visible := False;
     end;
   end;
