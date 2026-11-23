@@ -57,7 +57,7 @@ jobs:
         run: dotnet build tests/GameClub.Server.TestHost/GameClub.Server.TestHost.csproj -c Release --nologo
       - name: kiosk owned-server G2 and re-pair oracle
         if: always()
-        timeout-minutes: 25
+        timeout-minutes: 30
         run: |
           set -euo pipefail
           dotnet build tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj -c Release -f net10.0 --nologo

@@ -673,7 +673,8 @@ public sealed class WindowsKioskServerIntegrationTests
             G2BandAlignWait.AssertSameSideOfAllBandEdges(
                 g2HarnessTimeBand,
                 new DateTimeOffset(poweredSpanStartUtc, TimeSpan.Zero),
-                new[] { poweredSpanEndUtc });
+                new[] { poweredSpanEndUtc },
+                new DateTimeOffset(poweredSpanEndUtc, TimeSpan.Zero));
             var poweredSpanSeconds = (poweredSpanEndUtc - poweredSpanStartUtc).TotalSeconds;
             var secondsPastMinute = poweredSpanSeconds % 60;
             var marginToNearestMinute = Math.Min(secondsPastMinute, secondsPastMinute == 0 ? 60 : 60 - secondsPastMinute);
@@ -730,7 +731,8 @@ public sealed class WindowsKioskServerIntegrationTests
             G2BandAlignWait.AssertSameSideOfAllBandEdges(
                 g2HarnessTimeBand,
                 new DateTimeOffset(evidence.SessionStartedAtUtc, TimeSpan.Zero),
-                evidence.CheckpointAtUtc);
+                evidence.CheckpointAtUtc,
+                new DateTimeOffset(poweredSpanEndUtc, TimeSpan.Zero));
             Assert.Equal(evidence.ExpectedCollectibleToman, evidence.PendingBillCollectibleToman);
         }
         finally
