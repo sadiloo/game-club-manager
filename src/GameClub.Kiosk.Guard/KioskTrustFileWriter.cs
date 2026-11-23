@@ -5,6 +5,7 @@ using System.Threading;
 using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Text;
+using System.Threading.Tasks;
 using GameClub.Kiosk.Core.Security;
 
 namespace GameClub.Kiosk.Guard;
@@ -12,6 +13,10 @@ namespace GameClub.Kiosk.Guard;
 internal static class KioskTrustFileWriter
 {
     private static readonly TimeSpan PipeReadTimeout = TimeSpan.FromSeconds(30);
+
+    internal static TimeSpan? TestPipeReadTimeout { get; set; }
+
+    private static TimeSpan EffectiveReadTimeout => TestPipeReadTimeout ?? PipeReadTimeout;
 
     internal static void Run(CancellationToken ct)
     {
@@ -101,9 +106,15 @@ internal static class KioskTrustFileWriter
             return;
         }
 
+        if (!KioskTrustFileWriteValidator.TryNormalizeTrustFileName(fileName, out var canonical))
+        {
+            WriteResponse(server, ok: false, "invalid_file_name");
+            return;
+        }
+
         try
         {
-            var destination = KioskTrustFiles.TrustFilePath(fileName!);
+            var destination = KioskTrustFiles.TrustFilePath(canonical);
             KioskTrustFileAtomicWrite.WriteText(destination, content!);
             WriteResponse(server, ok: true, error: null);
         }
@@ -137,27 +148,26 @@ internal static class KioskTrustFileWriter
     }
 
     private static string ReadString(NamedPipeServerStream server, CancellationToken ct)
+        => ReadStringAsync(server, ct).GetAwaiter().GetResult();
+
+    private static async Task<string> ReadStringAsync(NamedPipeServerStream server, CancellationToken ct)
     {
         using var ms = new MemoryStream();
         var buffer = new byte[4096];
-        var deadline = DateTime.UtcNow + PipeReadTimeout;
-        do
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeoutCts.CancelAfter(EffectiveReadTimeout);
+        var readToken = timeoutCts.Token;
+
+        try
         {
-            ct.ThrowIfCancellationRequested();
-            if (DateTime.UtcNow > deadline)
+            while (!server.IsMessageComplete)
             {
-                throw new TimeoutException("trust pipe read timed out");
-            }
+                var read = await server.ReadAsync(buffer, 0, buffer.Length, readToken).ConfigureAwait(false);
+                if (read <= 0)
+                {
+                    break;
+                }
 
-            if (!server.CanRead)
-            {
-                Thread.Sleep(10);
-                continue;
-            }
-
-            var read = server.Read(buffer, 0, buffer.Length);
-            if (read > 0)
-            {
                 if (ms.Length + read > KioskTrustFiles.MaxContentBytes)
                 {
                     throw new InvalidOperationException("content_too_large");
@@ -166,7 +176,10 @@ internal static class KioskTrustFileWriter
                 ms.Write(buffer, 0, read);
             }
         }
-        while (!server.IsMessageComplete);
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            throw new TimeoutException("trust pipe read timed out");
+        }
 
         if (ms.Length > KioskTrustFiles.MaxContentBytes)
         {

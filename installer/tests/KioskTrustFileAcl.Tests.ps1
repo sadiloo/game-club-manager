@@ -56,6 +56,41 @@ catch [System.IO.IOException] {
     if ($writeProc.ExitCode -eq 0) { Write-Error "expected UnauthorizedAccessException writing $setupPath" }
     if ($writeProc.ExitCode -ne 10) { Write-Error "expected exit 10 (UnauthorizedAccessException) for setup write; got $($writeProc.ExitCode)" }
 
+    $lockWriteCmd = @"
+`$ErrorActionPreference = 'Stop'
+try {
+  Set-Content -LiteralPath '$lockLit' -Value 'tampered' -Encoding UTF8
+  exit 0
+} catch [System.UnauthorizedAccessException] { exit 10 }
+catch [System.IO.IOException] {
+  if (`$_.Exception.Message -match '(?i)denied|unauthorized') { exit 10 }
+  exit 1
+}
+"@
+    $lockWriteProc = Invoke-UserPowerShell -UserName $account.Name -Password $account.Secure -Command $lockWriteCmd
+    if ($lockWriteProc.ExitCode -eq 0) { Write-Error "expected UnauthorizedAccessException writing $lockPath" }
+    if ($lockWriteProc.ExitCode -ne 10) { Write-Error "expected exit 10 for admin-lock write; got $($lockWriteProc.ExitCode)" }
+
+    $wdacCmd = @"
+`$ErrorActionPreference = 'Stop'
+icacls '$lockLit' /grant "${env:USERNAME}:(R)" 2>&1 | Out-Null
+if ($LASTEXITCODE -ne 0) { exit 10 }
+exit 0
+"@
+    $wdacProc = Invoke-UserPowerShell -UserName $account.Name -Password $account.Secure -Command $wdacCmd
+    if ($wdacProc.ExitCode -eq 0) { Write-Error "expected UnauthorizedAccessException changing ACL on $lockPath" }
+    if ($wdacProc.ExitCode -ne 10) { Write-Error "expected exit 10 for admin-lock WDAC; got $($wdacProc.ExitCode)" }
+
+    $woCmd = @"
+`$ErrorActionPreference = 'Stop'
+takeown /f '$lockLit' 2>&1 | Out-Null
+if ($LASTEXITCODE -ne 0) { exit 10 }
+exit 0
+"@
+    $woProc = Invoke-UserPowerShell -UserName $account.Name -Password $account.Secure -Command $woCmd
+    if ($woProc.ExitCode -eq 0) { Write-Error "expected UnauthorizedAccessException taking ownership of $lockPath" }
+    if ($woProc.ExitCode -ne 10) { Write-Error "expected exit 10 for admin-lock WO; got $($woProc.ExitCode)" }
+
     $deleteCmd = @"
 `$ErrorActionPreference = 'Stop'
 try {

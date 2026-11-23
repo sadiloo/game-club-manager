@@ -1,6 +1,7 @@
 #if NET48
 using System;
 using System.IO;
+using System.IO.Pipes;
 using System.Security.Principal;
 using System.Threading;
 using GameClub.Kiosk.Core.Security;
@@ -28,7 +29,29 @@ public sealed class KioskTrustFileWriterIntegrationTests : IDisposable
         Environment.SetEnvironmentVariable("CHECKPOINT_KIOSK_SID", WindowsIdentity.GetCurrent().User!.Value);
         _server = new Thread(() => KioskTrustFileWriter.Run(_cts.Token)) { IsBackground = true, Name = "trust-test" };
         _server.Start();
-        Thread.Sleep(500);
+        WaitForTrustPipeReady(TimeSpan.FromSeconds(5));
+    }
+
+    private static void WaitForTrustPipeReady(TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        Exception? last = null;
+        while (DateTime.UtcNow < deadline)
+        {
+            try
+            {
+                using var probe = new NamedPipeClientStream(".", KioskTrustFiles.PipeName, PipeDirection.Out);
+                probe.Connect(250);
+                return;
+            }
+            catch (Exception ex)
+            {
+                last = ex;
+                Thread.Sleep(50);
+            }
+        }
+
+        throw new TimeoutException("trust pipe server not ready", last);
     }
 
     public void Dispose()
@@ -61,6 +84,50 @@ public sealed class KioskTrustFileWriterIntegrationTests : IDisposable
         var json = "{\"isComplete\":true}";
         client.WriteTrustFile(path, json);
         Assert.Equal(json, File.ReadAllText(path));
+    }
+
+    [Fact]
+    public void guard_pipe_rejects_oversize_payload()
+    {
+        var path = KioskTrustFiles.TrustFilePath(KioskTrustFiles.SetupFileName);
+        var client = new KioskTrustFilePipeClient();
+        var big = "{\"x\":\"" + new string('a', KioskTrustFiles.MaxContentBytes) + "\"}";
+        var err = Assert.Throws<InvalidOperationException>(() => client.WriteTrustFile(path, big));
+        Assert.Contains("content_too_large", err.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void guard_pipe_silent_client_times_out_without_blocking_writer()
+    {
+        KioskTrustFileWriter.TestPipeReadTimeout = TimeSpan.FromMilliseconds(800);
+        try
+        {
+            var silent = new Thread(() =>
+            {
+                try
+                {
+                    using var pipe = new NamedPipeClientStream(".", KioskTrustFiles.PipeName, PipeDirection.InOut);
+                    pipe.Connect(5000);
+                    Thread.Sleep(TimeSpan.FromSeconds(5));
+                }
+                catch
+                {
+                    // expected when server drops timed-out connection
+                }
+            })
+            { IsBackground = true };
+            silent.Start();
+
+            var path = KioskTrustFiles.TrustFilePath(KioskTrustFiles.AdminLockFileName);
+            var client = new KioskTrustFilePipeClient();
+            var json = "{\"locked\":true}";
+            client.WriteTrustFile(path, json);
+            Assert.Equal(json, File.ReadAllText(path));
+        }
+        finally
+        {
+            KioskTrustFileWriter.TestPipeReadTimeout = null;
+        }
     }
 }
 #endif

@@ -57,13 +57,20 @@ public partial class SetupPanel : UserControl
             StepCaption.Text = "مرحلهٔ ۲ از ۲";
             ManagerPasswordInput.Focus();
         }
-        catch (HttpRequestException ex) when (KioskServerTransportErrors.IsUnreachable(ex))
+        catch (HttpRequestException ex)
         {
-            ShowServerUnreachable();
+            if (KioskServerTransportErrors.IsTimeout(ex))
+            {
+                ShowServerTimeout();
+            }
+            else
+            {
+                ShowServerUnreachable();
+            }
         }
-        catch (TaskCanceledException ex) when (KioskServerTransportErrors.IsUnreachable(ex))
+        catch (TaskCanceledException)
         {
-            ShowServerUnreachable();
+            ShowServerTimeout();
         }
         finally
         {
@@ -83,6 +90,13 @@ public partial class SetupPanel : UserControl
         Step1Error.Visibility = Visibility.Visible;
         Step1Error.Foreground = (System.Windows.Media.Brush)FindResource("Kiosk.DangerBrush");
         Step1Error.Text = KioskStatusMessages.DisplayText(KioskStatusMessages.Keys.ServerUnreachable);
+    }
+
+    private void ShowServerTimeout()
+    {
+        Step1Error.Visibility = Visibility.Visible;
+        Step1Error.Foreground = (System.Windows.Media.Brush)FindResource("Kiosk.WarningBrush");
+        Step1Error.Text = KioskLoginUserMessages.DisplayText(KioskLoginUserMessages.Keys.Timeout);
     }
 
     private async void OnContinueClick(object sender, RoutedEventArgs e)
@@ -130,19 +144,26 @@ public partial class SetupPanel : UserControl
             });
             SetupCompleted?.Invoke(this, EventArgs.Empty);
         }
-        catch (HttpRequestException ex) when (KioskServerTransportErrors.IsUnreachable(ex))
+        catch (HttpRequestException ex)
         {
             Step1Panel.Visibility = Visibility.Visible;
             Step2Panel.Visibility = Visibility.Collapsed;
             StepCaption.Text = "مرحلهٔ ۱ از ۲";
-            ShowServerUnreachable();
+            if (KioskServerTransportErrors.IsTimeout(ex))
+            {
+                ShowServerTimeout();
+            }
+            else
+            {
+                ShowServerUnreachable();
+            }
         }
-        catch (TaskCanceledException ex) when (KioskServerTransportErrors.IsUnreachable(ex))
+        catch (TaskCanceledException)
         {
             Step1Panel.Visibility = Visibility.Visible;
             Step2Panel.Visibility = Visibility.Collapsed;
             StepCaption.Text = "مرحلهٔ ۱ از ۲";
-            ShowServerUnreachable();
+            ShowServerTimeout();
         }
         finally
         {

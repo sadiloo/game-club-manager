@@ -55,7 +55,12 @@ public static class KioskTrustFileWriteValidator
             return false;
         }
 
-        var trimmed = fileName!.Trim();
+        if (!string.Equals(fileName, fileName.Trim(), StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var trimmed = fileName!;
         if (trimmed.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0
             || trimmed.IndexOf("..", StringComparison.Ordinal) >= 0
             || trimmed.IndexOf('/') >= 0

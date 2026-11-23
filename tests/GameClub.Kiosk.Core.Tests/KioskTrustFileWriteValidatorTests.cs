@@ -21,6 +21,8 @@ public sealed class KioskTrustFileWriteValidatorTests
     }
 
     [Theory]
+    [InlineData(" setup.json")]
+    [InlineData("setup.json ")]
     [InlineData("../admin-lock.json")]
     [InlineData("setup.json\\extra")]
     [InlineData("C:\\temp\\setup.json")]
@@ -50,6 +52,13 @@ public sealed class KioskTrustFileWriteValidatorTests
     {
         var err = KioskTrustFileWriteValidator.ValidatePayload(KioskSid, KioskSid, KioskTrustFiles.SetupFileName, "{\"a\":1}");
         Assert.Null(err);
+    }
+
+    [Fact]
+    public void normalize_maps_case_variant_to_canonical_setup_name()
+    {
+        Assert.True(KioskTrustFileWriteValidator.TryNormalizeTrustFileName("Setup.JSON", out var canonical));
+        Assert.Equal(KioskTrustFiles.SetupFileName, canonical);
     }
 
     [Fact]

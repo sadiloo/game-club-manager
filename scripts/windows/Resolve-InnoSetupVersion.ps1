@@ -64,17 +64,15 @@ function Resolve-InnoVersionDecision {
     }
   }
 
-  if (-not [string]::IsNullOrWhiteSpace($bannerVersionText)) {
-    if ($null -eq $bannerParsed -or -not (Test-VersionMatchesExpected $bannerParsed $Expected)) {
-      return @{
-        Ok               = $false
-        Reason           = "Compiler engine version banner must match $Expected."
-        DisplayVersion   = $DisplayVersion
-        FileVersion      = $FileVersion
-        ProductVersion   = $ProductVersion
-        BannerVersion    = $bannerVersionText
-        Contradictions   = @()
-      }
+  if ($null -eq $bannerParsed -or -not (Test-VersionMatchesExpected $bannerParsed $Expected)) {
+    return @{
+      Ok               = $false
+      Reason           = "Compiler engine version banner must match $Expected."
+      DisplayVersion   = $DisplayVersion
+      FileVersion      = $FileVersion
+      ProductVersion   = $ProductVersion
+      BannerVersion    = $bannerVersionText
+      Contradictions   = @()
     }
   }
 

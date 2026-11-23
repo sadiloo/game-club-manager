@@ -62,6 +62,7 @@ Invoke-DotnetPublish @(
 & (Join-Path $root "installer/tools/Fetch-InstallerThirdParty.ps1") -SkipIfPresent
 
 Write-Host "ci-installer: static installer rules"
+& (Join-Path $root "installer/tests/NoPwshInstaller.Tests.ps1")
 & (Join-Path $root "installer/tests/NoBackupDelete.Tests.ps1")
 & (Join-Path $root "installer/tests/BackupRestoreConfig.Tests.ps1")
 & (Join-Path $root "installer/tests/PersianIslKeys.Tests.ps1")
@@ -116,18 +117,24 @@ function Get-IsccBannerText([string]$isccPath) {
     if (-not (Test-Path -LiteralPath $isccPath)) { return $null }
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $isccPath
-    $psi.Arguments = "/?"
+    $psi.Arguments = ""
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
     $psi.UseShellExecute = $false
     $psi.CreateNoWindow = $true
     $proc = [System.Diagnostics.Process]::Start($psi)
-    $text = $proc.StandardOutput.ReadToEnd()
-    $err = $proc.StandardError.ReadToEnd()
-    $proc.WaitForExit()
-    $merged = $text + $err
+    if ($null -eq $proc) {
+        return (& cmd.exe /c "`"$isccPath`" 2>&1" | Out-String)
+    }
+    $stdout = $proc.StandardOutput.ReadToEnd()
+    $stderr = $proc.StandardError.ReadToEnd()
+    if (-not $proc.WaitForExit(15000)) {
+        try { $proc.Kill() } catch { }
+        throw "iscc banner probe timed out"
+    }
+    $merged = $stdout + $stderr
     if ([string]::IsNullOrWhiteSpace($merged)) {
-        return (& $isccPath 2>&1 | Out-String)
+        return (& cmd.exe /c "`"$isccPath`" 2>&1" | Out-String)
     }
     return $merged
 }

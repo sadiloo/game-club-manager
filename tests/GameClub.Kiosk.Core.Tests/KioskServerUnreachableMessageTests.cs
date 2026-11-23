@@ -72,6 +72,27 @@ public sealed class KioskServerUnreachableMessageTests
     }
 
     [Fact]
+    public void http_client_timeout_is_timeout_not_unreachable()
+    {
+        var timeout = new TimeoutException("timed out");
+        var ex = new TaskCanceledException("canceled", timeout);
+        Assert.True(KioskServerTransportErrors.IsTimeout(ex));
+        Assert.False(KioskServerTransportErrors.IsUnreachable(ex));
+        Assert.Equal(KioskLoginUserMessages.Keys.Timeout, KioskServerTransportErrors.TryGetMessageKey(ex));
+    }
+
+    [Fact]
+    public void http_request_with_timeout_web_exception_is_timeout_not_unreachable()
+    {
+        var web = new WebException("timeout", null, WebExceptionStatus.Timeout, null);
+        var ex = new HttpRequestException("request failed", web);
+        Assert.True(KioskServerTransportErrors.IsTimeout(ex));
+        Assert.False(KioskServerTransportErrors.IsUnreachable(ex));
+        var detail = KioskServerTransportErrors.FormatDetail(ex);
+        Assert.True(KioskServerTransportErrors.IsTimeoutDetail(detail));
+    }
+
+    [Fact]
     public void status_presentation_shows_server_unreachable_transient_key()
     {
         var state = KioskStationStatus.ResolveState(

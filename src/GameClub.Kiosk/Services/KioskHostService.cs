@@ -172,10 +172,22 @@ public sealed class KioskHostService : IAsyncDisposable
                 $"{_serverBase}/api/kiosk/pair",
                 new StringContent(JsonSerializer.Serialize(new { code }), Encoding.UTF8, "application/json"));
         }
-        catch (Exception ex) when (KioskServerTransportErrors.IsUnreachable(ex))
+        catch (Exception ex)
         {
             _pairingJustFailed = true;
-            LastLoginFailureKey = KioskServerTransportErrors.MessageKey;
+            if (KioskServerTransportErrors.IsTimeout(ex))
+            {
+                LastLoginFailureKey = KioskLoginUserMessages.Keys.Timeout;
+            }
+            else if (KioskServerTransportErrors.IsUnreachable(ex))
+            {
+                LastLoginFailureKey = KioskServerTransportErrors.MessageKey;
+            }
+            else
+            {
+                LastLoginFailureKey = KioskLoginUserMessages.Keys.Timeout;
+            }
+
             PresentLoginFailure(LastLoginFailureKey);
             RefreshStationStatusText();
             return;
@@ -270,19 +282,19 @@ public sealed class KioskHostService : IAsyncDisposable
                 $"{_serverBase}/api/kiosk/auth/login",
                 new StringContent(payload, Encoding.UTF8, "application/json"));
         }
-        catch (HttpRequestException ex) when (KioskServerTransportErrors.IsUnreachable(ex))
+        catch (HttpRequestException ex)
         {
             LastLoginHttpStatus = null;
-            LastLoginFailureKey = KioskLoginUserMessages.ResolveFailureKey(
-                null,
-                0,
-                KioskLoginUserMessages.LoginTransportFailure.Unreachable);
+            var transport = KioskServerTransportErrors.IsTimeout(ex)
+                ? KioskLoginUserMessages.LoginTransportFailure.Timeout
+                : KioskLoginUserMessages.LoginTransportFailure.Unreachable;
+            LastLoginFailureKey = KioskLoginUserMessages.ResolveFailureKey(null, 0, transport);
             PresentLoginFailure(LastLoginFailureKey);
-            Trace.TraceWarning($"Kiosk login failed (unreachable): {ex.Message}");
+            Trace.TraceWarning($"Kiosk login failed ({transport}): {ex.Message}");
             RefreshStationStatusText();
             return;
         }
-        catch (TaskCanceledException ex) when (KioskServerTransportErrors.IsUnreachable(ex))
+        catch (TaskCanceledException ex)
         {
             LastLoginHttpStatus = null;
             LastLoginFailureKey = KioskLoginUserMessages.ResolveFailureKey(
@@ -678,6 +690,11 @@ public sealed class KioskHostService : IAsyncDisposable
                     || KioskServerTransportErrors.IsUnreachableDetail(detail))
                 {
                     _transientStatusErrorKey = KioskServerTransportErrors.MessageKey;
+                }
+                else if (_runtime.LastTransportTimeout
+                    || KioskServerTransportErrors.IsTimeoutDetail(detail))
+                {
+                    _transientStatusErrorKey = KioskLoginUserMessages.Keys.Timeout;
                 }
 
                 RefreshStationStatusText();

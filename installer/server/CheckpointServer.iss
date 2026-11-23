@@ -57,11 +57,11 @@ Source: "..\tools\CheckpointInstall.Common.psm1"; DestDir: "{app}\tools"; Flags:
 Source: "..\..\docs\install\server-install.fa.md"; DestDir: "{app}\docs"; Flags: ignoreversion
 
 [Dirs]
-Name: "{commonappdata}\Checkpoint"; Permissions: administrators-full
-Name: "{commonappdata}\Checkpoint\config"; Permissions: administrators-full
-Name: "{commonappdata}\Checkpoint\pgdata"; Permissions: administrators-full
-Name: "{commonappdata}\Checkpoint\backups"; Permissions: administrators-full
-Name: "{commonappdata}\Checkpoint\logs"; Permissions: administrators-full
+Name: "{commonappdata}\Checkpoint"; Permissions: admins-full
+Name: "{commonappdata}\Checkpoint\config"; Permissions: admins-full
+Name: "{commonappdata}\Checkpoint\pgdata"; Permissions: admins-full
+Name: "{commonappdata}\Checkpoint\backups"; Permissions: admins-full
+Name: "{commonappdata}\Checkpoint\logs"; Permissions: admins-full
 
 [Icons]
 Name: "{userdesktop}\چک‌پوینت — پیشخوان"; Filename: "{app}\GameClub.Shell.exe"; Tasks: desktopicon; Check: FileExists(ExpandConstant('{app}\GameClub.Shell.exe'))

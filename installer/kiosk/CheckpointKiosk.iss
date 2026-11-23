@@ -45,7 +45,7 @@ Source: "..\tools\CheckpointInstall.Common.psm1"; DestDir: "{pf}\Checkpoint\Guar
 Source: "..\..\docs\install\kiosk-install.fa.md"; DestDir: "{app}\docs"; Flags: ignoreversion
 
 [Dirs]
-Name: "{commonappdata}\Checkpoint\kiosk"; Permissions: administrators-full
+Name: "{commonappdata}\Checkpoint\kiosk"; Permissions: admins-full
 
 [Run]
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{pf}\Checkpoint\Guard\tools\kiosk-postinstall.ps1"""; StatusMsg: "پیکربندی کاربر کیوسک و نگهبان…"; Flags: runhidden waituntilidle

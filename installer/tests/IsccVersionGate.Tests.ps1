@@ -36,8 +36,8 @@ $decisionMissing = Resolve-InnoVersionDecision `
   -ProductVersion "0.0.0.0" `
   -BannerText "Inno Setup 6 Command-Line Compiler`n" `
   -Expected $expected
-if (-not $decisionMissing.Ok) {
-  Write-Error "expected missing banner version to pass when DisplayVersion matches: $($decisionMissing.Reason)"
+if ($decisionMissing.Ok) {
+  Write-Error "expected missing banner version to fail"
 }
 
 Write-Host "IsccVersionGate: ok"

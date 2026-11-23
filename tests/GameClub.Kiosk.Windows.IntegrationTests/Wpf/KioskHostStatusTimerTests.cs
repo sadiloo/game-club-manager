@@ -1467,6 +1467,41 @@ public sealed class KioskHostStatusTimerTests
     }
 
     [Fact]
+    public void host_profile_fetch_invalid_json_does_not_crash()
+    {
+        Exception error = null;
+        _wpf.RunAsync(async () =>
+        {
+            try
+            {
+                var host = CreateHost(out _, out _, out _, null, out _);
+                try
+                {
+                    var httpField = typeof(KioskHostService).GetField("_http", BindingFlags.Instance | BindingFlags.NonPublic)!;
+                    httpField.SetValue(host, new HttpClient(new InvalidProfileJsonHandler()));
+                    SetField(host, "_deviceId", Guid.Parse("11111111-1111-1111-1111-111111111111"));
+                    SetField(host, "_stationId", "PC-PROFILE");
+                    SetField(host, "_serverBase", "http://127.0.0.1:5998");
+                    var apply = typeof(KioskHostService).GetMethod(
+                        "ApplyStationProfileAsync",
+                        BindingFlags.Instance | BindingFlags.NonPublic)!;
+                    await (Task)apply.Invoke(host, Array.Empty<object>())!;
+                }
+                finally
+                {
+                    await host.DisposeAsync();
+                }
+            }
+            catch (Exception ex)
+            {
+                error = ex;
+            }
+        }, TimeSpan.FromSeconds(30));
+
+        Assert.Null(error);
+    }
+
+    [Fact]
     public void host_device_key_change_clears_pair_before_login_error()
     {
         _wpf.RunAsync(async () =>
@@ -1773,6 +1808,25 @@ public sealed class KioskHostStatusTimerTests
     private static async Task WaitForTransportConnectedAsync(KioskRuntime runtime, TimeSpan timeout)
     {
         await runtime.WaitForTransportConnectedAsync(timeout, CancellationToken.None);
+    }
+
+    private sealed class InvalidProfileJsonHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            if (request.RequestUri is not null
+                && request.Method == HttpMethod.Get
+                && request.RequestUri.AbsolutePath.Contains("/stations/", StringComparison.Ordinal)
+                && request.RequestUri.AbsolutePath.EndsWith("/config", StringComparison.OrdinalIgnoreCase))
+            {
+                return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+                {
+                    Content = new StringContent("not json", Encoding.UTF8, "application/json"),
+                });
+            }
+
+            return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.NotFound));
+        }
     }
 
     private sealed class LogoutConflictCountingHandler : HttpMessageHandler
