@@ -114,7 +114,22 @@ function Get-IsccPeVersions([string]$isccPath) {
 
 function Get-IsccBannerText([string]$isccPath) {
     if (-not (Test-Path -LiteralPath $isccPath)) { return $null }
-    return (& $isccPath 2>&1 | Out-String)
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $isccPath
+    $psi.Arguments = "/?"
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $proc = [System.Diagnostics.Process]::Start($psi)
+    $text = $proc.StandardOutput.ReadToEnd()
+    $err = $proc.StandardError.ReadToEnd()
+    $proc.WaitForExit()
+    $merged = $text + $err
+    if ([string]::IsNullOrWhiteSpace($merged)) {
+        return (& $isccPath 2>&1 | Out-String)
+    }
+    return $merged
 }
 
 $pathIsccShim = Get-Command iscc.exe -ErrorAction SilentlyContinue
