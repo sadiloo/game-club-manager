@@ -543,6 +543,15 @@ public sealed class PcInternetBrief103CompletionTests(GameClubWebApplicationFact
             AppliedAtUtc = at,
         }, CancellationToken.None);
         await AssertInternetStateAndAuditFrozenAsync();
+
+        await coordinator.OnHeartbeatAsync(deviceId, sessionId, 0, new KioskInternetAppliedReport
+        {
+            Epoch = goodEpoch,
+            Version = 4,
+            On = true,
+            AppliedAtUtc = at,
+        }, CancellationToken.None);
+        await AssertInternetStateAndAuditFrozenAsync();
     }
 
     [Fact]
