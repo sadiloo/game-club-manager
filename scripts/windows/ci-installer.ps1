@@ -134,18 +134,18 @@ Compression=none
 "@
         Set-Content -LiteralPath $probeIss -Value $probeBody -Encoding ASCII
 
-        foreach ($arg in @(
-                "/?",
-                "/Q `"$probeIss`""
+        foreach ($args in @(
+                @("/?"),
+                @("/Q", $probeIss),
+                @($probeIss)
             )) {
-            $cmd = "`"$isccPath`" $arg 2>&1"
-            $merged = (& cmd.exe /c $cmd | Out-String)
+            $merged = (& $isccPath @args 2>&1 | Out-String)
             if ($merged -match '(?m)Compiler engine version:\s*Inno Setup') {
                 return $merged
             }
         }
 
-        throw "iscc banner probe produced no Compiler engine version line"
+        throw "iscc banner probe produced no Compiler engine version line (iscc=$isccPath)"
     }
     finally {
         if (Test-Path -LiteralPath $probeIss) {
