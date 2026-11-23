@@ -21,6 +21,7 @@ internal sealed class RunningStabilityTracker
         else
         {
             _runningSinceUtc = null;
+            _stableResetEdgeArmed = true;
         }
     }
 
