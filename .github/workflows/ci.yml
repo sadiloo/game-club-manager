@@ -215,7 +215,7 @@ jobs:
           $ciInstaller = Join-Path $PWD 'scripts/windows/ci-installer.ps1'
           $null = [System.Management.Automation.Language.Parser]::ParseFile($ciInstaller, [ref]$tokens, [ref]$errors)
           if ($errors -and $errors.Count -gt 0) {
-            foreach ($e in $errors) { Write-Error "$ciInstaller: $($e.Message)" }
+            foreach ($e in $errors) { Write-Error "${ciInstaller}: $($e.Message)" }
             exit 1
           }
           Write-Host "PowerShell 5.1 parse: ok ($($files.Count) installer files + ci-installer.ps1)"

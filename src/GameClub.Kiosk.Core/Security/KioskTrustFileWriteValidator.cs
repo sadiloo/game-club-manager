@@ -55,11 +55,11 @@ public static class KioskTrustFileWriteValidator
             return false;
         }
 
-        var trimmed = fileName.Trim();
+        var trimmed = fileName!.Trim();
         if (trimmed.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0
-            || trimmed.Contains("..", StringComparison.Ordinal)
-            || trimmed.Contains('/', StringComparison.Ordinal)
-            || trimmed.Contains('\\', StringComparison.Ordinal)
+            || trimmed.IndexOf("..", StringComparison.Ordinal) >= 0
+            || trimmed.IndexOf('/', StringComparison.Ordinal) >= 0
+            || trimmed.IndexOf('\\', StringComparison.Ordinal) >= 0
             || Path.IsPathRooted(trimmed))
         {
             return false;
