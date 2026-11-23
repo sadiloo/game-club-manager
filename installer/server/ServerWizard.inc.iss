@@ -332,7 +332,7 @@ begin
     Result := DefaultPinsJsonPath;
 end;
 
-function UpgradeHasDefaultPinsFile(Param: String): Boolean;
+function UpgradeHasDefaultPinsFile: Boolean;
 var F: String;
 begin
   F := Trim(GetDefaultPinsFile(''));
