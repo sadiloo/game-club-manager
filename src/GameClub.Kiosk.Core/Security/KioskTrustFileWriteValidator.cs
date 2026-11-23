@@ -50,17 +50,18 @@ public static class KioskTrustFileWriteValidator
     public static bool TryNormalizeTrustFileName(string? fileName, out string canonical)
     {
         canonical = "";
-        if (string.IsNullOrWhiteSpace(fileName))
+        if (fileName is null || string.IsNullOrWhiteSpace(fileName))
         {
             return false;
         }
 
-        if (!string.Equals(fileName, fileName.Trim(), StringComparison.Ordinal))
+        var name = fileName;
+        if (!string.Equals(name, name.Trim(), StringComparison.Ordinal))
         {
             return false;
         }
 
-        var trimmed = fileName;
+        var trimmed = name;
         if (trimmed.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0
             || trimmed.IndexOf("..", StringComparison.Ordinal) >= 0
             || trimmed.IndexOf('/') >= 0

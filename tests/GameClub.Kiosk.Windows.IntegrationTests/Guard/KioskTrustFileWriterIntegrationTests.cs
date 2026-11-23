@@ -35,7 +35,7 @@ public sealed class KioskTrustFileWriterIntegrationTests : IDisposable
     private static void WaitForTrustPipeReady(TimeSpan timeout)
     {
         var deadline = DateTime.UtcNow + timeout;
-        Exception? last = null;
+        Exception last = null;
         while (DateTime.UtcNow < deadline)
         {
             try
