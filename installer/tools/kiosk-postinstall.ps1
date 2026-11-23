@@ -38,7 +38,7 @@ $credential = New-Object System.Management.Automation.PSCredential($KioskUser, $
 
 $programDataKiosk = "C:\ProgramData\Checkpoint\kiosk"
 New-Item -ItemType Directory -Force -Path $programDataKiosk | Out-Null
-# R8b L-3: trust file deny ACEs for setup.json + admin-lock.json — Guard-mediated writes; not applied in R8c.
+Set-KioskTrustFileAcl -KioskAccount $KioskUser -Root $programDataKiosk
 
 $guardAcl = "D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;CCLCSWLOCRRC;;;IU)(A;;CCLCSWLOCRRC;;;SU)(A;;CCLCSWLOCRRC;;;S-1-5-32-545)(A;;CCLCSWLOCRRC;;;$sid)"
 $svc = Get-Service CheckpointGuard -ErrorAction SilentlyContinue

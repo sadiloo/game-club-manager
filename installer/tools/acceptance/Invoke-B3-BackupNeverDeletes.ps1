@@ -16,7 +16,7 @@ if (-not (Test-Path $scriptPath)) {
 }
 
 for ($i = 0; $i -lt 16; $i++) {
-    & pwsh -NoProfile -ExecutionPolicy Bypass -File $scriptPath
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $scriptPath
     if ($LASTEXITCODE -ne 0) { throw "B-3: backup run $i failed" }
 }
 

@@ -34,6 +34,13 @@ internal sealed class KioskShellSupervisor
         var protector = new GuardProcessProtection();
         var protection = new KioskShellProtectionLifecycle(protector, fault => File.AppendAllText(LogPath, $"{DateTime.UtcNow:O} {fault}{Environment.NewLine}"));
         GuardProcessProtection.ApplyStartupProtection(protection);
+        using var trustCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var trustThread = new Thread(() => KioskTrustFileWriter.Run(trustCts.Token))
+        {
+            IsBackground = true,
+            Name = "CheckpointKioskTrust",
+        };
+        trustThread.Start();
         while (!ct.IsCancellationRequested)
         {
             if (RegistryPolicyStore.Tampered())

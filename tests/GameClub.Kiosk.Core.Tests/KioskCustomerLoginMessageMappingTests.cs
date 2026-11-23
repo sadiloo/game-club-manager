@@ -104,7 +104,7 @@ public sealed class KioskCustomerLoginMessageMappingTests
     }
 
     [Theory]
-    [InlineData(KioskLoginUserMessages.LoginTransportFailure.Unreachable, KioskLoginUserMessages.Keys.Unreachable)]
+    [InlineData(KioskLoginUserMessages.LoginTransportFailure.Unreachable, KioskStatusMessages.Keys.ServerUnreachable)]
     [InlineData(KioskLoginUserMessages.LoginTransportFailure.Timeout, KioskLoginUserMessages.Keys.Timeout)]
     public void transport_failure_maps_before_http(
         KioskLoginUserMessages.LoginTransportFailure transport,

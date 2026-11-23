@@ -165,9 +165,24 @@ public sealed class KioskHostService : IAsyncDisposable
 
     public async Task SubmitPairingCodeAsync(string code)
     {
-        var pair = await _http.PostAsync(
-            $"{_serverBase}/api/kiosk/pair",
-            new StringContent(JsonSerializer.Serialize(new { code }), Encoding.UTF8, "application/json"));
+        HttpResponseMessage pair;
+        try
+        {
+            pair = await _http.PostAsync(
+                $"{_serverBase}/api/kiosk/pair",
+                new StringContent(JsonSerializer.Serialize(new { code }), Encoding.UTF8, "application/json"));
+        }
+        catch (Exception ex) when (KioskServerTransportErrors.IsUnreachable(ex))
+        {
+            _pairingJustFailed = true;
+            LastLoginFailureKey = KioskServerTransportErrors.MessageKey;
+            PresentLoginFailure(LastLoginFailureKey);
+            RefreshStationStatusText();
+            return;
+        }
+
+        using (pair)
+        {
         if (!pair.IsSuccessStatusCode)
         {
             _pairingJustFailed = true;
@@ -195,6 +210,7 @@ public sealed class KioskHostService : IAsyncDisposable
         await RefreshCatalogAsync();
         PresentStatusLine(KioskStatusLineState.Paired(_stationId));
         EnsureStatusUiTickRunning();
+        }
     }
 
     public void DismissLoginErrorMessage()
@@ -254,7 +270,7 @@ public sealed class KioskHostService : IAsyncDisposable
                 $"{_serverBase}/api/kiosk/auth/login",
                 new StringContent(payload, Encoding.UTF8, "application/json"));
         }
-        catch (HttpRequestException ex)
+        catch (HttpRequestException ex) when (KioskServerTransportErrors.IsUnreachable(ex))
         {
             LastLoginHttpStatus = null;
             LastLoginFailureKey = KioskLoginUserMessages.ResolveFailureKey(
@@ -266,7 +282,7 @@ public sealed class KioskHostService : IAsyncDisposable
             RefreshStationStatusText();
             return;
         }
-        catch (TaskCanceledException ex)
+        catch (TaskCanceledException ex) when (KioskServerTransportErrors.IsUnreachable(ex))
         {
             LastLoginHttpStatus = null;
             LastLoginFailureKey = KioskLoginUserMessages.ResolveFailureKey(
@@ -633,6 +649,12 @@ public sealed class KioskHostService : IAsyncDisposable
             return;
         }
 
+        if (!_runtime.IsTransportConnected)
+        {
+            _transientStatusErrorKey = KioskServerTransportErrors.MessageKey;
+            _shell.Dispatcher.Invoke(RefreshStationStatusText);
+        }
+
         _orchestrator.EnqueuePoweredSegmentOnDisconnect(_sessionId, _runtime.ClientMonotonicMs);
     }
 
@@ -650,6 +672,12 @@ public sealed class KioskHostService : IAsyncDisposable
                         _runCatalogOnFirstConnected = false;
                         _ = RunStartupCatalogRefreshAsync();
                     }
+                }
+
+                if (_runtime.LastTransportUnreachable
+                    || KioskServerTransportErrors.IsUnreachableDetail(detail))
+                {
+                    _transientStatusErrorKey = KioskServerTransportErrors.MessageKey;
                 }
 
                 RefreshStationStatusText();

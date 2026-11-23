@@ -38,7 +38,7 @@ function New-CheckpointRandomSecret {
 
 function New-CheckpointRandomPassword {
     param([int] $Length = 24)
-  $chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#"
+    $chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#"
     $bytes = New-Object byte[] $Length
     [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
     $sb = New-Object System.Text.StringBuilder
@@ -103,7 +103,68 @@ function Set-CheckpointServerJsonAcl {
     }
 }
 
-# Hook for R8b: setup.json + admin-lock.json trust ACL via Guard — not implemented in R8c (see kiosk-postinstall.ps1).
+function Set-KioskTrustFileAcl {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$KioskAccount,
+        [string]$Root = (Join-Path $env:ProgramData 'Checkpoint\kiosk')
+    )
+
+    if (-not (Test-Path -LiteralPath $Root)) {
+        New-Item -ItemType Directory -Force -Path $Root | Out-Null
+    }
+
+    $kioskSid = $null
+    try {
+        $kioskSid = (New-Object System.Security.Principal.NTAccount($KioskAccount)).Translate(
+            [System.Security.Principal.SecurityIdentifier])
+    }
+    catch {
+        $msg = "Set-KioskTrustFileAcl: failed to resolve SID for kiosk account '$KioskAccount': $($_.Exception.Message)"
+        Write-Error $msg
+        throw $msg
+    }
+
+  $systemSid = New-Object System.Security.Principal.SecurityIdentifier 'S-1-5-18'
+    $adminSid = New-Object System.Security.Principal.SecurityIdentifier 'S-1-5-32-544'
+
+    $trustNames = @('setup.json', 'admin-lock.json')
+    foreach ($name in $trustNames) {
+        $path = Join-Path $Root $name
+        if (-not (Test-Path -LiteralPath $path)) {
+            [System.IO.File]::WriteAllText($path, '')
+        }
+
+        $item = Get-Item -LiteralPath $path -Force
+        $owner = New-Object System.Security.Principal.NTAccount 'NT AUTHORITY\SYSTEM'
+        $acl = New-Object System.Security.AccessControl.FileSecurity
+        $acl.SetOwner($owner)
+        $acl.SetAccessRuleProtection($true, $false)
+
+        $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+                $systemSid, 'FullControl', 'None', 'None', 'Allow')))
+        $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+                $adminSid, 'FullControl', 'None', 'None', 'Allow')))
+        $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+                $kioskSid, 'Read', 'None', 'None', 'Allow')))
+        $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+                $kioskSid, 'Write,Delete,WriteData,AppendData,ChangePermissions,TakeOwnership', 'None', 'None', 'Deny')))
+        $item.SetAccessControl($acl)
+    }
+
+    $dir = Get-Item -LiteralPath $Root -Force
+    $dirAcl = New-Object System.Security.AccessControl.DirectorySecurity
+    $dirAcl.SetOwner((New-Object System.Security.Principal.NTAccount 'NT AUTHORITY\SYSTEM'))
+    $dirAcl.SetAccessRuleProtection($true, $false)
+    $dirAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+            $systemSid, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')))
+    $dirAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+            $adminSid, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')))
+    $dirAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+            $kioskSid, 'ReadAndExecute,ListDirectory,Read', 'ContainerInherit,ObjectInherit', 'None', 'Allow')))
+    $dir.SetAccessControl($dirAcl)
+}
 
 function Get-CheckpointIranTimeZone {
     try {
@@ -129,6 +190,7 @@ Export-ModuleMember -Function @(
     "Save-FileSha256",
     "Assert-FileSha256",
     "Set-CheckpointServerJsonAcl",
+    "Set-KioskTrustFileAcl",
     "Get-CheckpointDailyBackupStartBoundaryUtc",
     "Get-CheckpointIranTimeZone"
 )

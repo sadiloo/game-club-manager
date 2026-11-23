@@ -31,7 +31,7 @@ $xml = @"
   </Settings>
   <Actions>
     <Exec>
-      <Command>pwsh.exe</Command>
+      <Command>powershell.exe</Command>
       <Arguments>$argList</Arguments>
     </Exec>
   </Actions>

@@ -430,7 +430,7 @@ begin
     Exit;
   end;
   OutFile := ExpandConstant('{tmp}\open-sessions-count.txt');
-  if Exec('cmd.exe', '/c pwsh.exe -NoProfile -ExecutionPolicy Bypass -File "' + ScriptPath + '" > "' + OutFile + '" 2>nul', '', SW_HIDE, ewWaitUntilTerminated, Rc) then
+  if Exec('cmd.exe', '/c powershell.exe -NoProfile -ExecutionPolicy Bypass -File "' + ScriptPath + '" > "' + OutFile + '" 2>nul', '', SW_HIDE, ewWaitUntilTerminated, Rc) then
     if LoadStringsFromFile(OutFile, Lines) and (GetArrayLength(Lines) > 0) then
     begin
       Line := Trim(Lines[0]);

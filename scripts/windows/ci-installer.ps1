@@ -6,9 +6,9 @@ Set-Location $root
 Import-Module (Join-Path $root "installer/tools/CheckpointInstall.Common.psm1") -Force
 
 function Invoke-DotnetPublish {
-    param([string[]] $Args, [string] $Label)
+    param([string[]] $DotnetArgs, [string] $Label)
     Write-Host "ci-installer: $Label"
-    & dotnet @Args
+    & dotnet @DotnetArgs
     if ($LASTEXITCODE -ne 0) {
         Write-Error "ci-installer: $Label failed exit $LASTEXITCODE"
         exit $LASTEXITCODE
@@ -71,6 +71,7 @@ Write-Host "ci-installer: static installer rules"
 & (Join-Path $root "installer/tests/BackupDailyTehran.Tests.ps1")
 & (Join-Path $root "installer/tests/ServerWizardStatic.Tests.ps1")
 & (Join-Path $root "installer/tests/ServerFinishLanStatic.Tests.ps1")
+& (Join-Path $root "installer/tests/KioskTrustFileAcl.Tests.ps1")
 
 Write-Host "ci-installer: server finish LAN IPv4 probe (Get-ServerLanIPv4Addresses.ps1)"
 $lanProbe = Join-Path $root "installer/tools/Get-ServerLanIPv4Addresses.ps1"

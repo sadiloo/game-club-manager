@@ -54,7 +54,7 @@ exit /b $PgDumpExit
         @"
 @echo off
 set "args=%*"
-echo %args% | findstr /I "--list" >nul
+echo %args% | findstr /I /C:"--list" >nul
 if %errorlevel% equ 0 (
   if not exist "$listPass" (
     echo LIST>> "$listTrace"
@@ -65,7 +65,7 @@ if %errorlevel% equ 0 (
     exit /b $SecondListExit
   )
 )
-echo %args% | findstr /I "--clean" >nul
+echo %args% | findstr /I /C:"--clean" >nul
 if %errorlevel% equ 0 (
   echo CLEAN>> "$cleanTrace"
   exit /b $CleanExit

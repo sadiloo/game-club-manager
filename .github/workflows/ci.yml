@@ -71,6 +71,11 @@ jobs:
         run: dotnet build src/GameClub.Kiosk/GameClub.Kiosk.csproj -c Release -f net48 --nologo && dotnet build src/GameClub.Kiosk.Guard/GameClub.Kiosk.Guard.csproj -c Release -f net48 --nologo
       - name: test every target framework except server and windows kiosk integration
         run: dotnet test GameClub.slnx -c Release --nologo --filter "FullyQualifiedName!~GameClub.Server.Tests&FullyQualifiedName!~GameClub.Kiosk.Windows.IntegrationTests" --results-directory artifacts/windows-ci --logger "trx;LogFileName=windows-ci.trx"
+      - name: kiosk trust paths and ACL (L-3)
+        shell: pwsh
+        run: |
+          & ./installer/tests/KioskTrustPaths.Tests.ps1
+          & ./installer/tests/KioskTrustFileAcl.Tests.ps1
       - name: upload windows ci test artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -193,6 +198,27 @@ jobs:
       - name: pin Inno Setup 6.7.1
         shell: pwsh
         run: choco install innosetup --version=6.7.1 -y --no-progress --allow-downgrade
+      - name: PowerShell 5.1 parse installer scripts
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $files = Get-ChildItem -Path installer -Recurse -Include *.ps1,*.psm1 -File
+          foreach ($f in $files) {
+            $tokens = $null
+            $errors = $null
+            $null = [System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$tokens, [ref]$errors)
+            if ($errors -and $errors.Count -gt 0) {
+              foreach ($e in $errors) { Write-Error "$($f.FullName): $($e.Message)" }
+              exit 1
+            }
+          }
+          $ciInstaller = Join-Path $PWD 'scripts/windows/ci-installer.ps1'
+          $null = [System.Management.Automation.Language.Parser]::ParseFile($ciInstaller, [ref]$tokens, [ref]$errors)
+          if ($errors -and $errors.Count -gt 0) {
+            foreach ($e in $errors) { Write-Error "$ciInstaller: $($e.Message)" }
+            exit 1
+          }
+          Write-Host "PowerShell 5.1 parse: ok ($($files.Count) installer files + ci-installer.ps1)"
       - name: installer acceptance
         shell: pwsh
         run: ./scripts/windows/ci-installer.ps1

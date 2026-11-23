@@ -1,4 +1,5 @@
 using System.Text.Json;
+using GameClub.Kiosk.Core.Security;
 using GameClub.Kiosk.Core.Setup;
 
 namespace GameClub.Kiosk.Core.Admin;
@@ -13,9 +14,13 @@ public sealed class KioskAdminLockStore
 
     private readonly string _path;
     private readonly KioskAdminLock _lock = new();
+    private readonly IKioskTrustFileClient _trustWriter;
 
-    public KioskAdminLockStore(string? path = null)
-        => _path = path ?? Path.Combine(KioskSetupPaths.KioskDataRoot, "admin-lock.json");
+    public KioskAdminLockStore(string? path = null, IKioskTrustFileClient? trustWriter = null)
+    {
+        _path = path ?? Path.Combine(KioskSetupPaths.KioskDataRoot, "admin-lock.json");
+        _trustWriter = trustWriter ?? KioskTrustFileClientFactory.ForPath(_path);
+    }
 
     public KioskAdminLock Lock
     {
@@ -35,7 +40,7 @@ public sealed class KioskAdminLockStore
         }
 
         var json = JsonSerializer.Serialize(_lock.Snapshot().Values, JsonOptions);
-        File.WriteAllText(_path, json);
+        _trustWriter.WriteTrustFile(_path, json);
     }
 
     private void EnsureLoaded()

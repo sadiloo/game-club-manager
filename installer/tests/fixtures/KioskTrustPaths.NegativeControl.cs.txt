@@ -1,0 +1,2 @@
+// Fixture only: must be caught by KioskTrustPaths.Tests.ps1 patterns if copied into src.
+File.WriteAllText(@"C:\ProgramData\Checkpoint\kiosk\setup.json", "{}");

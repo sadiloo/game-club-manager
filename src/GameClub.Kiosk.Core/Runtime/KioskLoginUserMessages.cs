@@ -79,9 +79,16 @@ public static class KioskLoginUserMessages
     public static IReadOnlyCollection<string> MappedKeys => AllMappedKeys;
 
     public static string DisplayText(string key)
-        => TextByKey.TryGetValue(key, out var text)
+    {
+        if (string.Equals(key, KioskStatusMessages.Keys.ServerUnreachable, StringComparison.Ordinal))
+        {
+            return KioskStatusMessages.DisplayText(key);
+        }
+
+        return TextByKey.TryGetValue(key, out var text)
             ? text
             : TextByKey[Keys.Unknown];
+    }
 
     public static bool IsKnownKey(string key) => AllMappedKeys.Contains(key);
 
@@ -109,7 +116,7 @@ public static class KioskLoginUserMessages
     {
         if (transport == LoginTransportFailure.Unreachable)
         {
-            return Keys.Unreachable;
+            return KioskStatusMessages.Keys.ServerUnreachable;
         }
 
         if (transport == LoginTransportFailure.Timeout)
