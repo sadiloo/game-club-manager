@@ -1,7 +1,7 @@
 ﻿# Server installer post-install (elevated); -InstallPhase splits §1.8 status steps.
 param(
     [string] $InstallMode = "install",
-    [ValidateSet("install-all", "webview2", "database", "accounts", "services", "firewall", "backup", "start", "upgrade", "upgrade-pins", "upgrade-stop", "upgrade-backup", "upgrade-start")]
+    [ValidateSet("install-all", "webview2", "reinstall-kept-pg", "database", "accounts", "services", "firewall", "backup", "start", "upgrade", "upgrade-pins", "upgrade-stop", "upgrade-backup", "upgrade-start")]
     [string] $InstallPhase = "install-all",
     [string] $AccountsFile = "",
     [string] $DefaultPinsFile = "",
@@ -26,6 +26,11 @@ function Test-Phase([string[]] $Names) {
 }
 
 New-Item -ItemType Directory -Force -Path $configDir, $logsDir, $backupsDir | Out-Null
+
+if ($env:CHECKPOINT_INTERNAL_TEST_HOOKS -eq "1" -and $env:CHECKPOINT_TEST_FAIL_PHASE -eq $InstallPhase) {
+    Write-Host "CHECKPOINT_POSTINSTALL_FAILED phase=$InstallPhase (internal test hook)"
+    exit 17
+}
 
 $isUpgrade = Test-Path -LiteralPath $configPath
 if ($InstallMode -eq "upgrade") { $isUpgrade = $true }
@@ -115,6 +120,21 @@ if (Test-Phase @("webview2")) {
             Start-Process -FilePath $wv2.FullName -ArgumentList "/silent", "/install" -Wait -NoNewWindow
         }
     }
+    if ($InstallPhase -ne "install-all") { exit 0 }
+}
+
+if (Test-Phase @("reinstall-kept-pg")) {
+    & (Join-Path $PSScriptRoot "Initialize-CheckpointPostgres.ps1") -PgRoot $pgRoot -SuperPassword $dbPassword -ReinstallKeptCluster
+    $stamp = Get-Date -Format "yyyyMMdd-HHmm"
+    $preDump = Join-Path $backupsDir "pre-reinstall-kept-$stamp.dump"
+    $env:PGPASSWORD = $dbPassword
+    $pgDump = Join-Path $pgRoot "bin\pg_dump.exe"
+    & $pgDump -Fc -h 127.0.0.1 -p 5433 -U postgres -d checkpoint -f $preDump
+    if ($LASTEXITCODE -ne 0) {
+        & $pgDump -Fc -h 127.0.0.1 -p 5433 -U postgres -f $preDump
+        if ($LASTEXITCODE -ne 0) { throw "pre-reinstall-kept pg_dump failed" }
+    }
+    Write-Host "server-postinstall: pre-reinstall-kept backup $preDump"
     if ($InstallPhase -ne "install-all") { exit 0 }
 }
 

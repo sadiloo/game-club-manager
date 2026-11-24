@@ -3,7 +3,8 @@ param(
     [string] $PgRoot = "C:\Program Files\Checkpoint\PostgreSQL",
     [string] $PgData = "C:\ProgramData\Checkpoint\pgdata",
     [int] $Port = 5433,
-    [string] $SuperPassword
+    [string] $SuperPassword,
+    [switch] $ReinstallKeptCluster
 )
 
 $ErrorActionPreference = "Stop"
@@ -155,8 +156,66 @@ if (-not (Test-Path -LiteralPath $initdb)) {
     throw "initdb missing at $initdb"
 }
 
-Write-InitLog "Initialize-CheckpointPostgres: begin port=$Port"
+Write-InitLog "Initialize-CheckpointPostgres: begin port=$Port reinstallKept=$($ReinstallKeptCluster.IsPresent)"
 $pgVersionFile = Join-Path $PgData "PG_VERSION"
+
+if ($ReinstallKeptCluster) {
+    if (-not (Test-Path -LiteralPath $pgVersionFile)) {
+        throw "ReinstallKeptCluster: PG_VERSION missing"
+    }
+    $probeScript = Join-Path $PSScriptRoot "Test-CheckpointPgDataCluster.ps1"
+    if (Test-Path -LiteralPath $probeScript) {
+        $probe = (& $probeScript -PgData $PgData -PgRoot $PgRoot -ExpectedMajor 16).Trim()
+        if ($probe -ne "VALID") {
+            throw "ReinstallKeptCluster: cluster probe $probe"
+        }
+    }
+    Set-PostgresClusterConf
+    $svcKept = Get-Service CheckpointPostgres -ErrorAction SilentlyContinue
+    if ($svcKept) {
+        if ($svcKept.Status -ne "Running") {
+            Start-Service CheckpointPostgres -ErrorAction Stop
+        }
+    } else {
+        $regCode = Invoke-PostgresNative -FilePath $pgCtl -ArgumentList @("register", "-N", "CheckpointPostgres", "-D", $PgData, "-S", "auto")
+        if ($regCode -ne 0) {
+            throw "pg_ctl register CheckpointPostgres failed exit $regCode (reinstall-kept)"
+        }
+        Start-Service CheckpointPostgres -ErrorAction Stop
+    }
+    Start-Sleep -Seconds 3
+    if (-not (Wait-PostgresSuperuserLogin $SuperPassword 45)) {
+        if (-not (Test-PostgresSuperuserLogin $SuperPassword)) {
+            Write-InitLog "ReinstallKeptCluster: superuser login failed; attempting repair"
+            try {
+                Repair-PostgresSuperuserPassword $SuperPassword
+            } catch {
+                Write-InitLog "ReinstallKeptCluster: password repair failed: $_"
+                throw
+            }
+        }
+    }
+    if (-not (Wait-PostgresSuperuserLogin $SuperPassword 15)) {
+        throw "ReinstallKeptCluster: superuser password could not be validated"
+    }
+    $existsKept = $false
+    $env:PGPASSWORD = $SuperPassword
+    $oldKept = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    & $psql -h 127.0.0.1 -p $Port -U postgres -tc "SELECT 1 FROM pg_database WHERE datname='checkpoint'" | ForEach-Object {
+        if ($_ -match "1") { $existsKept = $true }
+    }
+    if (-not $existsKept) {
+        $createCode = Invoke-PostgresNative -FilePath $psql -ArgumentList @("-h", "127.0.0.1", "-p", "$Port", "-U", "postgres", "-c", "CREATE DATABASE checkpoint;")
+        if ($createCode -ne 0) {
+            $ErrorActionPreference = $oldKept
+            throw "CREATE DATABASE checkpoint failed (reinstall-kept)"
+        }
+    }
+    $ErrorActionPreference = $oldKept
+    Write-InitLog "Initialize-CheckpointPostgres: ok (reinstall-kept)"
+    exit 0
+}
 function Invoke-InitDbCluster {
     if (-not (Test-Path -LiteralPath $PgData)) {
         New-Item -ItemType Directory -Force -Path $PgData | Out-Null

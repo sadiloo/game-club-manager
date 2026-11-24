@@ -218,7 +218,11 @@ if (-not $decision.Ok) {
 }
 
 function Invoke-IsccCompile {
-    param([string] $IssPath, [string] $Version)
+    param(
+        [string] $IssPath,
+        [string] $Version,
+        [switch] $InternalTestHooks
+    )
     $defines = @(
         "/DAppVersion=$Version",
         "/DStagingServerDir=$stageServer",
@@ -227,6 +231,9 @@ function Invoke-IsccCompile {
         "/DStagingKioskDir=$stageKiosk",
         "/DStagingGuardDir=$stageGuard"
     )
+    if ($InternalTestHooks) {
+        $defines += "/DCheckpointInternalTestHooks=1"
+    }
     Write-Host "ci-installer: iscc $IssPath AppVersion=$Version"
     $compileLog = & $realIscc $defines $IssPath 2>&1 | Out-String
     Write-Host $compileLog
@@ -241,6 +248,7 @@ $kioskIss = Join-Path $root "installer/kiosk/CheckpointKiosk.iss"
 $serverLow = Invoke-IsccCompile -IssPath $serverIss -Version $lowVersion
 $serverHigh = Invoke-IsccCompile -IssPath $serverIss -Version $appVersion
 $serverHigh2 = Invoke-IsccCompile -IssPath $serverIss -Version $high2Version
+$serverHighHooks = Invoke-IsccCompile -IssPath $serverIss -Version $appVersion -InternalTestHooks
 $kioskLow = Invoke-IsccCompile -IssPath $kioskIss -Version $lowVersion
 $kioskHigh = Invoke-IsccCompile -IssPath $kioskIss -Version $appVersion
 
@@ -259,6 +267,7 @@ New-Item -ItemType Directory -Force -Path $manifestDir | Out-Null
     ServerLow      = $serverLow
     ServerHigh     = $serverHigh
     ServerHigh2    = $serverHigh2
+    ServerHighHooks = $serverHighHooks
     KioskLow       = $kioskLow
     KioskHigh      = $kioskHigh
     AccountsFile   = (Join-Path $root "installer/ci/accounts-silent.json")

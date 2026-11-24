@@ -11,6 +11,9 @@
 #ifndef StagingWebView2
   #define StagingWebView2 "..\..\artifacts\installer\stage-webview2\MicrosoftEdgeWebView2RuntimeInstallerX64.exe"
 #endif
+#ifndef CheckpointInternalTestHooks
+  #define CheckpointInternalTestHooks "0"
+#endif
 
 #define AppName "چک‌پوینت سرور"
 #define SetupBase "CheckpointServerSetup-" + AppVersion
@@ -32,6 +35,7 @@ OutputBaseFilename={#SetupBase}
 OutputDir=Output
 UninstallDisplayName={#AppName}
 SetupLogging=yes
+AbortInstallationOnRunFailure=yes
 CloseApplications=no
 RestartApplications=no
 ArchitecturesAllowed=x64compatible
@@ -73,16 +77,17 @@ Name: "desktopicon"; Description: "میان‌بر روی میزکار"; Flags: 
 
 [Run]
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\tools\server-postinstall.ps1"" -InstallPhase webview2"; StatusMsg: "در حال نصب WebView2…"; Flags: runhidden; Check: NeedWebView2Install
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\tools\server-postinstall.ps1"" -InstallPhase database"; StatusMsg: "در حال آماده کردن پایگاه داده…"; Flags: runhidden; Check: IsFirstInstall
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\tools\server-postinstall.ps1"" -InstallPhase reinstall-kept-pg"; StatusMsg: "در حال آماده کردن پایگاه دادهٔ موجود…"; Flags: runhidden; Check: ReinstallKeptPgDataCheck
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\tools\server-postinstall.ps1"" -InstallPhase database"; StatusMsg: "در حال آماده کردن پایگاه داده…"; Flags: runhidden; Check: FirstInstallDatabaseCheck
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\tools\server-postinstall.ps1"" -InstallPhase accounts -AccountsFile ""{code:GetAccountsFile}"""; StatusMsg: "در حال آماده کردن حساب‌ها…"; Flags: runhidden; Check: IsFirstInstall
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\tools\server-postinstall.ps1"" -InstallPhase services"; StatusMsg: "در حال نصب سرویس‌های چک‌پوینت…"; Flags: runhidden; Check: IsFirstInstall
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\tools\server-postinstall.ps1"" -InstallPhase firewall"; StatusMsg: "در حال تنظیم فایروال…"; Flags: runhidden; Check: IsFirstInstall
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\tools\server-postinstall.ps1"" -InstallPhase backup -AccountsFile ""{code:GetAccountsFile}"""; StatusMsg: "در حال تنظیم پشتیبان روزانه…"; Flags: runhidden; Check: IsFirstInstall
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\tools\server-postinstall.ps1"" -InstallPhase start"; StatusMsg: "در حال روشن کردن سرور…"; Flags: runhidden; Check: IsFirstInstall
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\tools\server-postinstall.ps1"" -InstallMode upgrade -InstallPhase upgrade-pins -DefaultPinsFile ""{code:GetDefaultPinsFile}"""; StatusMsg: "در حال آماده‌سازی ارتقا…"; Flags: runhidden; Check: IsUpgradeInstallCheck and UpgradeDefaultPinsReady and UpgradeHasDefaultPinsFile
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\tools\server-postinstall.ps1"" -InstallMode upgrade -InstallPhase upgrade-stop"; StatusMsg: "در حال توقف سرور…"; Flags: runhidden; Check: IsUpgradeInstallCheck and UpgradeDefaultPinsReady
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\tools\server-postinstall.ps1"" -InstallMode upgrade -InstallPhase upgrade-backup"; StatusMsg: "در حال گرفتن پشتیبان پیش از ارتقا…"; Flags: runhidden; Check: IsUpgradeInstallCheck and UpgradeDefaultPinsReady
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\tools\server-postinstall.ps1"" -InstallMode upgrade -InstallPhase upgrade-start -AccountsFile ""{code:GetAccountsFile}"""; StatusMsg: "در حال روشن کردن سرور…"; Flags: runhidden; Check: IsUpgradeInstallCheck and UpgradeDefaultPinsReady
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\tools\server-postinstall.ps1"" -InstallMode upgrade -InstallPhase upgrade-pins -DefaultPinsFile ""{code:GetDefaultPinsFile}"""; StatusMsg: "در حال آماده‌سازی ارتقا…"; Flags: runhidden; Check: NormalUpgradeInstallCheck and UpgradeDefaultPinsReady and UpgradeHasDefaultPinsFile
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\tools\server-postinstall.ps1"" -InstallMode upgrade -InstallPhase upgrade-stop"; StatusMsg: "در حال توقف سرور…"; Flags: runhidden; Check: NormalUpgradeInstallCheck and UpgradeDefaultPinsReady
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\tools\server-postinstall.ps1"" -InstallMode upgrade -InstallPhase upgrade-backup"; StatusMsg: "در حال گرفتن پشتیبان پیش از ارتقا…"; Flags: runhidden; Check: NormalUpgradeInstallCheck and UpgradeDefaultPinsReady
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\tools\server-postinstall.ps1"" -InstallMode upgrade -InstallPhase upgrade-start -AccountsFile ""{code:GetAccountsFile}"""; StatusMsg: "در حال روشن کردن سرور…"; Flags: runhidden; Check: NormalUpgradeInstallCheck and UpgradeDefaultPinsReady
 Filename: "{app}\docs\server-install.fa.md"; Description: "مشاهدهٔ راهنمای نصب"; Flags: postinstall shellexec skipifsilent unchecked; Check: FileExists(ExpandConstant('{app}\docs\server-install.fa.md'))
 
 [UninstallRun]
@@ -126,10 +131,27 @@ begin
   ExitProcess(CHECKPOINT_EXIT_DOWNGRADE_BLOCKED);
 end;
 
+procedure AbortExistingDataKept(const Reason: String);
+var
+  PgPath, LogPath: String;
+begin
+  PgPath := ExpandConstant('{commonappdata}\Checkpoint\pgdata');
+  Log('CHECKPOINT_EXISTING_DATA_KEPT reason=' + Reason + ' pgdata=' + PgPath);
+  LogPath := ExpandConstant('{log}');
+  if not WizardSilent then
+    MsgBox(
+      Format('پوشهٔ دادهٔ PostgreSQL از قبل وجود دارد و دست نخورده نگه داشته شد.%nمسیر: %s%nگزارش: %s', [PgPath, LogPath]),
+      mbError, MB_OK);
+  ExitProcess(CHECKPOINT_EXIT_EXISTING_DATA_KEPT);
+end;
+
 function InitializeSetup: Boolean;
 var Installed, NewVer: String; Cmp: Integer;
 begin
   CaptureFirstInstallState;
+#if CheckpointInternalTestHooks == "1"
+  ApplyInternalTestHooks;
+#endif
   Installed := GetInstalledDisplayVersion;
   NewVer := '{#AppVersion}';
   if Installed <> '' then
@@ -140,5 +162,6 @@ begin
       AbortDowngradeBlocked(Installed, NewVer);
     end;
   end;
+  EvaluatePgDataForFreshInstall;
   Result := True;
 end;

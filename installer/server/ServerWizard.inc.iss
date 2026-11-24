@@ -2,9 +2,15 @@ const
   MAX_DEFAULT_PIN_PAGES = 256;
   { Inno uses exit codes 0 success, 1 init failure, 2 user cancel, 3/4 fatal, 5=need admin (some builds). }
   CHECKPOINT_EXIT_DOWNGRADE_BLOCKED = 128;
+  CHECKPOINT_EXIT_POSTINSTALL_FAILED = 129;
+  CHECKPOINT_EXIT_EXISTING_DATA_KEPT = 130;
+  CHECKPOINT_EXPECTED_PG_MAJOR_STR = '16';
 
 procedure ExitProcess(uExitCode: UINT);
   external 'ExitProcess@kernel32 stdcall';
+
+function SetEnvironmentVariable(lpName, lpValue: PChar; dwFlags: DWORD): BOOL;
+  external 'SetEnvironmentVariableW@kernel32 stdcall';
 
 var
   Manager1Page, Manager2Page, OperatorPage: TInputQueryWizardPage;
@@ -29,6 +35,7 @@ var
   GFirstInstallCaptured: Boolean;
   GUpgradeStoppedServer: Boolean;
   GInstallReachedDone: Boolean;
+  GReinstallWithKeptPgData: Boolean;
 
 function WindowsServiceExists(const ServiceName: String): Boolean;
 var Rc: Integer;
@@ -93,6 +100,101 @@ end;
 function IsUpgradeInstallCheck: Boolean;
 begin
   Result := not IsFirstInstall;
+end;
+
+function ReinstallKeptPgDataCheck: Boolean;
+begin
+  Result := GReinstallWithKeptPgData;
+end;
+
+function NormalUpgradeInstallCheck: Boolean;
+begin
+  Result := IsUpgradeInstallCheck and (not GReinstallWithKeptPgData);
+end;
+
+function FirstInstallDatabaseCheck: Boolean;
+begin
+  Result := IsFirstInstall and (not GReinstallWithKeptPgData);
+end;
+
+function PgDataDirectoryNonEmpty(const Dir: String): Boolean;
+var F: TFindRec;
+begin
+  Result := False;
+  if FindFirst(Dir + '\*', F) then
+  try
+    repeat
+      if (F.Name <> '.') and (F.Name <> '..') then
+      begin
+        Result := True;
+        Exit;
+      end;
+    until not FindNext(F);
+  finally
+    FindClose(F);
+  end;
+end;
+
+procedure EvaluatePgDataForFreshInstall;
+var
+  PgPath, VerFile, MajorRead, Content: String;
+begin
+  if not IsFirstInstall then Exit;
+  PgPath := ExpandConstant('{commonappdata}\Checkpoint\pgdata');
+  if not DirExists(PgPath) then Exit;
+  VerFile := PgPath + '\PG_VERSION';
+  if not FileExists(VerFile) then
+  begin
+    if PgDataDirectoryNonEmpty(PgPath) then
+      AbortExistingDataKept('pgdata_without_valid_cluster');
+    Exit;
+  end;
+  if not LoadStringFromFile(VerFile, Content) then
+  begin
+    AbortExistingDataKept('pg_version_unreadable');
+    Exit;
+  end;
+  MajorRead := Trim(Content);
+  if MajorRead <> CHECKPOINT_EXPECTED_PG_MAJOR_STR then
+  begin
+    AbortExistingDataKept('pg_major_mismatch major=' + MajorRead);
+    Exit;
+  end;
+  GReinstallWithKeptPgData := True;
+  Log('CHECKPOINT_REINSTALL_KEPT_PGDATA major=' + MajorRead);
+end;
+
+#if CheckpointInternalTestHooks == "1"
+procedure ApplyInternalTestHooks;
+var
+  Phase: String;
+begin
+  Phase := ExpandConstant('{param:TESTFAILPHASE|}');
+  if Phase = '' then Exit;
+  SetEnvironmentVariable('CHECKPOINT_INTERNAL_TEST_HOOKS', '1', 0);
+  SetEnvironmentVariable('CHECKPOINT_TEST_FAIL_PHASE', PChar(Phase), 0);
+  Log('CHECKPOINT_INTERNAL_TEST_HOOK phase=' + Phase);
+end;
+#endif
+
+procedure CurRunFailed(CurRunRecId: Integer);
+var
+  LogPath, PhaseHint: String;
+begin
+  Log('CHECKPOINT_POSTINSTALL_FAILED CurRunRecId=' + IntToStr(CurRunRecId));
+  LogPath := ExpandConstant('{log}');
+  PhaseHint := ExpandConstant('{param:TESTFAILPHASE|}');
+  if PhaseHint = '' then
+    PhaseHint := '(see log for InstallPhase)';
+  if WizardSilent then
+    ExitProcess(CHECKPOINT_EXIT_POSTINSTALL_FAILED)
+  else
+  begin
+    MsgBox(
+      Format('مرحلهٔ پس‌نصب (%s) ناموفق بود. جزئیات در فایل گزارش:%n%s', [PhaseHint, LogPath]),
+      mbError, MB_OK);
+    ExitProcess(CHECKPOINT_EXIT_POSTINSTALL_FAILED);
+  end;
 end;
 
 function IsWebView2Installed: Boolean;
@@ -844,11 +946,40 @@ end;
 
 function InstallPostgreSqlPayload: Boolean;
 begin
-  Result := IsFirstInstall;
+  Result := IsFirstInstall or GReinstallWithKeptPgData;
+end;
+
+function ValidateReinstallKeptCluster: Boolean;
+var
+  ScriptPath, OutFile, Line: String;
+  Rc: Integer;
+  Lines: TArrayOfString;
+begin
+  Result := False;
+  ScriptPath := ExpandConstant('{app}\tools\Test-CheckpointPgDataCluster.ps1');
+  OutFile := ExpandConstant('{tmp}\pgdata-probe.txt');
+  if not FileExists(ScriptPath) then Exit;
+  if Exec('powershell.exe', '-NoProfile -ExecutionPolicy Bypass -File "' + ScriptPath + '" > "' + OutFile + '"', '', SW_HIDE, ewWaitUntilTerminated, Rc) then
+    if LoadStringsFromFile(OutFile, Lines) and (GetArrayLength(Lines) > 0) then
+    begin
+      Line := Trim(Lines[0]);
+      Result := (Line = 'VALID');
+      Log('CHECKPOINT_PGDATA_PROBE result=' + Line);
+    end;
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
+  if CurStep = ssPostInstall then
+  begin
+    if GReinstallWithKeptPgData then
+    begin
+      if not ValidateReinstallKeptCluster then
+        AbortExistingDataKept('cluster_probe_invalid');
+      SetEnvironmentVariable('CHECKPOINT_REINSTALL_KEPT_DATA', '1', 0);
+      SetEnvironmentVariable('CHECKPOINT_UPGRADE_FROM', 'reinstall-kept', 0);
+    end;
+  end;
   if CurStep = ssDone then
     GInstallReachedDone := True;
 end;
@@ -866,7 +997,8 @@ begin
   CaptureFirstInstallState;
   NeedsRestart := False;
   Result := '';
-  if IsFirstInstall then Exit;
+  if IsFirstInstall and (not GReinstallWithKeptPgData) then Exit;
+  if GReinstallWithKeptPgData and (not WindowsServiceExists('CheckpointServer')) then Exit;
   GUpgradeStoppedServer := True;
   StopCheckpointServerForUpgrade;
 end;

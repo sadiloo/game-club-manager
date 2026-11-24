@@ -26,4 +26,7 @@ foreach ($p in @("pgdata", "backups", "config")) {
 Install-ServerSetup -Exe $ServerSetup -Accounts $AccountsFile
 $after = Get-InstallerDbCounts
 if ($before.Customers -ne $after.Customers) { throw "B-4: customer count changed after reinstall" }
-Write-Host "B-4: ok"
+$reinstallBackup = Get-ChildItem "C:\ProgramData\Checkpoint\backups\pre-reinstall-kept-*.dump" -ErrorAction SilentlyContinue | Select-Object -First 1
+if (-not $reinstallBackup) { throw "B-4: pre-reinstall-kept backup missing" }
+Assert-InstallerServerServicesRunning
+Write-Host "B-4: ok backup=$($reinstallBackup.Name)"

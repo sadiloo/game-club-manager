@@ -78,6 +78,19 @@
         $exitCodes | Should -Match "CheckpointSetupExitDowngradeBlocked = 128"
     }
 
+    It "postinstall fail and existing pgdata exit codes (R8f)" {
+        $script:Inc | Should -Match "CHECKPOINT_EXIT_POSTINSTALL_FAILED = 129"
+        $script:Inc | Should -Match "CHECKPOINT_EXIT_EXISTING_DATA_KEPT = 130"
+        $script:Inc | Should -Match "procedure CurRunFailed"
+        $script:Inc | Should -Match "CHECKPOINT_POSTINSTALL_FAILED"
+        $script:Iss | Should -Match "AbortInstallationOnRunFailure=yes"
+        $script:Iss | Should -Match "procedure AbortExistingDataKept"
+        $script:Iss | Should -Match "CHECKPOINT_EXISTING_DATA_KEPT"
+        $exitCodes = Get-Content -LiteralPath (Join-Path $PSScriptRoot "..\ci\checkpoint-setup-exit-codes.ps1") -Raw
+        $exitCodes | Should -Match "CheckpointSetupExitPostinstallFailed = 129"
+        $exitCodes | Should -Match "CheckpointSetupExitExistingDataKept = 130"
+    }
+
     It "PostgreSQL payload only on first install (§2.2)" {
         $script:Inc | Should -Match "function InstallPostgreSqlPayload"
         $script:Iss | Should -Match "InstallPostgreSqlPayload"
