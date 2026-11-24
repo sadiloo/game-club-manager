@@ -151,6 +151,12 @@ function Invoke-InstallerApiJson {
     return Invoke-WebRequest @params
 }
 
+function Get-InstallerPsqlExecutable {
+    $psql = "C:\Program Files\Checkpoint\PostgreSQL\bin\psql.exe"
+    if (-not (Test-Path -LiteralPath $psql)) { throw "psql missing at $psql" }
+    return $psql
+}
+
 function Get-InstallerDbCounts {
     $json = Get-InstallerServerJson
     $cs = [string]$json.ConnectionStrings.Default
@@ -164,7 +170,14 @@ SELECT
  (SELECT count(*) FROM invoices),
  (SELECT count(*) FROM wallet_ledger);
 "@
-    $out = & psql -h 127.0.0.1 -p 5433 -U postgres -d checkpoint -At -F '|' -c $q 2>&1
+    $psql = Get-InstallerPsqlExecutable
+    $oldEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $out = & $psql -h 127.0.0.1 -p 5433 -U postgres -d checkpoint -At -F '|' -c $q 2>&1
+    } finally {
+        $ErrorActionPreference = $oldEap
+    }
     if ($LASTEXITCODE -ne 0) { throw "psql count failed: $out" }
     $parts = $out.Trim() -split '\|'
     return [PSCustomObject]@{

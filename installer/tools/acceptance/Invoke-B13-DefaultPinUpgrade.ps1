@@ -30,7 +30,15 @@ $hash1111 = $proc.StandardOutput.ReadToEnd().Trim()
 $proc.WaitForExit()
 if ($proc.ExitCode -ne 0) { throw "B-13: hash-pin failed" }
 
-& psql -h 127.0.0.1 -p 5433 -U postgres -d checkpoint -c "UPDATE operator_users SET pin_hash='$hash1111' WHERE username='$operatorUser';" | Out-Null
+$psql = Get-InstallerPsqlExecutable
+$oldEap = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+try {
+    $null = & $psql -h 127.0.0.1 -p 5433 -U postgres -d checkpoint -c "UPDATE operator_users SET pin_hash='$hash1111' WHERE username='$operatorUser';" 2>&1
+} finally {
+    $ErrorActionPreference = $oldEap
+}
+if ($LASTEXITCODE -ne 0) { throw "B-13: psql pin update failed" }
 
 $check = & $serverExe --check-default-pins 2>&1 | Out-String
 if ($check -notmatch [regex]::Escape($operatorUser)) {
