@@ -382,7 +382,7 @@ public sealed record PayableLine(string? GroupId, bool IsPcTime, bool IsTimeChar
 public sealed record LineShare(int LineIndex, int TenderIndex, PaymentMethod Method, long AmountToman);
 
 /// <summary>
-/// Exact balance shares, then one rounding of the counter remainder.
+/// Exact balance shares; when no whole-invoice collectible is supplied, one rounding of the counter remainder.
 /// Wallet and PC amounts are never rounded. A zero counter remainder is not lifted to the step.
 /// </summary>
 public sealed record AllocationResult(
@@ -619,19 +619,6 @@ public static class PaymentAllocator
         var counterExact = MoneyMath.CheckedAdd(counterTime, counterOther);
         long roundingDelta = 0;
         long counterRounded = counterExact;
-        if (rounding.Enabled && counterExact > 0)
-        {
-            if (rounding.Scope == RoundingScope.TimeChargesOnly)
-            {
-                var (roundedTime, delta) = MoneyMath.Round(counterTime, rounding);
-                roundingDelta = delta;
-                counterRounded = MoneyMath.CheckedAdd(roundedTime, counterOther);
-            }
-            else
-            {
-                (counterRounded, roundingDelta) = MoneyMath.Round(counterExact, rounding);
-            }
-        }
 
         long balanceApplied = 0;
         long counterTendered = 0;
@@ -652,8 +639,25 @@ public static class PaymentAllocator
             }
         }
 
+        var wholeBillWithBalance = cashEquivalentPayable > 0 && balanceApplied > 0;
+        if (rounding.Enabled && counterExact > 0 && !wholeBillWithBalance)
+        {
+            if (rounding.Scope == RoundingScope.TimeChargesOnly)
+            {
+                var (roundedTime, delta) = MoneyMath.Round(counterTime, rounding);
+                roundingDelta = delta;
+                counterRounded = MoneyMath.CheckedAdd(roundedTime, counterOther);
+            }
+            else
+            {
+                (counterRounded, roundingDelta) = MoneyMath.Round(counterExact, rounding);
+            }
+        }
+
         var deferCounterCheck = cashEquivalentPayable > 0 && counterExact == 0 && balanceApplied > 0;
-        if (counterTendered != counterRounded && !deferCounterCheck)
+        var skipCounterRoundedCheck = wholeBillWithBalance && counterTendered > 0;
+        var deferWholeBillWalletOnly = wholeBillWithBalance && counterTendered == 0;
+        if (counterTendered != counterRounded && !deferCounterCheck && !skipCounterRoundedCheck && !deferWholeBillWalletOnly)
         {
             errors.Add(new PaymentError(
                 PaymentErrors.SumMismatch,
@@ -725,6 +729,12 @@ public static class PaymentAllocator
             {
                 counterExact = roundingGapCounter;
                 counterRounded = roundingGapCounter;
+            }
+            else if (!trackingCashCollectible)
+            {
+                errors.Add(new PaymentError(
+                    PaymentErrors.SumMismatch,
+                    $"Tenders {balanceApplied + counterTendered} toman must equal collectible {cashEquivalentPayable}."));
             }
         }
 

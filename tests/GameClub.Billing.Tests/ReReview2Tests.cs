@@ -118,7 +118,7 @@ public class ReReview2Tests
     }
 
     [Fact]
-    public void R2_4_collect_rounds_only_the_counter_remainder()
+    public void R2_4_collect_whole_invoice_when_wallet_and_cash_share_rounded_collectible()
     {
         var issued = T.At(2026, 6, 2, 12, 0);
         var request = new InvoiceRequest(
@@ -134,17 +134,14 @@ public class ReReview2Tests
         var split = new Tender[]
         {
             new(PaymentMethod.Wallet, 50_001, "m"),
-            new(PaymentMethod.Cash, 100_000),
+            new(PaymentMethod.Cash, 99_999),
         };
         var wallets = new MemberWallet[] { new("m", 50_001, 0) };
         var preview = InvoiceCalculator.Calculate(request, split, wallets);
-        var (mixed, allocation) = InvoiceCalculator.Collect(
-            request,
-            [new Tender(PaymentMethod.Wallet, 50_001, "m"), new Tender(PaymentMethod.Cash, 100_000)],
-            [new MemberWallet("m", 50_001, 0)]);
+        var (mixed, allocation) = InvoiceCalculator.Collect(request, split, wallets);
         Assert.True(allocation.IsValid, allocation.Errors.FirstOrDefault()?.Message);
-        Assert.Equal(150_001, preview.PayableToman);
-        Assert.Equal(150_001, allocation.PayableToman);
+        Assert.Equal(150_000, preview.PayableToman);
+        Assert.Equal(150_000, allocation.PayableToman);
         Assert.Equal(preview.PayableToman, mixed.PayableToman);
         Assert.Equal(allocation.PayableToman, mixed.PayableToman);
     }

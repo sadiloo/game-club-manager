@@ -416,7 +416,7 @@ public sealed class OperatorBillService(
     }
 
     public void EnsurePreviewMatchesConfirmValidation(
-        PendingBillEntity bill,
+        long livePaymentTimeCollectibleToman,
         BillAmounts amounts,
         IReadOnlyList<PaymentInput> effective,
         Guid? customerId)
@@ -427,7 +427,7 @@ public sealed class OperatorBillService(
         }
         catch (ApiException)
         {
-            if (AllowsOverTenderPreview(bill, amounts, effective))
+            if (AllowsOverTenderPreview(livePaymentTimeCollectibleToman, effective))
             {
                 return;
             }
@@ -437,17 +437,11 @@ public sealed class OperatorBillService(
     }
 
     private static bool AllowsOverTenderPreview(
-        PendingBillEntity bill,
-        BillAmounts amounts,
+        long livePaymentTimeCollectibleToman,
         IReadOnlyList<PaymentInput> effective)
     {
-        if (amounts.Detail?.Allocation is { IsValid: false })
-        {
-            return false;
-        }
-
         var tendered = effective.Sum(p => p.AmountToman);
-        return tendered > bill.CollectibleToman;
+        return tendered > livePaymentTimeCollectibleToman;
     }
 
     public async Task<PaymentPreviewResult> BuildBuffetPaymentPreviewAsync(
@@ -466,7 +460,7 @@ public sealed class OperatorBillService(
             ct);
         var tenders = ToTenders(effective, sale.CustomerId);
         var amounts = await calculator.ComputeBuffetOnlyAsync(sale.Lines, sale.CustomerId, tenders, ct, effective);
-        EnsurePreviewMatchesConfirmValidation(bill, amounts, effective, sale.CustomerId);
+        EnsurePreviewMatchesConfirmValidation(live.CollectibleToman, amounts, effective, sale.CustomerId);
         return new PaymentPreviewResult(
             amounts,
             effective,
@@ -504,7 +498,7 @@ public sealed class OperatorBillService(
             tenders,
             ct,
             effective);
-        EnsurePreviewMatchesConfirmValidation(bill, amounts, effective, session.CustomerId);
+        EnsurePreviewMatchesConfirmValidation(live.CollectibleToman, amounts, effective, session.CustomerId);
         return new PaymentPreviewResult(
             amounts,
             effective,
