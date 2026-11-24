@@ -35,7 +35,9 @@ begin
   if not GFirstInstallCaptured then
   begin
     ConfigPath := ExpandConstant('{commonappdata}\Checkpoint\config\server.json');
-    GFirstInstall := (not FileExists(ConfigPath)) or (not WindowsServiceExists('CheckpointServer'));
+    GFirstInstall := (not FileExists(ConfigPath))
+      or (not WindowsServiceExists('CheckpointServer'))
+      or (not WindowsServiceExists('CheckpointPostgres'));
     GFirstInstallCaptured := True;
   end;
 end;
