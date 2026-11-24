@@ -817,9 +817,21 @@ public static class InvoiceCalculator
         var effectiveRounding = resolved.EffectiveRounding;
         var walletLikeCash = resolved.WalletRoundsLikeCash;
         var subThreshold = unroundedPayable < WalletPaymentRounding.CashLikeThresholdToman;
-        var cashEquivalent = walletLikeCash
-            ? Calculate(request with { Rounding = resolved.BranchRounding })
-            : priced;
+        var branchRounded = Calculate(request with { Rounding = resolved.BranchRounding });
+        var hasBalanceTender = tenders.Any(t => t.Method is PaymentMethod.Wallet or PaymentMethod.PcBalance);
+        var hasCounterTender = tenders.Any(t => t.Method is PaymentMethod.Cash or PaymentMethod.CardReader or PaymentMethod.CardToCard);
+        var mixedBalanceCounter = hasBalanceTender && hasCounterTender;
+        var balanceTendered = tenders
+            .Where(t => t.Method is PaymentMethod.Wallet or PaymentMethod.PcBalance)
+            .Sum(t => t.AmountToman);
+        var walletOnlyPartial = hasBalanceTender && !hasCounterTender && balanceTendered < unroundedPayable;
+        var mixedWholeBillWhenWalletCashOff = !subThreshold
+            && mixedBalanceCounter
+            && !roundingSettings.ApplyToWallet;
+        var useCashEquivalentForAllocate = walletLikeCash
+            || mixedWholeBillWhenWalletCashOff
+            || (!subThreshold && walletOnlyPartial);
+        var cashEquivalent = useCashEquivalentForAllocate ? branchRounded : priced;
         var nets = PayableNets(request, priced.NetBeforeRoundingToman);
         var allocation = PaymentAllocator.Allocate(
             nets,
@@ -828,8 +840,8 @@ public static class InvoiceCalculator
             wallets,
             walletDebt,
             pcBalance,
-            walletLikeCash ? cashEquivalent.PayableToman : 0,
-            walletLikeCash ? cashEquivalent.RoundingToman : 0,
+            useCashEquivalentForAllocate ? cashEquivalent.PayableToman : 0,
+            useCashEquivalentForAllocate ? cashEquivalent.RoundingToman : 0,
             roundingSettings.AllowWalletShortBalanceDebt,
             roundingSettings.SuppressWalletDebtDraw,
             subThreshold);

@@ -275,4 +275,107 @@ public sealed class WalletLoyaltyR4cQ2Q3BillingTests
         Assert.Equal(150_000, alloc.PayableToman);
         Assert.Single(alloc.Errors, e => e.Code == PaymentErrors.SumMismatch);
     }
+
+  private static InvoiceRequest BuffetRequest(long net)
+        => new(
+            [],
+            [new BuffetLine("custom", "خدمت", 1, net)],
+            [],
+            null,
+            null,
+            DiscountPolicy.Default,
+            Step5Up,
+            Issued);
+
+    private static InvoiceRequest PcTimeRequest(long net)
+        => new(
+            [new TimeChargeLine("time", net, PilotSeed.PcNormalGroupId, new LocalDate(2026, 6, 3), DayOfWeek.Tuesday, IsPcTime: true)],
+            [],
+            [],
+            null,
+            null,
+            DiscountPolicy.Default,
+            Step5Up,
+            Issued);
+
+    [Fact]
+    public void q_b_ruled_apply_to_wallet_off_mixed_12000_whole_bill_15000()
+    {
+        var settings = PaymentRoundingSettings.Default with { ApplyToWallet = false };
+        var (_, alloc) = InvoiceCalculator.Collect(
+            BuffetRequest(12_000),
+            [new Tender(PaymentMethod.Wallet, 6_000, "m"), new Tender(PaymentMethod.Cash, 9_000)],
+            [new MemberWallet("m", 20_000, 0)],
+            roundingSettings: settings);
+        Assert.True(alloc.IsValid, alloc.Errors.FirstOrDefault()?.Message);
+        Assert.Equal(15_000, alloc.PayableToman);
+        Assert.NotEqual(16_000, alloc.PayableToman);
+        Assert.Equal(3_000, alloc.RoundingToman);
+        var (_, under) = InvoiceCalculator.Collect(
+            BuffetRequest(12_000),
+            [new Tender(PaymentMethod.Wallet, 6_000, "m"), new Tender(PaymentMethod.Cash, 6_000)],
+            [new MemberWallet("m", 20_000, 0)],
+            roundingSettings: settings);
+        Assert.False(under.IsValid);
+        Assert.Equal(15_000, under.PayableToman);
+    }
+
+    [Fact]
+    public void gate_mutant_qb_cash_part_only_round_apply_wallet_off_mixed_not_16000()
+    {
+        q_b_ruled_apply_to_wallet_off_mixed_12000_whole_bill_15000();
+    }
+
+    [Fact]
+    public void q_a_ruled_pc_balance_mixed_149850_collectible_150000()
+    {
+        var pcPocket = new WalletPocket(50_001, 0);
+        var (_, alloc) = InvoiceCalculator.Collect(
+            PcTimeRequest(149_850),
+            [new Tender(PaymentMethod.PcBalance, 50_001), new Tender(PaymentMethod.Cash, 99_999)],
+            pcBalance: pcPocket);
+        Assert.True(alloc.IsValid, alloc.Errors.FirstOrDefault()?.Message);
+        Assert.Equal(150_000, alloc.PayableToman);
+        Assert.NotEqual(151_000, alloc.PayableToman);
+        Assert.Equal(150, alloc.RoundingToman);
+    }
+
+    [Fact]
+    public void gate_mutant_qa_wallet_only_balance_applied_pc_balance_149850_fails_whole_bill()
+    {
+        q_a_ruled_pc_balance_mixed_149850_collectible_150000();
+    }
+
+    [Fact]
+    public void q_a_ruled_pc_balance_12000_pc1000_cash14000_valid_cash15000_invalid()
+    {
+        var pcPocket = new WalletPocket(1_000, 0);
+        var request = PcTimeRequest(12_000);
+        var (_, ok) = InvoiceCalculator.Collect(
+            request,
+            [new Tender(PaymentMethod.PcBalance, 1_000), new Tender(PaymentMethod.Cash, 14_000)],
+            pcBalance: pcPocket);
+        Assert.True(ok.IsValid, ok.Errors.FirstOrDefault()?.Message);
+        Assert.Equal(15_000, ok.PayableToman);
+        var (_, bad) = InvoiceCalculator.Collect(
+            request,
+            [new Tender(PaymentMethod.PcBalance, 1_000), new Tender(PaymentMethod.Cash, 15_000)],
+            pcBalance: pcPocket);
+        Assert.False(bad.IsValid);
+        Assert.Equal(15_000, bad.PayableToman);
+        Assert.Contains(bad.Errors, e => e.Code == PaymentErrors.SumMismatch);
+    }
+
+    [Fact]
+    public void q_b_ruled_apply_to_wallet_off_preview_buffet_12000_wallet_only_collectible_15000()
+    {
+        var settings = PaymentRoundingSettings.Default with { ApplyToWallet = false };
+        var (_, alloc) = InvoiceCalculator.Collect(
+            BuffetRequest(12_000),
+            [new Tender(PaymentMethod.Wallet, 1_000, "m")],
+            [new MemberWallet("m", 20_000, 0)],
+            roundingSettings: settings);
+        Assert.False(alloc.IsValid);
+        Assert.Equal(15_000, alloc.PayableToman);
+    }
 }

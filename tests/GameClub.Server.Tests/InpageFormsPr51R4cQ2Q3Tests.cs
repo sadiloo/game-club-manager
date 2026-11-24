@@ -41,6 +41,22 @@ public sealed class InpageFormsPr51R4cQ2Q3Tests(GameClubWebApplicationFactory fa
         return openSaleId;
     }
 
+    private static async Task PutRoundingAsync(HttpClient client, bool applyToWallet)
+    {
+        var res = await client.PutAsJsonAsync(
+            "/api/operator/settings/rounding",
+            new
+            {
+                enabled = true,
+                stepToman = 5_000L,
+                direction = "Up",
+                applyToWallet,
+                walletMinBillToman = 5_000L,
+                allowWalletShortBalanceDebt = true,
+            });
+        res.EnsureSuccessStatusCode();
+    }
+
     private static async Task ConfirmMixedAsync(HttpClient op, Guid openSaleId, long wallet, long cash)
     {
         (await op.PostAsJsonAsync(
@@ -273,5 +289,57 @@ public sealed class InpageFormsPr51R4cQ2Q3Tests(GameClubWebApplicationFactory fa
         using var scope = factory.Services.CreateScope();
         var invoice = await scope.ServiceProvider.GetRequiredService<AppDbContext>().Invoices.AsNoTracking().SingleAsync();
         Assert.Equal(150_000, invoice.CollectibleToman);
+    }
+
+    [Fact]
+    public async Task q_b_ruled_apply_to_wallet_off_server_buffet_12000_mixed_preview_confirm_15000()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var manager = await factory.CreateOperatorClientAsync("manager", "1234");
+        await PutRoundingAsync(manager, applyToWallet: false);
+        var op = await factory.CreateOperatorClientAsync();
+        var customerId = await CreateCustomerAsync(op);
+        (await op.PostAsJsonAsync(
+            $"/api/operator/members/customers/{customerId}/wallet/top-up",
+            new { method = "Cash", amountToman = 50_000L, commandId = Guid.NewGuid() })).EnsureSuccessStatusCode();
+        var openSaleId = await OpenCustomBuffetAsync(op, customerId, 12_000L);
+        var preview = await op.PostAsJsonAsync(
+            $"/api/operator/buffet-only/{openSaleId}/bill/preview",
+            new
+            {
+                payments = new[]
+                {
+                    new { method = "Wallet", amountToman = 6_000L },
+                    new { method = "Cash", amountToman = 9_000L },
+                },
+            });
+        preview.EnsureSuccessStatusCode();
+        Assert.Equal(15_000, BillCollectible(await preview.Content.ReadFromJsonAsync<JsonElement>()));
+        var before = await WalletSpendableAsync(op, customerId);
+        await ConfirmMixedAsync(op, openSaleId, 6_000, 9_000);
+        Assert.Equal(before - 6_000, await WalletSpendableAsync(op, customerId));
+        using var scope = factory.Services.CreateScope();
+        var invoice = await scope.ServiceProvider.GetRequiredService<AppDbContext>().Invoices.AsNoTracking().SingleAsync();
+        Assert.Equal(15_000, invoice.CollectibleToman);
+        Assert.Equal(3_000, invoice.RoundingToman);
+    }
+
+    [Fact]
+    public async Task q_b_ruled_apply_to_wallet_off_server_buffet_12000_wallet_only_preview_15000()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var manager = await factory.CreateOperatorClientAsync("manager", "1234");
+        await PutRoundingAsync(manager, applyToWallet: false);
+        var op = await factory.CreateOperatorClientAsync();
+        var customerId = await CreateCustomerAsync(op);
+        (await op.PostAsJsonAsync(
+            $"/api/operator/members/customers/{customerId}/wallet/top-up",
+            new { method = "Cash", amountToman = 50_000L, commandId = Guid.NewGuid() })).EnsureSuccessStatusCode();
+        var openSaleId = await OpenCustomBuffetAsync(op, customerId, 12_000L);
+        var preview = await op.PostAsJsonAsync(
+            $"/api/operator/buffet-only/{openSaleId}/bill/preview",
+            new { payments = new[] { new { method = "Wallet", amountToman = 1_000L } } });
+        preview.EnsureSuccessStatusCode();
+        Assert.Equal(15_000, BillCollectible(await preview.Content.ReadFromJsonAsync<JsonElement>()));
     }
 }
