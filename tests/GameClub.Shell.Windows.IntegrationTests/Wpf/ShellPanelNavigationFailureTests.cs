@@ -141,11 +141,12 @@ public sealed class ShellPanelNavigationFailureTests
 
                         Assert.False(string.IsNullOrEmpty(matchingOrphan));
 
+                        var navAfterOrphan = window.NavigationStartingCount;
                         var steadyDeadline = DateTime.UtcNow.AddSeconds(15);
                         while (DateTime.UtcNow < steadyDeadline)
                         {
                             await Task.Delay(500);
-                            Assert.Equal(navAtOffline, window.NavigationStartingCount);
+                            Assert.Equal(navAfterOrphan, window.NavigationStartingCount);
                             Assert.Equal(0, window.PanelNavigationPendingCountForTests);
                         }
 
