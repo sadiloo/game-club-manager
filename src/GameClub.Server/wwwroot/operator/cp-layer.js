@@ -79,11 +79,13 @@
           if (!cpLayer._historyPopWaiters.length) cpLayer._closingViaHistory = false;
         }
       }, 1500);
-      try {
-        history.back();
-      } catch (_) {
-        settleHistoryPopWaiters();
-      }
+      window.setTimeout(() => {
+        try {
+          history.back();
+        } catch (_) {
+          settleHistoryPopWaiters();
+        }
+      }, 50);
     });
   }
 

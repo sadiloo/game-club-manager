@@ -1,7 +1,8 @@
 import {
   loadOperatorApp,
   installFetchCapture,
-  sleep,
+  captureBillPreviewDebounce,
+  waitCpVisible,
 } from "./operator-jsdom-harness.mjs";
 
 const SESSION = "22222222-2222-4222-8222-222222222222";
@@ -13,6 +14,7 @@ function previewPostCount(log) {
 }
 
 const { window, document, runInApp, ctx } = loadOperatorApp();
+const debounce = captureBillPreviewDebounce(window);
 const cap = installFetchCapture(window, ctx);
 
 cap.stub(`/api/operator/sessions/${SESSION}/bill/preview`, "POST", {
@@ -36,7 +38,7 @@ runInApp(`
   scheduleBillPreview();
 `);
 
-await sleep(400);
+debounce.flush();
 
 cap.reset();
 
@@ -51,15 +53,16 @@ runInApp(`
   for (let i = 0; i < 8; i++) scheduleBillPreview();
 `);
 
-await sleep(50);
-
 if (debounceCalls > 0) {
   throw new Error(
     `scheduleBillPreview must return before debounce when draft key unchanged (setTimeout(200) called ${debounceCalls} times)`,
   );
 }
 
-await sleep(300);
+debounce.restore();
+window.setTimeout = nativeSetTimeout;
+debounce.flush();
+
 if (previewPostCount(cap.log) > 0) {
   throw new Error("no preview POST when payment draft unchanged");
 }

@@ -14,6 +14,34 @@ export function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+/** Captures bill-preview debounce timers (200ms) for deterministic flush without wall sleep. */
+export function captureBillPreviewDebounce(window) {
+  const queued = [];
+  const native = window.setTimeout.bind(window);
+  const nativeClear = window.clearTimeout.bind(window);
+  const prev = window.setTimeout;
+  window.setTimeout = (fn, ms, ...rest) => {
+    if (ms === 200) {
+      const id = queued.length + 1;
+      queued.push(fn);
+      return id;
+    }
+    return native(fn, ms, ...rest);
+  };
+  return {
+    flush() {
+      const fns = queued.splice(0, queued.length);
+      for (const fn of fns) fn();
+    },
+    pendingCount() {
+      return queued.length;
+    },
+    restore() {
+      window.setTimeout = prev;
+    },
+  };
+}
+
 const LAYER_GLOBALS = [
   "cpForm",
   "cpPrompt",
@@ -42,7 +70,7 @@ const APP_FNS = [
   "escapeHtmlText",
 ];
 
-export function loadOperatorApp(url = "http://localhost/operator/", { trackKeydown = false } = {}) {
+export function loadOperatorApp(url = "http://localhost/operator/", { trackKeydown = false, layerSource } = {}) {
   const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
   const dom = new JSDOM(html, { url, pretendToBeVisual: true });
   const { window } = dom;
@@ -97,7 +125,7 @@ export function loadOperatorApp(url = "http://localhost/operator/", { trackKeydo
     fetch: async () => ({ ok: true, status: 200, text: async () => "null" }),
   });
 
-  vm.runInContext(layerJs, ctx);
+  vm.runInContext(layerSource ?? layerJs, ctx);
   const bridge = LAYER_GLOBALS.map((g) => `var ${g} = window.${g};`).join("\n");
   vm.runInContext(bridge, ctx);
   vm.runInContext(appJs, ctx);

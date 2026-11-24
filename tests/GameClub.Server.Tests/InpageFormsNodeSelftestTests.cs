@@ -30,6 +30,7 @@ public sealed class InpageFormsNodeSelftestTests
         "cp-d2-wallet-keydown-regression-selftest.mjs",
         "cp-d3-confirm-alert-selftest.mjs",
         "cp-d4-popstate-back-selftest.mjs",
+        "cp-d4-deferred-popstate-correction-selftest.mjs",
         "cp-d1-bill-preview-bounded-selftest.mjs",
         "cp-d1-bill-preview-draft-key-guard-selftest.mjs",
         "cp-r14-ks1-preview-change-selftest.mjs",

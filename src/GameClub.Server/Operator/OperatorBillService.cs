@@ -393,6 +393,11 @@ public sealed class OperatorBillService(
 
         if (collectibleToman == 0)
         {
+            if (payments.Count > 0 && payments.All(p => p.AmountToman <= 0))
+            {
+                throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", "دست‌کم یک خط پرداخت مثبت لازم است.");
+            }
+
             if (payments.Count > 0 && payments.Any(p => p.AmountToman > 0))
             {
                 var positiveTenders = payments
@@ -463,6 +468,7 @@ public sealed class OperatorBillService(
                 }
             }
 
+            CounterPaymentRecording.EnsureRecordable(collectibleToman, payments, alloc);
             return;
         }
 
@@ -477,15 +483,9 @@ public sealed class OperatorBillService(
 
         if (detail?.Allocation is { IsValid: true })
         {
-            var tendered = payments.Sum(p => p.AmountToman);
-            if (tendered < collectibleToman)
-            {
-                throw new ApiException(
-                    StatusCodes.Status400BadRequest,
-                    "payment_invalid",
-                    OperatorPaymentErrors.Localize(new PaymentError(PaymentErrors.SumMismatch, ""), collectibleToman));
-            }
+            CounterPaymentRecording.EnsureRecordable(collectibleToman, payments, detail.Allocation);
 
+            var tendered = payments.Sum(p => p.AmountToman);
             if (tendered == collectibleToman)
             {
                 var splitWhenExact = PaymentSplitter.Split(collectibleToman, tenders);
@@ -1074,6 +1074,7 @@ public sealed class OperatorBillService(
             unroundedPayableToman = amounts.UnroundedPayableToman,
             roundingToman = amounts.RoundingToman,
             collectibleToman = preview.CollectibleToman,
+            changeToman = CounterPaymentRecording.ComputeChangeToman(preview.CollectibleToman, preview.Effective),
             surchargeToman = bill.SurchargeToman,
             timeGrossToman = amounts.TimeGrossToman,
             buffetGrossToman = amounts.BuffetGrossToman,

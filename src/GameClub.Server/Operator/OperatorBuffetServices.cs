@@ -488,6 +488,7 @@ public sealed class OperatorBuffetSaleService(
                 unroundedPayableToman = preview.Amounts.UnroundedPayableToman,
                 roundingToman = preview.Amounts.RoundingToman,
                 collectibleToman = preview.CollectibleToman,
+                changeToman = CounterPaymentRecording.ComputeChangeToman(preview.CollectibleToman, preview.Effective),
                 timeGrossToman = preview.Amounts.TimeGrossToman,
                 buffetGrossToman = preview.Amounts.BuffetGrossToman,
                 servicesGrossToman = preview.Amounts.ServicesGrossToman,

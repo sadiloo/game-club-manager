@@ -1,11 +1,11 @@
 import {
   loadOperatorApp,
   installFetchCapture,
-  sleep,
+  captureBillPreviewDebounce,
+  waitCpVisible,
 } from "./operator-jsdom-harness.mjs";
 
 const SESSION = "22222222-2222-4222-8222-222222222222";
-const PREVIEW_DEBOUNCE_MS = 200;
 
 function previewPostCount(log) {
   return log.filter(
@@ -13,16 +13,17 @@ function previewPostCount(log) {
   ).length;
 }
 
-async function waitForCondition(label, predicate, { timeout = 4000, interval = 40 } = {}) {
+async function waitForCondition(label, predicate, { timeout = 4000, interval = 20 } = {}) {
   const start = Date.now();
   while (Date.now() - start < timeout) {
     if (predicate()) return;
-    await sleep(interval);
+    await new Promise((r) => setTimeout(r, interval));
   }
   throw new Error(`timeout waiting for ${label}`);
 }
 
 const { window, document, runInApp, ctx } = loadOperatorApp();
+const debounce = captureBillPreviewDebounce(window);
 const cap = installFetchCapture(window, ctx);
 
 cap.stub(`/api/operator/sessions/${SESSION}/bill/preview`, "POST", {
@@ -46,8 +47,9 @@ runInApp(`
   scheduleBillPreview();
 `);
 
+debounce.flush();
+
 await waitForCondition("first preview POST", () => previewPostCount(cap.log) >= 1);
-await sleep(PREVIEW_DEBOUNCE_MS + 80);
 
 let lastCount = previewPostCount(cap.log);
 await waitForCondition("preview POSTs settled after idle", () => {

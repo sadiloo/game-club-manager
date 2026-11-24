@@ -1695,10 +1695,17 @@ function renderBill(bill) {
   if (bill.walletShortRemainder) lastWalletShortRemainder = bill.walletShortRemainder;
   const changeEl = document.getElementById("cashChange");
   if (changeEl) {
-    const cash = cashTendered();
     const collect = bill.collectibleToman ?? 0;
-    changeEl.textContent =
-      collect > 0 && cash > 0 ? `نقد ${cash}؛ باقی‌مانده ${Math.max(0, cash - collect)}` : "";
+    const tendered = paymentDraft.reduce((s, l) => s + (l.amountToman || 0), 0);
+  const change =
+      typeof bill.changeToman === "number" ? bill.changeToman : Math.max(0, tendered - collect);
+    if (collect > 0 && change > 0) {
+      changeEl.textContent = `باقی‌مانده ${change.toLocaleString("fa-IR")}`;
+    } else if (collect > 0 && cashTendered() > 0) {
+      changeEl.textContent = `نقد ${cashTendered().toLocaleString("fa-IR")}`;
+    } else {
+      changeEl.textContent = "";
+    }
   }
 }
 
