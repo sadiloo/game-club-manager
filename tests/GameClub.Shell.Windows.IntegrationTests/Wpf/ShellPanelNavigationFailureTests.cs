@@ -424,10 +424,6 @@ public sealed class ShellPanelNavigationFailureTests
                     try
                     {
                         window = await StartWindowOnStubAsync(stub);
-                        if (ShellSeams.HttpProbe is StubAlignedHttpProbeSeam alignedProbeSeam)
-                        {
-                            alignedProbeSeam.PanelOkTimeoutOverrideMilliseconds = 120_000;
-                        }
 
                         var wv = await WaitForPanelWebViewAsync(window, TimeSpan.FromSeconds(45));
                         ShellFileLog.Write("shell-probe-deadline-window-ready");
@@ -443,19 +439,18 @@ public sealed class ShellPanelNavigationFailureTests
                             window.PanelNavigationPendingCountForTests >= 1,
                             "expected in-flight panel navigation before the 10s loopback deadline");
 
-                        stub.OperatorDelayMilliseconds = 0;
                         var probeEntered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-                        stub.OperatorHandlerEnteredForTests = probeEntered;
-                        var operatorResponsesBefore = stub.OperatorResponseCount;
-                        stub.HoldNextPanelOperatorProbe();
-                        window.TriggerRunningPanelProbeForTests();
+                        stub.ShellProbeHandlerEnteredForTests = probeEntered;
+                        var probeRequestsBefore = stub.ProbeRequestCount;
+                        stub.HoldNextShellProbeResponse();
+                        window.TriggerProbeThenNavigatePanelForTests();
                         await AwaitTaskOrTimeoutAsync(
                             probeEntered.Task,
                             TimeSpan.FromSeconds(20),
-                            "panel-recovery operator probe did not start while held across deadline");
+                            "/shell-probe request did not start while held across deadline");
                         Assert.True(
-                            stub.OperatorResponseCount > operatorResponsesBefore,
-                            "panel-recovery operator probe did not start while held across deadline");
+                            stub.ProbeRequestCount > probeRequestsBefore,
+                            "/shell-probe request did not start while held across deadline");
 
                         await WaitForPanelUnavailableOfflineAsync(wv, TimeSpan.FromSeconds(45));
                         var deltaAfterTimeout = LogDelta(baseline);
@@ -466,7 +461,7 @@ public sealed class ShellPanelNavigationFailureTests
                         Assert.Equal(0, window.PanelNavigationPendingCountForTests);
 
                         var navAfterDeadline = window.NavigationStartingCount;
-                        stub.ReleasePanelOperatorProbeHold();
+                        stub.ReleaseShellProbeHold();
 
                         await AwaitShellLogLineAsync(
                             baseline,

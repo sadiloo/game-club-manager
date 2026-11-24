@@ -267,6 +267,11 @@ public partial class MainWindow : Window
         _ = TryRunningPanelProbeCoreAsync();
     }
 
+    internal void TriggerProbeThenNavigatePanelForTests()
+    {
+        _ = TryProbeThenNavigatePanelAsync();
+    }
+
     internal void NavigateToStringWithOfflineDataPermissionForTests(string html)
     {
         _allowOfflineDataNav = true;

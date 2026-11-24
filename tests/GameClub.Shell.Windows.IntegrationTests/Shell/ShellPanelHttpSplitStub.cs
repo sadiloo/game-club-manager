@@ -18,6 +18,8 @@ internal sealed class ShellPanelHttpSplitStub : IDisposable
     private readonly object _telemetryLock = new();
     private TaskCompletionSource<bool>? _releaseHeldOperatorResponse;
     private int _holdNextOperatorResponse;
+    private TaskCompletionSource<bool>? _releaseHeldShellProbeResponse;
+    private int _holdNextShellProbeResponse;
     private readonly List<DateTime> _probeSuccessUtcTimestamps = new();
     private readonly List<OperatorDelayWindow> _operatorDelayWindows = new();
     private Task? _listenTask;
@@ -54,6 +56,20 @@ internal sealed class ShellPanelHttpSplitStub : IDisposable
 
     /// <summary>Signaled when an /operator/ handler begins (after hold gate, before delay/response).</summary>
     public TaskCompletionSource<bool>? OperatorHandlerEnteredForTests { get; set; }
+
+    /// <summary>Signaled when a /shell-probe handler begins (after hold gate, before delay/response).</summary>
+    public TaskCompletionSource<bool>? ShellProbeHandlerEnteredForTests { get; set; }
+
+    public void HoldNextShellProbeResponse()
+    {
+        _holdNextShellProbeResponse = 1;
+        _releaseHeldShellProbeResponse = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
+
+    public void ReleaseShellProbeHold()
+    {
+        _releaseHeldShellProbeResponse?.TrySetResult(true);
+    }
 
     public void HoldNextPanelOperatorProbe()
     {
@@ -227,6 +243,16 @@ internal sealed class ShellPanelHttpSplitStub : IDisposable
             if (path.StartsWith("/shell-probe", StringComparison.OrdinalIgnoreCase))
             {
                 Interlocked.Increment(ref _probeRequestCount);
+                ShellProbeHandlerEnteredForTests?.TrySetResult(true);
+                if (Interlocked.Exchange(ref _holdNextShellProbeResponse, 0) == 1)
+                {
+                    var release = _releaseHeldShellProbeResponse;
+                    if (release is not null)
+                    {
+                        await release.Task.ConfigureAwait(false);
+                    }
+                }
+
                 await WriteHtmlResponseAsync(
                     ctx.Response,
                     200,
