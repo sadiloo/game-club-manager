@@ -118,7 +118,7 @@ public class ReReview2Tests
     }
 
     [Fact]
-    public void R2_4_collect_rounds_only_the_counter_remainder()
+    public void R2_4_mixed_wallet_cash_whole_bill_rounded_once()
     {
         // owner ruling 2026-11-24 R4c Q3 (whole bill rounded once)
         var issued = T.At(2026, 6, 2, 12, 0);

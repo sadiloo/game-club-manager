@@ -734,16 +734,13 @@ public static class PaymentAllocator
 
         var mixedCollectiblePayable = billBelowCashLikeThreshold ? exact : cashEquivalentPayable;
         var mixedCollectibleRounding = billBelowCashLikeThreshold ? 0L : cashEquivalentRounding;
-        if (wholeBillMixed && counterTendered > 0)
+        if (wholeBillMixed)
         {
             var requiredCounter = mixedCollectiblePayable - balanceApplied;
-            if (counterTendered == requiredCounter)
-            {
-                trackingCashCollectible = true;
-                roundingDelta = mixedCollectibleRounding;
-                counterRounded = requiredCounter;
-            }
-            else
+            roundingDelta = mixedCollectibleRounding;
+            counterRounded = requiredCounter;
+            trackingCashCollectible = true;
+            if (counterTendered != requiredCounter)
             {
                 errors.Add(new PaymentError(
                     PaymentErrors.SumMismatch,

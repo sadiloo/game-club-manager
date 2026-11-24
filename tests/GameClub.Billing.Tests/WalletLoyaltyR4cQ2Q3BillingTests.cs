@@ -166,4 +166,113 @@ public sealed class WalletLoyaltyR4cQ2Q3BillingTests
             Issued);
         AssertQ3Collect(request);
     }
+
+    [Fact]
+    public void r4c_preview_buffet_12000_wallet_1000_only_collectible_15000()
+    {
+        var request = new InvoiceRequest(
+            [],
+            [new BuffetLine("custom", "خدمت", 1, 12_000)],
+            [],
+            null,
+            null,
+            DiscountPolicy.Default,
+            Step5Up,
+            Issued);
+        var (_, alloc) = InvoiceCalculator.Collect(
+            request,
+            [new Tender(PaymentMethod.Wallet, 1_000, "m")],
+            [new MemberWallet("m", 10_000, 0)]);
+        Assert.False(alloc.IsValid);
+        Assert.Equal(15_000, alloc.PayableToman);
+        Assert.Equal(3_000, alloc.RoundingToman);
+        Assert.Single(alloc.Errors, e => e.Code == PaymentErrors.SumMismatch);
+        Assert.Equal(15_000, InvoiceCalculator.Calculate(request, [new Tender(PaymentMethod.Wallet, 1_000, "m")], [new MemberWallet("m", 10_000, 0)]).PayableToman);
+    }
+
+    [Fact]
+    public void r4c_preview_time_149850_wallet_50001_only_collectible_150000()
+    {
+        var request = new InvoiceRequest(
+            [new TimeChargeLine("time", 149_850, CafeFixture.Ps5, new LocalDate(2026, 6, 3), DayOfWeek.Tuesday)],
+            [],
+            [],
+            null,
+            null,
+            DiscountPolicy.Default,
+            Step5Up,
+            Issued);
+        var (_, alloc) = InvoiceCalculator.Collect(
+            request,
+            [new Tender(PaymentMethod.Wallet, 50_001, "m")],
+            [new MemberWallet("m", 50_001, 0)]);
+        Assert.False(alloc.IsValid);
+        Assert.Equal(150_000, alloc.PayableToman);
+        Assert.Equal(150, alloc.RoundingToman);
+        Assert.Single(alloc.Errors, e => e.Code == PaymentErrors.SumMismatch);
+    }
+
+    [Fact]
+    public void r4c_preview_buffet_3000_wallet_1000_only_collectible_3000()
+    {
+        var request = new InvoiceRequest(
+            [],
+            [new BuffetLine("custom", "خدمت", 1, 3_000)],
+            [],
+            null,
+            null,
+            DiscountPolicy.Default,
+            Step5Up,
+            Issued);
+        var (_, alloc) = InvoiceCalculator.Collect(
+            request,
+            [new Tender(PaymentMethod.Wallet, 1_000, "m")],
+            [new MemberWallet("m", 10_000, 0)]);
+        Assert.False(alloc.IsValid);
+        Assert.Equal(3_000, alloc.PayableToman);
+        Assert.Equal(0, alloc.RoundingToman);
+        Assert.Single(alloc.Errors, e => e.Code == PaymentErrors.SumMismatch);
+    }
+
+    [Fact]
+    public void r4c_q2_underpay_3000_wallet_1000_cash_1999_single_sum_mismatch()
+    {
+        var request = new InvoiceRequest(
+            [],
+            [new BuffetLine("custom", "خدمت", 1, 3_000)],
+            [],
+            null,
+            null,
+            DiscountPolicy.Default,
+            Step5Up,
+            Issued);
+        var (_, alloc) = InvoiceCalculator.Collect(
+            request,
+            [new Tender(PaymentMethod.Wallet, 1_000, "m"), new Tender(PaymentMethod.Cash, 1_999)],
+            [new MemberWallet("m", 10_000, 0)]);
+        Assert.False(alloc.IsValid);
+        Assert.Equal(3_000, alloc.PayableToman);
+        Assert.Single(alloc.Errors, e => e.Code == PaymentErrors.SumMismatch);
+    }
+
+    [Fact]
+    public void r4c_q3_underpay_149850_wallet_50001_cash_99998_single_sum_mismatch()
+    {
+        var request = new InvoiceRequest(
+            [],
+            [new BuffetLine("custom", "خدمت", 1, 149_850)],
+            [],
+            null,
+            null,
+            DiscountPolicy.Default,
+            Step5Up,
+            Issued);
+        var (_, alloc) = InvoiceCalculator.Collect(
+            request,
+            [new Tender(PaymentMethod.Wallet, 50_001, "m"), new Tender(PaymentMethod.Cash, 99_998)],
+            [new MemberWallet("m", 50_001, 0)]);
+        Assert.False(alloc.IsValid);
+        Assert.Equal(150_000, alloc.PayableToman);
+        Assert.Single(alloc.Errors, e => e.Code == PaymentErrors.SumMismatch);
+    }
 }
