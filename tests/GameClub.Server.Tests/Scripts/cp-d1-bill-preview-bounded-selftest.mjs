@@ -5,11 +5,21 @@ import {
 } from "./operator-jsdom-harness.mjs";
 
 const SESSION = "22222222-2222-4222-8222-222222222222";
+const PREVIEW_DEBOUNCE_MS = 200;
 
 function previewPostCount(log) {
   return log.filter(
     (e) => e.method === "POST" && String(e.url).includes(`/sessions/${SESSION}/bill/preview`),
   ).length;
+}
+
+async function waitForCondition(label, predicate, { timeout = 4000, interval = 40 } = {}) {
+  const start = Date.now();
+  while (Date.now() - start < timeout) {
+    if (predicate()) return;
+    await sleep(interval);
+  }
+  throw new Error(`timeout waiting for ${label}`);
 }
 
 const { window, document, runInApp, ctx } = loadOperatorApp();
@@ -36,8 +46,16 @@ runInApp(`
   scheduleBillPreview();
 `);
 
-cap.reset();
-await sleep(2500);
+await waitForCondition("first preview POST", () => previewPostCount(cap.log) >= 1);
+await sleep(PREVIEW_DEBOUNCE_MS + 80);
+
+let lastCount = previewPostCount(cap.log);
+await waitForCondition("preview POSTs settled after idle", () => {
+  const c = previewPostCount(cap.log);
+  if (c === lastCount && c >= 1 && c <= 2) return true;
+  lastCount = c;
+  return false;
+});
 
 const idlePosts = previewPostCount(cap.log);
 if (idlePosts > 2) {
@@ -57,13 +75,10 @@ cap.stubJsonError(`/api/operator/sessions/${SESSION}/bill/confirm`, "POST", 400,
 const confirmBtn = document.getElementById("confirmBtn");
 if (!confirmBtn) throw new Error("missing confirmBtn");
 confirmBtn.onclick();
-await sleep(400);
-
-const errEl = document.getElementById("error");
-const errText = (errEl?.textContent || "").trim();
-if (!errText.includes("۱۵٬۰۰۰")) {
-  throw new Error(`rejected confirm must keep error visible (got "${errText}")`);
-}
+await waitForCondition("confirm error visible", () => {
+  const errText = (document.getElementById("error")?.textContent || "").trim();
+  return errText.includes("۱۵٬۰۰۰");
+});
 
 const afterRejectPosts = previewPostCount(cap.log);
 if (afterRejectPosts > idlePosts + 1) {

@@ -418,7 +418,6 @@ public static class PaymentAllocator
         bool allowWalletShortBalanceDebt = true,
         bool suppressWalletDebtDraw = false,
         bool billBelowCashLikeThreshold = false,
-        bool mixedExactBelowWalletMinBill = false,
         bool allowCounterOverTender = false)
     {
         if (lines is null)
@@ -645,7 +644,7 @@ public static class PaymentAllocator
 
         long roundingDelta = 0;
         long counterRounded = counterExact;
-        if (rounding.Enabled && counterExact > 0 && !wholeBillMixed && !mixedExactBelowWalletMinBill)
+        if (rounding.Enabled && counterExact > 0 && !wholeBillMixed)
         {
             if (rounding.Scope == RoundingScope.TimeChargesOnly)
             {
@@ -677,9 +676,6 @@ public static class PaymentAllocator
         var deferCounterCheck = cashEquivalentPayable > 0 && counterExact == 0 && balanceApplied > 0;
         var skipCounterRoundedCheck = wholeBillWithBalance && counterTendered > 0 && !wholeBillMixed;
         var deferWholeBillWalletOnly = wholeBillWithBalance && counterTendered == 0 && !wholeBillMixed;
-        var mixedExactSettle = mixedExactBelowWalletMinBill
-            && mixedWalletCashRemainder
-            && balanceApplied + counterTendered >= exact;
         var counterUnder = counterTendered < counterRounded;
         var counterOver = counterTendered > counterRounded;
         var counterMismatch = counterUnder || (counterOver && !(allowCounterOverTender && balanceApplied == 0));
@@ -687,8 +683,7 @@ public static class PaymentAllocator
             && counterMismatch
             && !deferCounterCheck
             && !skipCounterRoundedCheck
-            && !deferWholeBillWalletOnly
-            && !mixedExactSettle)
+            && !deferWholeBillWalletOnly)
         {
             errors.Add(new PaymentError(
                 PaymentErrors.SumMismatch,
@@ -790,13 +785,13 @@ public static class PaymentAllocator
                 PaymentErrors.SumMismatch,
                 $"Counter tenders {counterTendered} toman against rounded remainder {counterRounded}."));
         }
-        else if (counterUnder && !deferCounterCheck && !mixedExactSettle)
+        else if (counterUnder && !deferCounterCheck)
         {
             errors.Add(new PaymentError(
                 PaymentErrors.SumMismatch,
                 $"Counter tenders {counterTendered} toman against rounded remainder {counterRounded}."));
         }
-        else if (counterOver && balanceApplied > 0 && !wholeBillMixed && !deferCounterCheck && !mixedExactSettle)
+        else if (counterOver && balanceApplied > 0 && !wholeBillMixed && !deferCounterCheck)
         {
             errors.Add(new PaymentError(
                 PaymentErrors.SumMismatch,
@@ -806,12 +801,6 @@ public static class PaymentAllocator
         var payable = trackingCashCollectible
             ? mixedCollectiblePayable
             : MoneyMath.CheckedAdd(balanceApplied, counterRounded);
-        if (mixedExactSettle)
-        {
-            counterRounded = counterExact;
-            roundingDelta = 0;
-            payable = exact;
-        }
         var remainingWallets = new List<MemberWallet>();
         foreach (var pair in pockets)
         {

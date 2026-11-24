@@ -27,15 +27,9 @@ async function runViewport({ phone }) {
   }
 
   let programmaticBacks = 0;
-  let deferPickerPop = false;
   const nativeBack = history.back.bind(history);
   history.back = () => {
     programmaticBacks += 1;
-    if (deferPickerPop) {
-      deferPickerPop = false;
-      setTimeout(() => nativeBack(), 50);
-      return;
-    }
     return nativeBack();
   };
 
@@ -72,36 +66,30 @@ async function runViewport({ phone }) {
   await waitCpVisible(document);
 
   cap.reset();
-  deferPickerPop = true;
-  void globalThis.walletCorrectTopUp();
-  await waitCpVisible(document);
-  document.querySelector(".cp-pick-row")?.click();
-  await waitCpVisible(document);
-  await sleep(80);
-
   cap.stub(`/api/operator/members/wallet/top-ups/${TOPUP_GROUP}/correct`, "POST", {});
   await fillMoneyField(document, "newAmountToman", "2000");
   await fillMoneyField(document, "newGiftToman", "0");
   document.querySelector('[data-cp-field="description"]').value = "back test";
   programmaticBacks = 0;
   await clickCpSubmit(document);
-  await sleep(500);
+  await sleep(200);
+  await waitCpHidden(document);
   assertOnOperator(window);
-  if (String(window.location.href) === "about:blank") {
-    throw new Error("wallet correction submit must not navigate to about:blank");
+  if (programmaticBacks > 0) {
+    throw new Error(`wallet correction submit must not history.back (got ${programmaticBacks})`);
   }
 
-  deferPickerPop = true;
   void globalThis.walletCorrectTopUp();
   await waitCpVisible(document);
   document.querySelector(".cp-pick-row")?.click();
   await waitCpVisible(document);
-  await sleep(120);
+  programmaticBacks = 0;
   document.querySelector(".cp-secondary")?.click();
-  await sleep(500);
+  await sleep(200);
+  await waitCpHidden(document);
   assertOnOperator(window);
-  if (String(window.location.href) === "about:blank") {
-    throw new Error("wallet correction cancel must not navigate to about:blank");
+  if (programmaticBacks > 0) {
+    throw new Error(`wallet correction cancel must not history.back (got ${programmaticBacks})`);
   }
 }
 

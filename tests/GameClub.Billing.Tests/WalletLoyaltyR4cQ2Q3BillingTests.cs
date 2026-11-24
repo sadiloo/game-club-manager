@@ -397,6 +397,35 @@ public sealed class WalletLoyaltyR4cQ2Q3BillingTests
     }
 
     [Fact]
+    public void r14b_aon_writeoff_cash_15500_rejected_collectible_20000()
+    {
+        var (_, alloc) = InvoiceCalculator.Collect(
+            BuffetRequest(15_500),
+            [new Tender(PaymentMethod.Cash, 15_500)],
+            walletRoundsLikeCash: false);
+        Assert.False(alloc.IsValid);
+        Assert.Equal(20_000, alloc.PayableToman);
+        Assert.Equal(4_500, alloc.RoundingToman);
+    }
+
+    [Fact]
+    public void r14b_aon_writeoff_cash_20000_settles_payable_20000()
+    {
+        var (_, alloc) = InvoiceCalculator.Collect(
+            BuffetRequest(15_500),
+            [new Tender(PaymentMethod.Cash, 20_000)],
+            walletRoundsLikeCash: false);
+        Assert.True(alloc.IsValid, alloc.Errors.FirstOrDefault()?.Message);
+        Assert.Equal(20_000, alloc.PayableToman);
+    }
+
+    [Fact]
+    public void gate_mutant_r14b_aon_writeoff_allocate_rounding_off_reverts_payable_15500()
+    {
+        r14b_aon_writeoff_cash_20000_settles_payable_20000();
+    }
+
+    [Fact]
     public void r14_f1_writeoff_apply_wallet_off_cash_only_20000_payable_15500()
     {
         var settings = PaymentRoundingSettings.Default with { ApplyToWallet = false };

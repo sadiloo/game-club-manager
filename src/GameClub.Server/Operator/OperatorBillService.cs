@@ -486,6 +486,15 @@ public sealed class OperatorBillService(
                     OperatorPaymentErrors.Localize(new PaymentError(PaymentErrors.SumMismatch, ""), collectibleToman));
             }
 
+            if (tendered == collectibleToman)
+            {
+                var splitWhenExact = PaymentSplitter.Split(collectibleToman, tenders);
+                if (!splitWhenExact.IsValid)
+                {
+                    throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", OperatorPaymentErrors.Localize(splitWhenExact.Errors.FirstOrDefault(), collectibleToman));
+                }
+            }
+
             return;
         }
 

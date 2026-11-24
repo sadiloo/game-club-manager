@@ -26,10 +26,11 @@ public sealed class InpageFormsPr51R14Tests(GameClubWebApplicationFactory factor
         long? stepToman = null,
         string? direction = null,
         long walletMinBillToman = 5_000L,
-        bool applyToWallet = true)
+        bool applyToWallet = true,
+        bool enabled = true)
         => new
         {
-            enabled = true,
+            enabled,
             stepToman = stepToman ?? 5_000L,
             direction = direction ?? "Up",
             applyToWallet,
@@ -115,79 +116,6 @@ public sealed class InpageFormsPr51R14Tests(GameClubWebApplicationFactory factor
         Assert.NotNull(message);
         Assert.Contains("۱۵٬۰۰۰", message);
         Assert.Contains("مبلغ قابل پرداخت", message);
-    }
-
-    [Fact]
-    public async Task r14_d2_mixed_5000_wallet_min_10k_preview_equals_confirm()
-    {
-        await S3TestHelpers.ResetAsync(factory);
-        var manager = await factory.CreateOperatorClientAsync("manager", "1234");
-        var op = await factory.CreateOperatorClientAsync();
-        await PutRoundingAsync(manager, RoundingBody(walletMinBillToman: 10_000L));
-        var customerId = await CreateCustomerAsync(op);
-        (await op.PostAsJsonAsync(
-            $"/api/operator/members/customers/{customerId}/wallet/top-up",
-            new { method = "Cash", amountToman = 10_000L, commandId = Guid.NewGuid() })).EnsureSuccessStatusCode();
-        var openSaleId = await BuffetCheckoutAsync(op, customerId, 5_000L);
-        var payments = new[]
-        {
-            new { method = "Wallet", amountToman = 1_000L },
-            new { method = "Cash", amountToman = 4_000L },
-        };
-        var preview = await op.PostAsJsonAsync(
-            $"/api/operator/buffet-only/{openSaleId}/bill/preview",
-            new { payments });
-        preview.EnsureSuccessStatusCode();
-        var previewCollectible = (await preview.Content.ReadFromJsonAsync<JsonElement>())!
-            .GetProperty("bill").GetProperty("collectibleToman").GetInt64();
-        Assert.Equal(5_000, previewCollectible);
-        var confirm = await op.PostAsJsonAsync(
-            $"/api/operator/buffet-only/{openSaleId}/confirm",
-            new { previewCollectibleToman = previewCollectible, payments });
-        confirm.EnsureSuccessStatusCode();
-        using var scope = factory.Services.CreateScope();
-        Assert.Equal(5_000, await scope.ServiceProvider.GetRequiredService<AppDbContext>()
-            .Invoices.AsNoTracking().Select(i => i.CollectibleToman).SingleAsync());
-    }
-
-    [Fact]
-    public async Task r14_d2_mixed_8000_wallet_min_10k_not_above_all_cash_rounded()
-    {
-        await S3TestHelpers.ResetAsync(factory);
-        var manager = await factory.CreateOperatorClientAsync("manager", "1234");
-        var op = await factory.CreateOperatorClientAsync();
-        await PutRoundingAsync(manager, RoundingBody(walletMinBillToman: 10_000L));
-        var customerId = await CreateCustomerAsync(op);
-        (await op.PostAsJsonAsync(
-            $"/api/operator/members/customers/{customerId}/wallet/top-up",
-            new { method = "Cash", amountToman = 10_000L, commandId = Guid.NewGuid() })).EnsureSuccessStatusCode();
-        var openSaleId = await BuffetCheckoutAsync(op, customerId, 8_000L);
-        var previewCash = await op.PostAsJsonAsync(
-            $"/api/operator/buffet-only/{openSaleId}/bill/preview",
-            new { payments = new[] { new { method = "Cash", amountToman = 10_000L } } });
-        previewCash.EnsureSuccessStatusCode();
-        var allCashCollectible = (await previewCash.Content.ReadFromJsonAsync<JsonElement>())!
-            .GetProperty("bill").GetProperty("collectibleToman").GetInt64();
-        Assert.Equal(10_000, allCashCollectible);
-        var payments = new[]
-        {
-            new { method = "Wallet", amountToman = 2_000L },
-            new { method = "Cash", amountToman = 6_000L },
-        };
-        var preview = await op.PostAsJsonAsync(
-            $"/api/operator/buffet-only/{openSaleId}/bill/preview",
-            new { payments });
-        preview.EnsureSuccessStatusCode();
-        var mixedCollectible = (await preview.Content.ReadFromJsonAsync<JsonElement>())!
-            .GetProperty("bill").GetProperty("collectibleToman").GetInt64();
-        Assert.Equal(8_000, mixedCollectible);
-        Assert.True(mixedCollectible <= allCashCollectible);
-        (await op.PostAsJsonAsync(
-            $"/api/operator/buffet-only/{openSaleId}/confirm",
-            new { previewCollectibleToman = mixedCollectible, payments })).EnsureSuccessStatusCode();
-        using var scope = factory.Services.CreateScope();
-        Assert.Equal(8_000, await scope.ServiceProvider.GetRequiredService<AppDbContext>()
-            .Invoices.AsNoTracking().Select(i => i.CollectibleToman).SingleAsync());
     }
 
     [Fact]
@@ -447,5 +375,91 @@ public sealed class InpageFormsPr51R14Tests(GameClubWebApplicationFactory factor
             doc.RootElement.GetProperty("deviceId").GetGuid(),
             doc.RootElement.GetProperty("deviceKey").GetString()!,
             doc.RootElement.GetProperty("leaseVerifyPublicKeyPem").GetString()!);
+    }
+
+    [Fact]
+    public async Task r14b_q5_paused_session_get_bill_matches_preview_collectible()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var api = factory.CreateClientWithKey();
+        var op = await factory.CreateOperatorClientAsync();
+        const string station = "PS5-R14B-Q5";
+        await S3TestHelpers.RegisterConsole(api, op, station, 1);
+        factory.Clock.SetTehran(2026, 6, 3, 14, 0);
+        var sessionId = await S3TestHelpers.StartSession(api, station, 1);
+        factory.Clock.SetTehran(2026, 6, 3, 14, 5);
+        (await op.PostAsync($"/api/operator/sessions/{sessionId}/pause", null)).EnsureSuccessStatusCode();
+        factory.Clock.SetTehran(2026, 6, 3, 14, 25);
+        (await op.PostAsync($"/api/operator/sessions/{sessionId}/bill/open", null)).EnsureSuccessStatusCode();
+        var getBill = await op.GetFromJsonAsync<JsonElement>($"/api/operator/sessions/{sessionId}/bill");
+        var billCollectible = getBill.GetProperty("collectibleToman").GetInt64();
+        var preview = await op.PostAsJsonAsync(
+            $"/api/operator/sessions/{sessionId}/bill/preview",
+            new { payments = new[] { new { method = "Cash", amountToman = billCollectible } } });
+        preview.EnsureSuccessStatusCode();
+        var previewCollectible = (await preview.Content.ReadFromJsonAsync<JsonElement>())!.GetProperty("collectibleToman").GetInt64();
+        Assert.Equal(previewCollectible, billCollectible);
+        Assert.True(billCollectible < 15_000, "paused wall time must not bill while session stayed paused");
+    }
+
+    [Fact]
+    public async Task r14b_multi_line_overpay_cash_10k_card_10k_payment_lines_sum_collectible()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var manager = await factory.CreateOperatorClientAsync("manager", "1234");
+        await PutRoundingAsync(manager, RoundingBody(enabled: false));
+        var op = await factory.CreateOperatorClientAsync();
+        var customerId = await CreateCustomerAsync(op);
+        var openSaleId = await BuffetCheckoutAsync(op, customerId, 15_500L);
+        var payments = new object[]
+        {
+            new { method = "Cash", amountToman = 10_000L },
+            new { method = "CardReader", amountToman = 10_000L },
+        };
+        var preview = await op.PostAsJsonAsync($"/api/operator/buffet-only/{openSaleId}/bill/preview", new { payments });
+        preview.EnsureSuccessStatusCode();
+        var previewCollectible = (await preview.Content.ReadFromJsonAsync<JsonElement>())!
+            .GetProperty("bill").GetProperty("collectibleToman").GetInt64();
+        Assert.Equal(15_500, previewCollectible);
+        (await op.PostAsJsonAsync(
+            $"/api/operator/buffet-only/{openSaleId}/confirm",
+            new { previewCollectibleToman = previewCollectible, payments })).EnsureSuccessStatusCode();
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var invoice = await db.Invoices.AsNoTracking().Include(i => i.PaymentLines).SingleAsync();
+        Assert.Equal(15_500, invoice.CollectibleToman);
+        Assert.Equal(15_500, invoice.PaymentLines.Sum(p => p.AmountToman));
+        Assert.Equal(10_000, invoice.PaymentLines.Single(p => p.Method == PaymentMethod.CardReader).AmountToman);
+        Assert.Equal(5_500, invoice.PaymentLines.Single(p => p.Method == PaymentMethod.Cash).AmountToman);
+    }
+
+    [Fact]
+    public async Task r14b_multi_line_overpay_cash_16k_card_4k_payment_lines_sum_collectible()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var manager = await factory.CreateOperatorClientAsync("manager", "1234");
+        await PutRoundingAsync(manager, RoundingBody(enabled: false));
+        var op = await factory.CreateOperatorClientAsync();
+        var customerId = await CreateCustomerAsync(op);
+        var openSaleId = await BuffetCheckoutAsync(op, customerId, 15_500L);
+        var payments = new object[]
+        {
+            new { method = "Cash", amountToman = 16_000L },
+            new { method = "CardReader", amountToman = 4_000L },
+        };
+        var preview = await op.PostAsJsonAsync($"/api/operator/buffet-only/{openSaleId}/bill/preview", new { payments });
+        preview.EnsureSuccessStatusCode();
+        var previewCollectible = (await preview.Content.ReadFromJsonAsync<JsonElement>())!
+            .GetProperty("bill").GetProperty("collectibleToman").GetInt64();
+        (await op.PostAsJsonAsync(
+            $"/api/operator/buffet-only/{openSaleId}/confirm",
+            new { previewCollectibleToman = previewCollectible, payments })).EnsureSuccessStatusCode();
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var invoice = await db.Invoices.AsNoTracking().Include(i => i.PaymentLines).SingleAsync();
+        Assert.Equal(15_500, invoice.CollectibleToman);
+        Assert.Equal(15_500, invoice.PaymentLines.Sum(p => p.AmountToman));
+        Assert.Equal(4_000, invoice.PaymentLines.Single(p => p.Method == PaymentMethod.CardReader).AmountToman);
+        Assert.Equal(11_500, invoice.PaymentLines.Single(p => p.Method == PaymentMethod.Cash).AmountToman);
     }
 }

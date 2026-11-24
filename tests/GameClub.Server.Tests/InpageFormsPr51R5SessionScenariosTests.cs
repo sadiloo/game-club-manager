@@ -71,7 +71,7 @@ public sealed class InpageFormsPr51R5SessionScenariosTests(GameClubWebApplicatio
         var cashLine = invoice.PaymentLines.Single(p => p.Method == PaymentMethod.Cash);
         Assert.Equal(expectedWalletLineToman, walletLine.AmountToman);
         Assert.Equal(expectedWalletLineToman, walletLine.WalletRealDrawnToman + walletLine.WalletGiftDrawnToman);
-        Assert.True(walletLine.AmountToman <= expectedCollectibleToman);
+        Assert.Equal(expectedCollectibleToman, walletLine.AmountToman + cashLine.AmountToman);
         var spend = await db.WalletLedger.AsNoTracking()
             .Where(w => w.Kind == WalletLedgerKind.InvoiceSpend)
             .SingleAsync();
@@ -159,7 +159,7 @@ public sealed class InpageFormsPr51R5SessionScenariosTests(GameClubWebApplicatio
         var cashLine = invoice.PaymentLines.Single(p => p.Method == PaymentMethod.Cash);
         Assert.Equal(expectedWalletLineToman, walletLine.AmountToman);
         Assert.Equal(expectedWalletLineToman, walletLine.WalletRealDrawnToman + walletLine.WalletGiftDrawnToman);
-        Assert.True(walletLine.AmountToman <= expectedCollectibleToman);
+        Assert.Equal(expectedCollectibleToman, walletLine.AmountToman + cashLine.AmountToman);
     }
 
     [Fact]

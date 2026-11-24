@@ -383,8 +383,10 @@ public sealed class SessionCloser(
             CustomerId = customerId,
         };
         var allocTenders = amounts.Detail?.Allocation?.Tenders;
-        foreach (var pay in payments)
+        var counterLineAmounts = ResolveCounterPaymentLineAmounts(payments, amounts.CollectibleToman, amounts.Detail?.Allocation);
+        for (var paymentIndex = 0; paymentIndex < payments.Count; paymentIndex++)
         {
+            var pay = payments[paymentIndex];
             var method = OperatorPaymentMethods.Parse(pay.Method);
             if (pay.AmountToman <= 0)
             {
@@ -394,14 +396,7 @@ public sealed class SessionCloser(
             var allocTender = method == PaymentMethod.Wallet
                 ? allocTenders?.FirstOrDefault(t => t.Method == PaymentMethod.Wallet && t.Accepted)
                 : null;
-            var lineAmount = pay.AmountToman;
-            if (method is PaymentMethod.Cash or PaymentMethod.CardReader or PaymentMethod.CardToCard
-                && amounts.Detail?.Allocation is { IsValid: true }
-                && pay.AmountToman > amounts.CollectibleToman
-                && payments.All(p => OperatorPaymentMethods.Parse(p.Method) is not (PaymentMethod.Wallet or PaymentMethod.PcBalance)))
-            {
-                lineAmount = amounts.CollectibleToman;
-            }
+            var lineAmount = counterLineAmounts[paymentIndex];
 
             if (method == PaymentMethod.Wallet && allocTender is not null)
             {
@@ -441,6 +436,109 @@ public sealed class SessionCloser(
         }
 
         return invoice;
+    }
+
+    private static long[] ResolveCounterPaymentLineAmounts(
+        IReadOnlyList<OperatorBillService.PaymentInput> payments,
+        long collectibleToman,
+        AllocationResult? allocation)
+    {
+        var recorded = new long[payments.Count];
+        for (var i = 0; i < payments.Count; i++)
+        {
+            recorded[i] = payments[i].AmountToman;
+        }
+
+        if (payments.Sum(p => p.AmountToman) <= collectibleToman)
+        {
+            return recorded;
+        }
+
+        long walletRecorded = 0;
+        for (var i = 0; i < payments.Count; i++)
+        {
+            var method = OperatorPaymentMethods.Parse(payments[i].Method);
+            if (method is not (PaymentMethod.Wallet or PaymentMethod.PcBalance))
+            {
+                continue;
+            }
+
+            var allocTender = allocation?.Tenders.FirstOrDefault(t => t.Method == method && t.Accepted);
+            var drawn = allocTender is null
+                ? payments[i].AmountToman
+                : Math.Max(
+                    payments[i].AmountToman,
+                    MoneyMath.CheckedAdd(allocTender.RealDrawnToman, allocTender.GiftDrawnToman));
+            if (allocTender is not null && allocTender.AmountToman > drawn)
+            {
+                drawn = allocTender.AmountToman;
+            }
+
+            recorded[i] = drawn;
+            walletRecorded = MoneyMath.CheckedAdd(walletRecorded, drawn);
+        }
+
+        var counterOwed = collectibleToman - walletRecorded;
+        if (counterOwed < 0)
+        {
+            counterOwed = 0;
+        }
+
+        long nonCashRecorded = 0;
+        var cashIndices = new List<int>();
+        for (var i = 0; i < payments.Count; i++)
+        {
+            var method = OperatorPaymentMethods.Parse(payments[i].Method);
+            if (method is PaymentMethod.Wallet or PaymentMethod.PcBalance)
+            {
+                continue;
+            }
+
+            if (method is PaymentMethod.Cash)
+            {
+                cashIndices.Add(i);
+                continue;
+            }
+
+            var owedAfterPrior = counterOwed - nonCashRecorded;
+            if (owedAfterPrior < 0)
+            {
+                owedAfterPrior = 0;
+            }
+
+            var take = Math.Min(payments[i].AmountToman, owedAfterPrior);
+            recorded[i] = take;
+            nonCashRecorded = MoneyMath.CheckedAdd(nonCashRecorded, take);
+        }
+
+        var cashOwed = counterOwed - nonCashRecorded;
+        if (cashOwed < 0)
+        {
+            cashOwed = 0;
+        }
+
+        if (cashIndices.Count == 0)
+        {
+            return recorded;
+        }
+
+        if (cashIndices.Count == 1)
+        {
+            recorded[cashIndices[0]] = cashOwed;
+            return recorded;
+        }
+
+        var lastCash = cashIndices[^1];
+        for (var c = 0; c < cashIndices.Count - 1; c++)
+        {
+            var idx = cashIndices[c];
+            var take = Math.Min(payments[idx].AmountToman, cashOwed);
+            recorded[idx] = take;
+            cashOwed -= take;
+        }
+
+        recorded[lastCash] = cashOwed;
+        return recorded;
     }
 
     private static (long Level, long Birthday) SplitMemberDiscounts(MemberBillResult? detail)

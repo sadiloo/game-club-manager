@@ -31,6 +31,7 @@ public sealed class InpageFormsNodeSelftestTests
         "cp-d3-confirm-alert-selftest.mjs",
         "cp-d4-popstate-back-selftest.mjs",
         "cp-d1-bill-preview-bounded-selftest.mjs",
+        "cp-d1-bill-preview-draft-key-guard-selftest.mjs",
         "cp-r14-ks1-preview-change-selftest.mjs",
         "cp-d5-xss-render-selftest.mjs",
         "cp-f12-birthday-percent-selftest.mjs",

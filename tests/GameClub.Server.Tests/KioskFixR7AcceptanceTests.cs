@@ -170,6 +170,84 @@ public sealed class KioskFixR7AcceptanceTests(GameClubWebApplicationFactory fact
     }
 
     [Fact]
+    public async Task r14b_aon_writeoff_cash_15500_preview_20000_confirm_rejected_400()
+    {
+        var (sessionId, op) = await CreateOvershootSessionAsync(graceOff: true);
+        await op.PostAsJsonAsync($"/api/operator/sessions/{sessionId}/sale/lines", new { catalogItemId = SodaId });
+        await op.PostAsync($"/api/operator/sessions/{sessionId}/force-logout", null);
+        var payments = new[] { new { method = "Cash", amountToman = 15_500L } };
+        var preview = await op.PostAsJsonAsync($"/api/operator/sessions/{sessionId}/bill/preview", new { payments });
+        preview.EnsureSuccessStatusCode();
+        var previewCollectible = (await preview.Content.ReadFromJsonAsync<JsonElement>())!.GetProperty("collectibleToman").GetInt64();
+        Assert.Equal(20_000, previewCollectible);
+        var confirm = await op.PostAsJsonAsync(
+            $"/api/operator/sessions/{sessionId}/bill/confirm",
+            new { previewCollectibleToman = previewCollectible, payments });
+        Assert.Equal(HttpStatusCode.BadRequest, confirm.StatusCode);
+    }
+
+    [Fact]
+    public async Task r14b_aon_writeoff_cash_20000_preview_confirm_20000()
+    {
+        var (sessionId, op) = await CreateOvershootSessionAsync(graceOff: true);
+        await op.PostAsJsonAsync($"/api/operator/sessions/{sessionId}/sale/lines", new { catalogItemId = SodaId });
+        await op.PostAsync($"/api/operator/sessions/{sessionId}/force-logout", null);
+        var payments = new[] { new { method = "Cash", amountToman = 20_000L } };
+        var preview = await op.PostAsJsonAsync($"/api/operator/sessions/{sessionId}/bill/preview", new { payments });
+        preview.EnsureSuccessStatusCode();
+        var previewCollectible = (await preview.Content.ReadFromJsonAsync<JsonElement>())!.GetProperty("collectibleToman").GetInt64();
+        Assert.Equal(20_000, previewCollectible);
+        (await op.PostAsJsonAsync(
+            $"/api/operator/sessions/{sessionId}/bill/confirm",
+            new { previewCollectibleToman = previewCollectible, payments })).EnsureSuccessStatusCode();
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        Assert.Equal(20_000, await db.Invoices.Where(i => i.SessionId == sessionId).Select(i => i.CollectibleToman).SingleAsync());
+        Assert.Equal(20_000, await db.PaymentLines.Where(p => p.Method == PaymentMethod.Cash).Select(p => p.AmountToman).SingleAsync());
+    }
+
+    [Fact]
+    public async Task r14b_aon_writeoff_mixed_12000_wallet_1000_cash_11000_preview_confirm_15000()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var api = factory.CreateClientWithKey();
+        var op = await factory.CreateOperatorClientAsync();
+        var customerId = await CreateCustomerAsync(op);
+        (await op.PostAsJsonAsync(
+            $"/api/operator/members/customers/{customerId}/wallet/top-up",
+            new { method = "Cash", amountToman = 20_000L, commandId = Guid.NewGuid() })).EnsureSuccessStatusCode();
+        const string station = "PS5-R14B-AON12";
+        await S3TestHelpers.RegisterConsole(api, op, station, 1);
+        factory.Clock.SetTehran(2026, 6, 3, 14, 0);
+        var sessionId = await S3TestHelpers.StartSession(api, station, 1);
+        await op.PutAsJsonAsync($"/api/operator/sessions/{sessionId}/customer", new { customerId });
+        await op.PostAsJsonAsync(
+            $"/api/operator/sessions/{sessionId}/sale/lines",
+            new { catalogItemId = CustomServiceId, customAmountToman = 12_000L });
+        (await op.PostAsync($"/api/operator/sessions/{sessionId}/bill/open", null)).EnsureSuccessStatusCode();
+        var previewPartial = await op.PostAsJsonAsync(
+            $"/api/operator/sessions/{sessionId}/bill/preview",
+            new { payments = new[] { new { method = "Wallet", amountToman = 1_000L }, new { method = "Cash", amountToman = 11_000L } } });
+        previewPartial.EnsureSuccessStatusCode();
+        Assert.Equal(15_000, (await previewPartial.Content.ReadFromJsonAsync<JsonElement>())!.GetProperty("collectibleToman").GetInt64());
+        var payments = new[]
+        {
+            new { method = "Wallet", amountToman = 1_000L },
+            new { method = "Cash", amountToman = 14_000L },
+        };
+        var preview = await op.PostAsJsonAsync($"/api/operator/sessions/{sessionId}/bill/preview", new { payments });
+        preview.EnsureSuccessStatusCode();
+        var previewCollectible = (await preview.Content.ReadFromJsonAsync<JsonElement>())!.GetProperty("collectibleToman").GetInt64();
+        Assert.Equal(15_000, previewCollectible);
+        (await op.PostAsJsonAsync(
+            $"/api/operator/sessions/{sessionId}/bill/confirm",
+            new { previewCollectibleToman = previewCollectible, payments })).EnsureSuccessStatusCode();
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        Assert.Equal(15_000, await db.Invoices.Where(i => i.SessionId == sessionId).Select(i => i.CollectibleToman).SingleAsync());
+    }
+
+    [Fact]
     public async Task f1_writeoff_apply_wallet_off_overpay_wallet500_cash19500_confirm_rejects_not_20000()
     {
         var (sessionId, op) = await CreateOvershootSessionAsync(graceOff: true);
@@ -253,6 +331,13 @@ public sealed class KioskFixR7AcceptanceTests(GameClubWebApplicationFactory fact
         var manager = await factory.CreateOperatorClientAsync("manager", "1234");
         await PutRoundingAsync(manager, applyToWallet: false);
         return (sessionId, op);
+    }
+
+    private static async Task<Guid> CreateCustomerAsync(HttpClient op)
+    {
+        var created = await op.PostAsJsonAsync("/api/operator/customers", new { name = "r14b", mobile = $"0918{Random.Shared.Next(1000000, 9999999)}" });
+        created.EnsureSuccessStatusCode();
+        return (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetGuid();
     }
 
     private async Task<(Guid SessionId, HttpClient Op)> CreateOvershootSessionAsync(bool graceOff)
