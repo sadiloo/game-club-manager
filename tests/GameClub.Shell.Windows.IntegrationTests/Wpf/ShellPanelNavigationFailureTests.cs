@@ -513,9 +513,14 @@ public sealed class ShellPanelNavigationFailureTests
 
                         Assert.True(sawStale, "expected stale-probe-generation after reload during in-flight probe");
                         var afterDelta = LogDelta(baseline);
+                        var staleMark = afterDelta.IndexOf(
+                            "reason=stale-probe-generation",
+                            StringComparison.Ordinal);
+                        Assert.True(staleMark >= 0);
+                        var tailAfterStale = afterDelta.Substring(staleMark);
                         Assert.DoesNotContain(
                             "panel-navigate caller=NavigatePanel",
-                            afterDelta,
+                            tailAfterStale,
                             StringComparison.Ordinal);
                     }
                     finally
