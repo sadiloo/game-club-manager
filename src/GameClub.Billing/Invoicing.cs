@@ -827,7 +827,8 @@ public static class InvoiceCalculator
         var walletOnlyPartial = hasBalanceTender && !hasCounterTender && balanceTendered < unroundedPayable;
         var mixedWholeBillWhenWalletCashOff = !subThreshold
             && mixedBalanceCounter
-            && !roundingSettings.ApplyToWallet;
+            && !roundingSettings.ApplyToWallet
+            && walletRoundsLikeCash;
         var useCashEquivalentForAllocate = walletLikeCash
             || mixedWholeBillWhenWalletCashOff
             || (!subThreshold && walletOnlyPartial);

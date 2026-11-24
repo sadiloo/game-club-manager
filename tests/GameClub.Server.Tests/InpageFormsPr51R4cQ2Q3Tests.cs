@@ -325,6 +325,46 @@ public sealed class InpageFormsPr51R4cQ2Q3Tests(GameClubWebApplicationFactory fa
     }
 
     [Fact]
+    public async Task gate_pin_wl_04_session_preview_collectible_equals_confirm_invoice_150000()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var api = factory.CreateClientWithKey();
+        var op = await factory.CreateOperatorClientAsync();
+        var customerId = await CreateCustomerAsync(op);
+        (await op.PostAsJsonAsync(
+            $"/api/operator/members/customers/{customerId}/wallet/top-up",
+            new { method = "Cash", amountToman = 200_000L, commandId = Guid.NewGuid() })).EnsureSuccessStatusCode();
+
+        await S3TestHelpers.RegisterConsole(api, op, "PS5-WL04", 1);
+        factory.Clock.SetTehran(2026, 6, 3, 14, 0);
+        var sessionId = await S3TestHelpers.StartSession(api, "PS5-WL04", 1);
+        await op.PutAsJsonAsync($"/api/operator/sessions/{sessionId}/customer", new { customerId });
+        factory.Clock.SetTehran(2026, 6, 3, 14, 50);
+        (await op.PostAsJsonAsync(
+            $"/api/operator/sessions/{sessionId}/sale/lines",
+            new { catalogItemId = CustomServiceId, customAmountToman = 58_183L })).EnsureSuccessStatusCode();
+        (await op.PostAsync($"/api/operator/sessions/{sessionId}/bill/open", null)).EnsureSuccessStatusCode();
+
+        var payments = new[]
+        {
+            new { method = "Wallet", amountToman = 50_001L },
+            new { method = "Cash", amountToman = 99_999L },
+        };
+        var preview = await op.PostAsJsonAsync($"/api/operator/sessions/{sessionId}/bill/preview", new { payments });
+        preview.EnsureSuccessStatusCode();
+        var previewCollectible = (await preview.Content.ReadFromJsonAsync<JsonElement>())!.GetProperty("collectibleToman").GetInt64();
+        Assert.Equal(150_000, previewCollectible);
+        var confirm = await op.PostAsJsonAsync(
+            $"/api/operator/sessions/{sessionId}/bill/confirm",
+            new { previewCollectibleToman = previewCollectible, payments });
+        confirm.EnsureSuccessStatusCode();
+        using var scope = factory.Services.CreateScope();
+        var invoice = await scope.ServiceProvider.GetRequiredService<AppDbContext>().Invoices.AsNoTracking().SingleAsync();
+        Assert.Equal(previewCollectible, invoice.CollectibleToman);
+        Assert.Equal(150_000, invoice.CollectibleToman);
+    }
+
+    [Fact]
     public async Task q_b_ruled_apply_to_wallet_off_server_buffet_12000_wallet_only_preview_15000()
     {
         await S3TestHelpers.ResetAsync(factory);

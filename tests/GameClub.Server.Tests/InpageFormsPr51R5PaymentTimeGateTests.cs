@@ -164,6 +164,33 @@ public sealed class InpageFormsPr51R5PaymentTimeGateTests(GameClubWebApplication
     }
 
     [Fact]
+    public async Task gate_mutant_cb_session_w03_preview_200_collectible_50000_when_wallet_under_rounded()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var api = factory.CreateClientWithKey();
+        var op = await factory.CreateOperatorClientAsync();
+        var customerId = await CreateCustomerAsync(op);
+        (await op.PostAsJsonAsync(
+            $"/api/operator/members/customers/{customerId}/wallet/top-up",
+            new { method = "Cash", amountToman = 100_000L, commandId = Guid.NewGuid() })).EnsureSuccessStatusCode();
+        await S3TestHelpers.RegisterConsole(api, op, "PS5-CB-W03", 1);
+        factory.Clock.SetTehran(2026, 6, 3, 14, 0);
+        var sessionId = await S3TestHelpers.StartSession(api, "PS5-CB-W03", 1);
+        await op.PutAsJsonAsync($"/api/operator/sessions/{sessionId}/customer", new { customerId });
+        factory.Clock.SetTehran(2026, 6, 3, 14, 27);
+        (await op.PostAsync($"/api/operator/sessions/{sessionId}/bill/open", null)).EnsureSuccessStatusCode();
+        var preview = await op.PostAsJsonAsync(
+            $"/api/operator/sessions/{sessionId}/bill/preview",
+            new { payments = new[] { new { method = "Wallet", amountToman = 49_000L } } });
+        Assert.Equal(HttpStatusCode.OK, preview.StatusCode);
+        Assert.Equal(50_000, (await preview.Content.ReadFromJsonAsync<JsonElement>())!.GetProperty("collectibleToman").GetInt64());
+        var confirm = await op.PostAsJsonAsync(
+            $"/api/operator/sessions/{sessionId}/bill/confirm",
+            new { payments = new[] { new { method = "Wallet", amountToman = 49_000L } } });
+        Assert.Equal(HttpStatusCode.BadRequest, confirm.StatusCode);
+    }
+
+    [Fact]
     public async Task gate_mutant_b2_buffet_confirm_live_prep_rejects_s5_after_step_up_at_payment()
     {
         await S3TestHelpers.ResetAsync(factory);

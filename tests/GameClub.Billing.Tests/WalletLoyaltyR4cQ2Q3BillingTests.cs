@@ -367,6 +367,58 @@ public sealed class WalletLoyaltyR4cQ2Q3BillingTests
     }
 
     [Fact]
+    public void f1_ruled_writeoff_wallet_rounds_like_cash_false_mixed_15500_unrounded()
+    {
+        var settings = PaymentRoundingSettings.Default with { ApplyToWallet = false };
+        var (_, ok) = InvoiceCalculator.Collect(
+            BuffetRequest(15_500),
+            [new Tender(PaymentMethod.Wallet, 500, "m"), new Tender(PaymentMethod.Cash, 15_000)],
+            [new MemberWallet("m", 10_000, 0)],
+            walletRoundsLikeCash: false,
+            roundingSettings: settings);
+        Assert.True(ok.IsValid, ok.Errors.FirstOrDefault()?.Message);
+        Assert.Equal(15_500, ok.PayableToman);
+        Assert.Equal(0, ok.RoundingToman);
+        var (_, over) = InvoiceCalculator.Collect(
+            BuffetRequest(15_500),
+            [new Tender(PaymentMethod.Wallet, 500, "m"), new Tender(PaymentMethod.Cash, 19_500)],
+            [new MemberWallet("m", 10_000, 0)],
+            walletRoundsLikeCash: false,
+            roundingSettings: settings);
+        Assert.False(over.IsValid);
+        Assert.Equal(15_500, over.PayableToman);
+        Assert.NotEqual(20_000, over.PayableToman);
+    }
+
+    [Fact]
+    public void gate_mutant_f1_writeoff_apply_wallet_off_whole_bill_round_reverts_to_20000()
+    {
+        f1_ruled_writeoff_wallet_rounds_like_cash_false_mixed_15500_unrounded();
+    }
+
+    [Fact]
+    public void q_a_ruled_apply_wallet_off_pc_balance_12000_pc1000_cash14000_valid_15000()
+    {
+        var settings = PaymentRoundingSettings.Default with { ApplyToWallet = false };
+        var pcPocket = new WalletPocket(1_000, 0);
+        var request = PcTimeRequest(12_000);
+        var (_, ok) = InvoiceCalculator.Collect(
+            request,
+            [new Tender(PaymentMethod.PcBalance, 1_000), new Tender(PaymentMethod.Cash, 14_000)],
+            pcBalance: pcPocket,
+            roundingSettings: settings);
+        Assert.True(ok.IsValid, ok.Errors.FirstOrDefault()?.Message);
+        Assert.Equal(15_000, ok.PayableToman);
+        Assert.NotEqual(16_000, ok.PayableToman);
+    }
+
+    [Fact]
+    public void gate_mutant_qa_apply_wallet_off_pc_balance_whole_bill_not_cash_only_16000()
+    {
+        q_a_ruled_apply_wallet_off_pc_balance_12000_pc1000_cash14000_valid_15000();
+    }
+
+    [Fact]
     public void q_b_ruled_apply_to_wallet_off_preview_buffet_12000_wallet_only_collectible_15000()
     {
         var settings = PaymentRoundingSettings.Default with { ApplyToWallet = false };
