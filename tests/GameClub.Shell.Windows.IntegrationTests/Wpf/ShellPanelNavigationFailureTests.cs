@@ -457,12 +457,11 @@ public sealed class ShellPanelNavigationFailureTests
                             stub.OperatorResponseCount > operatorResponsesBefore,
                             "panel-recovery operator probe did not start while held across deadline");
 
-                        var timeoutConfirm = await AwaitShellLogLineAsync(
-                            baseline,
-                            line => line.Contains("branch=panel-nav-timeout", StringComparison.Ordinal)
-                                && !line.Contains("panel-nav-timeout-", StringComparison.Ordinal),
-                            TimeSpan.FromSeconds(25));
-
+                        await WaitForPanelUnavailableOfflineAsync(wv, TimeSpan.FromSeconds(45));
+                        var deltaAfterTimeout = LogDelta(baseline);
+                        var timeoutConfirm = deltaAfterTimeout.Split('\n').FirstOrDefault(line =>
+                            line.Contains("branch=panel-nav-timeout", StringComparison.Ordinal)
+                            && !line.Contains("panel-nav-timeout-", StringComparison.Ordinal));
                         Assert.False(string.IsNullOrEmpty(timeoutConfirm), "panel-nav-timeout was not confirmed");
                         Assert.Equal(0, window.PanelNavigationPendingCountForTests);
 
@@ -1135,6 +1134,7 @@ public sealed class ShellPanelNavigationFailureTests
         FileSystemEventHandler onLogChanged = (_, _) => TryMatch();
         watcher.Changed += onLogChanged;
         watcher.Created += onLogChanged;
+        using var pollTimer = new Timer(_ => TryMatch(), null, TimeSpan.Zero, TimeSpan.FromMilliseconds(50));
         TryMatch();
         try
         {
