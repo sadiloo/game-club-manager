@@ -39,13 +39,10 @@ foreach ($svc in @("CheckpointServer", "CheckpointPostgres")) {
 
 & schtasks.exe /Delete /TN CheckpointDailyBackup /F 2>$null | Out-Null
 
-$paths = @(
-    "C:\ProgramData\Checkpoint\config\server.json",
-    "C:\ProgramData\Checkpoint\config\.install-secrets.json"
-)
-foreach ($p in $paths) {
+foreach ($dir in @("pgdata", "backups", "config")) {
+    $p = Join-Path "C:\ProgramData\Checkpoint" $dir
     if (Test-Path -LiteralPath $p) {
-        Remove-Item -LiteralPath $p -Force
+        Remove-Item -LiteralPath $p -Recurse -Force
     }
 }
 

@@ -19,13 +19,8 @@ $result = Start-CheckpointServerSetup -LegLabel "b1-clean" -Exe $ServerSetup -Ar
 if ($result.ExitCode -ne 0) {
     throw "B-1: server setup exit $($result.ExitCode)"
 }
-
-foreach ($svc in @("CheckpointPostgres", "CheckpointServer")) {
-    $s = Get-Service $svc -ErrorAction Stop
-    if ($s.Status -ne "Running") {
-        throw "B-1: $svc not Running"
-    }
-}
+Assert-InnoSetupLogNoFailedRuns -LogPath $legLog
+Assert-InstallerServerServicesRunning
 
 $config = "C:\ProgramData\Checkpoint\config\server.json"
 $raw = Get-Content -LiteralPath $config -Raw
