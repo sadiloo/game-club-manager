@@ -56,13 +56,22 @@ function Set-PostgresClusterConf {
     $conf = Join-Path $PgData "postgresql.conf"
     if (-not (Test-Path -LiteralPath $conf)) { return }
     $text = Get-Content -LiteralPath $conf -Raw
-    $text = $text -replace "port\s*=\s*\d+", "port = $Port"
-    if ($text -notmatch "listen_addresses") {
-        $text += "`nlisten_addresses = '127.0.0.1'`n"
+    if ($text -match "(?m)^port\s*=\s*\d+") {
+        $text = $text -replace "(?m)^port\s*=\s*\d+", "port = $Port"
+    } elseif ($text -match "(?m)^#\s*port\s*=\s*\d+") {
+        $text = $text -replace "(?m)^#\s*port\s*=\s*\d+", "port = $Port"
     } else {
-        $text = $text -replace "listen_addresses\s*=\s*'[^']*'", "listen_addresses = '127.0.0.1'"
+        $text += "`nport = $Port`n"
+    }
+    if ($text -match "(?m)^listen_addresses\s*=") {
+        $text = $text -replace "(?m)^listen_addresses\s*=\s*'[^']*'", "listen_addresses = '127.0.0.1'"
+    } elseif ($text -match "(?m)^#\s*listen_addresses\s*=") {
+        $text = $text -replace "(?m)^#\s*listen_addresses\s*=\s*'[^']*'", "listen_addresses = '127.0.0.1'"
+    } else {
+        $text += "`nlisten_addresses = '127.0.0.1'`n"
     }
     Set-Content -LiteralPath $conf -Value $text -NoNewline
+    Write-InitLog "Set-PostgresClusterConf: port=$Port listen=127.0.0.1"
 }
 
 function Repair-PostgresSuperuserPassword([string] $NewPassword) {
