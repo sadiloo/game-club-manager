@@ -148,6 +148,7 @@ function Invoke-InitDbCluster {
     return $initCode
 }
 
+$createdNewCluster = $false
 if (-not (Test-Path -LiteralPath $pgVersionFile)) {
     $initCode = Invoke-InitDbCluster
     if ($initCode -ne 0) {
@@ -163,11 +164,12 @@ if (-not (Test-Path -LiteralPath $pgVersionFile)) {
         }
     }
     Write-InitLog "initdb: new cluster"
+    $createdNewCluster = $true
 }
 
 Set-PostgresClusterConf
 
-if ((Test-Path -LiteralPath $pgVersionFile) -and -not (Get-Service CheckpointPostgres -ErrorAction SilentlyContinue)) {
+if ((Test-Path -LiteralPath $pgVersionFile) -and -not (Get-Service CheckpointPostgres -ErrorAction SilentlyContinue) -and -not $createdNewCluster) {
     Write-InitLog "pgdata present but CheckpointPostgres service missing; reinitializing cluster"
     Initialize-FreshPgDataCluster
     $pgVersionFile = Join-Path $PgData "PG_VERSION"
