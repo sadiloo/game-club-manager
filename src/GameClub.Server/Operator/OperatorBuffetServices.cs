@@ -505,22 +505,36 @@ public sealed class OperatorBuffetSaleService(
             .FirstOrDefaultAsync(o => o.Id == openSaleId && o.IsBuffetOnly, ct)
             ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "فروش بوفهٔ مستقل یافت نشد.");
         var bill = sale.PendingBill;
-        var walletShort = bill is null
-            ? new WalletShortRemainderSnapshot(false, 0, 0, false)
-            : await bills.GetWalletShortRemainderSnapshotAsync(sale.CustomerId, bill.CollectibleToman, null, ct);
+        if (bill is null)
+        {
+            return new
+            {
+                openSaleId = sale.Id,
+                lines = OpenSaleMapper.ToDtos(sale.Lines),
+                linkedCustomer = CustomerMapper.ToLinkedChip(sale.Customer),
+                bill = (object?)null,
+            };
+        }
+
+        var amounts = await calculator.ComputeBuffetOnlyAsync(sale.Lines.ToList(), sale.CustomerId, null, ct);
+        var walletShort = await bills.GetWalletShortRemainderSnapshotAsync(
+            sale.CustomerId,
+            amounts.CollectibleToman,
+            null,
+            ct);
         return new
         {
             openSaleId = sale.Id,
             lines = OpenSaleMapper.ToDtos(sale.Lines),
             linkedCustomer = CustomerMapper.ToLinkedChip(sale.Customer),
-            bill = bill is null ? null : new
+            bill = new
             {
-                bill.UnroundedPayableToman,
-                bill.RoundingToman,
-                bill.CollectibleToman,
-                bill.TimeGrossToman,
-                bill.BuffetGrossToman,
-                bill.ServicesGrossToman,
+                unroundedPayableToman = amounts.UnroundedPayableToman,
+                roundingToman = amounts.RoundingToman,
+                collectibleToman = amounts.CollectibleToman,
+                timeGrossToman = amounts.TimeGrossToman,
+                buffetGrossToman = amounts.BuffetGrossToman,
+                servicesGrossToman = amounts.ServicesGrossToman,
                 walletShortRemainder = OperatorBillService.ToWalletShortRemainderDto(walletShort),
             },
         };

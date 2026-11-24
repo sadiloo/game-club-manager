@@ -10,6 +10,7 @@
     _toastTimer: null,
     _historyPushed: false,
     _closingViaHistory: false,
+    _historyPopWaiters: [],
   };
 
   function isPhone() {
@@ -50,25 +51,48 @@
     } catch (_) {}
   }
 
+  function settleHistoryPopWaiters() {
+    const waiters = cpLayer._historyPopWaiters;
+    cpLayer._historyPopWaiters = [];
+  for (const done of waiters) {
+      try {
+        done();
+      } catch (_) {}
+    }
+    cpLayer._closingViaHistory = false;
+  }
+
   function popHistoryIfNeeded() {
-    if (!cpLayer._historyPushed) return;
+    if (!cpLayer._historyPushed) return Promise.resolve();
     if (cpLayer._closingViaHistory) {
       cpLayer._historyPushed = false;
-      return;
+      return Promise.resolve();
     }
     cpLayer._closingViaHistory = true;
     cpLayer._historyPushed = false;
-    try {
-      history.back();
-    } catch (_) {}
-    window.setTimeout(() => {
-      cpLayer._closingViaHistory = false;
-    }, 0);
+    return new Promise((resolve) => {
+      cpLayer._historyPopWaiters.push(resolve);
+      window.setTimeout(() => {
+        if (cpLayer._historyPopWaiters.includes(resolve)) {
+          cpLayer._historyPopWaiters = cpLayer._historyPopWaiters.filter((w) => w !== resolve);
+          resolve();
+          if (!cpLayer._historyPopWaiters.length) cpLayer._closingViaHistory = false;
+        }
+      }, 1500);
+      try {
+        history.back();
+      } catch (_) {
+        settleHistoryPopWaiters();
+      }
+    });
   }
 
   if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
   window.addEventListener("popstate", (ev) => {
-    if (cpLayer._closingViaHistory) return;
+    if (cpLayer._closingViaHistory) {
+      settleHistoryPopWaiters();
+      return;
+    }
     const active = cpLayer.active;
     if (!active) return;
   if (active._onBackStep) {
@@ -356,7 +380,7 @@
 
     _finish(value) {
       this._detachKeydown();
-      popHistoryIfNeeded();
+      const historyPop = popHistoryIfNeeded();
       lockBodyScroll(false);
       const root = ensureRoot();
       root.replaceChildren();
@@ -365,7 +389,7 @@
       cpLayer.active = null;
       if (prev === this) {
         this.resolve(value);
-        drainQueue();
+        void historyPop.then(() => drainQueue());
       }
     }
 

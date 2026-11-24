@@ -180,4 +180,49 @@ public sealed class Pr51R5RoundingSettingsTests
         Assert.True(alloc.IsValid);
         Assert.Equal(50_000, alloc.PayableToman);
     }
+
+    [Fact]
+    public void r14_d2_mixed_5000_wallet_1000_cash_5000_settles_exact_wallet_min_10k()
+    {
+        var request = BuffetRequest(5_000);
+        var settings = Defaults with { WalletMinBillToman = 10_000 };
+        var (_, alloc) = InvoiceCalculator.Collect(
+            request,
+            [new Tender(PaymentMethod.Wallet, 1_000, "m"), new Tender(PaymentMethod.Cash, 4_000)],
+            [new MemberWallet("m", 10_000, 0)],
+            roundingSettings: settings);
+        Assert.True(alloc.IsValid);
+        Assert.Equal(5_000, alloc.PayableToman);
+    }
+
+    [Fact]
+    public void r14_d2_mixed_8000_settles_exact_not_above_all_cash_wallet_min_10k()
+    {
+        var request = BuffetRequest(8_000);
+        var settings = Defaults with { WalletMinBillToman = 10_000 };
+        var cashRounded = InvoiceCalculator.Calculate(request);
+        Assert.Equal(10_000, cashRounded.PayableToman);
+        var (_, alloc) = InvoiceCalculator.Collect(
+            request,
+            [new Tender(PaymentMethod.Wallet, 2_000, "m"), new Tender(PaymentMethod.Cash, 6_000)],
+            [new MemberWallet("m", 10_000, 0)],
+            roundingSettings: settings);
+        Assert.True(alloc.IsValid);
+        Assert.Equal(8_000, alloc.PayableToman);
+        Assert.True(alloc.PayableToman <= cashRounded.PayableToman);
+    }
+
+    [Fact]
+    public void r14_sub_5000_499_wallet_498_cash_1_stays_exact()
+    {
+        var request = BuffetRequest(499);
+        var settings = Defaults with { WalletMinBillToman = 10_000 };
+        var (_, alloc) = InvoiceCalculator.Collect(
+            request,
+            [new Tender(PaymentMethod.Wallet, 498, "m"), new Tender(PaymentMethod.Cash, 1)],
+            [new MemberWallet("m", 10_000, 0)],
+            roundingSettings: settings);
+        Assert.True(alloc.IsValid);
+        Assert.Equal(499, alloc.PayableToman);
+    }
 }

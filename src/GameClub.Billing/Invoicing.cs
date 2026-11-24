@@ -816,7 +816,8 @@ public static class InvoiceCalculator
         var resolved = PaymentRounding.Resolve(unroundedPayable, request.Rounding, roundingSettings, walletRoundsLikeCash);
         var effectiveRounding = resolved.EffectiveRounding;
         var walletLikeCash = resolved.WalletRoundsLikeCash;
-        var subThreshold = unroundedPayable < WalletPaymentRounding.CashLikeThresholdToman;
+        var billBelowCashLikeThreshold = unroundedPayable < WalletPaymentRounding.CashLikeThresholdToman;
+        var belowWalletMinBill = unroundedPayable < roundingSettings.WalletMinBillToman;
         var branchRounded = Calculate(request with { Rounding = resolved.BranchRounding });
         var hasBalanceTender = tenders.Any(t => t.Method is PaymentMethod.Wallet or PaymentMethod.PcBalance);
         var hasCounterTender = tenders.Any(t => t.Method is PaymentMethod.Cash or PaymentMethod.CardReader or PaymentMethod.CardToCard);
@@ -825,13 +826,13 @@ public static class InvoiceCalculator
             .Where(t => t.Method is PaymentMethod.Wallet or PaymentMethod.PcBalance)
             .Sum(t => t.AmountToman);
         var walletOnlyPartial = hasBalanceTender && !hasCounterTender && balanceTendered < unroundedPayable;
-        var mixedWholeBillWhenWalletCashOff = !subThreshold
+        var mixedWholeBillWhenWalletCashOff = !belowWalletMinBill
             && mixedBalanceCounter
             && !roundingSettings.ApplyToWallet
             && walletRoundsLikeCash;
         var useCashEquivalentForAllocate = walletLikeCash
             || mixedWholeBillWhenWalletCashOff
-            || (!subThreshold && walletOnlyPartial);
+            || (!belowWalletMinBill && walletOnlyPartial);
         var cashEquivalent = useCashEquivalentForAllocate ? branchRounded : priced;
         var nets = PayableNets(request, priced.NetBeforeRoundingToman);
         var allocation = PaymentAllocator.Allocate(
@@ -845,7 +846,8 @@ public static class InvoiceCalculator
             useCashEquivalentForAllocate ? cashEquivalent.RoundingToman : 0,
             roundingSettings.AllowWalletShortBalanceDebt,
             roundingSettings.SuppressWalletDebtDraw,
-            subThreshold);
+            billBelowCashLikeThreshold,
+            belowWalletMinBill && mixedBalanceCounter);
         var date = TehranTime.Date(request.IssuedAt);
         var lines = new List<InvoiceLine>();
         foreach (var line in priced.Lines)

@@ -55,5 +55,13 @@ const paymentInvalidServer = ctx.window.cpTranslateApiError(
 if (paymentInvalidServer !== "جمع پرداختی با مبلغ قابل پرداخت برابر نیست.") {
   throw new Error("payment_invalid must prefer server Persian over ERROR_MAP");
 }
+const paymentInvalidFallback = ctx.window.cpTranslateApiError("payment_invalid", "");
+if (paymentInvalidFallback !== "دست‌کم یک خط پرداخت با مبلغ بیشتر از صفر لازم است.") {
+  throw new Error("payment_invalid must use ERROR_MAP when server sends no message");
+}
+const paymentInvalidLatin = ctx.window.cpTranslateApiError("payment_invalid", "Sum mismatch");
+if (paymentInvalidLatin !== "دست‌کم یک خط پرداخت با مبلغ بیشتر از صفر لازم است.") {
+  throw new Error("payment_invalid must use ERROR_MAP when server message is not Persian");
+}
 
 console.log("cp-error-map-selftest: ok");

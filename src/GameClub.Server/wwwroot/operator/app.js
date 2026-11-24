@@ -914,28 +914,49 @@ function paymentDraftForApi() {
   }));
 }
 
+let billPreviewTimer = null;
+let billPreviewDraftKey = "";
+
+function paymentDraftPreviewKey() {
+  return JSON.stringify(paymentDraftForApi());
+}
+
+function scheduleBillPreview() {
+  if (!paymentDraft.length) return;
+  const key = paymentDraftPreviewKey();
+  if (key === billPreviewDraftKey) return;
+  if (billPreviewTimer) clearTimeout(billPreviewTimer);
+  billPreviewTimer = setTimeout(() => {
+    billPreviewTimer = null;
+    refreshBillPreview().catch(() => {});
+  }, 200);
+}
+
 async function refreshBillPreview() {
   if (!paymentDraft.length) return;
+  const key = paymentDraftPreviewKey();
+  if (key === billPreviewDraftKey) return;
+  billPreviewDraftKey = key;
   const payments = paymentDraftForApi();
   try {
     if (billTarget === "buffet-only" && buffetOpenSaleId) {
       const res = await api(`/api/operator/buffet-only/${buffetOpenSaleId}/bill/preview`, {
         method: "POST",
         body: JSON.stringify({ payments }),
+        background: true,
       });
       if (res.bill?.walletShortRemainder) lastWalletShortRemainder = res.bill.walletShortRemainder;
       renderBuffetOnlyCheckoutBill(res);
-      renderPaymentLines();
       return;
     }
     if (selectedSessionId) {
       const bill = await api(`/api/operator/sessions/${selectedSessionId}/bill/preview`, {
         method: "POST",
         body: JSON.stringify({ payments }),
+        background: true,
       });
       if (bill.walletShortRemainder) lastWalletShortRemainder = bill.walletShortRemainder;
       renderBill(bill);
-      renderPaymentLines();
     }
   } catch (_) {}
 }
@@ -1662,7 +1683,7 @@ function renderWalletShortRemainderGroup(walletIdx) {
       line.shortRemainderMethod = value;
       syncShortRemainderCashLine();
       renderPaymentLines();
-      refreshBillPreview().catch(() => {});
+      scheduleBillPreview();
     };
     lab.append(inp, document.createTextNode(label));
     box.appendChild(lab);
@@ -1704,7 +1725,7 @@ async function renderPaymentLines() {
       }
       paymentDraft.splice(idx, 1);
       renderPaymentLines();
-      refreshBillPreview().catch(() => {});
+      scheduleBillPreview();
     };
     row.appendChild(del);
     box.appendChild(row);
@@ -1712,9 +1733,6 @@ async function renderPaymentLines() {
       box.appendChild(renderWalletShortRemainderGroup(idx));
     }
   });
-  if (paymentDraft.length > 0) {
-    refreshBillPreview().catch(() => {});
-  }
 }
 
 async function openBillScreen(sessionId) {
@@ -1722,9 +1740,38 @@ async function openBillScreen(sessionId) {
   resetBuffetOnlyContext();
   billTarget = "session";
   paymentDraft = [];
+  billPreviewDraftKey = "";
   const bill = await api(`/api/operator/sessions/${sessionId}/bill`);
   renderBill(bill);
   renderPaymentLines();
+}
+
+async function refreshOpenBillAfterSettingsChange() {
+  branchRoundingSettingsCache = null;
+  try {
+    if (billTarget === "session" && selectedSessionId) {
+      const bill = await api(`/api/operator/sessions/${selectedSessionId}/bill`, { background: true });
+      billPreviewDraftKey = "";
+      renderBill(bill);
+      scheduleBillPreview();
+    } else if (billTarget === "buffet-only" && buffetOpenSaleId) {
+      const sale = await api(`/api/operator/buffet-only/${buffetOpenSaleId}`, { background: true });
+      const bill = await api(`/api/operator/buffet-only/${buffetOpenSaleId}/bill`, { background: true });
+      billPreviewDraftKey = "";
+      renderBill({
+        collectibleToman: bill.collectibleToman,
+        unroundedPayableToman: bill.unroundedPayableToman,
+        roundingToman: bill.roundingToman,
+        timeGrossToman: bill.timeGrossToman,
+        buffetGrossToman: bill.buffetGrossToman,
+        servicesGrossToman: bill.servicesGrossToman,
+        saleLines: sale?.lines ?? [],
+        segments: [],
+        linkedCustomer: sale?.linkedCustomer,
+      });
+      scheduleBillPreview();
+    }
+  } catch (_) {}
 }
 
 async function onTileClick(t) {
@@ -1926,7 +1973,9 @@ async function addPaymentLineSimple(method, title, label) {
     return;
   }
   paymentDraft.push({ method, amountToman: amount });
+  billPreviewDraftKey = "";
   renderPaymentLines();
+  scheduleBillPreview();
 }
 
 document.getElementById("addCashLineBtn").onclick = () => {
@@ -1973,7 +2022,9 @@ document.getElementById("addC2cLineBtn").onclick = async () => {
     destinationCardId: values.destinationCardId || undefined,
     reference: values.reference || undefined,
   });
+  billPreviewDraftKey = "";
   renderPaymentLines();
+  scheduleBillPreview();
 };
 
 document.getElementById("addWalletLineBtn").onclick = async () => {
@@ -2005,7 +2056,9 @@ document.getElementById("addWalletLineBtn").onclick = async () => {
       shortRemainderToman: remainder,
     });
     syncShortRemainderCashLine();
+    billPreviewDraftKey = "";
     renderPaymentLines();
+    scheduleBillPreview();
     return;
   }
   await addPaymentLineSimple("Wallet", "پرداخت کیف پول", "مبلغ کیف پول (تومان)");
@@ -2021,36 +2074,51 @@ document.getElementById("surchargeBtn").onclick = async () => {
 
 document.getElementById("confirmBtn").onclick = async () => {
   syncShortRemainderCashLine();
-  let collectible;
-  let payments = paymentDraftForApi();
-  if (billTarget === "buffet-only" && buffetOpenSaleId) {
-    const detail = await api(`/api/operator/buffet-only/${buffetOpenSaleId}`);
-    collectible = detail.bill?.collectibleToman ?? 0;
-    if (collectible === 0 && !payments.length) payments = [];
-    else if (payments.length === 0) payments = [{ method: "Cash", amountToman: collectible }];
-    await api(`/api/operator/buffet-only/${buffetOpenSaleId}/confirm`, {
-      method: "POST",
-      body: JSON.stringify({ payments }),
-    });
-    buffetOpenSaleId = null;
+  try {
+    let collectible;
+    let payments = paymentDraftForApi();
+    if (billTarget === "buffet-only" && buffetOpenSaleId) {
+      const detail = await api(`/api/operator/buffet-only/${buffetOpenSaleId}`);
+      collectible = detail.bill?.collectibleToman ?? 0;
+      if (collectible === 0 && !payments.length) payments = [];
+      else if (payments.length === 0) payments = [{ method: "Cash", amountToman: collectible }];
+      await api(`/api/operator/buffet-only/${buffetOpenSaleId}/confirm`, {
+        method: "POST",
+        body: JSON.stringify({
+          previewCollectibleToman: lastCollectibleToman > 0 ? lastCollectibleToman : collectible,
+          payments,
+        }),
+      });
+      buffetOpenSaleId = null;
+      billTarget = null;
+      document.getElementById("buffetPanel").classList.add("hidden");
+    } else {
+      const bill = await api(`/api/operator/sessions/${selectedSessionId}/bill`);
+      collectible = bill.collectibleToman;
+      if (collectible === 0) payments = [];
+      else if (payments.length === 0) payments = [{ method: "Cash", amountToman: collectible }];
+      await api(`/api/operator/sessions/${selectedSessionId}/bill/confirm`, {
+        method: "POST",
+        body: JSON.stringify({
+          previewCollectibleToman: lastCollectibleToman > 0 ? lastCollectibleToman : collectible,
+          payments,
+        }),
+      });
+    }
+    billPreviewDraftKey = "";
+    selectedSessionId = null;
     billTarget = null;
-    document.getElementById("buffetPanel").classList.add("hidden");
-  } else {
-    const bill = await api(`/api/operator/sessions/${selectedSessionId}/bill`);
-    collectible = bill.collectibleToman;
-    if (collectible === 0) payments = [];
-    else if (payments.length === 0) payments = [{ method: "Cash", amountToman: collectible }];
-    await api(`/api/operator/sessions/${selectedSessionId}/bill/confirm`, {
-      method: "POST",
-      body: JSON.stringify({ payments }),
-    });
+    document.getElementById("bill").classList.add("hidden");
+    await refreshGrid();
+    await refreshLowStock();
+    await refreshPendingC2c();
+  } catch (e) {
+    if (e && e.status === 400 && (e.code === "payment_invalid" || e.message)) {
+      showError(e.message || "پرداخت نامعتبر است.");
+      return;
+    }
+    throw e;
   }
-  selectedSessionId = null;
-  billTarget = null;
-  document.getElementById("bill").classList.add("hidden");
-  await refreshGrid();
-  await refreshLowStock();
-  await refreshPendingC2c();
 };
 
 document.getElementById("cancelBillBtn").onclick = async () => {
@@ -2679,6 +2747,7 @@ bindClick("mgrRoundingBtn", async () => {
       });
       branchRoundingSettingsCache = null;
       cpToast({ tone: "success", text: CP_TEXT.f20.saved });
+      await refreshOpenBillAfterSettingsChange();
     },
   });
   if (values == null) return;

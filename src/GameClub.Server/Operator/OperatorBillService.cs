@@ -401,7 +401,7 @@ public sealed class OperatorBillService(
                 var positiveSplit = PaymentSplitter.Split(0, positiveTenders);
                 if (!positiveSplit.IsValid)
                 {
-                    throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", OperatorPaymentErrors.Localize(positiveSplit.Errors.FirstOrDefault()));
+                    throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", OperatorPaymentErrors.Localize(positiveSplit.Errors.FirstOrDefault(), collectibleToman));
                 }
 
                 throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", "دست‌کم یک خط پرداخت مثبت لازم است.");
@@ -421,7 +421,7 @@ public sealed class OperatorBillService(
             throw new ApiException(
                 StatusCodes.Status400BadRequest,
                 "payment_invalid",
-                OperatorPaymentErrors.Localize(allocation.Errors.FirstOrDefault()));
+                OperatorPaymentErrors.Localize(allocation.Errors.FirstOrDefault(), collectibleToman));
         }
 
         if (payments.Any(p => OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet))
@@ -459,7 +459,7 @@ public sealed class OperatorBillService(
                     && allocPayable > unrounded;
                 if (!typedUnroundedFullPay)
                 {
-                    throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", "جمع پرداختی با مبلغ قابل پرداخت برابر نیست.");
+                    throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", OperatorPaymentErrors.Localize(new PaymentError(PaymentErrors.SumMismatch, ""), collectibleToman));
                 }
             }
 
@@ -478,7 +478,7 @@ public sealed class OperatorBillService(
         var split = PaymentSplitter.Split(collectibleToman, tenders);
         if (!split.IsValid)
         {
-            throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", OperatorPaymentErrors.Localize(split.Errors.FirstOrDefault()));
+            throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", OperatorPaymentErrors.Localize(split.Errors.FirstOrDefault(), collectibleToman));
         }
     }
 
@@ -492,6 +492,11 @@ public sealed class OperatorBillService(
         BillAmounts amounts,
         IReadOnlyList<PaymentInput> effective)
     {
+        if (amounts.Detail?.Allocation is { IsValid: true })
+        {
+            return amounts.CollectibleToman;
+        }
+
         var tendered = effective.Sum(p => p.AmountToman);
         return tendered > paymentTimeCollectibleToman ? paymentTimeCollectibleToman : amounts.CollectibleToman;
     }
@@ -1096,13 +1101,13 @@ public sealed class OperatorBillService(
             bill.SessionId,
             playerCount = session.PlayerCount,
             groupId = session.Station!.GroupId,
-            unroundedPayableToman = bill.UnroundedPayableToman,
-            roundingToman = bill.RoundingToman,
-            collectibleToman = bill.CollectibleToman,
+            unroundedPayableToman = amounts.UnroundedPayableToman,
+            roundingToman = amounts.RoundingToman,
+            collectibleToman = amounts.CollectibleToman,
             surchargeToman = bill.SurchargeToman,
-            timeGrossToman = bill.TimeGrossToman,
-            buffetGrossToman = bill.BuffetGrossToman,
-            servicesGrossToman = bill.ServicesGrossToman,
+            timeGrossToman = amounts.TimeGrossToman,
+            buffetGrossToman = amounts.BuffetGrossToman,
+            servicesGrossToman = amounts.ServicesGrossToman,
             levelDiscountToman,
             birthdayDiscountToman,
             writeOffToman,
@@ -1115,7 +1120,7 @@ public sealed class OperatorBillService(
             linkedCustomer = CustomerMapper.ToLinkedChip(session.Customer),
             walletShortRemainder = ToWalletShortRemainderDto(await GetWalletShortRemainderSnapshotAsync(
                 session.CustomerId,
-                bill.CollectibleToman,
+                amounts.CollectibleToman,
                 session.Station?.Group?.Kind,
                 ct)),
         };

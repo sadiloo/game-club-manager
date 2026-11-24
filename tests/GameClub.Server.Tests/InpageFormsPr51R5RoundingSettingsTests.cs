@@ -459,7 +459,8 @@ public sealed class InpageFormsPr51R5RoundingSettingsTests(GameClubWebApplicatio
         Assert.Equal(HttpStatusCode.BadRequest, confirm.StatusCode);
         var err = await ReadJsonAsync(confirm);
         Assert.Equal("payment_invalid", err.GetProperty("code").GetString());
-        Assert.Equal("جمع پرداختی با مبلغ قابل پرداخت برابر نیست.", err.GetProperty("message").GetString());
+        Assert.Contains("مبلغ قابل پرداخت", err.GetProperty("message").GetString());
+        Assert.Contains("۵۰٬۰۰۰", err.GetProperty("message").GetString());
         Assert.Equal(before, await WalletSpendableAsync(op, customerId));
         using var scope = factory.Services.CreateScope();
         Assert.Equal(0, await scope.ServiceProvider.GetRequiredService<AppDbContext>().Invoices.CountAsync());

@@ -382,6 +382,7 @@ public sealed class SessionCloser(
             StopReason = bill.StopReason,
             CustomerId = customerId,
         };
+        var allocTenders = amounts.Detail?.Allocation?.Tenders;
         foreach (var pay in payments)
         {
             var method = OperatorPaymentMethods.Parse(pay.Method);
@@ -390,12 +391,28 @@ public sealed class SessionCloser(
                 throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", "مبلغ هر خط پرداخت باید بیشتر از صفر باشد.");
             }
 
-            var walletDraw = amounts.Detail?.Allocation?.Tenders
-                .FirstOrDefault(t => t.Method == method && t.AmountToman == pay.AmountToman);
+            var allocTender = method == PaymentMethod.Wallet
+                ? allocTenders?.FirstOrDefault(t => t.Method == PaymentMethod.Wallet && t.Accepted)
+                : null;
+            var lineAmount = pay.AmountToman;
+            if (method == PaymentMethod.Wallet && allocTender is not null)
+            {
+                var drawn = MoneyMath.CheckedAdd(allocTender.RealDrawnToman, allocTender.GiftDrawnToman);
+                if (drawn > lineAmount)
+                {
+                    lineAmount = drawn;
+                }
+                else if (allocTender.AmountToman > lineAmount)
+                {
+                    lineAmount = allocTender.AmountToman;
+                }
+            }
+
+            var walletDraw = allocTender;
             invoice.PaymentLines.Add(new PaymentLineEntity
             {
                 Method = method,
-                AmountToman = pay.AmountToman,
+                AmountToman = lineAmount,
                 DestinationCardId = pay.DestinationCardId,
                 Reference = pay.Reference,
                 ConfirmationStatus = method == PaymentMethod.CardToCard
