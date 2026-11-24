@@ -179,13 +179,13 @@ function Invoke-CheckpointDowngradeBlockedProbe {
 
     $logPath = "C:\ProgramData\Checkpoint\logs\acceptance-setup-$LegLabel.log"
     if (Test-Path -LiteralPath $logPath) { Remove-Item -LiteralPath $logPath -Force }
-    $args = @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/LOG=`"$logPath`"")
-    $cmdLine = Format-SetupCommandLine -Exe $OlderSetupExe -ArgumentList $args
+    $setupArgs = @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/LOG=`"$logPath`"")
+    $cmdLine = Format-SetupCommandLine -Exe $OlderSetupExe -ArgumentList $setupArgs
     Write-Host "Invoke-CheckpointDowngradeBlockedProbe: leg=$LegLabel cmd=$cmdLine"
     [Console]::Out.Flush()
 
     $result = Write-AcceptanceHarnessTrace "downgrade blocked setup leg=$LegLabel" {
-        Start-CheckpointServerSetup -LegLabel $LegLabel -Exe $OlderSetupExe -ArgumentList $args `
+        Start-CheckpointServerSetup -LegLabel $LegLabel -Exe $OlderSetupExe -ArgumentList $setupArgs `
             -TimeoutSeconds 300 -LogPath $logPath -ExpectExitCode $script:CheckpointSetupExitDowngradeBlocked
     }
     if ($result.ExitCode -ne $script:CheckpointSetupExitDowngradeBlocked) {
@@ -322,17 +322,17 @@ function Install-ServerSetup {
     $logPath = Join-Path $logDir "acceptance-setup-$LegLabel.log"
     if (Test-Path -LiteralPath $logPath) { Remove-Item -LiteralPath $logPath -Force }
 
-    $args = @(
+    $setupArgs = @(
         "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/ACCOUNTS=$Accounts", "/SKIPSESSIONCHECK=1",
         "/LOG=`"$logPath`""
     )
     if ($FromVer) {
         if (-not (Test-Path -LiteralPath $DefaultPinsFile)) { throw "DefaultPinsFile missing: $DefaultPinsFile" }
-        $args += "/DEFAULTPINS=$DefaultPinsFile"
+        $setupArgs += "/DEFAULTPINS=$DefaultPinsFile"
     }
 
     $result = Write-AcceptanceHarnessTrace "Start-CheckpointServerSetup leg=$LegLabel" {
-        Start-CheckpointServerSetup -LegLabel $LegLabel -Exe $Exe -ArgumentList $args -TimeoutSeconds 2700 -LogPath $logPath
+        Start-CheckpointServerSetup -LegLabel $LegLabel -Exe $Exe -ArgumentList $setupArgs -TimeoutSeconds 2700 -LogPath $logPath
     }
     if ($result.ExitCode -ne 0) {
         Write-InnoSetupHangDiagnostics -LogPath $logPath

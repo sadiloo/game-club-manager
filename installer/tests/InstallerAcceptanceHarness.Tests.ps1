@@ -17,4 +17,9 @@ Describe "installer acceptance harness" {
         $body | Should -Match "Get-SetupLegDescendantPids"
         $script:Common | Should -Match "function Install-ServerSetup"
     }
+
+    It "Install-ServerSetup does not pass scriptblock empty $args to Inno" {
+        $script:Common | Should -Match '\$setupArgs'
+        $script:Common | Should -Not -Match 'ArgumentList \$args'
+    }
 }
