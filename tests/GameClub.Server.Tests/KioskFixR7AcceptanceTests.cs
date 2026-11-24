@@ -101,7 +101,7 @@ public sealed class KioskFixR7AcceptanceTests(GameClubWebApplicationFactory fact
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
             await db.Database.ExecuteSqlRawAsync(
-                "UPDATE rate_lines SET \"HourlyToman\" = 80000 WHERE \"GroupId\" = 'pc-normal' AND \"PlayerCount\" = 1");
+                "UPDATE rate_lines SET \"HourlyToman\" = 80000 WHERE \"GroupId\" = 'pc-normal' AND \"PlayMode\" = 'Online' AND \"PlayerCount\" IS NULL");
             var customer = new CustomerEntity { Id = Guid.NewGuid(), Name = "PartialGrace", Mobile = "09128881333", CreatedAtUtc = DateTime.UtcNow };
             db.Customers.Add(customer);
             db.CustomerMembers.Add(new CustomerMemberEntity { CustomerId = customer.Id, RealToman = 1_833 });
@@ -132,7 +132,7 @@ public sealed class KioskFixR7AcceptanceTests(GameClubWebApplicationFactory fact
         {
             var db0 = setup.ServiceProvider.GetRequiredService<AppDbContext>();
             await db0.Database.ExecuteSqlInterpolatedAsync(
-                $"""UPDATE rate_lines SET "HourlyToman" = 60000 WHERE "GroupId" = 'pc-normal' AND "PlayerCount" = 1""");
+                $"""UPDATE rate_lines SET "HourlyToman" = 60000 WHERE "GroupId" = 'pc-normal' AND "PlayMode" = 'Online' AND "PlayerCount" IS NULL AND "IsSpecialBand" = false""");
             var customer = new CustomerEntity { Id = Guid.NewGuid(), Name = "OverR7", Mobile = "09126666333", CreatedAtUtc = DateTime.UtcNow };
             db0.Customers.Add(customer);
             db0.CustomerMembers.Add(new CustomerMemberEntity { CustomerId = customer.Id, RealToman = 500 });
@@ -172,7 +172,7 @@ public sealed class KioskFixR7AcceptanceTests(GameClubWebApplicationFactory fact
                 EndUtc = session.StartedAtUtc.AddMinutes(2),
                 StationId = session.StationId,
                 GroupId = session.Station!.GroupId,
-                Mode = PlayMode.Offline,
+                Mode = PlayMode.Online,
                 PlayerCount = 1,
                 Kind = StationKind.Pc,
             });

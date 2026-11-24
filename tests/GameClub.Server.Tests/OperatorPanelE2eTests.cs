@@ -538,14 +538,13 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
 
         var deleteDone = page.WaitForResponseAsync(r =>
             r.Request.Method == "DELETE" && r.Url.Contains("/buffet-only/", StringComparison.Ordinal));
-        var billRefresh = page.WaitForResponseAsync(r =>
+        await page.Locator("#buffetSaleLines button", new() { HasText = "حذف" }).Last.ClickAsync();
+        await deleteDone;
+        var billResponse = await page.WaitForResponseAsync(r =>
             r.Request.Method == "GET"
             && r.Url.Contains("/buffet-only/", StringComparison.Ordinal)
             && !r.Url.Contains("/lines/", StringComparison.Ordinal)
             && r.Ok);
-        await page.Locator("#buffetSaleLines button", new() { HasText = "حذف" }).Last.ClickAsync();
-        await deleteDone;
-        var billResponse = await billRefresh;
         var billBody = await billResponse.JsonAsync<JsonElement>();
         Assert.Equal(20_000, billBody.GetProperty("bill").GetProperty("collectibleToman").GetInt64());
 

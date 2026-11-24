@@ -11,6 +11,8 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using GameClub.Billing;
+using GameClub.Kiosk.Windows.IntegrationTests;
+using GameClub.Kiosk.Windows.IntegrationTests.Server;
 using Xunit;
 
 namespace GameClub.Kiosk.Windows.IntegrationTests.Wpf;
@@ -88,6 +90,7 @@ public sealed class WindowsKioskWpfSmokeTests
     [Fact]
     public void wpf_remaining_time_matches_funded_session_within_one_tick()
     {
+        StabStepLog.Write("within_one_tick_begin");
         var setupError = (Exception)null;
         var staSetup = new Thread(() =>
         {
@@ -114,12 +117,12 @@ public sealed class WindowsKioskWpfSmokeTests
         string lastPollStatusText = null;
         string pollFailureDiagnostics = null;
         Exception inProcessError = null;
-        var at = DateTime.SpecifyKind(new DateTime(2026, 6, 3, 14, 0, 0), DateTimeKind.Unspecified);
-        var card = new RateCardBuilder().AddBase("pc-normal", PlayMode.Offline, 1, 80_000).Build();
+        var at = GameClub.Billing.TehranTime.FromUtc(DateTime.UtcNow);
+        var card = new RateCardBuilder().AddBase("pc-normal", PlayMode.Online, null, 80_000).Build();
         var stabilityLogin = Environment.GetEnvironmentVariable("WPF_STABILITY_LOGIN") ?? "fund48667";
         var account = new PcAccount(stabilityLogin, startWalletToman);
         var estimatorSeconds = (int)TimeSpan.FromMinutes(
-            RemainingTimeEstimator.Estimate(account, "pc-normal", PlayMode.Offline, 1, at, card, graceMinuteEnabled: true).MoneyMinutes!.Value).TotalSeconds;
+            RemainingTimeEstimator.Estimate(account, "pc-normal", PlayMode.Online, 1, at, card, graceMinuteEnabled: true).MoneyMinutes!.Value).TotalSeconds;
         Assert.Equal(expectedSeconds, estimatorSeconds);
 
         _wpf.RunAsync(async () =>
@@ -184,6 +187,107 @@ public sealed class WindowsKioskWpfSmokeTests
         }
 
         Assert.False(string.IsNullOrWhiteSpace(capturedStatus), statusAssertMessage);
+        var match = Regex.Match(capturedStatus, @"~(\d{2}):(\d{2}):(\d{2})\s+left", RegexOptions.IgnoreCase);
+        Assert.True(match.Success, $"StatusText must match hh:mm:ss left pattern; got '{capturedStatus}'.");
+        var displayedSeconds = (int)new TimeSpan(
+            int.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture),
+            int.Parse(match.Groups[2].Value, CultureInfo.InvariantCulture),
+            int.Parse(match.Groups[3].Value, CultureInfo.InvariantCulture)).TotalSeconds;
+        Assert.InRange(displayedSeconds, expectedSeconds - 1, expectedSeconds + 1);
+        StabStepLog.Write("within_one_tick_end", $"displayed_seconds={displayedSeconds}");
+    }
+
+    [Fact]
+    public void wpf_remaining_time_matches_funded_session_special_band_night_line()
+    {
+        var bandMode = Environment.GetEnvironmentVariable("CHECKPOINT_SERVER_PC_BAND")?.Trim();
+        if (!string.Equals(bandMode, "night", StringComparison.OrdinalIgnoreCase))
+        {
+            IntegrationTestCi.FailIfActive("CHECKPOINT_SERVER_PC_BAND must be night in CI for wpf_remaining_time_matches_funded_session_special_band_night_line.");
+            return;
+        }
+
+        var setupError = (Exception)null;
+        var staSetup = new Thread(() =>
+        {
+            try
+            {
+                var loginName = "fund48667-night";
+                WpfLiveServerTestHelper.SetupFundedSessionAsync(loginName, "pass").GetAwaiter().GetResult();
+            }
+            catch (Exception ex)
+            {
+                setupError = ex;
+            }
+        });
+        staSetup.Start();
+        staSetup.Join(TimeSpan.FromMinutes(2));
+        if (setupError is not null)
+        {
+            Assert.Fail(setupError.ToString());
+        }
+
+        const int expectedSeconds = 1_740;
+        const long startWalletToman = 48_667;
+        var at = GameClub.Billing.TehranTime.FromUtc(DateTime.UtcNow);
+        var harnessSpecialHours = PcSpecialBandLiveRateCardHelper.HarnessPcNormalSpecialBandForLiveServer();
+        var card = new RateCardBuilder()
+            .AddBase("pc-normal", PlayMode.Online, null, 80_000)
+            .AddBand(harnessSpecialHours)
+            .AddBandRate(PilotSeed.PcNormalBandId, "pc-normal", PlayMode.Online, null, 100_000)
+            .Build();
+        var account = new PcAccount("fund48667-night", startWalletToman);
+        var estimatorSeconds = (int)TimeSpan.FromMinutes(
+            RemainingTimeEstimator.Estimate(account, "pc-normal", PlayMode.Online, 1, at, card, graceMinuteEnabled: true).MoneyMinutes!.Value).TotalSeconds;
+        Assert.Equal(expectedSeconds, estimatorSeconds);
+
+        string capturedStatus = null;
+        Exception inProcessError = null;
+        _wpf.RunAsync(async () =>
+        {
+            try
+            {
+                var window = new GameClub.Kiosk.MainWindow();
+                try
+                {
+                    window.Show();
+                    window.UpdateLayout();
+                    var host = GetField(window, "_host");
+                    await WpfLiveServerTransportHelper.WaitForKioskRuntimeTransportConnectedAsync(host, TimeSpan.FromSeconds(60));
+                    var login = host.GetType().GetMethod("LoginAsync", BindingFlags.Instance | BindingFlags.Public);
+                    await (Task)login.Invoke(host, new object[] { "fund48667-night", "pass" });
+                    var status = (System.Windows.Controls.TextBlock)GetField(window, "StatusText");
+                    var deadline = DateTime.UtcNow.AddSeconds(90);
+                    while (DateTime.UtcNow < deadline)
+                    {
+                        window.Dispatcher.Invoke(() => { }, DispatcherPriority.Background);
+                        var text = status.Text ?? "";
+                        if (text.IndexOf("left", StringComparison.OrdinalIgnoreCase) >= 0)
+                        {
+                            capturedStatus = text;
+                            break;
+                        }
+
+                        await Task.Delay(1000);
+                    }
+                }
+                finally
+                {
+                    window.Close();
+                }
+            }
+            catch (Exception ex)
+            {
+                inProcessError = ex;
+            }
+        }, TimeSpan.FromMinutes(2));
+
+        if (inProcessError is not null)
+        {
+            Assert.Fail(inProcessError.ToString());
+        }
+
+        Assert.False(string.IsNullOrWhiteSpace(capturedStatus));
         var match = Regex.Match(capturedStatus, @"~(\d{2}):(\d{2}):(\d{2})\s+left", RegexOptions.IgnoreCase);
         Assert.True(match.Success, $"StatusText must match hh:mm:ss left pattern; got '{capturedStatus}'.");
         var displayedSeconds = (int)new TimeSpan(

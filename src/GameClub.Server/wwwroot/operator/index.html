@@ -164,6 +164,8 @@
       </label>
       <button id="playerCountBtn" type="button">تغییر تعداد</button>
       <button id="forceLogoutBtn" type="button" class="hidden">خروج اجباری</button>
+      <button id="pcInternetToggleBtn" type="button" class="hidden">قطع اینترنت</button>
+      <p id="pcInternetHint" class="hidden" role="status"></p>
       <button id="openBillBtn" type="button">باز کردن صورتحساب</button>
       <button id="transferBtn" type="button" class="hidden">پرش ایستگاه</button>
       <label id="transferFaultWrap" class="hidden"><input type="checkbox" id="transferFaultChk" /> ایستگاه مبدأ خراب</label>
@@ -217,6 +219,13 @@
       <button id="mgrDiscountCapBtn" type="button">سقف تخفیف ترکیبی</button>
       <button id="mgrRoundingBtn" type="button">رند کردن مبلغ</button>
       <button id="mgrCorrectionsBtn" type="button">اصلاح‌های شارژ</button>
+      <button id="mgrPcRatesBtn" type="button">نرخ‌های PC</button>
+      <div id="pcRatesPanel" class="panel hidden">
+        <h3>نرخ‌های PC</h3>
+        <p id="pcRatesError" class="ss14-game-rates-error" role="alert"></p>
+        <div id="pcRatesTables"></div>
+        <p id="pcRatesSaveMsg"></p>
+      </div>
     </section>
 
     <section id="bill" class="panel hidden">

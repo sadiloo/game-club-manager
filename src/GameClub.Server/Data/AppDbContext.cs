@@ -100,6 +100,8 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
 
     public DbSet<KioskLeaseSigningKeyEntity> KioskLeaseSigningKeys => Set<KioskLeaseSigningKeyEntity>();
 
+    public DbSet<StationInternetStateEntity> StationInternetStates => Set<StationInternetStateEntity>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<StationGroupEntity>(e =>
@@ -321,6 +323,13 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             e.ToTable("rate_lines");
             e.HasKey(x => x.Id);
             e.HasIndex(x => new { x.GroupId, x.PlayMode, x.PlayerCount, x.IsSpecialBand }).IsUnique();
+        });
+
+        modelBuilder.Entity<StationInternetStateEntity>(e =>
+        {
+            e.ToTable("station_internet_state");
+            e.HasKey(x => x.StationId);
+            e.HasOne(x => x.Station).WithMany().HasForeignKey(x => x.StationId);
         });
 
         modelBuilder.Entity<BranchMemberSettingsEntity>(e =>

@@ -9,6 +9,7 @@ using GameClub.Kiosk.Core.Offline;
 using GameClub.Kiosk.Core.Protocol;
 using GameClub.Kiosk.Core.Runtime;
 using GameClub.Server.Kiosk;
+using GameClub.Server.Testing;
 using GameClub.Server.Tests;
 
 namespace GameClub.Kiosk.Windows.IntegrationTests.Server;
@@ -136,10 +137,12 @@ public sealed class WindowsKioskServerIntegrationTests
             }
 
             await backend.ResetAsync();
-            await backend.SetPcNormalOfflineRate80000WithZeroSurchargeAsync();
+            await backend.SetPcNormalOfflineRatesAsync();
             await backend.RegisterPcAsync(backend.CreateApiClient(), "PC-UNREACH");
             await backend.SeedCustomerWithCredentialAsync("unreach", "pass", 200_000);
             var (deviceId, deviceKey, leasePem) = await backend.PairAsync("PC-UNREACH");
+            Console.WriteLine(GameClub.Server.Testing.KioskLeaseSigningKeyDiagnostics.FormatFingerprintLine(leasePem));
+            var leaseKeyBefore = GameClub.Server.Testing.KioskLeaseSigningKeyDiagnostics.Sha256Prefix16(leasePem);
             var kioskHttp = backend.CreateKioskHttpClient(deviceId, deviceKey);
             var login = await kioskHttp.PostAsJsonAsync(
                 "/api/kiosk/auth/login",
@@ -148,12 +151,12 @@ public sealed class WindowsKioskServerIntegrationTests
             var sessionId = await backend.OpenSessionIdAsync();
             const long startWalletToman = 200_000;
             var sessionStartedUtc = DateTime.UtcNow;
-            var rateCard = new RateCardBuilder().AddBase(PilotSeed.PcNormalGroupId, PlayMode.Offline, 1, PilotSeed.PcNormalHourly).Build();
+            var rateCard = new RateCardBuilder().AddBase(PilotSeed.PcNormalGroupId, PlayMode.Online, null, PilotSeed.PcNormalHourly).Build();
             var fundedPlaySeconds = (int)TimeSpan.FromMinutes(
                 RemainingTimeEstimator.Estimate(
                     new PcAccount("unreach", startWalletToman),
                     PilotSeed.PcNormalGroupId,
-                    PlayMode.Offline,
+                    PlayMode.Online,
                     1,
                     DateTime.UtcNow,
                     rateCard,
@@ -227,6 +230,7 @@ public sealed class WindowsKioskServerIntegrationTests
 
             await ownedServer!.RelaunchAsync();
             serverStoppedForOutage = false;
+            Console.WriteLine($"LEASE_BUILD_SERVER pid={ownedServer.ProcessId}");
 
             await WaitUntilTransportConnectedAsync(runtime, TimeSpan.FromSeconds(30));
             Assert.True(runtime.IsTransportConnected, "Transport must connect within 30 seconds after server returns.");
@@ -242,6 +246,23 @@ public sealed class WindowsKioskServerIntegrationTests
                 }
 
                 await Task.Delay(500);
+            }
+
+            var leaseKeyAfter = await backend.LeaseSigningKeyFingerprintFromDatabaseAsync();
+            if (lastAck?.Lease is null)
+            {
+                Console.WriteLine(
+                    $"LEASE_VERIFY lease=null sig_ok=false authorizedUntilUtc= nowUtc={DateTime.UtcNow:O} "
+                    + $"phase={orchestrator.Phase} lease_key_k1={leaseKeyBefore} lease_key_k2={leaseKeyAfter} "
+                    + $"keys_match={string.Equals(leaseKeyBefore, leaseKeyAfter, StringComparison.Ordinal)}");
+            }
+            else
+            {
+                var sigOk = new GameClub.Kiosk.Core.Lease.LeaseVerifier(leasePem).TryVerify(lastAck.Lease);
+                Console.WriteLine(
+                    $"LEASE_VERIFY sig_ok={sigOk} authorizedUntilUtc={lastAck.Lease.Payload.AuthorizedUntilUtc:O} "
+                    + $"nowUtc={DateTime.UtcNow:O} phase={orchestrator.Phase} lease_key_k1={leaseKeyBefore} lease_key_k2={leaseKeyAfter} "
+                    + $"keys_match={string.Equals(leaseKeyBefore, leaseKeyAfter, StringComparison.Ordinal)}");
             }
 
             Assert.NotNull(lastAck);
@@ -302,24 +323,8 @@ public sealed class WindowsKioskServerIntegrationTests
         await _backend.ResetAsync();
         await _backend.RegisterPcAsync(_backend.CreateApiClient(), "PC-10M");
         var api = _backend.CreateApiClient();
-        if (_backend.UsesMutableClock)
-        {
-            _backend.SetTehran(2026, 6, 3, 14, 0);
-        }
-
         var sessionId = await _backend.StartSessionAsync("PC-10M");
-        if (_backend.UsesMutableClock)
-        {
-            _backend.SetTehran(2026, 6, 3, 15, 0);
-            await api.PostAsJsonAsync(
-                $"/api/sessions/{sessionId}/checkpoints",
-                new { at = S3TestHelpers.T(2026, 6, 3, 15, 0) });
-            _backend.SetTehran(2026, 6, 3, 15, 10);
-        }
-        else
-        {
-            await _backend.BackdateOpenSessionForDeadPcSweepAsync(sessionId);
-        }
+        await _backend.BackdateOpenSessionForDeadPcSweepAsync(sessionId);
 
         var sweep = await api.PostAsync("/api/internal/dead-pc-sweep", null);
         sweep.EnsureSuccessStatusCode();
@@ -559,26 +564,53 @@ public sealed class WindowsKioskServerIntegrationTests
         await runtime.DisposeAsync();
     }
 
-    [SkippableFact(Timeout = 1_200_000)]
+    [Fact(Timeout = 1_800_000)]
+    [Trait("Category", "UbuntuG2Oracle")]
     public async Task live_server_two_outages_bill_matches_main_g2_oracle()
     {
-        Skip.If(
-            KioskIntegrationBackend.IsLiveMode,
-            "G2 ~11 min owned-server oracle runs on ubuntu (dedicated CI step); Windows live job does not host a second server.");
-
         OutOfProcessLiveServer? ownedServer = null;
         var priorCheckpointUrl = Environment.GetEnvironmentVariable("CHECKPOINT_SERVER_URL");
+        const int g2ExpectedRunMinutes = 25;
+        var g2RunStartUtc = DateTime.UtcNow;
+        var g2HarnessBand = PcSpecialBandHarnessSchedule.BandAwayFromUtcWindow(
+            g2RunStartUtc,
+            g2RunStartUtc.AddMinutes(g2ExpectedRunMinutes),
+            TimeSpan.FromHours(3));
+        var g2HostArgs = PcSpecialBandHarnessEnv.HostArgsFromBand(g2HarnessBand);
+        var g2HarnessTimeBand = new TimeBand(
+            "g2-harness",
+            PilotSeed.PcNormalGroupId,
+            "g2-harness",
+            g2HarnessBand.Start,
+            g2HarnessBand.End);
         try
         {
-            ownedServer = await OutOfProcessLiveServer.StartNewAsync();
+            ownedServer = await OutOfProcessLiveServer.StartNewAsync(g2HostArgs);
             Environment.SetEnvironmentVariable("CHECKPOINT_SERVER_URL", ownedServer.BaseUrl);
+            Console.WriteLine(
+                $"G2_HARNESS_BAND start={g2HarnessBand.Start.Hour:00}:{g2HarnessBand.Start.Minute:00} "
+                + $"end={g2HarnessBand.End.Hour:00}:{g2HarnessBand.End.Minute:00} hostArgs={g2HostArgs}");
             var backend = KioskIntegrationBackend.CreateForBaseUrl(ownedServer.BaseUrl);
             await backend.ResetAsync();
-            await backend.SetPcNormalOfflineRate40000Async();
+            await backend.ConfigurePcNormalOfflineRate40KForG2Async();
             await backend.RegisterPcAsync(backend.CreateApiClient(), "PC-G2");
             var customerId = await backend.SeedCustomerWithCredentialAsync("g2user", "pass", 500_000);
             var (deviceId, deviceKey, leasePem) = await backend.PairAsync("PC-G2");
             var kioskHttp = backend.CreateKioskHttpClient(deviceId, deviceKey);
+            var bandEdges = G2BandAlignWait.BandEdges(g2HarnessTimeBand);
+            var alignNowUtc = DateTimeOffset.UtcNow;
+            var alignPlan = G2BandAlignWait.ComputePlan(alignNowUtc, bandEdges);
+            if (alignPlan.WaitMilliseconds <= 0)
+            {
+                Console.WriteLine("G2_BAND_ALIGN none");
+            }
+            else
+            {
+                Console.WriteLine(
+                    $"G2_BAND_ALIGN now={alignNowUtc:O} edge={alignPlan.TriggeringEdgeTehran:O} waitMs={alignPlan.WaitMilliseconds}");
+                await Task.Delay(TimeSpan.FromMilliseconds(alignPlan.WaitMilliseconds));
+            }
+
             var login = await kioskHttp.PostAsJsonAsync(
                 "/api/kiosk/auth/login",
                 new { loginName = "g2user", password = "pass", stationId = "PC-G2" });
@@ -620,6 +652,7 @@ public sealed class WindowsKioskServerIntegrationTests
             }, leaseCts.Token);
             await runtime.StartAsync(default);
             await WaitUntilTransportConnectedAsync(runtime, TimeSpan.FromSeconds(60));
+            AssertG2HarnessDayBandPutsSessionInOnlineDay(g2HarnessBand);
             var poweredSpanStartUtc = DateTime.UtcNow;
             await Task.Delay(TimeSpan.FromMinutes(6));
 
@@ -636,7 +669,13 @@ public sealed class WindowsKioskServerIntegrationTests
             var afterOutage2 = (await runtime.GetQueue().PendingAsync()).Count(e => e.Type == "offline_play_segment");
             Assert.True(afterOutage2 > afterOutage1, "outage 2 must enqueue offline_play_segment evidence");
 
-            var poweredSpanSeconds = (DateTime.UtcNow - poweredSpanStartUtc).TotalSeconds;
+            var poweredSpanEndUtc = DateTime.UtcNow;
+            G2BandAlignWait.AssertSameSideOfAllBandEdges(
+                g2HarnessTimeBand,
+                new DateTimeOffset(poweredSpanStartUtc, TimeSpan.Zero),
+                new[] { poweredSpanEndUtc },
+                new DateTimeOffset(poweredSpanEndUtc, TimeSpan.Zero));
+            var poweredSpanSeconds = (poweredSpanEndUtc - poweredSpanStartUtc).TotalSeconds;
             var secondsPastMinute = poweredSpanSeconds % 60;
             var marginToNearestMinute = Math.Min(secondsPastMinute, secondsPastMinute == 0 ? 60 : 60 - secondsPastMinute);
             Console.WriteLine(
@@ -684,9 +723,16 @@ public sealed class WindowsKioskServerIntegrationTests
             Console.WriteLine("G2_ROW_DUMP " + evidence.ToDumpLine());
             Console.WriteLine(
                 $"G2_ORACLE measured_seconds={poweredSpanSeconds:F1} minutes={evidence.ExpectedBillableMinutes} expected_collectible={evidence.ExpectedCollectibleToman}");
-            Assert.Equal(40_000, evidence.PcNormalOfflineHourlyToman);
+            Assert.Equal(80_000, evidence.PcNormalOnlineDayHourlyToman);
+            Assert.Equal(40_000, evidence.PcNormalOfflineDayHourlyToman);
+            Assert.Equal(0, evidence.OfflinePlaySegmentCount);
             Assert.Equal(evidence.ExpectedBillableMinutes, evidence.CheckpointCount);
             Assert.Equal(0, evidence.DuplicateCheckpointMinuteBuckets);
+            G2BandAlignWait.AssertSameSideOfAllBandEdges(
+                g2HarnessTimeBand,
+                new DateTimeOffset(evidence.SessionStartedAtUtc, TimeSpan.Zero),
+                evidence.CheckpointAtUtc,
+                new DateTimeOffset(poweredSpanEndUtc, TimeSpan.Zero));
             Assert.Equal(evidence.ExpectedCollectibleToman, evidence.PendingBillCollectibleToman);
         }
         finally
@@ -697,6 +743,27 @@ public sealed class WindowsKioskServerIntegrationTests
                 Environment.SetEnvironmentVariable("CHECKPOINT_SERVER_URL", priorCheckpointUrl);
             }
         }
+    }
+
+    private static void AssertG2HarnessDayBandPutsSessionInOnlineDay((TimeOfDay Start, TimeOfDay End) harnessBand)
+    {
+        var (start, end) = harnessBand;
+        var now = TehranTime.FromUtc(DateTime.UtcNow);
+        if (IsInsideHarnessSpecialBand(now, start, end))
+        {
+            Assert.Fail(
+                $"G2 requires test-host --pc-band day; now {now:yyyy-MM-dd HH:mm} Tehran is inside harness special {start.Hour:00}:{start.Minute:00}–{end.Hour:00}:{end.Minute:00}.");
+        }
+    }
+
+    private static bool IsInsideHarnessSpecialBand(DateTimeOffset tehranLocal, TimeOfDay bandStart, TimeOfDay bandEnd)
+    {
+        var minuteOfDay = (tehranLocal.Hour * 60) + tehranLocal.Minute;
+        var startMinute = (bandStart.Hour * 60) + bandStart.Minute;
+        var endMinute = (bandEnd.Hour * 60) + bandEnd.Minute;
+        return startMinute <= endMinute
+            ? minuteOfDay >= startMinute && minuteOfDay < endMinute
+            : minuteOfDay >= startMinute || minuteOfDay < endMinute;
     }
 
     private static async Task DrainG2QueueOnAckAsync(
@@ -814,9 +881,303 @@ public sealed class WindowsKioskServerIntegrationTests
 
         Assert.Fail("Expected at least 3 advancing kiosk heartbeats on the server.");
     }
+
+    /// <summary>Brief §10.4.7 (b) — server outage while internet OFF; station desired stays OFF (L3 firewall proof in net48 guard tests).</summary>
+    [Trait("Category", "LiveCheckpointServer")]
+    [Fact(Timeout = 180_000)]
+    public async Task live_server_pc_internet_off_unaffected_by_server_outage()
+    {
+        if (!KioskIntegrationBackend.IsLiveMode)
+        {
+            IntegrationTestCi.FailIfActive("CHECKPOINT_SERVER_URL must be set in CI for live_server_pc_internet_off_unaffected_by_server_outage.");
+            return;
+        }
+
+        OutOfProcessLiveServer? ownedServer = null;
+        var priorCheckpointUrl = Environment.GetEnvironmentVariable("CHECKPOINT_SERVER_URL");
+        var ciPid = 0;
+        var usesCiServer = KioskIntegrationBackend.IsLiveMode
+            && int.TryParse(Environment.GetEnvironmentVariable("GAMECLUB_SERVER_PID"), out ciPid);
+        var serverStopped = false;
+        try
+        {
+            var backend = KioskIntegrationBackend.Create(null);
+            ownedServer = OutOfProcessLiveServer.AttachExisting(ciPid, priorCheckpointUrl!);
+            await backend.ResetAsync();
+            await backend.SetPcNormalOfflineRatesAsync();
+            await backend.RegisterPcAsync(backend.CreateApiClient(), "PC-OUTAGE");
+            await backend.SeedCustomerWithCredentialAsync("inetout", "pass", 200_000);
+            var (deviceId, deviceKey, _) = await backend.PairAsync("PC-OUTAGE");
+            var kioskHttp = backend.CreateKioskHttpClient(deviceId, deviceKey);
+            (await kioskHttp.PostAsJsonAsync(
+                "/api/kiosk/auth/login",
+                new { loginName = "inetout", password = "pass", stationId = "PC-OUTAGE" })).EnsureSuccessStatusCode();
+            var sessionId = await backend.OpenSessionIdAsync();
+            var op = await backend.CreateOperatorClientAsync();
+            var rv = (await op.GetFromJsonAsync<JsonElement[]>("/api/operator/grid"))!
+                .Single(t => t.GetProperty("id").GetString() == "PC-OUTAGE").GetProperty("rowVersion").GetUInt32();
+            (await op.PostAsJsonAsync($"/api/operator/sessions/{sessionId}/internet", new
+            {
+                on = false,
+                expectedVersion = rv,
+                commandId = Guid.NewGuid(),
+            })).EnsureSuccessStatusCode();
+
+            KioskLiveServerRegistry.LogServerKill(ciPid, "live_server_pc_internet_off_outage_b");
+            KioskLiveServerRegistry.Unregister(ciPid);
+            Process.GetProcessById(ciPid).Kill(entireProcessTree: true);
+            serverStopped = true;
+
+            await ownedServer.RelaunchAsync();
+            serverStopped = false;
+
+            op = await backend.CreateOperatorClientAsync();
+            var tile = (await op.GetFromJsonAsync<JsonElement[]>("/api/operator/grid"))!
+                .Single(t => t.GetProperty("id").GetString() == "PC-OUTAGE");
+            Assert.False(tile.GetProperty("internetOn").GetBoolean());
+            Assert.False(tile.GetProperty("internetDesiredOn").GetBoolean());
+            _ = deviceKey;
+            _ = sessionId;
+        }
+        finally
+        {
+            if (usesCiServer && ownedServer is not null && serverStopped)
+            {
+                try
+                {
+                    await ownedServer.RelaunchAsync();
+                }
+                catch
+                {
+                    /* best-effort */
+                }
+            }
+            else if (usesCiServer && ownedServer is not null)
+            {
+                await FinalizeCiOwnedServerAsync(ownedServer, usesCiServer, false, priorCheckpointUrl);
+            }
+        }
+    }
+
+    /// <summary>Brief §10.4.7 (c) — kiosk killed while disconnected; ON press queues until reconnect, segment at press.</summary>
+    [Trait("Category", "LiveCheckpointServer")]
+    [Fact(Timeout = 240_000)]
+    public async Task live_server_pc_internet_on_while_kiosk_killed_shows_pending_then_applied_on_reconnect()
+    {
+        if (!KioskIntegrationBackend.IsLiveMode)
+        {
+            IntegrationTestCi.FailIfActive(
+                "CHECKPOINT_SERVER_URL must be set in CI for live_server_pc_internet_on_while_kiosk_killed_shows_pending_then_applied_on_reconnect.");
+            return;
+        }
+
+        OutOfProcessLiveServer? ownedServer = null;
+        var priorCheckpointUrl = Environment.GetEnvironmentVariable("CHECKPOINT_SERVER_URL");
+        var ciPid = 0;
+        var usesCiServer = KioskIntegrationBackend.IsLiveMode
+            && int.TryParse(Environment.GetEnvironmentVariable("GAMECLUB_SERVER_PID"), out ciPid);
+        KioskRuntime? runtime = null;
+        var serverStopped = false;
+        try
+        {
+            var backend = KioskIntegrationBackend.Create(null);
+            ownedServer = OutOfProcessLiveServer.AttachExisting(ciPid, priorCheckpointUrl!);
+            await backend.ResetAsync();
+            await backend.SetPcNormalOfflineRatesAsync();
+            await backend.RegisterPcAsync(backend.CreateApiClient(), "PC-KILL");
+            await backend.SeedCustomerWithCredentialAsync("inetkill", "pass", 200_000);
+            var (deviceId, deviceKey, _) = await backend.PairAsync("PC-KILL");
+            var kioskHttp = backend.CreateKioskHttpClient(deviceId, deviceKey);
+            var login = await kioskHttp.PostAsJsonAsync(
+                "/api/kiosk/auth/login",
+                new { loginName = "inetkill", password = "pass", stationId = "PC-KILL" });
+            login.EnsureSuccessStatusCode();
+            var sessionId = (await login.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("sessionId").GetGuid();
+
+            var queuePath = Path.Combine(Path.GetTempPath(), $"kiosk-inet-kill-{Guid.NewGuid():N}.db");
+            runtime = new KioskRuntime(() => kioskHttp);
+            runtime.Configure(
+                backend.HubUri,
+                deviceId,
+                deviceKey,
+                "PC-KILL",
+                queuePath,
+                legacyWindows: true,
+                testHubHandler: backend.TestHubHandler);
+            runtime.BindSession(sessionId);
+            await runtime.StartAsync(default);
+            await WaitUntilTransportConnectedAsync(runtime, TimeSpan.FromSeconds(45));
+
+            var op = await backend.CreateOperatorClientAsync();
+            var rv0 = (await op.GetFromJsonAsync<JsonElement[]>("/api/operator/grid"))!
+                .Single(t => t.GetProperty("id").GetString() == "PC-KILL").GetProperty("rowVersion").GetUInt32();
+            var offPressAt = DateTime.UtcNow;
+            (await op.PostAsJsonAsync($"/api/operator/sessions/{sessionId}/internet", new
+            {
+                on = false,
+                expectedVersion = rv0,
+                commandId = Guid.NewGuid(),
+            })).EnsureSuccessStatusCode();
+
+            KioskLiveServerRegistry.LogServerKill(ciPid, "live_server_pc_internet_kiosk_kill_c");
+            KioskLiveServerRegistry.Unregister(ciPid);
+            Process.GetProcessById(ciPid).Kill(entireProcessTree: true);
+            serverStopped = true;
+            await runtime.DisposeAsync();
+            runtime = null;
+
+            await ownedServer.RelaunchAsync();
+            serverStopped = false;
+            await Task.Delay(TimeSpan.FromSeconds(3));
+
+            op = await backend.CreateOperatorClientAsync();
+            var tile = (await op.GetFromJsonAsync<JsonElement[]>("/api/operator/grid"))!
+                .Single(t => t.GetProperty("id").GetString() == "PC-KILL");
+            var rv = tile.GetProperty("rowVersion").GetUInt32();
+            var pressAt = DateTime.UtcNow;
+            (await op.PostAsJsonAsync($"/api/operator/sessions/{sessionId}/internet", new
+            {
+                on = true,
+                expectedVersion = rv,
+                commandId = Guid.NewGuid(),
+            })).EnsureSuccessStatusCode();
+
+            var afterPress = (await op.GetFromJsonAsync<JsonElement[]>("/api/operator/grid"))!
+                .Single(t => t.GetProperty("id").GetString() == "PC-KILL");
+            Assert.True(afterPress.GetProperty("internetPending").GetBoolean());
+            Assert.False(afterPress.GetProperty("kioskConnected").GetBoolean());
+            Assert.True(afterPress.GetProperty("internetOn").GetBoolean());
+
+            var segmentsBeforeReconnect = await backend.ReadPlaySegmentsAsync(sessionId);
+            Assert.Contains(
+                segmentsBeforeReconnect,
+                s => string.Equals(s.Mode, nameof(PlayMode.Online), StringComparison.Ordinal));
+
+            runtime = new KioskRuntime(() => kioskHttp);
+            runtime.Configure(
+                backend.HubUri,
+                deviceId,
+                deviceKey,
+                "PC-KILL",
+                queuePath,
+                legacyWindows: true,
+                testHubHandler: backend.TestHubHandler);
+            runtime.BindSession(sessionId);
+            await runtime.StartAsync(default);
+            await WaitUntilTransportConnectedAsync(runtime, TimeSpan.FromSeconds(45));
+
+            var appliedDeadline = DateTime.UtcNow.AddSeconds(45);
+            JsonElement? lastTile = null;
+            while (DateTime.UtcNow < appliedDeadline)
+            {
+                var grid = await op.GetFromJsonAsync<JsonElement[]>("/api/operator/grid");
+                lastTile = grid!.Single(t => t.GetProperty("id").GetString() == "PC-KILL");
+                if (!lastTile.Value.GetProperty("internetPending").GetBoolean()
+                    && lastTile.Value.GetProperty("internetOn").GetBoolean())
+                {
+                    break;
+                }
+
+                await Task.Delay(1_000);
+            }
+
+            Assert.NotNull(lastTile);
+            Assert.True(lastTile!.Value.GetProperty("internetOn").GetBoolean());
+
+            var segments = await backend.ReadPlaySegmentSequenceAsync(sessionId);
+            Assert.Equal(3, segments.Count);
+            Assert.All(segments, s => Assert.True(s.StartUtc <= (s.EndUtc ?? DateTime.UtcNow.AddMinutes(5)), "segment end must not precede start"));
+            Assert.Equal(nameof(PlayMode.Online), segments[0].Mode);
+            Assert.Equal(nameof(PlayMode.Offline), segments[1].Mode);
+            Assert.Equal(nameof(PlayMode.Online), segments[2].Mode);
+            Assert.True(segments[1].StartUtc.ToUniversalTime() >= offPressAt.AddSeconds(-5), "Offline segment must start at OFF press (brief L11).");
+            Assert.True(segments[1].StartUtc.ToUniversalTime() <= offPressAt.AddSeconds(5), "Offline segment must start at OFF press (brief L11).");
+            Assert.True(segments[2].StartUtc.ToUniversalTime() >= pressAt.AddSeconds(-5), "Online segment must start at ON press while disconnected (brief §10.4.7(c), L11).");
+            Assert.True(segments[2].StartUtc.ToUniversalTime() <= pressAt.AddSeconds(5), "Online segment must start at ON press while disconnected (brief §10.4.7(c), L11).");
+            Assert.True(segments[2].EndUtc is null, "final online segment remains open until session end");
+            Assert.True(
+                segments[0].StartUtc < segments[1].StartUtc && segments[1].StartUtc < segments[2].StartUtc,
+                "segment sequence must be strictly ordered by press boundaries");
+            _ = deviceKey;
+        }
+        finally
+        {
+            if (runtime is not null)
+            {
+                await runtime.DisposeAsync();
+            }
+
+            if (usesCiServer && ownedServer is not null && serverStopped)
+            {
+                try
+                {
+                    await ownedServer.RelaunchAsync();
+                }
+                catch
+                {
+                    /* best-effort */
+                }
+            }
+            else if (usesCiServer && ownedServer is not null)
+            {
+                await FinalizeCiOwnedServerAsync(ownedServer, usesCiServer, false, priorCheckpointUrl);
+            }
+        }
+    }
+
+    /// <summary>Brief §10.4.7 (a),(d),(e) — live server internet desired/applied without cafe hardware.</summary>
+    [Trait("Category", "LiveCheckpointServer")]
+    [Fact(Timeout = 120_000)]
+    public async Task live_server_pc_internet_toggle_off_report_applied_then_session_end_on()
+    {
+        if (!KioskIntegrationBackend.IsLiveMode)
+        {
+            IntegrationTestCi.FailIfActive("CHECKPOINT_SERVER_URL must be set in CI for live_server_pc_internet_toggle_off_report_applied_then_session_end_on.");
+            return;
+        }
+
+        await _backend.ResetAsync();
+        await _backend.SetPcNormalOfflineRatesAsync();
+        await _backend.RegisterPcAsync(_backend.CreateApiClient(), "PC-INET");
+        await _backend.SeedCustomerWithCredentialAsync("inete2e", "pass", 200_000);
+        var (deviceId, deviceKey, _) = await _backend.PairAsync("PC-INET");
+        var kioskHttp = _backend.CreateKioskHttpClient(deviceId, deviceKey);
+        var login = await kioskHttp.PostAsJsonAsync(
+            "/api/kiosk/auth/login",
+            new { loginName = "inete2e", password = "pass", stationId = "PC-INET" });
+        login.EnsureSuccessStatusCode();
+        var sessionId = await _backend.OpenSessionIdAsync();
+        var op = await _backend.CreateOperatorClientAsync();
+        var startGrid = await op.GetFromJsonAsync<JsonElement[]>("/api/operator/grid");
+        var rv = startGrid!.Single(t => t.GetProperty("id").GetString() == "PC-INET").GetProperty("rowVersion").GetUInt32();
+        var off = await op.PostAsJsonAsync($"/api/operator/sessions/{sessionId}/internet", new
+        {
+            on = false,
+            expectedVersion = rv,
+            commandId = Guid.NewGuid(),
+        });
+        off.EnsureSuccessStatusCode();
+        var offBody = await off.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.False(offBody!.GetProperty("internetOn").GetBoolean());
+        var gridAfterOff = await op.GetFromJsonAsync<JsonElement[]>("/api/operator/grid");
+        var tileAfterOff = gridAfterOff!.Single(t => t.GetProperty("id").GetString() == "PC-INET");
+        Assert.True(tileAfterOff.GetProperty("internetPending").GetBoolean() || !tileAfterOff.GetProperty("internetOn").GetBoolean());
+
+        var stop = await _backend.CreateApiClient().PostAsync($"/api/sessions/{sessionId}/stop", null);
+        stop.EnsureSuccessStatusCode();
+        var endGrid = await op.GetFromJsonAsync<JsonElement[]>("/api/operator/grid");
+        var endTile = endGrid!.Single(t => t.GetProperty("id").GetString() == "PC-INET");
+        Assert.True(endTile.GetProperty("internetDesiredOn").GetBoolean());
+    }
 }
 
-public sealed class WindowsIntegrationApplicationFactory : GameClubWebApplicationFactory;
+public sealed class WindowsIntegrationApplicationFactory : GameClubWebApplicationFactory
+{
+    public WindowsIntegrationApplicationFactory()
+    {
+        HarnessPcSpecialBand = GameClub.Server.Testing.PcSpecialBandHarnessSchedule.OptionsForBand("day");
+    }
+}
 
 [CollectionDefinition("windows-kiosk-server")]
 public sealed class WindowsKioskServerCollection

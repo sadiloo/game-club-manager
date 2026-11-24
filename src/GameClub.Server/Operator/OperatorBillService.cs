@@ -152,8 +152,110 @@ public sealed class OperatorBillService(
     OperatorPolicies policies,
     OperatorMemberContext memberContext,
     OperatorShiftGate shiftGate,
-    RateConfigService rates)
+    RateConfigService rates,
+    StationInternetStateService internetStates)
 {
+    private static IReadOnlyList<object> BuildBillSegments(
+        PlaySessionEntity session,
+        SessionCharge charge,
+        BranchRatesSnapshot snapshot)
+    {
+        var isPcSession = session.Station?.Group?.Kind == StationKind.Pc
+            || session.Segments.Any(s => s.Kind == StationKind.Pc);
+        if (!isPcSession)
+        {
+            return BuildBillSegmentsByPlaySegment(session, charge, snapshot);
+        }
+
+        var segmentsByKey = session.Segments.ToDictionary(s => s.SegmentKey, StringComparer.Ordinal);
+        return charge.Lines
+            .OrderBy(l => l.Start)
+            .Select(line =>
+            {
+                segmentsByKey.TryGetValue(line.SegmentId, out var segment);
+                var hourly = line.HourlyRateToman;
+                var minutes = line.BilledMinutes;
+                var amount = line.AmountToman;
+                var billedMinutes = (int)Math.Min(int.MaxValue, minutes);
+                var startUtc = line.Start.UtcDateTime;
+                var endUtc = line.End.UtcDateTime;
+                string? displayLine;
+                if (segment?.Kind == StationKind.Pc)
+                {
+                    var view = new PlaySegmentEntity
+                    {
+                        SegmentKey = segment.SegmentKey,
+                        StationId = segment.StationId,
+                        GroupId = segment.GroupId,
+                        Mode = line.Mode,
+                        PlayerCount = line.PlayerCount,
+                        Kind = StationKind.Pc,
+                        StartUtc = startUtc,
+                        EndUtc = endUtc,
+                        GameTitle = segment.GameTitle,
+                    };
+                    displayLine = PcInternetBillDisplay.FormatBillSegment(view, hourly, charge, billedMinutes, amount);
+                }
+                else if (segment is not null)
+                {
+                    displayLine = Ss14BillDisplay.FormatBillSegment(segment, hourly, charge);
+                }
+                else
+                {
+                    displayLine = null;
+                }
+
+                return (object)new
+                {
+                    segmentKey = line.SegmentId,
+                    playerCount = line.PlayerCount,
+                    mode = line.Mode.ToString(),
+                    hourlyToman = hourly,
+                    gameTitleName = segment?.GameTitle?.Name,
+                    displayLine,
+                    startUtc,
+                    endUtc,
+                    billedMinutes = minutes,
+                    amountToman = amount,
+                };
+            })
+            .ToList();
+    }
+
+    private static IReadOnlyList<object> BuildBillSegmentsByPlaySegment(
+        PlaySessionEntity session,
+        SessionCharge charge,
+        BranchRatesSnapshot snapshot)
+    {
+        return session.Segments
+            .OrderBy(s => s.StartUtc)
+            .Select(s =>
+            {
+                var priced = charge.Lines.FirstOrDefault(l => l.SegmentId == s.SegmentKey);
+                var hourly = DisplayHourlyToman(s, charge, snapshot);
+                var minutes = priced?.BilledMinutes ?? 0;
+                var amount = priced?.AmountToman ?? 0;
+                var billedMinutes = (int)Math.Min(int.MaxValue, minutes);
+                string? displayLine = s.Kind == StationKind.Pc
+                    ? PcInternetBillDisplay.FormatBillSegment(s, hourly, charge, billedMinutes, amount)
+                    : Ss14BillDisplay.FormatBillSegment(s, hourly, charge);
+                return (object)new
+                {
+                    s.SegmentKey,
+                    s.PlayerCount,
+                    mode = s.Mode.ToString(),
+                    hourlyToman = hourly,
+                    gameTitleName = s.GameTitle?.Name,
+                    displayLine,
+                    startUtc = s.StartUtc,
+                    endUtc = s.EndUtc,
+                    billedMinutes = minutes,
+                    amountToman = amount,
+                };
+            })
+            .ToList();
+    }
+
     private static long DisplayHourlyToman(
         PlaySegmentEntity segment,
         SessionCharge charge,
@@ -825,6 +927,19 @@ public sealed class OperatorBillService(
             await audit.AppendAsync("pc_overshoot", new { sessionId = session.Id, alert.Code, alert.AmountToman, alert.Message }, ct);
         }
 
+        var desiredVersion = await internetStates.BumpDesiredAsync(
+            session.StationId,
+            desiredOn: true,
+            endUtc,
+            userId: null,
+            "session_end",
+            session.Id,
+            ct);
+        await audit.AppendAsync(
+            "internet.auto_on",
+            new { stationId = session.StationId, sessionId = session.Id, reason = source, desiredVersion },
+            ct);
+
         var bill = new PendingBillEntity
         {
             Id = Guid.NewGuid(),
@@ -906,24 +1021,7 @@ public sealed class OperatorBillService(
         var snapshot = session.RateCardSnapshotId != 0
             ? await rates.LoadSnapshotAsync(session.RateCardSnapshotId, ct)
             : await rates.LoadAsync(ct);
-        var segments = session.Segments
-            .OrderBy(s => s.StartUtc)
-            .Select(s =>
-            {
-                var hourly = DisplayHourlyToman(s, charge, snapshot);
-                return new
-                {
-                    s.SegmentKey,
-                    s.PlayerCount,
-                    mode = s.Mode.ToString(),
-                    hourlyToman = hourly,
-                    gameTitleName = s.GameTitle?.Name,
-                    displayLine = Ss14BillDisplay.FormatBillSegment(s, hourly, charge),
-                    startUtc = s.StartUtc,
-                    endUtc = s.EndUtc,
-                };
-            })
-            .ToList();
+        var segments = BuildBillSegments(session, charge, snapshot);
         var sale = await db.OpenSales.AsNoTracking()
             .Include(o => o.Lines).ThenInclude(l => l.CatalogItem)
             .FirstOrDefaultAsync(o => o.SessionId == sessionId, ct);
@@ -975,24 +1073,7 @@ public sealed class OperatorBillService(
         var snapshot = session.RateCardSnapshotId != 0
             ? await rates.LoadSnapshotAsync(session.RateCardSnapshotId, ct)
             : await rates.LoadAsync(ct);
-        var segments = session.Segments
-            .OrderBy(s => s.StartUtc)
-            .Select(s =>
-            {
-                var hourly = DisplayHourlyToman(s, charge, snapshot);
-                return new
-                {
-                    s.SegmentKey,
-                    s.PlayerCount,
-                    mode = s.Mode.ToString(),
-                    hourlyToman = hourly,
-                    gameTitleName = s.GameTitle?.Name,
-                    displayLine = Ss14BillDisplay.FormatBillSegment(s, hourly, charge),
-                    startUtc = s.StartUtc,
-                    endUtc = s.EndUtc,
-                };
-            })
-            .ToList();
+        var segments = BuildBillSegments(session, charge, snapshot);
         var sale = await db.OpenSales.AsNoTracking()
             .Include(o => o.Lines).ThenInclude(l => l.CatalogItem)
             .FirstOrDefaultAsync(o => o.SessionId == sessionId, ct);
@@ -1040,9 +1121,11 @@ public sealed class OperatorBillService(
 
     private static void ApplyPlayEnd(PlaySessionEntity session, DateTime endUtc)
     {
+        var isPc = session.Station?.Group?.Kind == StationKind.Pc
+            || session.Segments.Any(s => s.Kind == StationKind.Pc);
         foreach (var seg in session.Segments.Where(s => s.EndUtc is null))
         {
-            seg.EndUtc = endUtc;
+            seg.EndUtc = isPc ? (seg.StartUtc > endUtc ? seg.StartUtc : endUtc) : endUtc;
         }
 
         foreach (var pause in session.Pauses.Where(p => p.EndUtc is null))
@@ -1169,10 +1252,18 @@ public sealed class OperatorBillService(
     }
 }
 
-public sealed class OperatorGridService(AppDbContext db, SessionService sessions)
+public sealed class OperatorGridService(
+    AppDbContext db,
+    SessionService sessions,
+    IClock clock,
+    RateConfigService rates)
 {
     public async Task<IReadOnlyList<object>> GetGridAsync(CancellationToken ct)
     {
+        var now = clock.UtcNow.UtcDateTime;
+        var rateLines = await db.RateLines.AsNoTracking().ToListAsync(ct);
+        var internetStates = await db.StationInternetStates.AsNoTracking().ToDictionaryAsync(s => s.StationId, ct);
+        var kioskDevices = await db.KioskDevices.AsNoTracking().Where(d => !d.IsRevoked).ToListAsync(ct);
         var stations = await db.Stations.AsNoTracking()
             .Include(s => s.Group)
             .Where(s => s.IsActive)
@@ -1199,9 +1290,10 @@ public sealed class OperatorGridService(AppDbContext db, SessionService sessions
                     StationOperationalState.Reserved => "Reserved",
                     _ => "Free",
                 };
+                var idleInet = BuildInternetFields(station, null, null, internetStates, kioskDevices, rateLines, now);
                 tiles.Add(new
                 {
-                    station.Id,
+                    id = station.Id,
                     station.Name,
                     station.GroupId,
                     groupKind = station.Group?.Kind.ToString(),
@@ -1214,6 +1306,17 @@ public sealed class OperatorGridService(AppDbContext db, SessionService sessions
                     sessionId = (Guid?)null,
                     currentGameTitleId = (int?)null,
                     currentGameTitleName = (string?)null,
+                    internetOn = idleInet.InternetOn,
+                    internetDesiredOn = idleInet.InternetDesiredOn,
+                    internetPending = idleInet.InternetPending,
+                    internetError = idleInet.InternetError,
+                    kioskConnected = idleInet.KioskConnected,
+                    kioskLastSeenUtc = idleInet.KioskLastSeenUtc,
+                    internetToggleAllowed = idleInet.InternetToggleAllowed,
+                    offlineRateAvailable = idleInet.OfflineRateAvailable,
+                    snapshotOfflineRatesMissing = !idleInet.SnapshotHasOfflineRates,
+                    nextHourlyToman = idleInet.NextHourlyToman,
+                    nextBand = idleInet.NextBand,
                 });
                 continue;
             }
@@ -1243,9 +1346,17 @@ public sealed class OperatorGridService(AppDbContext db, SessionService sessions
                     .FirstOrDefaultAsync(ct);
             }
 
+            var playInet = BuildInternetFields(
+                station,
+                session,
+                await LoadSessionSnapshotAsync(session, ct),
+                internetStates,
+                kioskDevices,
+                rateLines,
+                now);
             tiles.Add(new
             {
-                station.Id,
+                id = station.Id,
                 station.Name,
                 station.GroupId,
                 groupKind = station.Group?.Kind.ToString(),
@@ -1264,6 +1375,17 @@ public sealed class OperatorGridService(AppDbContext db, SessionService sessions
                 currentGameTitleId = session.CurrentGameTitleId,
                 currentGameTitleName = session.CurrentGameTitle?.Name,
                 currentGameRatedPlayerCounts = await ResolveGameRatedPlayerCountsAsync(session, ct),
+                internetOn = playInet.InternetOn,
+                internetDesiredOn = playInet.InternetDesiredOn,
+                internetPending = playInet.InternetPending,
+                internetError = playInet.InternetError,
+                kioskConnected = playInet.KioskConnected,
+                kioskLastSeenUtc = playInet.KioskLastSeenUtc,
+                internetToggleAllowed = playInet.InternetToggleAllowed,
+                offlineRateAvailable = playInet.OfflineRateAvailable,
+                snapshotOfflineRatesMissing = !playInet.SnapshotHasOfflineRates,
+                nextHourlyToman = playInet.NextHourlyToman,
+                nextBand = playInet.NextBand,
             });
         }
 
@@ -1343,6 +1465,97 @@ public sealed class OperatorGridService(AppDbContext db, SessionService sessions
         SessionStatus.ManualSettle => "Manual settle",
         _ => "Free",
     };
+
+    private async Task<BranchRatesSnapshot?> LoadSessionSnapshotAsync(PlaySessionEntity session, CancellationToken ct)
+    {
+        if (session.RateCardSnapshotId == 0)
+        {
+            return null;
+        }
+
+        return await rates.LoadSnapshotAsync(session.RateCardSnapshotId, ct);
+    }
+
+    private static InternetGridFields BuildInternetFields(
+        StationEntity station,
+        PlaySessionEntity? session,
+        BranchRatesSnapshot? sessionSnapshot,
+        IReadOnlyDictionary<string, StationInternetStateEntity> internetStates,
+        IReadOnlyList<KioskDeviceEntity> kioskDevices,
+        IReadOnlyList<RateLineEntity> rateLines,
+        DateTime now)
+    {
+        if (station.Group?.Kind != StationKind.Pc)
+        {
+            return InternetGridFields.Empty;
+        }
+
+        internetStates.TryGetValue(station.Id, out var inet);
+        var device = kioskDevices.Where(d => d.StationId == station.Id)
+            .OrderByDescending(d => d.PairedAtUtc)
+            .FirstOrDefault();
+        var kioskConnected = device?.LastSeenUtc is DateTime seen && seen >= now.AddSeconds(-15);
+        var pending = inet is null || StationInternetStateService.IsPending(inet);
+        var offlineRateAvailable = PcRateCardSupport.HasOfflineRates(rateLines, station.GroupId);
+        var snapshotHasOffline = sessionSnapshot is not null
+            && PcRateCardSupport.HasOfflineRates(sessionSnapshot.Card, station.GroupId);
+        bool? internetOn = session is null || session.Status is not (SessionStatus.Open or SessionStatus.Paused)
+            ? null
+            : session.Mode == PlayMode.Online;
+        string? nextBand = null;
+        long? nextHourly = null;
+        if (session is not null && sessionSnapshot is not null && session.Status == SessionStatus.Open)
+        {
+            var targetMode = session.Mode == PlayMode.Online ? PlayMode.Offline : PlayMode.Online;
+            if (targetMode == PlayMode.Offline && !snapshotHasOffline)
+            {
+                nextHourly = null;
+                nextBand = null;
+            }
+            else
+            {
+                (nextHourly, nextBand) = PcInternetRatePreview.Resolve(
+                    sessionSnapshot.Card,
+                    station.GroupId,
+                    targetMode,
+                    now);
+            }
+        }
+
+        var toggleAllowed = session?.Status == SessionStatus.Open
+            && offlineRateAvailable
+            && snapshotHasOffline
+            && session.PendingBill is null;
+        return new InternetGridFields(
+            internetOn,
+            inet?.DesiredOn ?? true,
+            pending,
+            inet?.LastError,
+            kioskConnected,
+            device?.LastSeenUtc,
+            toggleAllowed,
+            offlineRateAvailable,
+            snapshotHasOffline,
+            nextHourly,
+            nextBand);
+    }
+
+    private sealed record InternetGridFields(
+        bool? InternetOn,
+        bool InternetDesiredOn,
+        bool InternetPending,
+        string? InternetError,
+        bool KioskConnected,
+        DateTime? KioskLastSeenUtc,
+        bool InternetToggleAllowed,
+        bool OfflineRateAvailable,
+        bool SnapshotHasOfflineRates,
+        long? NextHourlyToman,
+        string? NextBand)
+    {
+        public static InternetGridFields Empty { get; } = new(null, true, false, null, false, null, false, false, false, null, null);
+    }
+
 }
 
 public sealed class OperatorInvoiceService(

@@ -27,6 +27,7 @@ public static class SessionTransferSupport
         AuditService audit,
         SessionBilling billing,
         RateConfigService rates,
+        StationInternetStateService internetStates,
         IOperatorPanelNotifier? panelNotifier,
         Guid sessionId,
         string rawTargetStationId,
@@ -128,19 +129,25 @@ public static class SessionTransferSupport
                 session.Status = SessionStatus.Open;
             }
 
-            var nextKey = ((char)('a' + session.Segments.Count)).ToString();
+            var nextKey = SegmentKeySupport.Allocate(session.Segments.Count);
             var clearedGame = session.CurrentGameTitleId;
+            var transferMode = target.Group!.Kind == StationKind.Pc ? PlayMode.Online : session.Mode;
+            var transferPlayers = target.Group.Kind == StationKind.Pc ? 1 : session.PlayerCount;
             session.Segments.Add(new PlaySegmentEntity
             {
                 SegmentKey = nextKey,
                 StartUtc = now,
                 StationId = target.Id,
                 GroupId = target.GroupId,
-                Mode = session.Mode,
-                PlayerCount = session.PlayerCount,
-                Kind = target.Group!.Kind,
+                Mode = transferMode,
+                PlayerCount = transferPlayers,
+                Kind = target.Group.Kind,
                 SplitReason = SplitReasonTransfer,
             });
+            if (target.Group.Kind == StationKind.Pc)
+            {
+                session.Mode = PlayMode.Online;
+            }
 
             session.CurrentGameTitleId = null;
             session.StationId = target.Id;
@@ -170,9 +177,35 @@ public static class SessionTransferSupport
 
             var transferSegment = session.Segments.Single(s => s.EndUtc is null);
             var snapshot = await LoadSnapshotAsync(rates, session, ct);
-            if (target.Group!.Kind == StationKind.Console)
+            if (target.Group!.Kind == StationKind.Pc)
             {
-                ConsolePrepaidRecalculator.RecalcAmountPrepaid(session, transferSegment, snapshot, now);
+                var convertedBudget = DurationPrepaidConverter.TryConvertToAmountBudget(session, snapshot, "transfer", commandId);
+                if (convertedBudget is not null)
+                {
+                    await audit.AppendAsync(
+                        "prepaid.duration_converted",
+                        new
+                        {
+                            sessionId,
+                            session.PrepaidBookedActiveSeconds,
+                            budgetToman = convertedBudget,
+                            reason = "transfer",
+                            commandId,
+                        },
+                        ct);
+                }
+
+                SessionPrepaidRecalculator.RecalcAmountPrepaid(session, transferSegment, snapshot, now);
+            }
+            else if (target.Group.Kind == StationKind.Console)
+            {
+                SessionPrepaidRecalculator.RecalcAmountPrepaid(session, transferSegment, snapshot, now);
+            }
+
+            if (source.Group?.Kind == StationKind.Pc)
+            {
+                await internetStates.BumpDesiredAsync(source.Id, true, now, null, "transfer_source", session.Id, ct);
+                await internetStates.BumpDesiredAsync(target.Id, true, now, null, "session_start", session.Id, ct);
             }
 
             await audit.AppendAsync(
@@ -283,13 +316,15 @@ public static class SessionTransferSupport
         var at = TimeMapping.ToTehran(now);
         try
         {
+            var mode = target.Group!.Kind == StationKind.Pc ? PlayMode.Online : session.Mode;
+            var players = target.Group.Kind == StationKind.Pc ? 1 : session.PlayerCount;
             _ = RateResolver.Resolve(
                 snapshot.Card,
                 SpecialDayCalendar.Empty,
                 at,
                 target.GroupId,
-                session.Mode,
-                session.PlayerCount);
+                mode,
+                players);
         }
         catch (BillingException ex) when (ex.Code == BillingErrors.TariffNotFound)
         {

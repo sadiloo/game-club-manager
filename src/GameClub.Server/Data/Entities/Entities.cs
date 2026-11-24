@@ -476,6 +476,37 @@ public sealed class BranchRoundingEntity
     public long PcSpecialBandSurchargeToman { get; set; } = 20_000;
 }
 
+public sealed class StationInternetStateEntity
+{
+    public string StationId { get; set; } = string.Empty;
+
+    public StationEntity? Station { get; set; }
+
+    public Guid Epoch { get; set; }
+
+    public bool DesiredOn { get; set; } = true;
+
+    public long DesiredVersion { get; set; }
+
+    public DateTime DesiredAtUtc { get; set; }
+
+    public Guid? DesiredByUserId { get; set; }
+
+    public string DesiredReason { get; set; } = "session_start";
+
+    public Guid? SessionId { get; set; }
+
+    public long? AppliedVersion { get; set; }
+
+    public bool? AppliedOn { get; set; }
+
+    public DateTime? AppliedAtUtc { get; set; }
+
+    public string? LastError { get; set; }
+
+    public DateTime? LastReportUtc { get; set; }
+}
+
 public sealed class RateLineEntity
 {
     public long Id { get; set; }

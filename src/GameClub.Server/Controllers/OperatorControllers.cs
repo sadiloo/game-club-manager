@@ -140,6 +140,25 @@ public sealed class OperatorPanelController(
         });
     }
 
+    public sealed record InternetChangeBody(bool On, uint? ExpectedVersion, Guid CommandId);
+
+    [HttpPost("sessions/{sessionId:guid}/internet")]
+    public async Task<IActionResult> ChangeInternet(Guid sessionId, InternetChangeBody body, CancellationToken ct)
+    {
+        var result = await sessions.ChangeInternetAsync(sessionId, body.On, body.ExpectedVersion, body.CommandId, ct);
+        return Ok(new
+        {
+            sessionId = result.SessionId,
+            internetOn = result.InternetOn,
+            rowVersion = result.RowVersion,
+            hourlyToman = result.HourlyToman,
+            desiredVersion = result.DesiredVersion,
+            pending = result.Pending,
+            kioskConnected = result.KioskConnected,
+            nextBand = result.NextBand,
+        });
+    }
+
     [HttpPatch("stations/{stationId}/defaults")]
     public async Task<IActionResult> UpdateDefaults(string stationId, UpdateDefaultsRequest body, CancellationToken ct)
     {

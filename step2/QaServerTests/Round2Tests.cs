@@ -138,13 +138,16 @@ public sealed class Round2Tests(MainFactory f) : QaBase(f)
         // all pilot amounts still produce the scenario totals after a round trip
         await Reg("PC-RV", Normal); Inv(await PcRun("PC-RV", (8, 0), (9, 0)), 90_000, 90_000);
     }
-    [Fact] public async Task QA_RV2_negative_pc_special_surcharge_rejected()
+    [Fact] public async Task QA_RV2_pc_vip_online_night_130000_without_surcharge_field()
     {
         await F.ResetAsync();
-        var r = await C.PutAsJsonAsync("/api/rates", new { roundingStepToman = 5000, roundingDirection = "Up", lines = Array.Empty<object>(), pcSpecialBandSurchargeToman = -100_000L });
-        var stored = (await C.GetFromJsonAsync<JsonElement>("/api/rates")).L("pcSpecialBandSurchargeToman");
-        await F.ResetAsync();
-        Assert.True(r.StatusCode == HttpStatusCode.BadRequest, $"negative surcharge: {(int)r.StatusCode}, stored {stored}");
+        Assert.False((await C.GetFromJsonAsync<JsonElement>("/api/rates")).TryGetProperty("pcSpecialBandSurchargeToman", out _));
+        await Reg("PC-RV2", Vip);
+        F.At(2, 0);
+        var id = await Start("PC-RV2");
+        F.At(3, 0);
+        await Cp(id);
+        Assert.Equal(130_000, (await Stop(id)).L("timeGrossToman"));
     }
 
     // ---- races ----
@@ -288,16 +291,20 @@ public sealed class Round2Tests(MainFactory f) : QaBase(f)
         }
         Assert.True(bad.Count == 0, "expected 91,667 each: " + string.Join(" | ", bad));
     }
-    [Fact] public async Task QA_RV2b_negative_surcharge_money_impact()
+    [Fact] public async Task QA_RV2b_rates_response_has_no_surcharge_field()
     {
         await F.ResetAsync();
-        await C.PutAsJsonAsync("/api/rates", new { roundingStepToman = 5000, roundingDirection = "Up", lines = Array.Empty<object>(), pcSpecialBandSurchargeToman = -100_000L });
+        var rates = await C.GetFromJsonAsync<JsonElement>("/api/rates");
+        Assert.False(rates.TryGetProperty("pcSpecialBandSurchargeToman", out _));
         await Reg("PC-NS", Normal);
-        F.At(2, 0); var id = await Start("PC-NS"); F.At(3, 0); await Cp(id);
+        F.At(2, 0);
+        var id = await Start("PC-NS");
+        F.At(3, 0);
+        await Cp(id);
         var r = await C.PostAsync($"/api/sessions/{id}/stop", null);
         var body = await r.Content.ReadAsStringAsync();
         await F.ResetAsync();
-        Assert.True(r.StatusCode == HttpStatusCode.OK, $"stop after surcharge -100,000 accepted by PUT /api/rates: {(int)r.StatusCode} {body[..Math.Min(160, body.Length)]}");
+        Assert.True(r.StatusCode == HttpStatusCode.OK, $"stop after online rates: {(int)r.StatusCode} {body[..Math.Min(160, body.Length)]}");
     }
     [Fact] public async Task QA_H8b_stop_vs_sweep_error_body()
     {

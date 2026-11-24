@@ -1,51 +1,48 @@
 using System.Diagnostics;
 using System.IO;
 using GameClub.Kiosk.Core.Security;
+using GameClub.Kiosk.Guard.Internet;
 
 namespace GameClub.Kiosk.Guard;
 
 /// <summary>Session-targeted shell recovery — not a global process-name poll.</summary>
 internal sealed class KioskShellSupervisor
 {
-    private static readonly string LogPath = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-        "Checkpoint",
-        "guard",
-        "watchdog.log");
-
     private readonly KioskGuardIdentity _identity;
     private DateTime _lastRelaunchUtc = DateTime.MinValue;
     private Process? _supervised;
     private uint? _supervisedSessionId;
+    private DateTime? _shellGateWaitBeginUtc;
+
+    private static readonly TimeSpan ShellGateMaxWait = TimeSpan.FromSeconds(20);
 
     internal KioskShellSupervisor(KioskGuardIdentity identity) => _identity = identity;
 
     internal void Run(CancellationToken ct)
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(LogPath)!);
         if (!_identity.IsResolved)
         {
-            File.AppendAllText(LogPath, $"{DateTime.UtcNow:O} guard.identity_failed{Environment.NewLine}");
+            GuardWatchdogLog.Append("guard.identity_failed");
             return;
         }
 
         Environment.SetEnvironmentVariable("CHECKPOINT_KIOSK_SID", _identity.Sid);
         RegistryPolicyStore.EnsureDefaults();
         var protector = new GuardProcessProtection();
-        var protection = new KioskShellProtectionLifecycle(protector, fault => File.AppendAllText(LogPath, $"{DateTime.UtcNow:O} {fault}{Environment.NewLine}"));
+        var protection = new KioskShellProtectionLifecycle(protector, fault => GuardWatchdogLog.Append(fault));
         GuardProcessProtection.ApplyStartupProtection(protection);
         while (!ct.IsCancellationRequested)
         {
             if (RegistryPolicyStore.Tampered())
             {
                 RegistryPolicyStore.Repair();
-                File.AppendAllText(LogPath, $"{DateTime.UtcNow:O} guard.policy_tamper{Environment.NewLine}");
+                GuardWatchdogLog.Append("guard.policy_tamper");
             }
 
             var sessionId = ConsoleSessionLaunch.FindActiveUserSessionId(_identity.UserName);
             if (sessionId is null)
             {
-                File.AppendAllText(LogPath, $"{DateTime.UtcNow:O} guard.kiosk_user_session_not_found{Environment.NewLine}");
+                GuardWatchdogLog.Append("guard.kiosk_user_session_not_found");
                 Wait(ct, TimeSpan.FromSeconds(5));
                 continue;
             }
@@ -54,6 +51,25 @@ internal sealed class KioskShellSupervisor
             {
                 Wait(ct, TimeSpan.FromSeconds(5));
                 continue;
+            }
+
+            if (!InternetGuardShellLaunchGate.IsReady)
+            {
+                _shellGateWaitBeginUtc ??= DateTime.UtcNow;
+                var gateWait = DateTime.UtcNow - _shellGateWaitBeginUtc.Value;
+                if (gateWait < ShellGateMaxWait)
+                {
+                    Wait(ct, TimeSpan.FromMilliseconds(250));
+                    continue;
+                }
+
+                GuardWatchdogLog.Append(
+                    $"guard.shell_gate_timeout elapsed_ms={(int)gateWait.TotalMilliseconds}");
+                _shellGateWaitBeginUtc = null;
+            }
+            else
+            {
+                _shellGateWaitBeginUtc = null;
             }
 
             if (!EnsureShellRunning(sessionId.Value, protection))
@@ -79,7 +95,7 @@ internal sealed class KioskShellSupervisor
         RegistryPolicyStore.EnsureDefaults();
         if (!ConsoleSessionLaunch.TryLaunch(path, out var detail))
         {
-            File.AppendAllText(LogPath, $"{DateTime.UtcNow:O} guard.launch_failed {detail}{Environment.NewLine}");
+            GuardWatchdogLog.Append($"guard.launch_failed {detail}");
             return false;
         }
 
@@ -100,7 +116,7 @@ internal sealed class KioskShellSupervisor
             }
         }
 
-        File.AppendAllText(LogPath, $"{DateTime.UtcNow:O} guard.restart {detail}{Environment.NewLine}");
+        GuardWatchdogLog.Append($"guard.restart {detail}");
         return true;
     }
 
