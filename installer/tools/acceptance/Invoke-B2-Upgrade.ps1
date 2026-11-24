@@ -15,8 +15,11 @@ $ErrorActionPreference = "Stop"
 function Install-ServerSetup {
     param([string] $Exe, [string] $Accounts, [string] $FromVer)
     if ($FromVer) { $env:CHECKPOINT_UPGRADE_FROM = $FromVer }
+    $logPath = "C:\ProgramData\Checkpoint\logs\acceptance-setup.log"
+    New-Item -ItemType Directory -Force -Path (Split-Path $logPath -Parent) | Out-Null
     $proc = Start-Process -FilePath $Exe -ArgumentList @(
-        "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/ACCOUNTS=$Accounts", "/SKIPSESSIONCHECK=1"
+        "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/ACCOUNTS=$Accounts", "/SKIPSESSIONCHECK=1",
+        "/LOG=`"$logPath`""
     ) -Wait -PassThru
     if ($proc.ExitCode -ne 0) { throw "setup exit $($proc.ExitCode) for $Exe" }
     Assert-InstallerServerServicesRunning

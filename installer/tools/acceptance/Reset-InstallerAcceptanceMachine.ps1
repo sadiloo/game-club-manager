@@ -1,6 +1,14 @@
 # CI only: remove partial Checkpoint installs so B-1/B-2 start from a consistent state.
 $ErrorActionPreference = "Stop"
 
+$uninstaller = "C:\Program Files\Checkpoint\Server\unins000.exe"
+if (Test-Path -LiteralPath $uninstaller) {
+    $proc = Start-Process -FilePath $uninstaller -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART") -Wait -PassThru
+    if ($proc.ExitCode -ne 0) {
+        Write-Host "Reset-InstallerAcceptanceMachine: uninstall exit $($proc.ExitCode)"
+    }
+}
+
 foreach ($svc in @("CheckpointServer", "CheckpointPostgres")) {
     $s = Get-Service $svc -ErrorAction SilentlyContinue
     if ($s) {
