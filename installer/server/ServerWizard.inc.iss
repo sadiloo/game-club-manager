@@ -23,11 +23,19 @@ var
   GFirstInstall: Boolean;
   GFirstInstallCaptured: Boolean;
 
+function WindowsServiceExists(const ServiceName: String): Boolean;
+var Rc: Integer;
+begin
+  Result := Exec('sc.exe', 'query ' + ServiceName, '', SW_HIDE, ewWaitUntilTerminated, Rc) and (Rc = 0);
+end;
+
 procedure CaptureFirstInstallState;
+var ConfigPath: String;
 begin
   if not GFirstInstallCaptured then
   begin
-    GFirstInstall := not FileExists(ExpandConstant('{commonappdata}\Checkpoint\config\server.json'));
+    ConfigPath := ExpandConstant('{commonappdata}\Checkpoint\config\server.json');
+    GFirstInstall := (not FileExists(ConfigPath)) or (not WindowsServiceExists('CheckpointServer'));
     GFirstInstallCaptured := True;
   end;
 end;

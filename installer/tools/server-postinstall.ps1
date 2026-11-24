@@ -187,9 +187,12 @@ if (Test-Phase @("services")) {
     $binPath = "`"$ServerExe`""
     $svc = Get-Service CheckpointServer -ErrorAction SilentlyContinue
     if (-not $svc) {
-        New-Service -Name CheckpointServer -BinaryPathName $binPath -DisplayName "Checkpoint Server" -StartupType Automatic -DependsOn CheckpointPostgres | Out-Null
+        New-Service -Name CheckpointServer -BinaryPathName $binPath -DisplayName "Checkpoint Server" -StartupType Automatic -DependsOn CheckpointPostgres -ErrorAction Stop | Out-Null
         sc.exe config CheckpointServer start= delayed-auto | Out-Null
         sc.exe failure CheckpointServer reset= 86400 actions= restart/60000/restart/60000/restart/60000 | Out-Null
+        if (-not (Get-Service CheckpointServer -ErrorAction SilentlyContinue)) {
+            throw "CheckpointServer service registration failed"
+        }
     }
     if ($InstallPhase -ne "install-all") { exit 0 }
 }
@@ -215,6 +218,10 @@ if (Test-Phase @("backup")) {
 }
 
 if (Test-Phase @("start", "install-all")) {
+    $pgSvc = Get-Service CheckpointPostgres -ErrorAction SilentlyContinue
+    if ($pgSvc -and $pgSvc.Status -ne 'Running') {
+        Start-Service CheckpointPostgres -ErrorAction Stop
+    }
     Start-Service CheckpointServer -ErrorAction Stop
     if (Test-Path -LiteralPath $stagingSecretsPath) {
         Remove-Item -LiteralPath $stagingSecretsPath -Force

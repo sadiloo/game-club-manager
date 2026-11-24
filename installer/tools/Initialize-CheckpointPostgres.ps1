@@ -41,10 +41,13 @@ $svc = Get-Service CheckpointPostgres -ErrorAction SilentlyContinue
 if (-not $svc) {
     $binPath = "`"$pgCtl`" runservice -N `"CheckpointPostgres`" -D `"$PgData`" -w"
     New-Service -Name CheckpointPostgres -BinaryPathName $binPath -DisplayName "Checkpoint PostgreSQL" -StartupType Automatic | Out-Null
-    sc.exe config CheckpointPostgres start= delayed-auto | Out-Null
+    sc.exe config CheckpointPostgres start= auto | Out-Null
 }
 
 Start-Service CheckpointPostgres -ErrorAction Stop
+if ((Get-Service CheckpointPostgres).Status -ne 'Running') {
+    throw "CheckpointPostgres failed to reach Running after Start-Service"
+}
 Start-Sleep -Seconds 3
 
 $psql = Join-Path $PgRoot "bin\psql.exe"

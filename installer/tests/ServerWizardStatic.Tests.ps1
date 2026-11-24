@@ -51,6 +51,7 @@
 
     It "first-install [Run] checks frozen at setup start (R8d)" {
         $script:Inc | Should -Match "GFirstInstallCaptured"
+        $script:Inc | Should -Match "WindowsServiceExists"
         $script:Inc | Should -Match "CaptureFirstInstallState"
         $script:Iss | Should -Match "CaptureFirstInstallState"
     }
