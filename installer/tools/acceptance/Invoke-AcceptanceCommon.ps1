@@ -34,6 +34,21 @@ function Write-InstallerAcceptanceFailureDiagnostics {
         } catch {
             Write-Host "installer acceptance diagnostics: event log read failed: $_"
         }
+        if ($svcName -eq "CheckpointServer") {
+            try {
+                Get-WinEvent -FilterHashtable @{
+                    LogName   = 'Application'
+                    StartTime = (Get-Date).AddHours(-4)
+                } -MaxEvents 80 -ErrorAction Stop |
+                    Where-Object {
+                        $_.Message -match 'GameClub\.Server|Checkpoint|\.NET Runtime|Microsoft\.AspNetCore'
+                    } |
+                    Select-Object -First 15 |
+                    ForEach-Object { Write-Host "installer acceptance diagnostics: $($_.TimeCreated) $($_.Message)" }
+            } catch {
+                Write-Host "installer acceptance diagnostics: application event log read failed: $_"
+            }
+        }
     }
     $logDir = "C:\ProgramData\Checkpoint\logs"
     if (Test-Path -LiteralPath $logDir) {

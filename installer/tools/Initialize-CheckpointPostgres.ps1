@@ -67,6 +67,61 @@ if ((Get-Service CheckpointPostgres).Status -ne 'Running') {
 Start-Sleep -Seconds 3
 
 $psql = Join-Path $PgRoot "bin\psql.exe"
+
+function Test-PostgresSuperuserLogin([string] $Password) {
+    $env:PGPASSWORD = $Password
+    & $psql -h 127.0.0.1 -p $Port -U postgres -tc "SELECT 1" 2>$null | Out-Null
+    return ($LASTEXITCODE -eq 0)
+}
+
+function Repair-PostgresSuperuserPassword([string] $NewPassword) {
+    $hbaPath = Join-Path $PgData "pg_hba.conf"
+    if (-not (Test-Path -LiteralPath $hbaPath)) {
+        throw "pg_hba.conf missing; cannot repair postgres password"
+    }
+    $hbaBackup = "$hbaPath.checkpoint-repair"
+    Copy-Item -LiteralPath $hbaPath -Destination $hbaBackup -Force
+    $trustLines = @()
+    foreach ($line in (Get-Content -LiteralPath $hbaPath)) {
+        $trim = $line.Trim()
+        if ($trim.Length -eq 0 -or $trim.StartsWith("#")) {
+            $trustLines += $line
+            continue
+        }
+        if ($trim -match '^(local|host)\s+') {
+            $parts = $trim -split '\s+'
+            if ($parts.Count -ge 4) {
+                $trustLines += ("{0} {1} all {2} {3} trust" -f $parts[0], $parts[1], $parts[2], $parts[3])
+            } else {
+                $trustLines += $line
+            }
+        } else {
+            $trustLines += $line
+        }
+    }
+    Set-Content -LiteralPath $hbaPath -Value $trustLines -Encoding ASCII
+    Restart-Service CheckpointPostgres -Force -ErrorAction Stop
+    Start-Sleep -Seconds 3
+    $env:PGPASSWORD = ""
+    $escaped = $NewPassword -replace "'", "''"
+    & $psql -h 127.0.0.1 -p $Port -U postgres -c "ALTER USER postgres WITH PASSWORD '$escaped';"
+    if ($LASTEXITCODE -ne 0) {
+        Copy-Item -LiteralPath $hbaBackup -Destination $hbaPath -Force
+        throw "ALTER USER postgres failed during password repair"
+    }
+    Copy-Item -LiteralPath $hbaBackup -Destination $hbaPath -Force
+    Remove-Item -LiteralPath $hbaBackup -Force
+    Restart-Service CheckpointPostgres -Force -ErrorAction Stop
+    Start-Sleep -Seconds 3
+}
+
+if (-not (Test-PostgresSuperuserLogin $SuperPassword)) {
+    Repair-PostgresSuperuserPassword $SuperPassword
+    if (-not (Test-PostgresSuperuserLogin $SuperPassword)) {
+        throw "postgres superuser password could not be aligned with install secrets"
+    }
+}
+
 $exists = $false
 $env:PGPASSWORD = $SuperPassword
 & $psql -h 127.0.0.1 -p $Port -U postgres -tc "SELECT 1 FROM pg_database WHERE datname='checkpoint'" | ForEach-Object {
