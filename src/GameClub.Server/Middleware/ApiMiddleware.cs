@@ -22,6 +22,7 @@ public sealed class ApiKeyMiddleware(RequestDelegate next, IConfiguration config
         if (context.Request.Path.StartsWithSegments("/swagger")
             || context.Request.Path.StartsWithSegments("/operator")
             || context.Request.Path.StartsWithSegments("/api/operator/auth/login")
+            || context.Request.Path.StartsWithSegments("/api/local")
             || context.Request.Path.StartsWithSegments("/api/kiosk")
             || context.Request.Path.StartsWithSegments("/hubs/kiosk"))
         {

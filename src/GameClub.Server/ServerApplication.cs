@@ -1,5 +1,6 @@
 using System.Text.Json.Serialization;
 using GameClub.Server.Data;
+using GameClub.Server.Hosting;
 using GameClub.Server.Hubs;
 using GameClub.Server.Kiosk;
 using GameClub.Server.Operator;
@@ -16,6 +17,9 @@ public static class ServerApplication
     public static async Task RunAsync(string[] args, Action<WebApplicationBuilder>? configureBuilder = null)
     {
         var builder = WebApplication.CreateBuilder(args);
+        WindowsServiceHosting.ConfigureServerJson(builder);
+        WindowsServiceHosting.UseWindowsServiceWhenApplicable(builder);
+        WindowsServiceHosting.ConfigureServiceFileLogging(builder);
         ConfigureBuilder(builder);
         configureBuilder?.Invoke(builder);
 
@@ -36,6 +40,14 @@ public static class ServerApplication
         builder.Services.AddDbContext<AppDbContext>(options => options.UseNpgsql(connectionString));
 
         var app = builder.Build();
+
+        var lifetime = app.Services.GetRequiredService<IHostApplicationLifetime>();
+        var runtimeStatus = app.Services.GetRequiredService<ServerRuntimeStatus>();
+        lifetime.ApplicationStarted.Register(() =>
+        {
+            runtimeStatus.ApplicationStartedAtUtc = DateTimeOffset.UtcNow;
+        });
+
         app.UseMiddleware<ApiExceptionMiddleware>();
         app.UseMiddleware<OperatorSessionMiddleware>();
         app.UseMiddleware<OperatorAuthorizationMiddleware>();
@@ -61,6 +73,8 @@ public static class ServerApplication
 
     public static void ConfigureBuilder(WebApplicationBuilder builder)
     {
+        builder.Services.AddSingleton<ServerRuntimeStatus>();
+        builder.Services.AddScoped<ServerStatusService>();
         builder.Services.AddControllers()
             .ConfigureApiBehaviorOptions(options =>
             {

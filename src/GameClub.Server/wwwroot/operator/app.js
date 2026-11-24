@@ -1282,6 +1282,64 @@ document.getElementById("customerCreateBtn").onclick = async () => {
 
 document.getElementById("customerClearBtn").onclick = () => clearCustomerLink().catch(() => {});
 
+function formatTehranHmFromUtc(iso) {
+  if (!iso) return "";
+  try {
+    return new Date(iso).toLocaleTimeString("fa-IR", {
+      timeZone: "Asia/Tehran",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  } catch {
+    return "";
+  }
+}
+
+function formatTehranDateFromUtc(iso) {
+  if (!iso) return "";
+  try {
+    return new Date(iso).toLocaleDateString("fa-IR", { timeZone: "Asia/Tehran" });
+  } catch {
+    return "";
+  }
+}
+
+function formatBackupLabel(iso) {
+  if (!iso) return { text: "آخرین پشتیبان: هنوز ثبت نشده", warn: false };
+  const d = new Date(iso);
+  const now = new Date();
+  const ageHours = (now.getTime() - d.getTime()) / 3600000;
+  const warn = ageHours >= 48;
+  const hm = formatTehranHmFromUtc(iso);
+  const tehranToday = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Tehran" })).toDateString();
+  const tehranDay = new Date(d.toLocaleString("en-US", { timeZone: "Asia/Tehran" })).toDateString();
+  const y = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Tehran" }));
+  y.setDate(y.getDate() - 1);
+  const tehranYesterday = y.toDateString();
+  let when = hm;
+  if (tehranDay === tehranYesterday) when = `دیروز ${hm}`;
+  else if (tehranDay !== tehranToday) when = `${formatTehranDateFromUtc(iso)} ${hm}`;
+  return { text: `آخرین پشتیبان: ${when}`, warn };
+}
+
+async function refreshServerStatusChip() {
+  const chip = document.getElementById("serverStatusChip");
+  if (!chip) return;
+  try {
+    const st = await api("/api/operator/server-status");
+    const badgeClass = st.dbOk === false ? "status-badge danger" : "status-badge";
+    const badgeText = st.dbOk === false
+      ? "سرور پاسخ نمی‌دهد"
+      : st.startedAtUtc
+        ? `سرور روشن از ${formatTehranHmFromUtc(st.startedAtUtc)}`
+        : "سرور روشن";
+  const backup = formatBackupLabel(st.lastBackupUtc);
+    chip.innerHTML = `<span class="${badgeClass}">${badgeText}</span><span class="backup-line${backup.warn ? " warn" : ""}">${backup.text}</span>`;
+  } catch {
+    chip.textContent = "";
+  }
+}
+
 document.getElementById("loginBtn").onclick = async () => {
   try {
     const user = await api("/api/operator/auth/login", {
@@ -1304,6 +1362,8 @@ document.getElementById("loginBtn").onclick = async () => {
     await refreshPendingWalletTopups();
     await refreshShiftState();
     await refreshCafeSettingsUi();
+    await refreshServerStatusChip();
+    setInterval(refreshServerStatusChip, 60000);
     const pollMs =
       typeof window !== "undefined" && window.__operatorPollIntervalMs != null
         ? window.__operatorPollIntervalMs

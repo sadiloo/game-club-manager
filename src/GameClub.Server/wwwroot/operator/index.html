@@ -98,6 +98,12 @@
     @media (min-width: 768px) {
       #cpToastHost { left: auto; width: 360px; right: 32px; }
     }
+    #serverStatusChip { font-size: 0.85rem; color: #333; margin: 0.25rem 0 0.75rem; display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; }
+    #serverStatusChip .status-badge { padding: 4px 8px; border-radius: 999px; background: #e8f5e9; white-space: nowrap; }
+    #serverStatusChip .status-badge.warn { background: #fff3e0; color: #bf360c; }
+    #serverStatusChip .status-badge.danger { background: #ffebee; color: #b00020; }
+    #serverStatusChip .backup-line { color: #555; }
+    #serverStatusChip .backup-line.warn { color: #e65100; }
   </style>
 </head>
 <body>
@@ -110,6 +116,7 @@
   </section>
   <section id="app" class="hidden">
     <h1>سالن</h1>
+    <p id="serverStatusChip" aria-live="polite"></p>
     <p id="prepaidGlobalAlert" class="hidden" role="alert"></p>
     <p id="cpBgStatus" class="hidden" role="status"></p>
     <p id="error" role="alert"></p>
