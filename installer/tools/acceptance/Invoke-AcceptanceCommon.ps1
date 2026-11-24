@@ -12,10 +12,49 @@ function Get-InstallerApiHeaders {
     return @{ "X-Api-Key" = $key }
 }
 
+function Write-InstallerAcceptanceFailureDiagnostics {
+    foreach ($svcName in @("CheckpointPostgres", "CheckpointServer")) {
+        Write-Host "installer acceptance diagnostics: === $svcName ==="
+        $s = Get-Service $svcName -ErrorAction SilentlyContinue
+        if ($s) {
+            Write-Host "installer acceptance diagnostics: Status=$($s.Status) StartType=$($s.StartType)"
+            & sc.exe query $svcName 2>&1 | ForEach-Object { Write-Host "installer acceptance diagnostics: $_" }
+        } else {
+            Write-Host "installer acceptance diagnostics: service not registered"
+        }
+        try {
+            Get-WinEvent -FilterHashtable @{
+                LogName   = 'System'
+                ProviderName = 'Service Control Manager'
+                StartTime = (Get-Date).AddHours(-4)
+            } -MaxEvents 100 -ErrorAction Stop |
+                Where-Object { $_.Message -match [regex]::Escape($svcName) } |
+                Select-Object -First 15 |
+                ForEach-Object { Write-Host "installer acceptance diagnostics: $($_.TimeCreated) $($_.Message)" }
+        } catch {
+            Write-Host "installer acceptance diagnostics: event log read failed: $_"
+        }
+    }
+    $logDir = "C:\ProgramData\Checkpoint\logs"
+    if (Test-Path -LiteralPath $logDir) {
+        Get-ChildItem -LiteralPath $logDir -File -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 5 |
+            ForEach-Object {
+                Write-Host "installer acceptance diagnostics: === tail $($_.FullName) ==="
+                Get-Content -LiteralPath $_.FullName -Tail 80 -ErrorAction SilentlyContinue |
+                    ForEach-Object { Write-Host "installer acceptance diagnostics: $_" }
+            }
+    } else {
+        Write-Host "installer acceptance diagnostics: log dir missing: $logDir"
+    }
+}
+
 function Assert-InstallerServerServicesRunning {
     foreach ($svc in @("CheckpointPostgres", "CheckpointServer")) {
         $s = Get-Service $svc -ErrorAction Stop
         if ($s.Status -ne "Running") {
+            Write-InstallerAcceptanceFailureDiagnostics
             throw "installer acceptance: $svc not Running (Status=$($s.Status))"
         }
     }
@@ -39,6 +78,7 @@ function Wait-InstallerServerApiPort {
             if ($null -ne $client) { $client.Dispose() }
         }
     }
+    Write-InstallerAcceptanceFailureDiagnostics
     throw "installer acceptance: TCP 127.0.0.1:5000 not accepting connections within ${TimeoutSeconds}s"
 }
 

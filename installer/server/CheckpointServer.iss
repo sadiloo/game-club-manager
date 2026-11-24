@@ -121,6 +121,7 @@ end;
 function InitializeSetup: Boolean;
 var Installed, NewVer: String; Cmp: Integer;
 begin
+  CaptureFirstInstallState;
   Installed := GetInstalledDisplayVersion;
   NewVer := '{#AppVersion}';
   if Installed <> '' then

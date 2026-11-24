@@ -20,10 +20,22 @@ var
   DefaultPinPages: array[0..MAX_DEFAULT_PIN_PAGES - 1] of TInputQueryWizardPage;
   DefaultPinErrPin, DefaultPinErrRepeat: array[0..MAX_DEFAULT_PIN_PAGES - 1] of TNewStaticText;
   DefaultPinStoredPins: TArrayOfString;
+  GFirstInstall: Boolean;
+  GFirstInstallCaptured: Boolean;
+
+procedure CaptureFirstInstallState;
+begin
+  if not GFirstInstallCaptured then
+  begin
+    GFirstInstall := not FileExists(ExpandConstant('{commonappdata}\Checkpoint\config\server.json'));
+    GFirstInstallCaptured := True;
+  end;
+end;
 
 function IsFirstInstall: Boolean;
 begin
-  Result := not FileExists(ExpandConstant('{commonappdata}\Checkpoint\config\server.json'));
+  CaptureFirstInstallState;
+  Result := GFirstInstall;
 end;
 
 function IsUpgradeInstallCheck: Boolean;

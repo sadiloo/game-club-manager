@@ -49,6 +49,12 @@
         $script:Inc | Should -Not -Match "DefaultPinUserCount > 5"
     }
 
+    It "first-install [Run] checks frozen at setup start (R8d)" {
+        $script:Inc | Should -Match "GFirstInstallCaptured"
+        $script:Inc | Should -Match "CaptureFirstInstallState"
+        $script:Iss | Should -Match "CaptureFirstInstallState"
+    }
+
     It "open-sessions upgrade confirm (§2.2α)" {
         $script:Inc | Should -Match "Get-InstallerOpenSessionCount"
         $script:Inc | Should -Match "TaskDialogMsgBox"
