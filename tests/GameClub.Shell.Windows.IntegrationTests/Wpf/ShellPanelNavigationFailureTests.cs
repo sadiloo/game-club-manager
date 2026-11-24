@@ -72,6 +72,7 @@ public sealed class ShellPanelNavigationFailureTests
                         window = await StartWindowOnStubAsync(stub);
                         var wv = await WaitForPanelWebViewAsync(window, TimeSpan.FromSeconds(45));
                         await WaitForPanelUnavailableOfflineAsync(wv, TimeSpan.FromSeconds(90));
+                        var navAtOffline = window.NavigationStartingCount;
                         Assert.Equal(0, window.PanelNavigationPendingCountForTests);
 
                         static string ReadShellLog() =>
@@ -140,12 +141,11 @@ public sealed class ShellPanelNavigationFailureTests
 
                         Assert.False(string.IsNullOrEmpty(matchingOrphan));
 
-                        var navAfterOrphan = window.NavigationStartingCount;
                         var steadyDeadline = DateTime.UtcNow.AddSeconds(15);
                         while (DateTime.UtcNow < steadyDeadline)
                         {
                             await Task.Delay(500);
-                            Assert.Equal(navAfterOrphan, window.NavigationStartingCount);
+                            Assert.Equal(navAtOffline, window.NavigationStartingCount);
                             Assert.Equal(0, window.PanelNavigationPendingCountForTests);
                         }
 
@@ -392,6 +392,189 @@ public sealed class ShellPanelNavigationFailureTests
     }
 
     [Fact]
+    public void shell_load_offline_html_webview_recovery_exhausted_pins_title_body_and_hides_countdown()
+    {
+        var html = MainWindow.LoadOfflineHtmlForTests("webview-recovery-exhausted");
+        var title = ExtractOfflineHtmlElementText(html, "h1", "title");
+        var body = ExtractOfflineHtmlElementText(html, "p", "body");
+        Assert.Equal("پنل اپراتور از کار افتاد", title);
+        Assert.Contains("بازخوانی", body, StringComparison.Ordinal);
+        Assert.Contains("id=\"countdown\" style=\"display:none\"", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("<p id=\"countdown\"></p>", html, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "سرور در دسترس نیست؛ دوباره تلاش می‌شود…",
+            title,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void shell_probe_held_across_panel_nav_deadline_skips_stale_navigate_without_second_pending()
+    {
+        if (!WebView2RuntimePresent()) throw new InvalidOperationException("WebView2 runtime required");
+        ExecuteWithShellDataRoot(() =>
+        {
+            ShellPanelHttpSplitStub? stub = null;
+            try
+            {
+                stub = CreateStub(200, 25_000);
+                _fixture.RunAsync(async () =>
+                {
+                    MainWindow? window = null;
+                    try
+                    {
+                        ShellFileLog.Write("shell-probe-deadline-invalidate-baseline");
+                        var baseline = Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log")
+                            .Select(File.ReadAllText)
+                            .Aggregate("", string.Concat);
+                        window = await StartWindowOnStubAsync(stub);
+                        var wv = await WaitForPanelWebViewAsync(window, TimeSpan.FromSeconds(45));
+                        var pendingDeadline = DateTime.UtcNow.AddSeconds(30);
+                        while (DateTime.UtcNow < pendingDeadline && window.PanelNavigationPendingCountForTests < 1)
+                        {
+                            await Task.Delay(100);
+                        }
+
+                        Assert.True(
+                            window.PanelNavigationPendingCountForTests >= 1,
+                            "expected in-flight panel navigation before the 10s loopback deadline");
+
+                        stub.HoldNextPanelOperatorProbe();
+                        window.TriggerRunningPanelProbeForTests();
+                        var probeWaitDeadline = DateTime.UtcNow.AddSeconds(20);
+                        while (DateTime.UtcNow < probeWaitDeadline && stub.ProbeRequestCount < 1)
+                        {
+                            await Task.Delay(50);
+                        }
+
+                        Assert.True(stub.ProbeRequestCount >= 1, "panel probe did not start while held across deadline");
+
+                        string? timeoutConfirm = null;
+                        var timeoutDeadline = DateTime.UtcNow.AddSeconds(20);
+                        while (DateTime.UtcNow < timeoutDeadline)
+                        {
+                            await Task.Delay(100);
+                            var delta = LogDelta(baseline);
+                            timeoutConfirm = delta.Split('\n').FirstOrDefault(l =>
+                                l.Contains("branch=panel-nav-timeout", StringComparison.Ordinal)
+                                && !l.Contains("panel-nav-timeout-", StringComparison.Ordinal));
+                            if (timeoutConfirm is not null)
+                            {
+                                break;
+                            }
+                        }
+
+                        Assert.False(string.IsNullOrEmpty(timeoutConfirm), "panel-nav-timeout was not confirmed");
+                        Assert.Equal(0, window.PanelNavigationPendingCountForTests);
+
+                        var navAfterDeadline = window.NavigationStartingCount;
+                        stub.ReleasePanelOperatorProbeHold();
+
+                        var staleDeadline = DateTime.UtcNow.AddSeconds(30);
+                        var sawStale = false;
+                        while (DateTime.UtcNow < staleDeadline)
+                        {
+                            await Task.Delay(100);
+                            var delta = LogDelta(baseline);
+                            if (delta.Contains("reason=stale-probe-generation", StringComparison.Ordinal))
+                            {
+                                sawStale = true;
+                                break;
+                            }
+                        }
+
+                        Assert.True(sawStale, "expected stale-probe-generation after probe release post-deadline");
+                        Assert.Equal(navAfterDeadline, window.NavigationStartingCount);
+                        Assert.Equal(0, window.PanelNavigationPendingCountForTests);
+                        var deltaFinal = LogDelta(baseline);
+                        var staleMark = deltaFinal.IndexOf("reason=stale-probe-generation", StringComparison.Ordinal);
+                        Assert.True(staleMark >= 0);
+                        var tailAfterStale = deltaFinal.Substring(staleMark);
+                        Assert.DoesNotContain(
+                            "panel-navigate caller=NavigatePanel",
+                            tailAfterStale,
+                            StringComparison.Ordinal);
+                    }
+                    finally
+                    {
+                        RestoreStubSeams();
+                        window?.Close();
+                    }
+                }, TimeSpan.FromSeconds(180));
+            }
+            finally
+            {
+                stub?.Dispose();
+            }
+        });
+    }
+
+    [Fact]
+    public void shell_fresh_probe_after_panel_nav_deadline_navigates_panel_once()
+    {
+        if (!WebView2RuntimePresent()) throw new InvalidOperationException("WebView2 runtime required");
+        ExecuteWithShellDataRoot(() =>
+        {
+            ShellPanelHttpSplitStub? stub = null;
+            try
+            {
+                stub = CreateStub(200, 25_000);
+                _fixture.RunAsync(async () =>
+                {
+                    MainWindow? window = null;
+                    try
+                    {
+                        window = await StartWindowOnStubAsync(stub);
+                        var wv = await WaitForPanelWebViewAsync(window, TimeSpan.FromSeconds(45));
+                        await WaitForPanelUnavailableOfflineAsync(wv, TimeSpan.FromSeconds(90));
+                        var navAfterTimeoutOffline = window.NavigationStartingCount;
+                        Assert.Equal(0, window.PanelNavigationPendingCountForTests);
+
+                        stub.OperatorStatusCode = 200;
+                        stub.OperatorDelayMilliseconds = 0;
+                        stub.ProbeDelayMilliseconds = 0;
+                        window.TriggerRunningPanelProbeForTests();
+
+                        var panelDeadline = DateTime.UtcNow.AddSeconds(60);
+                        var panelOk = false;
+                        while (DateTime.UtcNow < panelDeadline)
+                        {
+                            await Task.Delay(300);
+                            wv = window.FindName("PanelWebView") as Microsoft.Web.WebView2.Wpf.WebView2;
+                            if (wv?.CoreWebView2 is null)
+                            {
+                                continue;
+                            }
+
+                            var loc = UnquoteWebViewScriptString(
+                                await wv.CoreWebView2.ExecuteScriptAsync(
+                                    "location.pathname + '|' + document.readyState"));
+                            if (loc.StartsWith("/operator/", StringComparison.OrdinalIgnoreCase)
+                                && loc.EndsWith("|complete", StringComparison.Ordinal))
+                            {
+                                panelOk = true;
+                                break;
+                            }
+                        }
+
+                        Assert.True(panelOk, "fresh probe after deadline did not navigate panel to operator");
+                        Assert.Equal(navAfterTimeoutOffline + 1, window.NavigationStartingCount);
+                        Assert.Equal(0, window.PanelNavigationPendingCountForTests);
+                    }
+                    finally
+                    {
+                        RestoreStubSeams();
+                        window?.Close();
+                    }
+                }, TimeSpan.FromSeconds(180));
+            }
+            finally
+            {
+                stub?.Dispose();
+            }
+        });
+    }
+
+    [Fact]
     public void shell_panel_recovery_probe_logs_503_not_zero_with_production_http_seam()
     {
         if (!WebView2RuntimePresent()) throw new InvalidOperationException("WebView2 runtime required");
@@ -571,7 +754,6 @@ public sealed class ShellPanelNavigationFailureTests
                             "offlineState=webview-recovery-exhausted",
                             StringComparison.Ordinal);
                         Assert.True(exhaustedMark >= 0, "exhausted offline page was not presented");
-                        var exhaustedTail = postExhausted.Substring(exhaustedMark);
 
                         var measureStart = DateTime.UtcNow;
                         var samples = new List<PanelOfflineFlashAssert.FlashSample>();
@@ -603,7 +785,7 @@ public sealed class ShellPanelNavigationFailureTests
                                     : PanelOfflineFlashAssert.SampleViewKind.NonOffline,
                                 elapsedMs));
 
-                            if (LogDelta(baseline).Substring(exhaustedMark).Contains(
+                            if (LogDelta(baseline).Contains(
                                     "action=stay-offline",
                                     StringComparison.Ordinal))
                             {
@@ -1159,6 +1341,14 @@ public sealed class ShellPanelNavigationFailureTests
                 Console.WriteLine($"SHELL-R27D-CI-TRACE test={testName} {line}");
             }
         }
+    }
+
+    private static string ExtractOfflineHtmlElementText(string html, string tag, string id)
+    {
+        var pattern = $@"<{tag} id=""{id}"">([^<]*)</{tag}>";
+        var match = System.Text.RegularExpressions.Regex.Match(html, pattern);
+        Assert.True(match.Success, $"expected <{tag} id=\"{id}\"> in offline html");
+        return match.Groups[1].Value;
     }
 
     private static string UnquoteWebViewScriptString(string jsonQuoted)

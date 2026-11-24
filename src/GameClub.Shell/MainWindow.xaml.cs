@@ -496,6 +496,7 @@ public partial class MainWindow : Window
 
     private void HandleRunningPanelNavigationFailure()
     {
+        PanelProbeNavigateGeneration.Invalidate();
         CancelHealthyPanelProbeTimer("panel-nav-failure");
         _runningPanelLoadFailing = true;
         var utcNow = DateTime.UtcNow;
@@ -1766,6 +1767,8 @@ public partial class MainWindow : Window
         var html = reader.ReadToEnd();
         return OfflineHtmlContent.ApplyState(html, state);
     }
+
+    internal static string LoadOfflineHtmlForTests(string state) => LoadOfflineHtml(state);
 
     public void ShowFromTray()
     {

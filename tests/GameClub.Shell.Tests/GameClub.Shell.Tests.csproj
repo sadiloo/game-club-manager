@@ -28,7 +28,6 @@
     <Compile Include="..\..\src\GameClub.Shell\Shell\PendingLoopbackPanelNavigationExpiryPolicy.cs" Link="Shell\PendingLoopbackPanelNavigationExpiryPolicy.cs" />
     <Compile Include="..\..\src\GameClub.Shell\Shell\ShellServerVisualState.cs" Link="Shell\ShellServerVisualState.cs" />
     <Compile Include="..\..\src\GameClub.Shell\Shell\ShellPaths.cs" Link="Shell\ShellPaths.cs" />
-    <Compile Include="..\..\src\GameClub.Shell\Shell\OfflineHtmlContent.cs" Link="Shell\OfflineHtmlContent.cs" />
   </ItemGroup>
 
   <ItemGroup>
