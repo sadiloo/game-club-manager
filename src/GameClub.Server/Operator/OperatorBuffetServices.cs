@@ -450,7 +450,11 @@ public sealed class OperatorBuffetSaleService(
                 p.AmountToman,
                 OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet ? sale.CustomerId?.ToString() : null)).ToList();
             var amounts = await calculator.ComputeBuffetOnlyAsync(sale.Lines, sale.CustomerId, tenders, innerCt, effective);
-            OperatorBillService.EnsureClientPreviewCollectibleCurrent(previewCollectibleToman, amounts.CollectibleToman);
+            OperatorBillService.EnsureClientPreviewCollectibleCurrent(
+                previewCollectibleToman,
+                live.CollectibleToman,
+                amounts,
+                effective);
             bill.UnroundedPayableToman = amounts.UnroundedPayableToman;
             bill.RoundingToman = amounts.RoundingToman;
             bill.CollectibleToman = amounts.CollectibleToman;

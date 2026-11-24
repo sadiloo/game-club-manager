@@ -296,9 +296,7 @@ public sealed class InpageFormsPr51R5PaymentTimeRoundingTests(GameClubWebApplica
         var snapshot = new BranchRatesSnapshot(
             PilotSeed.CreateCard(),
             RoundingPolicy.Create(5_000, RoundingDirection.Up));
-        var sessionResolved = RoundingSettingsResolver.ResolveSessionRatesSnapshot(snapshot, offRow);
-        var openResolved = RoundingSettingsResolver.ResolveOpenBillRatesSnapshot(snapshot, offRow);
-        Assert.Equal(sessionResolved.Rounding, openResolved.Rounding);
-        Assert.Equal(GameClub.Billing.RoundingPolicy.Off, sessionResolved.Rounding);
+        var resolved = RoundingSettingsResolver.ResolveRatesForPayment(snapshot, offRow);
+        Assert.Equal(GameClub.Billing.RoundingPolicy.Off, resolved.Rounding);
     }
 }

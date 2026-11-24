@@ -125,7 +125,7 @@ public sealed class BillCalculator(
     private async Task<BranchRatesSnapshot> SnapshotForPaymentAsync(CancellationToken ct)
     {
         var snapshot = await rates.LoadAsync(ct);
-        return await roundingSettings.ResolveRatesForOpenBillAsync(snapshot, ct);
+        return await roundingSettings.ResolveRatesForPaymentAsync(snapshot, ct);
     }
 
     private static BillAmounts ToBillAmounts(MemberBillResult result)
@@ -394,9 +394,19 @@ public sealed class OperatorBillService(
         return tendered > paymentTimeCollectibleToman ? paymentTimeCollectibleToman : amounts.CollectibleToman;
     }
 
-    public static void EnsureClientPreviewCollectibleCurrent(long? previewCollectibleToman, long paymentTimeCollectibleToman)
+    public static void EnsureClientPreviewCollectibleCurrent(
+        long? previewCollectibleToman,
+        long livePaymentTimeCollectibleToman,
+        BillAmounts amounts,
+        IReadOnlyList<PaymentInput> effective)
     {
-        if (previewCollectibleToman is long client && client != paymentTimeCollectibleToman)
+        if (previewCollectibleToman is not long client)
+        {
+            return;
+        }
+
+        var expected = ResolvePreviewCollectibleToman(livePaymentTimeCollectibleToman, amounts, effective);
+        if (client != expected)
         {
             throw new ApiException(
                 StatusCodes.Status409Conflict,
@@ -782,11 +792,8 @@ public sealed class OperatorBillService(
                 tenders,
                 innerCt,
                 effective);
-            EnsureClientPreviewCollectibleCurrent(previewCollectibleToman, amounts.CollectibleToman);
+            EnsureClientPreviewCollectibleCurrent(previewCollectibleToman, live.CollectibleToman, amounts, effective);
             ValidatePayments(amounts.CollectibleToman, effective, amounts.Detail, session.CustomerId);
-            bill.UnroundedPayableToman = amounts.UnroundedPayableToman;
-            bill.RoundingToman = amounts.RoundingToman;
-            bill.CollectibleToman = amounts.CollectibleToman;
 
             var invoice = await closer.FinalizeFromPendingAsync(session, bill, effective, amounts, innerCt);
             await audit.AppendAsync("bill.confirm", new { sessionId, invoiceNumber = invoice.Number, collectible = invoice.CollectibleToman }, innerCt);

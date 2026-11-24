@@ -59,12 +59,6 @@ public sealed class RoundingSettingsService(AppDbContext db, AuditService audit,
             ratesSnapshot,
             await db.BranchRounding.AsNoTracking().SingleAsync(ct));
 
-    public Task<BranchRatesSnapshot> ResolveRatesForSessionBillAsync(BranchRatesSnapshot ratesSnapshot, CancellationToken ct = default)
-        => ResolveRatesForPaymentAsync(ratesSnapshot, ct);
-
-    public Task<BranchRatesSnapshot> ResolveRatesForOpenBillAsync(BranchRatesSnapshot ratesSnapshot, CancellationToken ct = default)
-        => ResolveRatesForPaymentAsync(ratesSnapshot, ct);
-
     internal static RoundingPolicy BuildRoundingPolicy(BranchRoundingEntity row)
     {
         if (!row.RoundingEnabled)
@@ -108,11 +102,6 @@ public static class RoundingSettingsResolver
         return ratesSnapshot with { Rounding = policy };
     }
 
-    public static BranchRatesSnapshot ResolveOpenBillRatesSnapshot(BranchRatesSnapshot ratesSnapshot, BranchRoundingEntity liveRow)
-        => ResolveRatesForPayment(ratesSnapshot, liveRow);
-
-    public static BranchRatesSnapshot ResolveSessionRatesSnapshot(BranchRatesSnapshot ratesSnapshot, BranchRoundingEntity liveRow)
-        => ResolveRatesForPayment(ratesSnapshot, liveRow);
 }
 
 public sealed record RoundingSettingsResponse(
