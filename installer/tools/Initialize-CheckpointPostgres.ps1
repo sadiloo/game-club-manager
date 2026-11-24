@@ -137,7 +137,7 @@ if (-not (Test-Path -LiteralPath $initdb)) {
 
 Write-InitLog "Initialize-CheckpointPostgres: begin port=$Port"
 $pgVersionFile = Join-Path $PgData "PG_VERSION"
-if (-not (Test-Path -LiteralPath $pgVersionFile)) {
+function Invoke-InitDbCluster {
     if (-not (Test-Path -LiteralPath $PgData)) {
         New-Item -ItemType Directory -Force -Path $PgData | Out-Null
     }
@@ -145,8 +145,22 @@ if (-not (Test-Path -LiteralPath $pgVersionFile)) {
     Set-Content -LiteralPath $pwFile -Value $SuperPassword -NoNewline -Encoding ASCII
     $initCode = Invoke-PostgresNative -FilePath $initdb -ArgumentList @("-U", "postgres", "-A", "scram-sha-256", "-E", "UTF8", "-D", $PgData, "--pwfile=$pwFile")
     Remove-Item -LiteralPath $pwFile -Force
+    return $initCode
+}
+
+if (-not (Test-Path -LiteralPath $pgVersionFile)) {
+    $initCode = Invoke-InitDbCluster
     if ($initCode -ne 0) {
-        throw "initdb failed"
+        Write-InitLog "initdb failed exit $initCode on $PgData; moving aside and retrying"
+        if (Test-Path -LiteralPath $PgData) {
+            $parent = Split-Path $PgData -Parent
+            $staleName = "pgdata-stale-init-" + [Guid]::NewGuid().ToString("N").Substring(0, 8)
+            Move-Item -LiteralPath $PgData -Destination (Join-Path $parent $staleName)
+        }
+        $initCode = Invoke-InitDbCluster
+        if ($initCode -ne 0) {
+            throw "initdb failed after move-aside (exit $initCode)"
+        }
     }
     Write-InitLog "initdb: new cluster"
 }
