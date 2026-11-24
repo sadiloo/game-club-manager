@@ -5,14 +5,15 @@
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "Invoke-AcceptanceCommon.ps1")
 New-Item -ItemType Directory -Force -Path $LogsDir | Out-Null
 $installLog = Join-Path $LogsDir "b1-server-install.log"
 
 Write-Host "B-1: silent server install"
-$proc = Start-Process -FilePath $ServerSetup -ArgumentList @(
+$proc = Start-CheckpointServerSetup -Exe $ServerSetup -ArgumentList @(
     "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/LOG=$installLog",
     "/ACCOUNTS=$AccountsFile"
-) -Wait -PassThru
+)
 if ($proc.ExitCode -ne 0) {
     throw "B-1: server setup exit $($proc.ExitCode)"
 }

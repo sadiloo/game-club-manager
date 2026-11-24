@@ -1,5 +1,41 @@
 ﻿$ErrorActionPreference = "Stop"
 
+function Wait-CheckpointInnoSetupProcesses {
+    param(
+        [int] $LeaderPid,
+        [int] $TimeoutSeconds = 3600
+    )
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    while ([DateTime]::UtcNow -lt $deadline) {
+        $setupProcs = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
+                $_.ProcessName -like "CheckpointServerSetup*"
+            })
+        $leader = Get-Process -Id $LeaderPid -ErrorAction SilentlyContinue
+        if (-not $setupProcs -and (-not $leader -or $leader.HasExited)) {
+            return
+        }
+        Start-Sleep -Seconds 5
+    }
+    foreach ($p in @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -like "CheckpointServerSetup*" })) {
+        Write-Host "Wait-CheckpointInnoSetupProcesses: still running pid=$($p.Id) name=$($p.ProcessName)"
+    }
+    throw "Checkpoint server Inno setup did not finish within ${TimeoutSeconds}s"
+}
+
+function Start-CheckpointServerSetup {
+    param(
+        [string] $Exe,
+        [string[]] $ArgumentList,
+        [int] $TimeoutSeconds = 3600
+    )
+    $proc = Start-Process -FilePath $Exe -ArgumentList $ArgumentList -PassThru
+    Wait-CheckpointInnoSetupProcesses -LeaderPid $proc.Id -TimeoutSeconds $TimeoutSeconds
+    if (-not $proc.HasExited) {
+        $proc.WaitForExit()
+    }
+    return $proc
+}
+
 function Assert-InnoSetupLogNoFailedRuns {
     param([string] $LogPath)
     if (-not (Test-Path -LiteralPath $LogPath)) { return }

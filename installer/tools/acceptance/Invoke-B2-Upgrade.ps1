@@ -30,7 +30,7 @@ function Install-ServerSetup {
         if (-not (Test-Path -LiteralPath $DefaultPinsFile)) { throw "DefaultPinsFile missing: $DefaultPinsFile" }
         $args += "/DEFAULTPINS=$DefaultPinsFile"
     }
-    $proc = Start-Process -FilePath $Exe -ArgumentList $args -Wait -PassThru
+    $proc = Start-CheckpointServerSetup -Exe $Exe -ArgumentList $args -TimeoutSeconds 3600
     if ($proc.ExitCode -ne 0) {
         if (Test-Path -LiteralPath $logPath) {
             Write-Host "=== tail $logPath ==="

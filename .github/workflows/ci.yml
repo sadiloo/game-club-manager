@@ -188,7 +188,7 @@ jobs:
 
   windows-installer:
     name: windows-2022 installer
-    timeout-minutes: 90
+    timeout-minutes: 120
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4

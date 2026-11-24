@@ -58,7 +58,10 @@
 
     It "upgrade stops CheckpointServer before file copy (§2.2)" {
         $script:Inc | Should -Match "function PrepareToInstall"
+        $script:Inc | Should -Match "StopCheckpointServerForUpgrade"
         $script:Inc | Should -Match "stop CheckpointServer"
+        $script:Inc | Should -Match "GameClub.Server.exe"
+        $script:Iss | Should -Match "CloseApplications=no"
         $script:Inc | Should -Match "GUpgradeStoppedServer"
         $script:Inc | Should -Match "procedure DeinitializeSetup"
         $script:Inc | Should -Match "start CheckpointServer"

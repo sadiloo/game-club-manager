@@ -51,10 +51,10 @@ if (-not (Test-Path -LiteralPath $DefaultPinsFile)) {
 
 $fromVer = (Get-Item -LiteralPath "C:\Program Files\Checkpoint\Server\GameClub.Server.exe").VersionInfo.ProductVersion
 $env:CHECKPOINT_UPGRADE_FROM = $fromVer
-$procSetup = Start-Process -FilePath $ServerSetup -ArgumentList @(
+$procSetup = Start-CheckpointServerSetup -Exe $ServerSetup -ArgumentList @(
     "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SKIPSESSIONCHECK=1",
     "/DEFAULTPINS=$DefaultPinsFile"
-) -Wait -PassThru
+)
 if ($procSetup.ExitCode -ne 0) { throw "B-13: upgrade exit $($procSetup.ExitCode)" }
 
 $checkAfter = & $serverExe --check-default-pins 2>&1 | Out-String

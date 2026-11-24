@@ -31,6 +31,41 @@ begin
   Result := Exec('sc.exe', 'query ' + ServiceName, '', SW_HIDE, ewWaitUntilTerminated, Rc) and (Rc = 0);
 end;
 
+function WindowsServiceRunning(const ServiceName: String): Boolean;
+var
+  Rc: Integer;
+  TempFile: String;
+  Lines: TArrayOfString;
+  I: Integer;
+begin
+  Result := False;
+  if not WindowsServiceExists(ServiceName) then Exit;
+  TempFile := ExpandConstant('{tmp}\sc-query-' + ServiceName + '.txt');
+  if Exec('cmd.exe', '/c sc.exe query ' + ServiceName + ' > "' + TempFile + '" 2>nul', '', SW_HIDE, ewWaitUntilTerminated, Rc) then
+    if LoadStringsFromFile(TempFile, Lines) then
+      for I := 0 to GetArrayLength(Lines) - 1 do
+        if Pos('RUNNING', UpperCase(Lines[I])) > 0 then
+        begin
+          Result := True;
+          Exit;
+        end;
+end;
+
+procedure StopCheckpointServerForUpgrade;
+var
+  I: Integer;
+  Rc: Integer;
+begin
+  Exec('sc.exe', 'stop CheckpointServer', '', SW_HIDE, ewWaitUntilTerminated, Rc);
+  for I := 1 to 45 do
+  begin
+    if not WindowsServiceRunning('CheckpointServer') then Break;
+    Sleep(1000);
+  end;
+  Exec('taskkill.exe', '/F /IM GameClub.Server.exe /T', '', SW_HIDE, ewWaitUntilTerminated, Rc);
+  Sleep(2000);
+end;
+
 procedure CaptureFirstInstallState;
 var ConfigPath: String;
 begin
@@ -828,6 +863,5 @@ begin
   Result := '';
   if IsFirstInstall then Exit;
   GUpgradeStoppedServer := True;
-  Exec('sc.exe', 'stop CheckpointServer', '', SW_HIDE, ewWaitUntilTerminated, Rc);
-  Sleep(3000);
+  StopCheckpointServerForUpgrade;
 end;
