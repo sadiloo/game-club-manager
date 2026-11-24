@@ -118,7 +118,7 @@ public sealed class PcInternetBillOracleTests(GameClubWebApplicationFactory fact
 
     /// <summary>
     /// Partial-wallet L12 (11+30 min, gross 44_667): Silver level 10% is
-    /// <c>MoneyMath.PercentOf(44_667, 10)</c> — one floor on the running gross (44_666.7 → 4_466),
+    /// <c>MoneyMath.PercentOf(44_667, 10)</c> — one floor on the running gross (4_466.7 → 4_466),
     /// not per-slice or per-minute sums. Online slice gross 14_667 still shows slice vs
     /// per-minute discount divergence (1_466 vs 1_463).
     /// </summary>
