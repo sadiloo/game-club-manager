@@ -72,7 +72,6 @@ public sealed class ShellPanelNavigationFailureTests
                         window = await StartWindowOnStubAsync(stub);
                         var wv = await WaitForPanelWebViewAsync(window, TimeSpan.FromSeconds(45));
                         await WaitForPanelUnavailableOfflineAsync(wv, TimeSpan.FromSeconds(90));
-                        var navAtOffline = window.NavigationStartingCount;
                         Assert.Equal(0, window.PanelNavigationPendingCountForTests);
 
                         static string ReadShellLog() =>
