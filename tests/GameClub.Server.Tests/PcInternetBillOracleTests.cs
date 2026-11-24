@@ -117,10 +117,10 @@ public sealed class PcInternetBillOracleTests(GameClubWebApplicationFactory fact
     }
 
     /// <summary>
-    /// Partial-wallet L12 with 11 online minutes at 80k/h: slice gross 14_667 makes
-    /// <c>MoneyMath.PercentOf(14_667, 10) = 1_466</c> (floor of 1_466.7), not 1_467.
-    /// Per-minute sum would be <c>11 × PercentOf(1_333, 10) = 1_463</c>. Offline 30×1_000
-    /// adds <c>30 × PercentOf(1_000, 10) = 3_000</c>. Settlement discount 4_466 = 1_466 + 3_000.
+    /// Partial-wallet L12 (11+30 min, gross 44_667): Silver level 10% is
+    /// <c>MoneyMath.PercentOf(44_667, 10)</c> — one floor on the running gross (44_666.7 → 4_466),
+    /// not per-slice or per-minute sums. Online slice gross 14_667 still shows slice vs
+    /// per-minute discount divergence (1_466 vs 1_463).
     /// </summary>
     private static void AssertL12PartialWalletRoundDownDiscounts(SessionCharge charge, Settlement settlement)
     {
@@ -144,7 +144,8 @@ public sealed class PcInternetBillOracleTests(GameClubWebApplicationFactory fact
         Assert.Equal(3_000, offlineSliceDiscount);
         Assert.Equal(1_463, perMinuteOnlineDiscount);
         Assert.NotEqual(perMinuteOnlineDiscount, onlineSliceDiscount);
-        var expectedDiscount = onlineSliceDiscount + offlineSliceDiscount;
+        Assert.Equal(44_667, charge.TotalAmountToman);
+        var expectedDiscount = MoneyMath.PercentOf(charge.TotalAmountToman, 10);
         Assert.Equal(4_466, expectedDiscount);
         Assert.Equal(expectedDiscount, settlement.DiscountToman);
         var conserved = settlement.MoneyConsumedToman
@@ -566,14 +567,14 @@ public sealed class PcInternetBillOracleTests(GameClubWebApplicationFactory fact
         Assert.Equal(63_000, bill.GetProperty("collectibleToman").GetInt64());
     }
 
-    /// <summary>L-12 variant: partial wallet forces pricingNet settlement (kills OFF-1).</summary>
+    /// <summary>L-12 variant: 25k wallet depleted mid offline slice (AccountSettlement preview before stop).</summary>
     [Fact]
-    public async Task L12_discount_on_toggled_pc_partial_wallet_covers_online_slice_only()
+    public async Task L12_discount_on_toggled_pc_partial_wallet_runs_out_during_offline_slice()
     {
         var (customerId, sessionId) = await L12PrepareMemberPcSessionAsync(
             "PC-L12P",
             "09124441213",
-            walletTopUpToman: 10_000L,
+            walletTopUpToman: 25_000L,
             graceMinuteEnabled: false,
             onlineBilledMinutes: 11,
             offlineBilledMinutes: 30);
@@ -582,16 +583,17 @@ public sealed class PcInternetBillOracleTests(GameClubWebApplicationFactory fact
         var endUtc = factory.Clock.UtcNow.UtcDateTime;
         var (charge, settlement) = await MemberPlaySettlementPreviewAsync(factory, sessionId, customerId, endUtc);
         AssertL12PartialWalletRoundDownDiscounts(charge, settlement);
-        Assert.Equal(10_000, settlement.MoneyConsumedToman);
-        Assert.Equal(30_201, settlement.WriteOffToman);
+        Assert.Equal(25_000, settlement.MoneyConsumedToman);
+        Assert.Equal(4_466, settlement.DiscountToman);
+        Assert.Equal(15_201, settlement.WriteOffToman);
         Assert.Equal(0, settlement.UncoveredToman);
         Assert.Equal(0, settlement.OmittedToman);
         Assert.Equal(0, settlement.UpdatedAccount.MoneyBalanceToman);
         var bill = await BillAfterStopAsync(op, api, sessionId);
         Assert.Equal(44_667, bill.GetProperty("timeGrossToman").GetInt64());
         Assert.Equal(4_466, bill.GetProperty("levelDiscountToman").GetInt64());
-        Assert.Equal(10_000, bill.GetProperty("collectibleToman").GetInt64());
-        Assert.Equal(10_000, bill.GetProperty("unroundedPayableToman").GetInt64());
-        Assert.Equal(30_201, bill.GetProperty("writeOffToman").GetInt64());
+        Assert.Equal(25_000, bill.GetProperty("collectibleToman").GetInt64());
+        Assert.Equal(25_000, bill.GetProperty("unroundedPayableToman").GetInt64());
+        Assert.Equal(15_201, bill.GetProperty("writeOffToman").GetInt64());
     }
 }
