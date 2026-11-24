@@ -1,5 +1,19 @@
 ﻿$ErrorActionPreference = "Stop"
 
+function Write-AcceptanceHarnessTrace {
+    param(
+        [string] $Label,
+        [scriptblock] $Action
+    )
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    Write-Host "acceptance-harness: $([DateTime]::UtcNow.ToString('o')) BEGIN $Label"
+    try {
+        return & $Action
+    } finally {
+        Write-Host "acceptance-harness: $([DateTime]::UtcNow.ToString('o')) END $Label elapsedMs=$($sw.ElapsedMilliseconds)"
+    }
+}
+
 function Write-InnoSetupHangDiagnostics {
     param([string] $LogPath)
     Write-Host "installer hang diagnostics: === processes (setup/server/pg) ==="
@@ -40,13 +54,16 @@ function Start-CheckpointServerSetup {
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
     $lastLog = [DateTime]::MinValue
     while ([DateTime]::UtcNow -lt $deadline) {
-        $children = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
-                $_.ProcessName -like "CheckpointServerSetup*"
+        $children = @(Write-AcceptanceHarnessTrace "Get-Process CheckpointServerSetup*" {
+                @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
+                        $_.ProcessName -like "CheckpointServerSetup*"
+                    })
             })
-        # Avoid $proc.HasExited in the poll loop: it can block indefinitely on hung Inno setups.
         $leaderDone = $false
         try {
-            $leaderDone = $proc.WaitForExit(1000)
+            $leaderDone = [bool](Write-AcceptanceHarnessTrace "WaitForExit leader pid=$($proc.Id)" {
+                    $proc.WaitForExit(1000)
+                })
         } catch {
             $leaderDone = $true
         }
@@ -63,7 +80,7 @@ function Start-CheckpointServerSetup {
             Write-Host "Start-CheckpointServerSetup: leader=$($proc.Id) leaderDone=$leaderDone remain=${remain}s children=$names"
             $lastLog = [DateTime]::UtcNow
         }
-        Start-Sleep -Seconds 4
+        $null = Write-AcceptanceHarnessTrace "Start-Sleep 4" { Start-Sleep -Seconds 4 }
     }
     Write-InnoSetupHangDiagnostics -LogPath $LogPath
     Write-InstallerAcceptanceFailureDiagnostics

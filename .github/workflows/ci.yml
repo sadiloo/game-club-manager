@@ -219,9 +219,18 @@ jobs:
             exit 1
           }
           Write-Host "PowerShell 5.1 parse: ok ($($files.Count) installer files + ci-installer.ps1)"
+      - name: installer build
+        shell: pwsh
+        run: ./scripts/windows/ci-installer.ps1 -Phase Build
       - name: installer acceptance
         shell: pwsh
-        run: ./scripts/windows/ci-installer.ps1
+        timeout-minutes: 50
+        run: ./scripts/windows/ci-installer.ps1 -Phase Acceptance
+      - name: installer acceptance hang diagnostics
+        if: always()
+        shell: pwsh
+        timeout-minutes: 5
+        run: ./scripts/windows/Write-InstallerAcceptanceStepDiagnostics.ps1
       - name: upload installer artifacts
         if: always()
         uses: actions/upload-artifact@v4

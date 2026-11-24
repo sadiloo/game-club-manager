@@ -1,9 +1,37 @@
 ﻿# windows-2022 installer job driver — build installers and run B-1..B-13 (B).
+param(
+    [ValidateSet("All", "Build", "Acceptance")]
+    [string] $Phase = "All"
+)
 $ErrorActionPreference = "Stop"
 $root = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 Set-Location $root
 
 Import-Module (Join-Path $root "installer/tools/CheckpointInstall.Common.psm1") -Force
+
+$manifestPath = Join-Path $root "artifacts/installer/ci-acceptance-manifest.json"
+if ($Phase -eq "Acceptance") {
+    if (-not (Test-Path -LiteralPath $manifestPath)) {
+        Write-Error "ci-installer: manifest missing at $manifestPath; run Build phase first"
+        exit 1
+    }
+    $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+    $root = $manifest.Root
+    Set-Location $root
+    $appVersion = $manifest.AppVersion
+    $lowVersion = $manifest.LowVersion
+    $high2Version = $manifest.High2Version
+    $serverLow = $manifest.ServerLow
+    $serverHigh = $manifest.ServerHigh
+    $serverHigh2 = $manifest.ServerHigh2
+    $kioskLow = $manifest.KioskLow
+    $kioskHigh = $manifest.KioskHigh
+    $accounts = $manifest.AccountsFile
+    $acceptance = $manifest.AcceptanceDir
+    $logRoot = $manifest.LogsDir
+    . (Join-Path $root "scripts/windows/ci-installer-acceptance.ps1")
+    exit $LASTEXITCODE
+}
 
 function Invoke-DotnetPublish {
     param([string[]] $DotnetArgs, [string] $Label)
@@ -221,22 +249,30 @@ foreach ($outPath in @($serverLow, $serverHigh, $serverHigh2, $kioskLow, $kioskH
     Write-Host ("ci-installer: installer path={0} bytes={1}" -f $outPath, $len)
 }
 
-$logRoot = Join-Path $root "artifacts/installer/acceptance-logs"
+$manifestDir = Join-Path $root "artifacts/installer"
+New-Item -ItemType Directory -Force -Path $manifestDir | Out-Null
+@{
+    Root           = $root
+    AppVersion     = $appVersion
+    LowVersion     = $lowVersion
+    High2Version   = $high2Version
+    ServerLow      = $serverLow
+    ServerHigh     = $serverHigh
+    ServerHigh2    = $serverHigh2
+    KioskLow       = $kioskLow
+    KioskHigh      = $kioskHigh
+    AccountsFile   = (Join-Path $root "installer/ci/accounts-silent.json")
+    AcceptanceDir  = (Join-Path $root "installer/tools/acceptance")
+    LogsDir        = (Join-Path $root "artifacts/installer/acceptance-logs")
+} | ConvertTo-Json | Set-Content -LiteralPath $manifestPath -Encoding UTF8
+Write-Host "ci-installer: wrote $manifestPath"
+
+if ($Phase -eq "Build") {
+    Write-Host "ci-installer: build phase complete"
+    exit 0
+}
+
 $accounts = Join-Path $root "installer/ci/accounts-silent.json"
 $acceptance = Join-Path $root "installer/tools/acceptance"
-
-& (Join-Path $acceptance "Reset-InstallerAcceptanceMachine.ps1")
-
-& (Join-Path $acceptance "Invoke-B2-Upgrade.ps1") -LowSetup $serverLow -HighSetup $serverHigh -AccountsFile $accounts -LowVersion $lowVersion -HighVersion $appVersion -Mode WithoutOpenSessions
-& (Join-Path $acceptance "Invoke-B2-Upgrade.ps1") -LowSetup $serverHigh -HighSetup $serverHigh2 -AccountsFile $accounts -LowVersion $appVersion -HighVersion $high2Version -Mode WithOpenSessions -SkipDowngradeCheck
-& (Join-Path $acceptance "Invoke-B1-CleanServerInstall.ps1") -ServerSetup $serverHigh -AccountsFile $accounts -LogsDir $logRoot
-& (Join-Path $acceptance "Invoke-B3-BackupNeverDeletes.ps1") -LogsDir $logRoot
-& (Join-Path $acceptance "Invoke-B4-UninstallReinstall.ps1") -ServerSetup $serverHigh -AccountsFile $accounts
-& (Join-Path $acceptance "Invoke-B5-KioskInstall.ps1") -KioskSetup $kioskHigh -LogsDir $logRoot
-& (Join-Path $acceptance "Invoke-B6-B12-KioskFirstRun.ps1") -RepoRoot $root
-& (Join-Path $acceptance "Invoke-B7-KioskUpgrade.ps1") -LowKioskSetup $kioskLow -HighKioskSetup $kioskHigh
-& (Join-Path $acceptance "Invoke-B8-WindowsBillingRestart.ps1") -AccountsFile $accounts
-& (Join-Path $acceptance "Invoke-B13-DefaultPinUpgrade.ps1") -ServerSetup $serverHigh -AccountsFile $accounts
-
-Copy-Item -Force "C:\ProgramData\Checkpoint\logs\upgrade.log" (Join-Path $logRoot "upgrade.log") -ErrorAction SilentlyContinue
-Write-Host "ci-installer: done"
+$logRoot = Join-Path $root "artifacts/installer/acceptance-logs"
+. (Join-Path $root "scripts/windows/ci-installer-acceptance.ps1")
