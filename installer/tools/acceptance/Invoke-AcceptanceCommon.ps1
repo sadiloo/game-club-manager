@@ -52,7 +52,11 @@ function Write-InstallerAcceptanceFailureDiagnostics {
 
 function Assert-InstallerServerServicesRunning {
     foreach ($svc in @("CheckpointPostgres", "CheckpointServer")) {
-        $s = Get-Service $svc -ErrorAction Stop
+        $s = Get-Service $svc -ErrorAction SilentlyContinue
+        if (-not $s) {
+            Write-InstallerAcceptanceFailureDiagnostics
+            throw "installer acceptance: $svc not registered"
+        }
         if ($s.Status -ne "Running") {
             Write-InstallerAcceptanceFailureDiagnostics
             throw "installer acceptance: $svc not Running (Status=$($s.Status))"

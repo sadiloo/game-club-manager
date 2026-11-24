@@ -5,7 +5,16 @@ $uninstaller = "C:\Program Files\Checkpoint\Server\unins000.exe"
 if (Test-Path -LiteralPath $uninstaller) {
     $proc = Start-Process -FilePath $uninstaller -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART") -Wait -PassThru
     if ($proc.ExitCode -ne 0) {
-        Write-Host "Reset-InstallerAcceptanceMachine: uninstall exit $($proc.ExitCode)"
+        throw "Reset-InstallerAcceptanceMachine: uninstall exit $($proc.ExitCode)"
+    }
+}
+
+foreach ($keyPath in @(
+        "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{8E5E6B2E-6B6D-4F5B-9D9A-4F4E7F8F6B6D}_is1",
+        "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\{8E5E6B2E-6B6D-4F5B-9D9A-4F4E7F8F6B6D}_is1"
+    )) {
+    if (Test-Path -LiteralPath $keyPath) {
+        Remove-Item -LiteralPath $keyPath -Recurse -Force
     }
 }
 
