@@ -287,6 +287,9 @@
     if (code === "gift_not_allowed_with_debt" && message && /[\u0600-\u06FF]/.test(message)) {
       return message;
     }
+    if (code === "payment_invalid" && message && /[\u0600-\u06FF]/.test(message)) {
+      return message;
+    }
     if (code && ERROR_MAP[code]) return ERROR_MAP[code];
     if (message && /[\u0600-\u06FF]/.test(message)) return message;
     return CP_ERR.generic;

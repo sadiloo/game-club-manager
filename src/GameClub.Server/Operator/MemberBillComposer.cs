@@ -226,7 +226,7 @@ public sealed class MemberBillComposer
         var unrounded = MoneyMath.CheckedAdd(invoice.NetBeforeRoundingToman, surchargeToman);
         long collectible;
         long rounding;
-        if (usedCollect && allocation is { IsValid: true })
+        if (usedCollect && allocation is not null)
         {
             collectible = MoneyMath.CheckedAdd(allocation.PayableToman, surchargeToman);
             rounding = collectible - unrounded;

@@ -427,7 +427,7 @@ public sealed class OperatorBillService(
         }
         catch (ApiException)
         {
-            if (AllowsOverTenderPreview(livePaymentTimeCollectibleToman, effective))
+            if (AllowsInformationalPaymentPreview(livePaymentTimeCollectibleToman, amounts, effective))
             {
                 return;
             }
@@ -436,12 +436,18 @@ public sealed class OperatorBillService(
         }
     }
 
-    private static bool AllowsOverTenderPreview(
+    private static bool AllowsInformationalPaymentPreview(
         long livePaymentTimeCollectibleToman,
+        BillAmounts amounts,
         IReadOnlyList<PaymentInput> effective)
     {
         var tendered = effective.Sum(p => p.AmountToman);
-        return tendered > livePaymentTimeCollectibleToman;
+        if (tendered > livePaymentTimeCollectibleToman)
+        {
+            return true;
+        }
+
+        return tendered < amounts.CollectibleToman;
     }
 
     public async Task<PaymentPreviewResult> BuildBuffetPaymentPreviewAsync(

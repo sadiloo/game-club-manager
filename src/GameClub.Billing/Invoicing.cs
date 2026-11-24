@@ -797,9 +797,9 @@ public static class InvoiceCalculator
     }
 
     /// <summary>
-    /// One rounding path. Per-line nets are taken after grace and discounts, balance tenders
-    /// pay those nets exactly, and only the counter remainder is rounded. The invoice payable
-    /// is the allocator payable, so a wallet plus cash cannot disagree with the invoice preview.
+    /// One rounding path. Mixed wallet+cash at or above the cash-like threshold rounds the
+    /// whole invoice once and sets cash to rounded total minus wallet; below the threshold the
+    /// mixed net is exact with no cash-remainder rounding. Cash-only paths are unchanged.
     /// </summary>
     public static (Invoice Invoice, AllocationResult Allocation) Collect(
         InvoiceRequest request,
@@ -816,6 +816,7 @@ public static class InvoiceCalculator
         var resolved = PaymentRounding.Resolve(unroundedPayable, request.Rounding, roundingSettings, walletRoundsLikeCash);
         var effectiveRounding = resolved.EffectiveRounding;
         var walletLikeCash = resolved.WalletRoundsLikeCash;
+        var subThreshold = unroundedPayable < WalletPaymentRounding.CashLikeThresholdToman;
         var cashEquivalent = walletLikeCash
             ? Calculate(request with { Rounding = resolved.BranchRounding })
             : priced;
@@ -823,14 +824,15 @@ public static class InvoiceCalculator
         var allocation = PaymentAllocator.Allocate(
             nets,
             tenders,
-            effectiveRounding,
+            request.Rounding,
             wallets,
             walletDebt,
             pcBalance,
             walletLikeCash ? cashEquivalent.PayableToman : 0,
             walletLikeCash ? cashEquivalent.RoundingToman : 0,
             roundingSettings.AllowWalletShortBalanceDebt,
-            roundingSettings.SuppressWalletDebtDraw);
+            roundingSettings.SuppressWalletDebtDraw,
+            subThreshold);
         var date = TehranTime.Date(request.IssuedAt);
         var lines = new List<InvoiceLine>();
         foreach (var line in priced.Lines)

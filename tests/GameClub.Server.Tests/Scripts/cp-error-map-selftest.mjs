@@ -48,5 +48,12 @@ if (ctx.window.cpTranslateApiError("invalid_time", "x") !== "زمان درست �
 if (ctx.window.cpTranslateApiError("invalid_minutes", "x") !== "دقیقه باید بیشتر از صفر باشد.") {
   throw new Error("invalid_minutes text");
 }
+const paymentInvalidServer = ctx.window.cpTranslateApiError(
+  "payment_invalid",
+  "جمع پرداختی با مبلغ قابل پرداخت برابر نیست.",
+);
+if (paymentInvalidServer !== "جمع پرداختی با مبلغ قابل پرداخت برابر نیست.") {
+  throw new Error("payment_invalid must prefer server Persian over ERROR_MAP");
+}
 
 console.log("cp-error-map-selftest: ok");

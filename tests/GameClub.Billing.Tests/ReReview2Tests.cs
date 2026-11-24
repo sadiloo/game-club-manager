@@ -120,6 +120,7 @@ public class ReReview2Tests
     [Fact]
     public void R2_4_collect_whole_invoice_when_wallet_and_cash_share_rounded_collectible()
     {
+        // owner ruling 2026-11-24 R4c Q3 (whole bill rounded once)
         var issued = T.At(2026, 6, 2, 12, 0);
         var request = new InvoiceRequest(
             [new TimeChargeLine("time", 149_850, null, null, null)],
@@ -142,6 +143,9 @@ public class ReReview2Tests
         Assert.True(allocation.IsValid, allocation.Errors.FirstOrDefault()?.Message);
         Assert.Equal(150_000, preview.PayableToman);
         Assert.Equal(150_000, allocation.PayableToman);
+        Assert.Equal(150, allocation.RoundingToman);
+        Assert.Equal(50_001, allocation.Tenders.First(t => t.Method == PaymentMethod.Wallet).AmountToman);
+        Assert.Equal(99_999, allocation.Tenders.First(t => t.Method == PaymentMethod.Cash).AmountToman);
         Assert.Equal(preview.PayableToman, mixed.PayableToman);
         Assert.Equal(allocation.PayableToman, mixed.PayableToman);
     }
