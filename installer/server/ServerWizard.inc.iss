@@ -53,7 +53,7 @@ end;
 
 function IsWebView2Installed: Boolean;
 begin
-  Result := FileExists(ExpandConstant('{reg:HKLM\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5},pv}'));
+  Result := FileExists(ExpandConstant('{reg:HKLM\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}},pv}'));
 end;
 
 function NeedWebView2Install: Boolean;
@@ -750,7 +750,7 @@ end;
 function UpdateReadyMemo(Space, NewLine, MemoUserInfoInfo, MemoDirInfo, MemoTypeInfo, MemoComponentsInfo, MemoGroupInfo, MemoTasksInfo: String): String;
 var Wv2Line, FolderLine: String;
 begin
-  if not FileExists(ExpandConstant('{reg:HKLM\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5},pv')) then
+  if not FileExists(ExpandConstant('{reg:HKLM\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}},pv')) then
     Wv2Line := 'WebView2: همراه نصاب نصب می‌شود'
   else
     Wv2Line := 'WebView2: نصب است';

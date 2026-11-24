@@ -14,8 +14,11 @@ if (-not (Test-Path -LiteralPath $initdb)) {
     throw "initdb missing at $initdb"
 }
 
-if (-not (Test-Path -LiteralPath $PgData)) {
-    New-Item -ItemType Directory -Force -Path $PgData | Out-Null
+$pgVersionFile = Join-Path $PgData "PG_VERSION"
+if (-not (Test-Path -LiteralPath $pgVersionFile)) {
+    if (-not (Test-Path -LiteralPath $PgData)) {
+        New-Item -ItemType Directory -Force -Path $PgData | Out-Null
+    }
     $pwFile = Join-Path $env:TEMP "checkpoint-initdb-pw.txt"
     Set-Content -LiteralPath $pwFile -Value $SuperPassword -NoNewline -Encoding ASCII
   & $initdb -U postgres -A scram-sha-256 -E UTF8 -D $PgData --pwfile=$pwFile

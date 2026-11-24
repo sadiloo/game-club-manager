@@ -19,6 +19,11 @@ foreach ($svc in @("CheckpointServer", "CheckpointPostgres")) {
     }
 }
 
+$pgdata = "C:\ProgramData\Checkpoint\pgdata"
+if (Test-Path -LiteralPath $pgdata) {
+    Remove-Item -LiteralPath $pgdata -Recurse -Force
+}
+
 $paths = @(
     "C:\ProgramData\Checkpoint\config\server.json",
     "C:\ProgramData\Checkpoint\config\.install-secrets.json"
