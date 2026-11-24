@@ -40,20 +40,30 @@ function Start-CheckpointServerSetup {
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
     $lastLog = [DateTime]::MinValue
     while ([DateTime]::UtcNow -lt $deadline) {
-        if ($proc.HasExited) {
-            return $proc
-        }
         $children = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
                 $_.ProcessName -like "CheckpointServerSetup*"
             })
-        if ($children) {
-            $names = ($children | ForEach-Object { "$($_.ProcessName):$($_.Id)" }) -join ", "
-            if ((([DateTime]::UtcNow - $lastLog).TotalSeconds) -ge 120) {
-                Write-Host "Start-CheckpointServerSetup: waiting leader=$($proc.Id) children=$names"
-                $lastLog = [DateTime]::UtcNow
-            }
+        # Avoid $proc.HasExited in the poll loop: it can block indefinitely on hung Inno setups.
+        $leaderDone = $false
+        try {
+            $leaderDone = $proc.WaitForExit(1000)
+        } catch {
+            $leaderDone = $true
         }
-        Start-Sleep -Seconds 5
+        if ($leaderDone -and $children.Count -eq 0) {
+            return $proc
+        }
+        if ((([DateTime]::UtcNow - $lastLog).TotalSeconds) -ge 120) {
+            $remain = [Math]::Max(0, [int]($deadline - [DateTime]::UtcNow).TotalSeconds)
+            $names = if ($children.Count -gt 0) {
+                ($children | ForEach-Object { "$($_.ProcessName):$($_.Id)" }) -join ", "
+            } else {
+                "(none)"
+            }
+            Write-Host "Start-CheckpointServerSetup: leader=$($proc.Id) leaderDone=$leaderDone remain=${remain}s children=$names"
+            $lastLog = [DateTime]::UtcNow
+        }
+        Start-Sleep -Seconds 4
     }
     Write-InnoSetupHangDiagnostics -LogPath $LogPath
     Write-InstallerAcceptanceFailureDiagnostics
