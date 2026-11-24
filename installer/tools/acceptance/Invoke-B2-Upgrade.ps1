@@ -82,20 +82,12 @@ if (-not (Test-Path $upgradeLog)) { throw "B-2: upgrade.log missing" }
 if (-not (Select-String -Path $upgradeLog -Pattern "downtimeSeconds=")) { throw "B-2: upgrade downtime not logged" }
 
 if (-not $SkipDowngradeCheck) {
-    Assert-NoCheckpointSetupProcesses -Context "B-2 downgrade check"
-    $downLog = "C:\ProgramData\Checkpoint\logs\acceptance-setup-b2-downgrade-probe.log"
-    if (Test-Path -LiteralPath $downLog) { Remove-Item -LiteralPath $downLog -Force }
-    $downArgs = @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/LOG=`"$downLog`"")
-    $downCmd = Format-SetupCommandLine -Exe $LowSetup -ArgumentList $downArgs
-    Write-Host "B-2 ($Mode): downgrade probe cmd=$downCmd"
-    [Console]::Out.Flush()
-    $down = Write-AcceptanceHarnessTrace "B-2 downgrade probe Start-Process" {
-        Start-Process -FilePath $LowSetup -ArgumentList $downArgs -Wait -PassThru
-    }
-    if ($down.ExitCode -eq 0) {
-        throw "B-2: downgrade must not succeed silently"
-    }
-    Assert-NoCheckpointSetupProcesses -Context "after B-2 downgrade probe"
+    $pgPin = Get-InstallerPostgreSqlBinFingerprint
+    $appPin = Get-InstallerServerAppFingerprint
+    Write-AcceptanceHarnessTrace "B-2 downgrade blocked probe ($LowVersion over $HighVersion)" {
+        Invoke-CheckpointDowngradeBlockedProbe -LegLabel "b2-$Mode-downgrade-blocked" -OlderSetupExe $LowSetup `
+            -PgBinFingerprintBefore $pgPin -AppFingerprintBefore $appPin
+    } | Out-Null
 }
 
 Write-Host "B-2 ($Mode): ok"

@@ -118,6 +118,14 @@ begin
     Result := AccountsJsonPath;
 end;
 
+procedure AbortDowngradeBlocked(const Installed, Attempted: String);
+begin
+  Log('CHECKPOINT_DOWNGRADE_BLOCKED installed=' + Installed + ' attempted=' + Attempted);
+  if not WizardSilent then
+    MsgBox(Format('نسخهٔ نصب‌شده (%s) از این نصاب (%s) تازه‌تر است. برای برگشت به نسخهٔ قبلی، اول آن را حذف کنید.', [Installed, Attempted]), mbError, MB_OK);
+  ExitProcess(CHECKPOINT_EXIT_DOWNGRADE_BLOCKED);
+end;
+
 function InitializeSetup: Boolean;
 var Installed, NewVer: String; Cmp: Integer;
 begin
@@ -129,10 +137,7 @@ begin
     Cmp := CompareVersionParts(Installed, NewVer);
     if Cmp > 0 then
     begin
-      if not WizardSilent then
-        MsgBox(Format('نسخهٔ نصب‌شده (%s) از این نصاب (%s) تازه‌تر است. برای برگشت به نسخهٔ قبلی، اول آن را حذف کنید.', [Installed, NewVer]), mbError, MB_OK);
-      Result := False;
-      Exit;
+      AbortDowngradeBlocked(Installed, NewVer);
     end;
   end;
   Result := True;

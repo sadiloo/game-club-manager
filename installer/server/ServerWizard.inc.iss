@@ -1,5 +1,10 @@
 const
   MAX_DEFAULT_PIN_PAGES = 256;
+  { Inno uses exit codes 0 success, 1 init failure, 2 user cancel, 3/4 fatal, 5=need admin (some builds). }
+  CHECKPOINT_EXIT_DOWNGRADE_BLOCKED = 128;
+
+procedure ExitProcess(uExitCode: UINT);
+  external 'ExitProcess@kernel32 stdcall';
 
 var
   Manager1Page, Manager2Page, OperatorPage: TInputQueryWizardPage;

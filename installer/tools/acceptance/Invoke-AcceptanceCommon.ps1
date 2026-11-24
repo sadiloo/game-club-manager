@@ -1,6 +1,7 @@
 ﻿$ErrorActionPreference = "Stop"
 
 . (Join-Path $PSScriptRoot "Get-CheckpointSetupUiText.ps1")
+. (Join-Path $PSScriptRoot "..\..\ci\checkpoint-setup-exit-codes.ps1")
 
 function Write-AcceptanceHarnessTrace {
     param(
@@ -148,13 +149,74 @@ function Stop-CheckpointInnoSetupProcesses {
     }
 }
 
+function Get-InstallerServerAppFingerprint {
+    param(
+        [string] $ServerExe = "C:\Program Files\Checkpoint\Server\GameClub.Server.exe"
+    )
+    if (-not (Test-Path -LiteralPath $ServerExe)) { throw "server exe missing: $ServerExe" }
+    return (Get-FileHash -LiteralPath $ServerExe -Algorithm SHA256).Hash.ToLowerInvariant()
+}
+
+function Assert-DowngradeBlockedLog {
+    param([string] $LogPath)
+    if (-not (Test-Path -LiteralPath $LogPath)) {
+        throw "downgrade blocked: Inno log missing: $LogPath"
+    }
+    $hit = @(Select-String -LiteralPath $LogPath -Pattern "CHECKPOINT_DOWNGRADE_BLOCKED" -SimpleMatch)
+    if ($hit.Count -lt 1) {
+        throw "downgrade blocked: log missing CHECKPOINT_DOWNGRADE_BLOCKED line"
+    }
+}
+
+function Invoke-CheckpointDowngradeBlockedProbe {
+    param(
+        [string] $LegLabel,
+        [string] $OlderSetupExe,
+        [string] $PgBinFingerprintBefore,
+        [string] $AppFingerprintBefore
+    )
+    Assert-NoCheckpointSetupProcesses -Context "downgrade probe preflight"
+
+    $logPath = "C:\ProgramData\Checkpoint\logs\acceptance-setup-$LegLabel.log"
+    if (Test-Path -LiteralPath $logPath) { Remove-Item -LiteralPath $logPath -Force }
+    $args = @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/LOG=`"$logPath`"")
+    $cmdLine = Format-SetupCommandLine -Exe $OlderSetupExe -ArgumentList $args
+    Write-Host "Invoke-CheckpointDowngradeBlockedProbe: leg=$LegLabel cmd=$cmdLine"
+    [Console]::Out.Flush()
+
+    $result = Write-AcceptanceHarnessTrace "downgrade blocked setup leg=$LegLabel" {
+        Start-CheckpointServerSetup -LegLabel $LegLabel -Exe $OlderSetupExe -ArgumentList $args `
+            -TimeoutSeconds 300 -LogPath $logPath -ExpectExitCode $script:CheckpointSetupExitDowngradeBlocked
+    }
+    if ($result.ExitCode -ne $script:CheckpointSetupExitDowngradeBlocked) {
+        throw "downgrade blocked: expected exit $($script:CheckpointSetupExitDowngradeBlocked); got $($result.ExitCode)"
+    }
+    Write-AcceptanceHarnessTrace "Assert-DowngradeBlockedLog" { Assert-DowngradeBlockedLog -LogPath $logPath } | Out-Null
+
+    $ui = Get-CheckpointSetupUiText
+    if ($ui.Count -gt 0) {
+        Write-SetupProcessFailureUiText -Reason "downgrade blocked left visible setup UI" -ProcessIds @()
+        throw "downgrade blocked: setup window text present: $($ui -join ' | ')"
+    }
+    Assert-NoCheckpointSetupProcesses -Context "after downgrade probe"
+
+    Write-AcceptanceHarnessTrace "Assert-InstallerServerServicesRunning" { Assert-InstallerServerServicesRunning } | Out-Null
+    Write-AcceptanceHarnessTrace "Assert-InstallerServerHealthOk" { Assert-InstallerServerHealthOk } | Out-Null
+
+    $pgAfter = Get-InstallerPostgreSqlBinFingerprint
+    $appAfter = Get-InstallerServerAppFingerprint
+    if ($pgAfter -ne $PgBinFingerprintBefore) { throw "downgrade blocked: PostgreSQL\bin fingerprint changed" }
+    if ($appAfter -ne $AppFingerprintBefore) { throw "downgrade blocked: server app fingerprint changed" }
+}
+
 function Start-CheckpointServerSetup {
     param(
         [string] $LegLabel,
         [string] $Exe,
         [string[]] $ArgumentList,
         [int] $TimeoutSeconds = 2700,
-        [string] $LogPath = $null
+        [string] $LogPath = $null,
+        [int] $ExpectExitCode = 0
     )
     $cmdLine = Format-SetupCommandLine -Exe $Exe -ArgumentList $ArgumentList
     Write-Host "Start-CheckpointServerSetup: leg=$LegLabel cmd=$cmdLine"
@@ -199,6 +261,14 @@ function Start-CheckpointServerSetup {
             $exitCode = Write-AcceptanceHarnessTrace "read leader ExitCode pid=$leaderId" {
                     $proc.ExitCode
                 }
+            if ($ExpectExitCode -ne 0) {
+                if ($exitCode -ne $ExpectExitCode) {
+                    Write-SetupProcessFailureUiText -Reason "unexpected exit $exitCode expected $ExpectExitCode leg $LegLabel"
+                    throw "setup leg pin: exit $exitCode expected $ExpectExitCode (leg=$LegLabel)"
+                }
+                Assert-NoCheckpointSetupProcesses -Context "expected-exit leg $LegLabel"
+                return [PSCustomObject]@{ Process = $proc; ExitCode = $exitCode; LegLabel = $LegLabel }
+            }
             Write-AcceptanceHarnessTrace "Assert-InnoLogClosedForLeg $LogPath" {
                 Assert-InnoLogClosedForLeg -LogPath $LogPath -LegStartUtc $legStartUtc
             } | Out-Null

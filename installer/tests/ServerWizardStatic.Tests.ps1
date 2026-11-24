@@ -69,10 +69,13 @@
         $script:Inc | Should -Match "GInstallReachedDone"
     }
 
-    It "silent downgrade guard uses WizardSilent not MsgBox (R8e)" {
-        $script:Iss | Should -Match "function InitializeSetup"
-        $script:Iss | Should -Match "if not WizardSilent then"
-        $script:Iss | Should -Match "CompareVersionParts"
+    It "silent downgrade abort exit code 128 (R8e)" {
+        $script:Inc | Should -Match "CHECKPOINT_EXIT_DOWNGRADE_BLOCKED = 128"
+        $script:Iss | Should -Match "procedure AbortDowngradeBlocked"
+        $script:Iss | Should -Match "CHECKPOINT_DOWNGRADE_BLOCKED installed="
+        $script:Iss | Should -Match "ExitProcess\(CHECKPOINT_EXIT_DOWNGRADE_BLOCKED\)"
+        $exitCodes = Get-Content -LiteralPath (Join-Path $PSScriptRoot "..\ci\checkpoint-setup-exit-codes.ps1") -Raw
+        $exitCodes | Should -Match "CheckpointSetupExitDowngradeBlocked = 128"
     }
 
     It "PostgreSQL payload only on first install (§2.2)" {
