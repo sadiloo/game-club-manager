@@ -12,6 +12,21 @@ $pgCtl = Join-Path $PgRoot "bin\pg_ctl.exe"
 $psql = Join-Path $PgRoot "bin\psql.exe"
 $initLog = "C:\ProgramData\Checkpoint\logs\postgres-init.log"
 
+function Invoke-PostgresNative {
+    param(
+        [string] $FilePath,
+        [string[]] $ArgumentList
+    )
+    $old = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        & $FilePath @ArgumentList
+        return $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $old
+    }
+}
+
 function Write-InitLog([string] $Message) {
     $logDir = Split-Path $initLog -Parent
     if (-not (Test-Path -LiteralPath $logDir)) {
@@ -22,8 +37,8 @@ function Write-InitLog([string] $Message) {
 
 function Test-PostgresSuperuserLogin([string] $Password) {
     $env:PGPASSWORD = $Password
-    & $psql -h 127.0.0.1 -p $Port -U postgres -tc "SELECT 1" 2>$null | Out-Null
-    return ($LASTEXITCODE -eq 0)
+    $code = Invoke-PostgresNative -FilePath $psql -ArgumentList @("-h", "127.0.0.1", "-p", "$Port", "-U", "postgres", "-tc", "SELECT 1")
+    return ($code -eq 0)
 }
 
 function Set-PostgresClusterConf {
@@ -68,8 +83,8 @@ function Repair-PostgresSuperuserPassword([string] $NewPassword) {
     Start-Sleep -Seconds 3
     $env:PGPASSWORD = ""
     $escaped = $NewPassword -replace "'", "''"
-    & $psql -h 127.0.0.1 -p $Port -U postgres -c "ALTER USER postgres WITH PASSWORD '$escaped';"
-    if ($LASTEXITCODE -ne 0) {
+    $alterCode = Invoke-PostgresNative -FilePath $psql -ArgumentList @("-h", "127.0.0.1", "-p", "$Port", "-U", "postgres", "-c", "ALTER USER postgres WITH PASSWORD '$escaped';")
+    if ($alterCode -ne 0) {
         Copy-Item -LiteralPath $hbaBackup -Destination $hbaPath -Force
         throw "ALTER USER postgres failed during password repair"
     }
@@ -101,14 +116,14 @@ function Initialize-FreshPgDataCluster {
     New-Item -ItemType Directory -Force -Path $PgData | Out-Null
     $pwFile = Join-Path $env:TEMP "checkpoint-initdb-pw.txt"
     Set-Content -LiteralPath $pwFile -Value $SuperPassword -NoNewline -Encoding ASCII
-    & $initdb -U postgres -A scram-sha-256 -E UTF8 -D $PgData --pwfile=$pwFile
+    $initCode = Invoke-PostgresNative -FilePath $initdb -ArgumentList @("-U", "postgres", "-A", "scram-sha-256", "-E", "UTF8", "-D", $PgData, "--pwfile=$pwFile")
     Remove-Item -LiteralPath $pwFile -Force
-    if ($LASTEXITCODE -ne 0) {
+    if ($initCode -ne 0) {
         throw "initdb failed after stale pgdata rename"
     }
     Set-PostgresClusterConf
-    & $pgCtl register -N CheckpointPostgres -D $PgData -S auto
-    if ($LASTEXITCODE -ne 0) {
+    $regCode = Invoke-PostgresNative -FilePath $pgCtl -ArgumentList @("register", "-N", "CheckpointPostgres", "-D", $PgData, "-S", "auto")
+    if ($regCode -ne 0) {
         throw "pg_ctl register failed after fresh cluster"
     }
     Start-Service CheckpointPostgres -ErrorAction Stop
@@ -128,9 +143,9 @@ if (-not (Test-Path -LiteralPath $pgVersionFile)) {
     }
     $pwFile = Join-Path $env:TEMP "checkpoint-initdb-pw.txt"
     Set-Content -LiteralPath $pwFile -Value $SuperPassword -NoNewline -Encoding ASCII
-    & $initdb -U postgres -A scram-sha-256 -E UTF8 -D $PgData --pwfile=$pwFile
+    $initCode = Invoke-PostgresNative -FilePath $initdb -ArgumentList @("-U", "postgres", "-A", "scram-sha-256", "-E", "UTF8", "-D", $PgData, "--pwfile=$pwFile")
     Remove-Item -LiteralPath $pwFile -Force
-    if ($LASTEXITCODE -ne 0) {
+    if ($initCode -ne 0) {
         throw "initdb failed"
     }
     Write-InitLog "initdb: new cluster"
@@ -152,9 +167,9 @@ if ($svc) {
 }
 
 if (-not $svc) {
-    & $pgCtl register -N CheckpointPostgres -D $PgData -S auto
-    if ($LASTEXITCODE -ne 0) {
-        throw "pg_ctl register CheckpointPostgres failed exit $LASTEXITCODE"
+    $regCode = Invoke-PostgresNative -FilePath $pgCtl -ArgumentList @("register", "-N", "CheckpointPostgres", "-D", $PgData, "-S", "auto")
+    if ($regCode -ne 0) {
+        throw "pg_ctl register CheckpointPostgres failed exit $regCode"
     }
 }
 
@@ -184,13 +199,17 @@ if (-not (Test-PostgresSuperuserLogin $SuperPassword)) {
 
 $exists = $false
 $env:PGPASSWORD = $SuperPassword
+$old = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
 & $psql -h 127.0.0.1 -p $Port -U postgres -tc "SELECT 1 FROM pg_database WHERE datname='checkpoint'" | ForEach-Object {
     if ($_ -match "1") { $exists = $true }
 }
 if (-not $exists) {
-    & $psql -h 127.0.0.1 -p $Port -U postgres -c "CREATE DATABASE checkpoint;"
-    if ($LASTEXITCODE -ne 0) {
+    $createCode = Invoke-PostgresNative -FilePath $psql -ArgumentList @("-h", "127.0.0.1", "-p", "$Port", "-U", "postgres", "-c", "CREATE DATABASE checkpoint;")
+    if ($createCode -ne 0) {
+        $ErrorActionPreference = $old
         throw "CREATE DATABASE checkpoint failed"
     }
 }
+$ErrorActionPreference = $old
 Write-InitLog "Initialize-CheckpointPostgres: ok"

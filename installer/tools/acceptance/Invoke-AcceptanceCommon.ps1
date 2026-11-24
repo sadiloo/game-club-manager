@@ -8,6 +8,7 @@ function Assert-InnoSetupLogNoFailedRuns {
         if ($lines[$i] -notmatch 'Process exit code: ([1-9]\d*)') { continue }
         $phase = ($lines[[Math]::Max(0, $i - 6)..$i] | Where-Object { $_ -match 'InstallPhase' } | Select-Object -Last 1)
         if (-not $phase) { $phase = "(unknown phase)" }
+        Write-InstallerAcceptanceFailureDiagnostics
         throw "Inno [Run] postinstall failed: $phase :: $($lines[$i])"
     }
 }
