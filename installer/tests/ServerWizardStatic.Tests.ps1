@@ -59,6 +59,11 @@
     It "upgrade stops CheckpointServer before file copy (§2.2)" {
         $script:Inc | Should -Match "function PrepareToInstall"
         $script:Inc | Should -Match "stop CheckpointServer"
+        $script:Inc | Should -Match "GUpgradeStoppedServer"
+        $script:Inc | Should -Match "procedure DeinitializeSetup"
+        $script:Inc | Should -Match "start CheckpointServer"
+        $script:Inc | Should -Match "procedure CurStepChanged"
+        $script:Inc | Should -Match "GInstallReachedDone"
     }
 
     It "PostgreSQL payload only on first install (§2.2)" {

@@ -196,3 +196,72 @@ function Get-ServerSecretsFingerprint {
         InitialUsersJson      = ($json.InitialUsers | ConvertTo-Json -Compress)
     }
 }
+
+function Get-InstallerPostgreSqlBinFingerprint {
+    param(
+        [string] $BinRoot = "C:\Program Files\Checkpoint\PostgreSQL\bin"
+    )
+    if (-not (Test-Path -LiteralPath $BinRoot)) { throw "PostgreSQL bin missing: $BinRoot" }
+    $lines = New-Object System.Collections.Generic.List[string]
+    Get-ChildItem -LiteralPath $BinRoot -File -Recurse | Sort-Object FullName | ForEach-Object {
+        $rel = $_.FullName.Substring($BinRoot.Length).TrimStart('\')
+        $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+        $lines.Add("$rel=$hash")
+    }
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes(($lines -join "`n"))
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        return [BitConverter]::ToString($sha.ComputeHash($bytes)).Replace("-", "").ToLowerInvariant()
+    } finally {
+        $sha.Dispose()
+    }
+}
+
+# Stable listing hash for pgdata on upgrade: relative paths only (sorted), excluding live
+# WAL/postmaster/log churn documented for B-2 upgrade pins:
+#   postmaster.pid, postmaster.opts, pg_wal\**, log\**, **\*.log, current_logfiles
+function Test-InstallerPgDataPathExcluded {
+    param([string] $RelativePath)
+    $r = $RelativePath.Replace('/', '\')
+    if ($r -eq 'postmaster.pid' -or $r -eq 'postmaster.opts' -or $r -eq 'current_logfiles') { return $true }
+    if ($r.StartsWith('pg_wal\', [StringComparison]::OrdinalIgnoreCase)) { return $true }
+    if ($r.StartsWith('log\', [StringComparison]::OrdinalIgnoreCase)) { return $true }
+    if ($r.EndsWith('.log', [StringComparison]::OrdinalIgnoreCase)) { return $true }
+    return $false
+}
+
+function Get-InstallerPgDataStableListingHash {
+    param(
+        [string] $PgData = "C:\ProgramData\Checkpoint\pgdata"
+    )
+    if (-not (Test-Path -LiteralPath $PgData)) { throw "pgdata missing: $PgData" }
+    $paths = New-Object System.Collections.Generic.List[string]
+    Get-ChildItem -LiteralPath $PgData -File -Recurse | Sort-Object FullName | ForEach-Object {
+        $rel = $_.FullName.Substring($PgData.Length).TrimStart('\')
+        if (-not (Test-InstallerPgDataPathExcluded -RelativePath $rel)) {
+            $paths.Add($rel.Replace('\', '/'))
+        }
+    }
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes(($paths -join "`n"))
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        return [BitConverter]::ToString($sha.ComputeHash($bytes)).Replace("-", "").ToLowerInvariant()
+    } finally {
+        $sha.Dispose()
+    }
+}
+
+function Assert-InstallerServerHealthOk {
+    param([int] $TimeoutSeconds = 60)
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    while ([DateTime]::UtcNow -lt $deadline) {
+        try {
+            $resp = Invoke-RestMethod -Uri "http://127.0.0.1:5000/api/kiosk/setup/hello" -Method Get -TimeoutSec 5
+            if ($resp.product -eq 'Checkpoint') { return }
+        } catch {
+            Start-Sleep -Seconds 2
+        }
+    }
+    Write-InstallerAcceptanceFailureDiagnostics
+    throw "installer acceptance: server health GET /api/kiosk/setup/hello failed within ${TimeoutSeconds}s"
+}

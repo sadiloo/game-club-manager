@@ -22,6 +22,8 @@ var
   DefaultPinStoredPins: TArrayOfString;
   GFirstInstall: Boolean;
   GFirstInstallCaptured: Boolean;
+  GUpgradeStoppedServer: Boolean;
+  GInstallReachedDone: Boolean;
 
 function WindowsServiceExists(const ServiceName: String): Boolean;
 var Rc: Integer;
@@ -805,6 +807,19 @@ begin
   Result := IsFirstInstall;
 end;
 
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssDone then
+    GInstallReachedDone := True;
+end;
+
+procedure DeinitializeSetup();
+var Rc: Integer;
+begin
+  if GUpgradeStoppedServer and (not GInstallReachedDone) then
+    Exec('sc.exe', 'start CheckpointServer', '', SW_HIDE, ewWaitUntilTerminated, Rc);
+end;
+
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var Rc: Integer;
 begin
@@ -812,6 +827,7 @@ begin
   NeedsRestart := False;
   Result := '';
   if IsFirstInstall then Exit;
-  if Exec('sc.exe', 'stop CheckpointServer', '', SW_HIDE, ewWaitUntilTerminated, Rc) then
-    Sleep(3000);
+  GUpgradeStoppedServer := True;
+  Exec('sc.exe', 'stop CheckpointServer', '', SW_HIDE, ewWaitUntilTerminated, Rc);
+  Sleep(3000);
 end;

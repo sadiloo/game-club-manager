@@ -57,14 +57,30 @@ if (-not (Test-Path "C:\ProgramData\Checkpoint\config\server.json")) {
 
 $before = Get-InstallerDbCounts
 $secrets = Get-ServerSecretsFingerprint
+$pgBinBefore = Get-InstallerPostgreSqlBinFingerprint
+$pgDataListingBefore = Get-InstallerPgDataStableListingHash
 
 Install-ServerSetup -Exe $HighSetup -Accounts $AccountsFile -FromVer $LowVersion
 
 $after = Get-InstallerDbCounts
 $secretsAfter = Get-ServerSecretsFingerprint
+$pgBinAfter = Get-InstallerPostgreSqlBinFingerprint
+$pgDataListingAfter = Get-InstallerPgDataStableListingHash
+
+Assert-InstallerServerHealthOk
+
+if ($pgBinBefore -ne $pgBinAfter) {
+    throw "B-2: PostgreSQL\bin fingerprint changed after upgrade"
+}
+if ($pgDataListingBefore -ne $pgDataListingAfter) {
+    throw "B-2: pgdata stable listing hash changed after upgrade"
+}
 
 if ($before.Customers -ne $after.Customers -or $before.Sessions -ne $after.Sessions) {
     throw "B-2: row count mismatch customers/sessions"
+}
+if ($before.Invoices -ne $after.Invoices -or $before.WalletLedger -ne $after.WalletLedger) {
+    throw "B-2: row count mismatch invoices/wallet_ledger"
 }
 if ($secrets.OperatorSessionSecret -ne $secretsAfter.OperatorSessionSecret) {
     throw "B-2: OperatorSessionSecret changed"
