@@ -504,6 +504,30 @@ function Invoke-InstallerApiJson {
     return Invoke-WebRequest @params
 }
 
+function Invoke-InstallerApiJsonAllowCodes {
+    param(
+        [string] $Method,
+        [string] $Uri,
+        [object] $Body = $null,
+        [Microsoft.PowerShell.Commands.WebRequestSession] $Session = $null,
+        [string[]] $AllowErrorCodes = @()
+    )
+    try {
+        return Invoke-InstallerApiJson -Method $Method -Uri $Uri -Body $Body -Session $Session
+    }
+    catch {
+        $detail = [string]$_.ErrorDetails.Message
+        if ($detail -and $AllowErrorCodes.Count -gt 0) {
+            foreach ($code in $AllowErrorCodes) {
+                if ($detail -match [regex]::Escape($code)) {
+                    return $null
+                }
+            }
+        }
+        throw
+    }
+}
+
 function Get-InstallerPsqlExecutable {
     $psql = "C:\Program Files\Checkpoint\PostgreSQL\bin\psql.exe"
     if (-not (Test-Path -LiteralPath $psql)) { throw "psql missing at $psql" }

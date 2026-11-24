@@ -8,18 +8,35 @@ $ErrorActionPreference = "Stop"
 $acc = Get-Content -LiteralPath $AccountsFile -Raw | ConvertFrom-Json
 $opSession = New-InstallerOperatorClient -Username $acc.manager1User -Pin $acc.manager1Pin
 
-Invoke-InstallerApiJson -Method Post -Uri "http://127.0.0.1:5000/api/stations" -Body @{ id = "PS5-B2"; name = "PS5-B2"; groupId = "ps5" } | Out-Null
-Invoke-InstallerApiJson -Method Post -Uri "http://127.0.0.1:5000/api/stations" -Body @{ id = "PC-B2"; name = "PC-B2"; groupId = "pc-normal" } | Out-Null
+$seedMobile = "09120000000"
 
-$customerResp = Invoke-InstallerApiJson -Method Post -Uri "http://127.0.0.1:5000/api/operator/customers" -Body @{ name = "B2 Customer"; mobile = "09120000000" } -Session $opSession
-$customer = ($customerResp.Content | ConvertFrom-Json)
-$customerId = $customer.id
+Invoke-InstallerApiJsonAllowCodes -Method Post -Uri "http://127.0.0.1:5000/api/stations" `
+    -Body @{ id = "PS5-B2"; name = "PS5-B2"; groupId = "ps5" } `
+    -AllowErrorCodes @("duplicate_station") | Out-Null
+Invoke-InstallerApiJsonAllowCodes -Method Post -Uri "http://127.0.0.1:5000/api/stations" `
+    -Body @{ id = "PC-B2"; name = "PC-B2"; groupId = "pc-normal" } `
+    -AllowErrorCodes @("duplicate_station") | Out-Null
 
-Invoke-InstallerApiJson -Method Post -Uri "http://127.0.0.1:5000/api/operator/members/customers/$customerId/wallet/top-up" -Body @{ amountToman = 500000; method = "Cash"; commandId = [guid]::NewGuid() } -Session $opSession | Out-Null
+$customerResp = Invoke-InstallerApiJsonAllowCodes -Method Post -Uri "http://127.0.0.1:5000/api/operator/customers" `
+    -Body @{ name = "B2 Customer"; mobile = $seedMobile } -Session $opSession `
+    -AllowErrorCodes @("duplicate_mobile", "duplicate_membership_code")
+if ($customerResp) {
+    $customerId = (($customerResp.Content | ConvertFrom-Json).id)
+} else {
+    $found = Invoke-InstallerApiJson -Method Get -Uri "http://127.0.0.1:5000/api/operator/customers/search?q=$seedMobile" -Session $opSession
+    $rows = @($found.Content | ConvertFrom-Json)
+    if ($rows.Count -lt 1) { throw "Seed-InstallerAcceptanceData: customer not found for mobile $seedMobile" }
+    $customerId = $rows[0].id
+}
+
+Invoke-InstallerApiJson -Method Post -Uri "http://127.0.0.1:5000/api/operator/members/customers/$customerId/wallet/top-up" `
+    -Body @{ amountToman = 500000; method = "Cash"; commandId = [guid]::NewGuid() } -Session $opSession | Out-Null
 
 if ($WithOpenSessions) {
-    Invoke-InstallerApiJson -Method Post -Uri "http://127.0.0.1:5000/api/sessions" -Body @{ stationId = "PS5-B2"; playerCount = 1 } | Out-Null
-    Invoke-InstallerApiJson -Method Post -Uri "http://127.0.0.1:5000/api/sessions" -Body @{ stationId = "PC-B2"; playerCount = 1 } | Out-Null
+    Invoke-InstallerApiJsonAllowCodes -Method Post -Uri "http://127.0.0.1:5000/api/sessions" `
+        -Body @{ stationId = "PS5-B2"; playerCount = 1 } -AllowErrorCodes @("station_busy", "session_elsewhere") | Out-Null
+    Invoke-InstallerApiJsonAllowCodes -Method Post -Uri "http://127.0.0.1:5000/api/sessions" `
+        -Body @{ stationId = "PC-B2"; playerCount = 1 } -AllowErrorCodes @("station_busy", "session_elsewhere") | Out-Null
 } else {
     $s = Invoke-InstallerApiJson -Method Post -Uri "http://127.0.0.1:5000/api/sessions" -Body @{ stationId = "PS5-B2"; playerCount = 1 }
     $sid = ($s.Content | ConvertFrom-Json).id
