@@ -61,6 +61,11 @@
         $script:Inc | Should -Match "stop CheckpointServer"
     }
 
+    It "PostgreSQL payload only on first install (§2.2)" {
+        $script:Inc | Should -Match "function InstallPostgreSqlPayload"
+        $script:Iss | Should -Match "InstallPostgreSqlPayload"
+    }
+
     It "open-sessions upgrade confirm (§2.2α)" {
         $script:Inc | Should -Match "Get-InstallerOpenSessionCount"
         $script:Inc | Should -Match "TaskDialogMsgBox"

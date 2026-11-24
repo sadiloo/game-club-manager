@@ -50,7 +50,7 @@ RightToLeft=yes
 
 [Files]
 Source: "{#StagingServerDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Check: PayloadDirExists('{#StagingServerDir}')
-Source: "{#StagingPgDir}\*"; DestDir: "{pf}\Checkpoint\PostgreSQL"; Flags: ignoreversion recursesubdirs createallsubdirs; Check: PayloadDirExists('{#StagingPgDir}')
+Source: "{#StagingPgDir}\*"; DestDir: "{pf}\Checkpoint\PostgreSQL"; Flags: ignoreversion recursesubdirs createallsubdirs; Check: PayloadDirExists('{#StagingPgDir}') and InstallPostgreSqlPayload
 Source: "{#StagingWebView2}"; DestDir: "{app}\_thirdparty"; Flags: ignoreversion; Check: PayloadFileExists('{#StagingWebView2}')
 Source: "..\tools\*.ps1"; DestDir: "{app}\tools"; Flags: ignoreversion
 Source: "..\tools\CheckpointInstall.Common.psm1"; DestDir: "{app}\tools"; Flags: ignoreversion

@@ -800,6 +800,11 @@ begin
     Result := FileExists(DefaultPinsJsonPath);
 end;
 
+function InstallPostgreSqlPayload: Boolean;
+begin
+  Result := IsFirstInstall;
+end;
+
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var Rc: Integer;
 begin
