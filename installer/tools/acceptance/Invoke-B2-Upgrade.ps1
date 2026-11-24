@@ -12,53 +12,27 @@
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "Invoke-AcceptanceCommon.ps1")
 
-function Install-ServerSetup {
-    param(
-        [string] $Exe,
-        [string] $Accounts,
-        [string] $FromVer,
-        [string] $DefaultPinsFile = (Join-Path $PSScriptRoot "..\..\ci\default-pins-silent-empty.json")
-    )
-    if ($FromVer) { $env:CHECKPOINT_UPGRADE_FROM = $FromVer }
-    $logPath = "C:\ProgramData\Checkpoint\logs\acceptance-setup.log"
-    New-Item -ItemType Directory -Force -Path (Split-Path $logPath -Parent) | Out-Null
-    $args = @(
-        "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/ACCOUNTS=$Accounts", "/SKIPSESSIONCHECK=1",
-        "/LOG=`"$logPath`""
-    )
-    if ($FromVer) {
-        if (-not (Test-Path -LiteralPath $DefaultPinsFile)) { throw "DefaultPinsFile missing: $DefaultPinsFile" }
-        $args += "/DEFAULTPINS=$DefaultPinsFile"
-    }
-    $proc = Start-CheckpointServerSetup -Exe $Exe -ArgumentList $args -TimeoutSeconds 2700 -LogPath $logPath
-    if ($proc.ExitCode -ne 0) {
-        Write-InnoSetupHangDiagnostics -LogPath $logPath
-        if (Test-Path -LiteralPath $logPath) {
-            $artifactDir = Join-Path $PSScriptRoot "..\..\..\artifacts\installer\acceptance-logs"
-            New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
-            Copy-Item -LiteralPath $logPath -Destination (Join-Path $artifactDir "acceptance-setup.log") -Force
-        }
-        throw "setup exit $($proc.ExitCode) for $Exe"
-    }
-    Assert-InnoSetupLogNoFailedRuns -LogPath $logPath
-    Assert-InstallerServerServicesRunning
-    Wait-InstallerServerApiPort
-}
-
 $withOpen = $Mode -eq "WithOpenSessions"
 Write-Host "B-2 ($Mode): low=$LowVersion high=$HighVersion"
+[Console]::Out.Flush()
 
 if (-not (Test-Path "C:\ProgramData\Checkpoint\config\server.json")) {
-    Install-ServerSetup -Exe $LowSetup -Accounts $AccountsFile -FromVer ""
+    Write-AcceptanceHarnessTrace "B-2 leg low install $LowVersion" {
+        Install-ServerSetup -LegLabel "b2-$Mode-low-$LowVersion" -Exe $LowSetup -Accounts $AccountsFile -FromVer ""
+    } | Out-Null
 }
 
-. (Join-Path $PSScriptRoot "Seed-InstallerAcceptanceData.ps1") -AccountsFile $AccountsFile -WithOpenSessions:$withOpen
+Write-AcceptanceHarnessTrace "Seed-InstallerAcceptanceData" {
+    . (Join-Path $PSScriptRoot "Seed-InstallerAcceptanceData.ps1") -AccountsFile $AccountsFile -WithOpenSessions:$withOpen
+} | Out-Null
 
-$before = Get-InstallerDbCounts
-$secrets = Get-ServerSecretsFingerprint
+$before = Write-AcceptanceHarnessTrace "Get-InstallerDbCounts (before upgrade)" { Get-InstallerDbCounts }
+$secrets = Write-AcceptanceHarnessTrace "Get-ServerSecretsFingerprint (before)" { Get-ServerSecretsFingerprint }
+
 Write-Host "B-2 ($Mode): fingerprint PostgreSQL\bin + pgdata before high upgrade"
-$pgBinBefore = Get-InstallerPostgreSqlBinFingerprint
-$pgDataListingBefore = Get-InstallerPgDataStableListingHash
+[Console]::Out.Flush()
+$pgBinBefore = Write-AcceptanceHarnessTrace "Get-InstallerPostgreSqlBinFingerprint (before)" { Get-InstallerPostgreSqlBinFingerprint }
+$pgDataListingBefore = Write-AcceptanceHarnessTrace "Get-InstallerPgDataStableListingHash (before)" { Get-InstallerPgDataStableListingHash }
 
 $defaultPinsFile = Join-Path $PSScriptRoot "..\..\ci\default-pins-silent-empty.json"
 $pinsRaw = (Get-Content -LiteralPath $defaultPinsFile -Raw).Trim()
@@ -68,14 +42,17 @@ if ($pinsRaw -ne "[]") {
 Write-Host "B-2 ($Mode): DEFAULTPINS empty — upgrade-pins no-op; pin replacement asserted in B-13"
 
 Write-Host "B-2 ($Mode): silent high upgrade install"
-Install-ServerSetup -Exe $HighSetup -Accounts $AccountsFile -FromVer $LowVersion
+[Console]::Out.Flush()
+Write-AcceptanceHarnessTrace "B-2 leg high upgrade $LowVersion->$HighVersion" {
+    Install-ServerSetup -LegLabel "b2-$Mode-high-$HighVersion" -Exe $HighSetup -Accounts $AccountsFile -FromVer $LowVersion
+} | Out-Null
 
-$after = Get-InstallerDbCounts
-$secretsAfter = Get-ServerSecretsFingerprint
-$pgBinAfter = Get-InstallerPostgreSqlBinFingerprint
-$pgDataListingAfter = Get-InstallerPgDataStableListingHash
+$after = Write-AcceptanceHarnessTrace "Get-InstallerDbCounts (after upgrade)" { Get-InstallerDbCounts }
+$secretsAfter = Write-AcceptanceHarnessTrace "Get-ServerSecretsFingerprint (after)" { Get-ServerSecretsFingerprint }
+$pgBinAfter = Write-AcceptanceHarnessTrace "Get-InstallerPostgreSqlBinFingerprint (after)" { Get-InstallerPostgreSqlBinFingerprint }
+$pgDataListingAfter = Write-AcceptanceHarnessTrace "Get-InstallerPgDataStableListingHash (after)" { Get-InstallerPgDataStableListingHash }
 
-Assert-InstallerServerHealthOk
+Write-AcceptanceHarnessTrace "Assert-InstallerServerHealthOk" { Assert-InstallerServerHealthOk } | Out-Null
 
 if ($pgBinBefore -ne $pgBinAfter) {
     throw "B-2: PostgreSQL\bin fingerprint changed after upgrade"
@@ -105,10 +82,21 @@ if (-not (Test-Path $upgradeLog)) { throw "B-2: upgrade.log missing" }
 if (-not (Select-String -Path $upgradeLog -Pattern "downtimeSeconds=")) { throw "B-2: upgrade downtime not logged" }
 
 if (-not $SkipDowngradeCheck) {
-    $down = Start-Process -FilePath $LowSetup -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART") -Wait -PassThru
+    Assert-NoCheckpointSetupProcesses -Context "B-2 downgrade check"
+    $downLog = "C:\ProgramData\Checkpoint\logs\acceptance-setup-b2-downgrade-probe.log"
+    if (Test-Path -LiteralPath $downLog) { Remove-Item -LiteralPath $downLog -Force }
+    $downArgs = @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/LOG=`"$downLog`"")
+    $downCmd = Format-SetupCommandLine -Exe $LowSetup -ArgumentList $downArgs
+    Write-Host "B-2 ($Mode): downgrade probe cmd=$downCmd"
+    [Console]::Out.Flush()
+    $down = Write-AcceptanceHarnessTrace "B-2 downgrade probe Start-Process" {
+        Start-Process -FilePath $LowSetup -ArgumentList $downArgs -Wait -PassThru
+    }
     if ($down.ExitCode -eq 0) {
         throw "B-2: downgrade must not succeed silently"
     }
+    Assert-NoCheckpointSetupProcesses -Context "after B-2 downgrade probe"
 }
 
 Write-Host "B-2 ($Mode): ok"
+[Console]::Out.Flush()

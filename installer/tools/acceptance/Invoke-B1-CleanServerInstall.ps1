@@ -10,12 +10,14 @@ New-Item -ItemType Directory -Force -Path $LogsDir | Out-Null
 $installLog = Join-Path $LogsDir "b1-server-install.log"
 
 Write-Host "B-1: silent server install"
-$proc = Start-CheckpointServerSetup -Exe $ServerSetup -ArgumentList @(
-    "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/LOG=$installLog",
+$legLog = "C:\ProgramData\Checkpoint\logs\acceptance-setup-b1-clean.log"
+if (Test-Path -LiteralPath $legLog) { Remove-Item -LiteralPath $legLog -Force }
+$result = Start-CheckpointServerSetup -LegLabel "b1-clean" -Exe $ServerSetup -ArgumentList @(
+    "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/LOG=`"$legLog`"",
     "/ACCOUNTS=$AccountsFile"
-)
-if ($proc.ExitCode -ne 0) {
-    throw "B-1: server setup exit $($proc.ExitCode)"
+) -LogPath $legLog
+if ($result.ExitCode -ne 0) {
+    throw "B-1: server setup exit $($result.ExitCode)"
 }
 
 foreach ($svc in @("CheckpointPostgres", "CheckpointServer")) {

@@ -1,6 +1,8 @@
 # CI-only: dump installer hang evidence after acceptance (or step timeout). Bounded WMI.
 $ErrorActionPreference = "Continue"
 $root = if ($env:GITHUB_WORKSPACE) { $env:GITHUB_WORKSPACE } else { Split-Path (Split-Path $PSScriptRoot -Parent) -Parent }
+$uiScript = Join-Path $root "installer/tools/acceptance/Get-CheckpointSetupUiText.ps1"
+if (Test-Path -LiteralPath $uiScript) { . $uiScript }
 $artifactDir = Join-Path $root "artifacts/installer/acceptance-logs"
 New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
 $stamp = [DateTime]::UtcNow.ToString("yyyyMMddHHmmss")
@@ -14,15 +16,18 @@ function Add-DiagLine {
 
 Add-DiagLine "=== installer acceptance step diagnostics (UTC $([DateTime]::UtcNow.ToString('o'))) ==="
 
-$innoLog = "C:\ProgramData\Checkpoint\logs\acceptance-setup.log"
-Add-DiagLine "=== tail Inno /LOG: $innoLog ==="
-if (Test-Path -LiteralPath $innoLog) {
-    $tail = @(Get-Content -LiteralPath $innoLog -Tail 120 -ErrorAction SilentlyContinue)
-    foreach ($line in $tail) { Add-DiagLine "inno: $line" }
-    Copy-Item -LiteralPath $innoLog -Destination (Join-Path $artifactDir "acceptance-setup.log") -Force -ErrorAction SilentlyContinue
-} else {
-    Add-DiagLine "inno: (missing)"
+$innoLogs = @(Get-ChildItem -LiteralPath "C:\ProgramData\Checkpoint\logs" -Filter "acceptance-setup*.log" -File -ErrorAction SilentlyContinue |
+    Sort-Object LastWriteTime -Descending)
+if ($innoLogs.Count -eq 0) {
+    $legacy = "C:\ProgramData\Checkpoint\logs\acceptance-setup.log"
+    if (Test-Path -LiteralPath $legacy) { $innoLogs = @(Get-Item -LiteralPath $legacy) }
 }
+foreach ($logFile in $innoLogs | Select-Object -First 3) {
+    Add-DiagLine "=== tail Inno /LOG: $($logFile.FullName) ==="
+    @(Get-Content -LiteralPath $logFile.FullName -Tail 120 -Encoding UTF8 -ErrorAction SilentlyContinue) | ForEach-Object { Add-DiagLine "inno: $_" }
+    Copy-Item -LiteralPath $logFile.FullName -Destination (Join-Path $artifactDir $logFile.Name) -Force -ErrorAction SilentlyContinue
+}
+if ($innoLogs.Count -eq 0) { Add-DiagLine "inno: (no acceptance-setup*.log)" }
 
 foreach ($svc in @("CheckpointServer", "CheckpointPostgres")) {
     Add-DiagLine "=== sc query $svc ==="
@@ -46,6 +51,16 @@ foreach ($pat in $patterns) {
     } catch {
         Add-DiagLine "proc: pattern=$pat error=$($_.Exception.Message)"
     }
+}
+
+if (Get-Command Get-CheckpointSetupUiText -ErrorAction SilentlyContinue) {
+    Add-DiagLine "=== Setup visible window + child control text (UTF-8) ==="
+    foreach ($line in Get-CheckpointSetupUiText) {
+        Add-DiagLine "setup-ui: $line"
+    }
+    $uiArtifact = Join-Path $artifactDir "setup-ui-capture-$stamp.utf8.txt"
+    [System.IO.File]::WriteAllLines($uiArtifact, @(Get-CheckpointSetupUiText), [System.Text.UTF8Encoding]::new($false))
+    Add-DiagLine "setup-ui: wrote $uiArtifact"
 }
 
 Add-DiagLine "=== Win32_Process command lines (60s job cap) ==="

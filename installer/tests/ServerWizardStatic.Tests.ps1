@@ -69,6 +69,12 @@
         $script:Inc | Should -Match "GInstallReachedDone"
     }
 
+    It "silent downgrade guard uses WizardSilent not MsgBox (R8e)" {
+        $script:Iss | Should -Match "function InitializeSetup"
+        $script:Iss | Should -Match "if not WizardSilent then"
+        $script:Iss | Should -Match "CompareVersionParts"
+    }
+
     It "PostgreSQL payload only on first install (§2.2)" {
         $script:Inc | Should -Match "function InstallPostgreSqlPayload"
         $script:Iss | Should -Match "InstallPostgreSqlPayload"

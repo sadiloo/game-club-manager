@@ -129,7 +129,8 @@ begin
     Cmp := CompareVersionParts(Installed, NewVer);
     if Cmp > 0 then
     begin
-      MsgBox(Format('نسخهٔ نصب‌شده (%s) از این نصاب (%s) تازه‌تر است. برای برگشت به نسخهٔ قبلی، اول آن را حذف کنید.', [Installed, NewVer]), mbError, MB_OK);
+      if not WizardSilent then
+        MsgBox(Format('نسخهٔ نصب‌شده (%s) از این نصاب (%s) تازه‌تر است. برای برگشت به نسخهٔ قبلی، اول آن را حذف کنید.', [Installed, NewVer]), mbError, MB_OK);
       Result := False;
       Exit;
     end;

@@ -1,5 +1,7 @@
 ﻿$ErrorActionPreference = "Stop"
 
+. (Join-Path $PSScriptRoot "Get-CheckpointSetupUiText.ps1")
+
 function Write-AcceptanceHarnessTrace {
     param(
         [string] $Label,
@@ -7,10 +9,113 @@ function Write-AcceptanceHarnessTrace {
     )
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     Write-Host "acceptance-harness: $([DateTime]::UtcNow.ToString('o')) BEGIN $Label"
+    [Console]::Out.Flush()
     try {
         return & $Action
     } finally {
         Write-Host "acceptance-harness: $([DateTime]::UtcNow.ToString('o')) END $Label elapsedMs=$($sw.ElapsedMilliseconds)"
+        [Console]::Out.Flush()
+    }
+}
+
+function Format-SetupCommandLine {
+    param([string] $Exe, [string[]] $ArgumentList)
+    $quoted = @($ArgumentList | ForEach-Object {
+            if ($_ -match '\s') { '"' + ($_ -replace '"', '\"') + '"' } else { $_ }
+        })
+    return "`"$Exe`" $($quoted -join ' ')"
+}
+
+function Get-SetupLegDescendantPids {
+    param([int] $RootPid)
+    $job = Start-Job -ArgumentList $RootPid -ScriptBlock {
+        param($root)
+        $children = @{}
+        foreach ($p in Get-CimInstance Win32_Process -ErrorAction SilentlyContinue) {
+            $pp = [int]$p.ParentProcessId
+            if (-not $children.ContainsKey($pp)) { $children[$pp] = [System.Collections.Generic.List[int]]::new() }
+            $children[$pp].Add([int]$p.ProcessId)
+        }
+        $seen = [System.Collections.Generic.HashSet[int]]::new()
+        $queue = [System.Collections.Generic.Queue[int]]::new()
+        $queue.Enqueue($root)
+        while ($queue.Count -gt 0) {
+            $id = $queue.Dequeue()
+            if (-not $seen.Add($id)) { continue }
+            if ($children.ContainsKey($id)) {
+                foreach ($c in $children[$id]) { $queue.Enqueue($c) }
+            }
+        }
+        return @($seen)
+    }
+    $done = Wait-Job -Job $job -Timeout 30
+    if (-not $done) {
+        Stop-Job -Job $job -Force -ErrorAction SilentlyContinue
+        Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
+        throw "Get-SetupLegDescendantPids: WMI timed out after 30s (root=$RootPid)"
+    }
+    $pids = @(Receive-Job -Job $job)
+    Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
+    return $pids
+}
+
+function Get-CheckpointServerSetupProcesses {
+    @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -like "CheckpointServerSetup*" })
+}
+
+function Write-SetupProcessFailureUiText {
+    param(
+        [string] $Reason,
+        [int[]] $ProcessIds = @()
+    )
+    Write-Host "setup-leg-failure: $Reason"
+    if ($ProcessIds.Count -eq 0) {
+        $ProcessIds = @(Get-CheckpointServerSetupProcesses | ForEach-Object { $_.Id })
+    }
+    foreach ($line in Get-CheckpointSetupUiText -ProcessIds $ProcessIds) {
+        Write-Host "setup-leg-ui: $line"
+    }
+    $artifactDir = Join-Path $PSScriptRoot "..\..\..\artifacts\installer\acceptance-logs"
+    New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
+    $report = Join-Path $artifactDir "setup-leg-ui-$(Get-Date -Format 'yyyyMMddHHmmss').utf8.txt"
+    $lines = @($Reason) + (Get-CheckpointSetupUiText -ProcessIds $ProcessIds)
+    [System.IO.File]::WriteAllLines($report, $lines, [System.Text.UTF8Encoding]::new($false))
+    Write-Host "setup-leg-failure: wrote $report"
+    [Console]::Out.Flush()
+}
+
+function Assert-NoCheckpointSetupProcesses {
+    param([string] $Context)
+    $procs = Get-CheckpointServerSetupProcesses
+    if ($procs.Count -eq 0) { return }
+    Write-SetupProcessFailureUiText -Reason "leftover CheckpointServerSetup* before $Context" -ProcessIds @($procs | ForEach-Object { $_.Id })
+    throw "setup leg pin: $($procs.Count) leftover CheckpointServerSetup* process(es) at $Context"
+}
+
+function Assert-InnoLogClosedForLeg {
+    param(
+        [string] $LogPath,
+        [DateTime] $LegStartUtc
+    )
+    if (-not (Test-Path -LiteralPath $LogPath)) {
+        throw "Inno log missing for leg: $LogPath"
+    }
+    $tail = @(Write-AcceptanceHarnessTrace "Inno log tail Log closed $LogPath" {
+            Get-Content -LiteralPath $LogPath -Tail 40 -Encoding UTF8 -ErrorAction Stop
+        })
+    if (-not ($tail | Where-Object { $_ -match 'Log closed\.' })) {
+        throw "Inno log missing 'Log closed.' for leg: $LogPath"
+    }
+    $written = (Get-Item -LiteralPath $LogPath).LastWriteTimeUtc
+    if ($written -lt $LegStartUtc.AddSeconds(-5)) {
+        throw "Inno log not updated for this leg (mtime=$written start=$LegStartUtc): $LogPath"
+    }
+}
+
+function Stop-SetupLegLeftoversAfterEvidence {
+    foreach ($p in Get-CheckpointServerSetupProcesses) {
+        Write-Host "Stop-SetupLegLeftoversAfterEvidence: pid=$($p.Id) name=$($p.ProcessName)"
+        Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
     }
 }
 
@@ -45,56 +150,143 @@ function Stop-CheckpointInnoSetupProcesses {
 
 function Start-CheckpointServerSetup {
     param(
+        [string] $LegLabel,
         [string] $Exe,
         [string[]] $ArgumentList,
         [int] $TimeoutSeconds = 2700,
         [string] $LogPath = $null
     )
-    $proc = Start-Process -FilePath $Exe -ArgumentList $ArgumentList -PassThru
+    $cmdLine = Format-SetupCommandLine -Exe $Exe -ArgumentList $ArgumentList
+    Write-Host "Start-CheckpointServerSetup: leg=$LegLabel cmd=$cmdLine"
+    [Console]::Out.Flush()
+
+    Assert-NoCheckpointSetupProcesses -Context "start leg $LegLabel"
+
+    $legStartUtc = [DateTime]::UtcNow
+  $proc = Write-AcceptanceHarnessTrace "Start-Process leg=$LegLabel" {
+        Start-Process -FilePath $Exe -ArgumentList $ArgumentList -PassThru
+    }
+    $leaderId = $proc.Id
+    Write-Host "Start-CheckpointServerSetup: leg=$LegLabel leader=$leaderId"
+    [Console]::Out.Flush()
+
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
     $lastLog = [DateTime]::MinValue
     while ([DateTime]::UtcNow -lt $deadline) {
-        $children = @(Write-AcceptanceHarnessTrace "Get-Process CheckpointServerSetup*" {
-                @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
-                        $_.ProcessName -like "CheckpointServerSetup*"
-                    })
+        $legPids = @(Write-AcceptanceHarnessTrace "Get-SetupLegDescendantPids root=$leaderId" {
+                Get-SetupLegDescendantPids -RootPid $leaderId
             })
+        $aliveLeg = @($legPids | ForEach-Object {
+                Get-Process -Id $_ -ErrorAction SilentlyContinue
+            } | Where-Object { $null -ne $_ })
+
+        $foreign = @(Get-CheckpointServerSetupProcesses | Where-Object { $legPids -notcontains $_.Id })
+        if ($foreign.Count -gt 0) {
+            Write-SetupProcessFailureUiText -Reason "foreign CheckpointServerSetup* during leg $LegLabel" -ProcessIds @($foreign | ForEach-Object { $_.Id })
+            throw "setup leg pin: foreign setup PID(s) during $LegLabel : $(($foreign | ForEach-Object { $_.ProcessName + ':' + $_.Id }) -join ', ')"
+        }
+
         $leaderDone = $false
         try {
-            $leaderDone = [bool](Write-AcceptanceHarnessTrace "WaitForExit leader pid=$($proc.Id)" {
+            $leaderDone = [bool](Write-AcceptanceHarnessTrace "WaitForExit leader pid=$leaderId" {
                     $proc.WaitForExit(1000)
                 })
         } catch {
             $leaderDone = $true
         }
-        if ($leaderDone -and $children.Count -eq 0) {
-            return $proc
+
+        if ($leaderDone -and $aliveLeg.Count -eq 0) {
+            $exitCode = Write-AcceptanceHarnessTrace "read leader ExitCode pid=$leaderId" {
+                    $proc.ExitCode
+                }
+            Write-AcceptanceHarnessTrace "Assert-InnoLogClosedForLeg $LogPath" {
+                Assert-InnoLogClosedForLeg -LogPath $LogPath -LegStartUtc $legStartUtc
+            } | Out-Null
+            Assert-NoCheckpointSetupProcesses -Context "complete leg $LegLabel"
+            return [PSCustomObject]@{ Process = $proc; ExitCode = $exitCode; LegLabel = $LegLabel }
         }
+
+        if ($leaderDone -and $aliveLeg.Count -gt 0) {
+            $ui = Get-CheckpointSetupUiText -ProcessIds @($aliveLeg | ForEach-Object { $_.Id })
+            if ($ui.Count -gt 0) {
+                Write-SetupProcessFailureUiText -Reason "visible UI on leg $LegLabel descendants after leader exit" -ProcessIds @($aliveLeg | ForEach-Object { $_.Id })
+                throw "setup leg pin: visible setup UI after leader exit ($LegLabel)"
+            }
+        }
+
         if ((([DateTime]::UtcNow - $lastLog).TotalSeconds) -ge 120) {
             $remain = [Math]::Max(0, [int]($deadline - [DateTime]::UtcNow).TotalSeconds)
-            $names = if ($children.Count -gt 0) {
-                ($children | ForEach-Object { "$($_.ProcessName):$($_.Id)" }) -join ", "
+            $names = if ($aliveLeg.Count -gt 0) {
+                ($aliveLeg | ForEach-Object { "$($_.ProcessName):$($_.Id)" }) -join ", "
             } else {
                 "(none)"
             }
-            Write-Host "Start-CheckpointServerSetup: leader=$($proc.Id) leaderDone=$leaderDone remain=${remain}s children=$names"
+            Write-Host "Start-CheckpointServerSetup: leg=$LegLabel leader=$leaderId leaderDone=$leaderDone remain=${remain}s aliveLeg=$names"
+            [Console]::Out.Flush()
             $lastLog = [DateTime]::UtcNow
         }
         $null = Write-AcceptanceHarnessTrace "Start-Sleep 4" { Start-Sleep -Seconds 4 }
     }
     Write-InnoSetupHangDiagnostics -LogPath $LogPath
     Write-InstallerAcceptanceFailureDiagnostics
-    Stop-CheckpointInnoSetupProcesses
+    Write-SetupProcessFailureUiText -Reason "timeout leg $LegLabel" -ProcessIds @($legPids)
+    Stop-SetupLegLeftoversAfterEvidence
     if (-not $proc.HasExited) {
         Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
     }
-    throw "Checkpoint server Inno setup did not finish within ${TimeoutSeconds}s (exe=$Exe)"
+    throw "Checkpoint server Inno setup did not finish within ${TimeoutSeconds}s (leg=$LegLabel exe=$Exe)"
+}
+
+function Install-ServerSetup {
+    param(
+        [string] $LegLabel,
+        [string] $Exe,
+        [string] $Accounts,
+        [string] $FromVer,
+        [string] $DefaultPinsFile = (Join-Path $PSScriptRoot "..\..\ci\default-pins-silent-empty.json")
+    )
+    if ($FromVer) { $env:CHECKPOINT_UPGRADE_FROM = $FromVer } else { Remove-Item Env:CHECKPOINT_UPGRADE_FROM -ErrorAction SilentlyContinue }
+
+    $logDir = "C:\ProgramData\Checkpoint\logs"
+    New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+    $logPath = Join-Path $logDir "acceptance-setup-$LegLabel.log"
+    if (Test-Path -LiteralPath $logPath) { Remove-Item -LiteralPath $logPath -Force }
+
+    $args = @(
+        "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/ACCOUNTS=$Accounts", "/SKIPSESSIONCHECK=1",
+        "/LOG=`"$logPath`""
+    )
+    if ($FromVer) {
+        if (-not (Test-Path -LiteralPath $DefaultPinsFile)) { throw "DefaultPinsFile missing: $DefaultPinsFile" }
+        $args += "/DEFAULTPINS=$DefaultPinsFile"
+    }
+
+    $result = Write-AcceptanceHarnessTrace "Start-CheckpointServerSetup leg=$LegLabel" {
+        Start-CheckpointServerSetup -LegLabel $LegLabel -Exe $Exe -ArgumentList $args -TimeoutSeconds 2700 -LogPath $logPath
+    }
+    if ($result.ExitCode -ne 0) {
+        Write-InnoSetupHangDiagnostics -LogPath $logPath
+        Write-SetupProcessFailureUiText -Reason "nonzero exit $($result.ExitCode) leg $LegLabel"
+        $artifactDir = Join-Path $PSScriptRoot "..\..\..\artifacts\installer\acceptance-logs"
+        New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
+        Copy-Item -LiteralPath $logPath -Destination (Join-Path $artifactDir (Split-Path $logPath -Leaf)) -Force
+        throw "setup exit $($result.ExitCode) leg=$LegLabel exe=$Exe"
+    }
+    Write-AcceptanceHarnessTrace "Assert-InnoSetupLogNoFailedRuns $logPath" {
+        Assert-InnoSetupLogNoFailedRuns -LogPath $logPath
+    } | Out-Null
+    Write-AcceptanceHarnessTrace "Assert-InstallerServerServicesRunning" {
+        Assert-InstallerServerServicesRunning
+    } | Out-Null
+    Write-AcceptanceHarnessTrace "Wait-InstallerServerApiPort" {
+        Wait-InstallerServerApiPort
+    } | Out-Null
 }
 
 function Assert-InnoSetupLogNoFailedRuns {
     param([string] $LogPath)
     if (-not (Test-Path -LiteralPath $LogPath)) { return }
-    $lines = Get-Content -LiteralPath $LogPath
+    $lines = @(Get-Content -LiteralPath $LogPath -Tail 500 -Encoding UTF8 -ErrorAction Stop)
     for ($i = 0; $i -lt $lines.Count; $i++) {
         if ($lines[$i] -notmatch 'Process exit code: ([1-9]\d*)') { continue }
         $phase = ($lines[[Math]::Max(0, $i - 6)..$i] | Where-Object { $_ -match 'InstallPhase' } | Select-Object -Last 1)

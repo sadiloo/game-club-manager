@@ -13,5 +13,8 @@ Describe "installer acceptance harness" {
         $body | Should -Match "Write-AcceptanceHarnessTrace"
         $body | Should -Match "Get-Process CheckpointServerSetup"
         $body | Should -Match "WaitForExit leader"
+        $body | Should -Match "Assert-NoCheckpointSetupProcesses"
+        $body | Should -Match "Get-SetupLegDescendantPids"
+        $script:Common | Should -Match "function Install-ServerSetup"
     }
 }
