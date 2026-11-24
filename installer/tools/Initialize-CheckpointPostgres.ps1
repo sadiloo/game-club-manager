@@ -153,6 +153,12 @@ if (-not (Test-Path -LiteralPath $pgVersionFile)) {
 
 Set-PostgresClusterConf
 
+if ((Test-Path -LiteralPath $pgVersionFile) -and -not (Get-Service CheckpointPostgres -ErrorAction SilentlyContinue)) {
+    Write-InitLog "pgdata present but CheckpointPostgres service missing; reinitializing cluster"
+    Initialize-FreshPgDataCluster
+    $pgVersionFile = Join-Path $PgData "PG_VERSION"
+}
+
 $svc = Get-Service CheckpointPostgres -ErrorAction SilentlyContinue
 if ($svc) {
     if ($svc.Status -ne "Running") {
@@ -173,9 +179,18 @@ if (-not $svc) {
     }
 }
 
-Start-Service CheckpointPostgres -ErrorAction Stop
-if ((Get-Service CheckpointPostgres).Status -ne 'Running') {
-    throw "CheckpointPostgres failed to reach Running after Start-Service"
+try {
+    Start-Service CheckpointPostgres -ErrorAction Stop
+    if ((Get-Service CheckpointPostgres).Status -ne 'Running') {
+        throw "CheckpointPostgres not Running after Start-Service"
+    }
+} catch {
+    Write-InitLog "Start-Service CheckpointPostgres failed: $_; reinitializing cluster"
+    Initialize-FreshPgDataCluster
+    Start-Service CheckpointPostgres -ErrorAction Stop
+    if ((Get-Service CheckpointPostgres).Status -ne 'Running') {
+        throw "CheckpointPostgres failed to reach Running after cluster reinit"
+    }
 }
 Start-Sleep -Seconds 3
 
