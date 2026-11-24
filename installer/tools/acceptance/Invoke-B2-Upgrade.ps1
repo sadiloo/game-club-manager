@@ -57,9 +57,11 @@ if (-not (Test-Path "C:\ProgramData\Checkpoint\config\server.json")) {
 
 $before = Get-InstallerDbCounts
 $secrets = Get-ServerSecretsFingerprint
+Write-Host "B-2 ($Mode): fingerprint PostgreSQL\bin + pgdata before high upgrade"
 $pgBinBefore = Get-InstallerPostgreSqlBinFingerprint
 $pgDataListingBefore = Get-InstallerPgDataStableListingHash
 
+Write-Host "B-2 ($Mode): silent high upgrade install"
 Install-ServerSetup -Exe $HighSetup -Accounts $AccountsFile -FromVer $LowVersion
 
 $after = Get-InstallerDbCounts

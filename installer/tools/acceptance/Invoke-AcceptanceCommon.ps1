@@ -203,7 +203,7 @@ function Get-InstallerPostgreSqlBinFingerprint {
     )
     if (-not (Test-Path -LiteralPath $BinRoot)) { throw "PostgreSQL bin missing: $BinRoot" }
     $lines = New-Object System.Collections.Generic.List[string]
-    Get-ChildItem -LiteralPath $BinRoot -File -Recurse | Sort-Object FullName | ForEach-Object {
+    Get-ChildItem -LiteralPath $BinRoot -File | Sort-Object FullName | ForEach-Object {
         $rel = $_.FullName.Substring($BinRoot.Length).TrimStart('\')
         $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
         $lines.Add("$rel=$hash")
@@ -219,13 +219,15 @@ function Get-InstallerPostgreSqlBinFingerprint {
 
 # Stable listing hash for pgdata on upgrade: relative paths only (sorted), excluding live
 # WAL/postmaster/log churn documented for B-2 upgrade pins:
-#   postmaster.pid, postmaster.opts, pg_wal\**, log\**, **\*.log, current_logfiles
+#   postmaster.pid, postmaster.opts, pg_wal\**, log\**, **\*.log, current_logfiles, base\**
+# (heap files under base\ are covered by Get-InstallerDbCounts row-count pins.)
 function Test-InstallerPgDataPathExcluded {
     param([string] $RelativePath)
     $r = $RelativePath.Replace('/', '\')
     if ($r -eq 'postmaster.pid' -or $r -eq 'postmaster.opts' -or $r -eq 'current_logfiles') { return $true }
     if ($r.StartsWith('pg_wal\', [StringComparison]::OrdinalIgnoreCase)) { return $true }
     if ($r.StartsWith('log\', [StringComparison]::OrdinalIgnoreCase)) { return $true }
+    if ($r.StartsWith('base\', [StringComparison]::OrdinalIgnoreCase)) { return $true }
     if ($r.EndsWith('.log', [StringComparison]::OrdinalIgnoreCase)) { return $true }
     return $false
 }
