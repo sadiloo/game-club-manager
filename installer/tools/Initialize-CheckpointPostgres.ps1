@@ -41,6 +41,17 @@ function Test-PostgresSuperuserLogin([string] $Password) {
     return ($code -eq 0)
 }
 
+function Wait-PostgresSuperuserLogin([string] $Password, [int] $TimeoutSeconds = 45) {
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    do {
+        if (Test-PostgresSuperuserLogin $Password) {
+            return $true
+        }
+        Start-Sleep -Seconds 1
+    } while ((Get-Date) -lt $deadline)
+    return $false
+}
+
 function Set-PostgresClusterConf {
     $conf = Join-Path $PgData "postgresql.conf"
     if (-not (Test-Path -LiteralPath $conf)) { return }
@@ -210,20 +221,27 @@ try {
 }
 Start-Sleep -Seconds 3
 
-if (-not (Test-PostgresSuperuserLogin $SuperPassword)) {
-    Write-InitLog "superuser login failed with install secrets; attempting repair"
-    try {
-        Repair-PostgresSuperuserPassword $SuperPassword
-    } catch {
-        Write-InitLog "password repair failed: $_"
+if (-not (Wait-PostgresSuperuserLogin $SuperPassword)) {
+    if (-not $createdNewCluster) {
+        Write-InitLog "superuser login failed with install secrets; attempting repair"
+        try {
+            Repair-PostgresSuperuserPassword $SuperPassword
+        } catch {
+            Write-InitLog "password repair failed: $_"
+        }
+    } else {
+        Write-InitLog "superuser login failed on fresh cluster after wait"
     }
 }
 
-if (-not (Test-PostgresSuperuserLogin $SuperPassword)) {
-    if (Test-Path -LiteralPath $pgVersionFile) {
+if (-not (Wait-PostgresSuperuserLogin $SuperPassword 15)) {
+    if (-not $createdNewCluster -and (Test-Path -LiteralPath $pgVersionFile)) {
         Initialize-FreshPgDataCluster
-    }
-    if (-not (Test-PostgresSuperuserLogin $SuperPassword)) {
+        $createdNewCluster = $true
+        if (-not (Wait-PostgresSuperuserLogin $SuperPassword 45)) {
+            throw "postgres superuser password could not be aligned with install secrets"
+        }
+    } else {
         throw "postgres superuser password could not be aligned with install secrets"
     }
 }
