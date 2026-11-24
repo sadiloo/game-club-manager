@@ -15,7 +15,7 @@ $customerResp = Invoke-InstallerApiJson -Method Post -Uri "http://127.0.0.1:5000
 $customer = ($customerResp.Content | ConvertFrom-Json)
 $customerId = $customer.id
 
-Invoke-InstallerApiJson -Method Post -Uri "http://127.0.0.1:5000/api/operator/members/customers/$customerId/wallet/top-up" -Body @{ amountToman = 500000; method = "Cash" } -Session $opSession | Out-Null
+Invoke-InstallerApiJson -Method Post -Uri "http://127.0.0.1:5000/api/operator/members/customers/$customerId/wallet/top-up" -Body @{ amountToman = 500000; method = "Cash"; commandId = [guid]::NewGuid() } -Session $opSession | Out-Null
 
 if ($WithOpenSessions) {
     Invoke-InstallerApiJson -Method Post -Uri "http://127.0.0.1:5000/api/sessions" -Body @{ stationId = "PS5-B2"; playerCount = 1 } | Out-Null
