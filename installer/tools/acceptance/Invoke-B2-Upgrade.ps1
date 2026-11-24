@@ -13,15 +13,31 @@ $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "Invoke-AcceptanceCommon.ps1")
 
 function Install-ServerSetup {
-    param([string] $Exe, [string] $Accounts, [string] $FromVer)
+    param(
+        [string] $Exe,
+        [string] $Accounts,
+        [string] $FromVer,
+        [string] $DefaultPinsFile = (Join-Path $PSScriptRoot "..\..\ci\default-pins-silent-empty.json")
+    )
     if ($FromVer) { $env:CHECKPOINT_UPGRADE_FROM = $FromVer }
     $logPath = "C:\ProgramData\Checkpoint\logs\acceptance-setup.log"
     New-Item -ItemType Directory -Force -Path (Split-Path $logPath -Parent) | Out-Null
-    $proc = Start-Process -FilePath $Exe -ArgumentList @(
+    $args = @(
         "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/ACCOUNTS=$Accounts", "/SKIPSESSIONCHECK=1",
         "/LOG=`"$logPath`""
-    ) -Wait -PassThru
-    if ($proc.ExitCode -ne 0) { throw "setup exit $($proc.ExitCode) for $Exe" }
+    )
+    if ($FromVer) {
+        if (-not (Test-Path -LiteralPath $DefaultPinsFile)) { throw "DefaultPinsFile missing: $DefaultPinsFile" }
+        $args += "/DEFAULTPINS=$DefaultPinsFile"
+    }
+    $proc = Start-Process -FilePath $Exe -ArgumentList $args -Wait -PassThru
+    if ($proc.ExitCode -ne 0) {
+        if (Test-Path -LiteralPath $logPath) {
+            Write-Host "=== tail $logPath ==="
+            Get-Content -LiteralPath $logPath -Tail 40 | ForEach-Object { Write-Host $_ }
+        }
+        throw "setup exit $($proc.ExitCode) for $Exe"
+    }
     Assert-InnoSetupLogNoFailedRuns -LogPath $logPath
     Assert-InstallerServerServicesRunning
     Wait-InstallerServerApiPort

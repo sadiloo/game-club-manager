@@ -429,7 +429,12 @@ begin
     if (Manager1Page <> nil) and ((PageID = Manager1Page.ID) or (PageID = Manager2Page.ID) or (PageID = OperatorPage.ID)) then
       Result := True;
     if (BackupDirPage <> nil) and (PageID = BackupDirPage.ID) then
-      Result := not NeedUpgradeBackupPage;
+    begin
+      if WizardSilent and (SilentAccountsPath <> '') then
+        Result := True
+      else
+        Result := not NeedUpgradeBackupPage;
+    end;
     for I := 0 to DefaultPinUserCount - 1 do
       if PageID = DefaultPinPageIds[I] then
         Result := ShouldSkipDefaultPinPage(I);
