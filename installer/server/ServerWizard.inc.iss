@@ -429,12 +429,7 @@ begin
     if (Manager1Page <> nil) and ((PageID = Manager1Page.ID) or (PageID = Manager2Page.ID) or (PageID = OperatorPage.ID)) then
       Result := True;
     if (BackupDirPage <> nil) and (PageID = BackupDirPage.ID) then
-    begin
-      if WizardSilent and (SilentAccountsPath <> '') then
-        Result := True
-      else
-        Result := not NeedUpgradeBackupPage;
-    end;
+      Result := not NeedUpgradeBackupPage;
     for I := 0 to DefaultPinUserCount - 1 do
       if PageID = DefaultPinPageIds[I] then
         Result := ShouldSkipDefaultPinPage(I);
@@ -803,4 +798,15 @@ begin
     Result := True
   else
     Result := FileExists(DefaultPinsJsonPath);
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var Rc: Integer;
+begin
+  CaptureFirstInstallState;
+  NeedsRestart := False;
+  Result := '';
+  if IsFirstInstall then Exit;
+  if Exec('sc.exe', 'stop CheckpointServer', '', SW_HIDE, ewWaitUntilTerminated, Rc) then
+    Sleep(3000);
 end;

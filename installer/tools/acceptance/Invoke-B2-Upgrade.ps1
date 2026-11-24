@@ -34,7 +34,10 @@ function Install-ServerSetup {
     if ($proc.ExitCode -ne 0) {
         if (Test-Path -LiteralPath $logPath) {
             Write-Host "=== tail $logPath ==="
-            Get-Content -LiteralPath $logPath -Tail 40 | ForEach-Object { Write-Host $_ }
+            Get-Content -LiteralPath $logPath -Tail 80 | ForEach-Object { Write-Host $_ }
+            $artifactDir = Join-Path $PSScriptRoot "..\..\..\artifacts\installer\acceptance-logs"
+            New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
+            Copy-Item -LiteralPath $logPath -Destination (Join-Path $artifactDir "acceptance-setup.log") -Force
         }
         throw "setup exit $($proc.ExitCode) for $Exe"
     }

@@ -56,6 +56,11 @@
         $script:Iss | Should -Match "CaptureFirstInstallState"
     }
 
+    It "upgrade stops CheckpointServer before file copy (§2.2)" {
+        $script:Inc | Should -Match "function PrepareToInstall"
+        $script:Inc | Should -Match "stop CheckpointServer"
+    }
+
     It "open-sessions upgrade confirm (§2.2α)" {
         $script:Inc | Should -Match "Get-InstallerOpenSessionCount"
         $script:Inc | Should -Match "TaskDialogMsgBox"
