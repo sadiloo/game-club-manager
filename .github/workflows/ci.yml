@@ -240,4 +240,5 @@ jobs:
             installer/server/Output/CheckpointServerSetup-*.exe
             installer/kiosk/Output/CheckpointKioskSetup-*.exe
             artifacts/installer/acceptance-logs/**
+            artifacts/installer/ci-acceptance-manifest.json
             artifacts/installer/third-party-cache/**

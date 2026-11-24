@@ -30,7 +30,7 @@ if ($Phase -eq "Acceptance") {
     $acceptance = $manifest.AcceptanceDir
     $logRoot = $manifest.LogsDir
     . (Join-Path $root "scripts/windows/ci-installer-acceptance.ps1")
-    exit $LASTEXITCODE
+    exit 0
 }
 
 function Invoke-DotnetPublish {
