@@ -431,6 +431,7 @@ public sealed class PcInternetRatesMigrationTests(GameClubWebApplicationFactory 
             var sessionId = await SeedOpenPreMigrationPcSessionAsync(db, "PC-L1-SNAP", start, checkpoint);
             await db.Database.MigrateAsync();
             var v2Json = await SessionSnapshotJsonAsync(db, sessionId);
+            AssertSnapshotContainsGroupOnlineDayAndNight(v2Json, PilotSeed.PcVipGroupId);
             var patched = SetGroupOnlineDayNightInSnapshot(v2Json, PilotSeed.PcNormalGroupId, 90_000, 130_000);
             patched = SetGroupOnlineDayNightInSnapshot(patched, PilotSeed.PcVipGroupId, 120_000, 180_000);
             await ReplaceSessionSnapshotJsonAsync(db, sessionId, patched);
@@ -626,6 +627,44 @@ public sealed class PcInternetRatesMigrationTests(GameClubWebApplicationFactory 
             """UPDATE rate_card_snapshot SET "Json" = {0} WHERE "Id" = {1}""",
             json,
             snapId);
+    }
+
+    private static void AssertSnapshotContainsGroupOnlineDayAndNight(string json, string groupId)
+    {
+        using var doc = JsonDocument.Parse(json);
+        var hasDay = false;
+        var hasNight = false;
+        foreach (var line in doc.RootElement.GetProperty("Lines").EnumerateArray())
+        {
+            if (line.GetProperty("GroupId").GetString() != groupId)
+            {
+                continue;
+            }
+
+            if (line.GetProperty("PlayMode").GetString() != nameof(PlayMode.Online))
+            {
+                continue;
+            }
+
+            if (line.TryGetProperty("PlayerCount", out var playerCount) && playerCount.ValueKind != JsonValueKind.Null)
+            {
+                continue;
+            }
+
+            var rate = line.GetProperty("HourlyToman").GetInt64();
+            Assert.True(rate > 0);
+            if (line.GetProperty("IsSpecialBand").GetBoolean())
+            {
+                hasNight = true;
+            }
+            else
+            {
+                hasDay = true;
+            }
+        }
+
+        Assert.True(hasDay, $"snapshot must contain {groupId} online day line before patch");
+        Assert.True(hasNight, $"snapshot must contain {groupId} online night line before patch");
     }
 
     private static string SetGroupOnlineDayNightInSnapshot(string json, string groupId, long day, long night)

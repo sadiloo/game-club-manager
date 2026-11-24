@@ -116,6 +116,46 @@ public sealed class PcInternetBillOracleTests(GameClubWebApplicationFactory fact
         Assert.Equal(charge.TotalAmountToman, conserved);
     }
 
+    /// <summary>
+    /// Partial-wallet L12 with 11 online minutes at 80k/h: slice gross 14_667 makes
+    /// <c>MoneyMath.PercentOf(14_667, 10) = 1_466</c> (floor of 1_466.7), not 1_467.
+    /// Per-minute sum would be <c>11 × PercentOf(1_333, 10) = 1_463</c>. Offline 30×1_000
+    /// adds <c>30 × PercentOf(1_000, 10) = 3_000</c>. Settlement discount 4_466 = 1_466 + 3_000.
+    /// </summary>
+    private static void AssertL12PartialWalletRoundDownDiscounts(SessionCharge charge, Settlement settlement)
+    {
+        var onlineGross = charge.Lines.Where(l => l.Mode == PlayMode.Online).Sum(l => l.AmountToman);
+        var offlineGross = charge.Lines.Where(l => l.Mode == PlayMode.Offline).Sum(l => l.AmountToman);
+        const int onlineMinutes = 11;
+        const int offlineMinutes = 30;
+        const long hourlyOnline = 80_000;
+        const long hourlyOffline = 60_000;
+        var remainder = BillingPolicy.Default.Remainder;
+        var minuteOnlineGross = MoneyMath.ChargeForMinutes(hourlyOnline, 1, remainder);
+        var minuteOfflineGross = MoneyMath.ChargeForMinutes(hourlyOffline, 1, remainder);
+        Assert.Equal(onlineMinutes, charge.Lines.Where(l => l.Mode == PlayMode.Online).Sum(l => l.BilledMinutes));
+        Assert.Equal(offlineMinutes, charge.Lines.Where(l => l.Mode == PlayMode.Offline).Sum(l => l.BilledMinutes));
+        Assert.Equal(14_667, onlineGross);
+        Assert.Equal(30_000, offlineGross);
+        var onlineSliceDiscount = MoneyMath.PercentOf(onlineGross, 10);
+        var offlineSliceDiscount = MoneyMath.PercentOf(offlineGross, 10);
+        var perMinuteOnlineDiscount = onlineMinutes * MoneyMath.PercentOf(minuteOnlineGross, 10);
+        Assert.Equal(1_466, onlineSliceDiscount);
+        Assert.Equal(3_000, offlineSliceDiscount);
+        Assert.Equal(1_463, perMinuteOnlineDiscount);
+        Assert.NotEqual(perMinuteOnlineDiscount, onlineSliceDiscount);
+        var expectedDiscount = onlineSliceDiscount + offlineSliceDiscount;
+        Assert.Equal(4_466, expectedDiscount);
+        Assert.Equal(expectedDiscount, settlement.DiscountToman);
+        var conserved = settlement.MoneyConsumedToman
+            + settlement.DiscountToman
+            + settlement.UncoveredToman
+            + settlement.OmittedToman
+            + settlement.WriteOffToman
+            + (settlement.Grace?.WaivedToman ?? 0);
+        Assert.Equal(charge.TotalAmountToman, conserved);
+    }
+
     [Fact]
     public async Task PcInternet_Oracle_E1_three_segments_110000()
     {
@@ -464,7 +504,9 @@ public sealed class PcInternetBillOracleTests(GameClubWebApplicationFactory fact
         string stationId,
         string mobile,
         long walletTopUpToman,
-        bool graceMinuteEnabled = true)
+        bool graceMinuteEnabled = true,
+        int onlineBilledMinutes = 30,
+        int offlineBilledMinutes = 30)
     {
         await S3TestHelpers.ResetAsync(factory);
         var mgr = await factory.CreateOperatorClientAsync("manager", "1234");
@@ -498,10 +540,12 @@ public sealed class PcInternetBillOracleTests(GameClubWebApplicationFactory fact
         factory.Clock.SetTehran(2026, 6, 2, 14, 0);
         var sessionId = await S3TestHelpers.StartSession(api, stationId);
         (await op.PutAsJsonAsync($"/api/operator/sessions/{sessionId}/customer", new { customerId })).EnsureSuccessStatusCode();
-        factory.Clock.SetTehran(2026, 6, 2, 14, 30);
+        factory.Clock.SetTehran(2026, 6, 2, 14, onlineBilledMinutes);
         await S3TestHelpers.CheckpointAsync(api, sessionId, factory.Clock.UtcNow);
         await ToggleAsync(op, sessionId, false);
-        factory.Clock.SetTehran(2026, 6, 2, 15, 0);
+        var endHour = 14 + (onlineBilledMinutes + offlineBilledMinutes) / 60;
+        var endMinute = (onlineBilledMinutes + offlineBilledMinutes) % 60;
+        factory.Clock.SetTehran(2026, 6, 2, endHour, endMinute);
         await S3TestHelpers.CheckpointAsync(api, sessionId, factory.Clock.UtcNow);
         return (customerId, sessionId);
     }
@@ -529,23 +573,25 @@ public sealed class PcInternetBillOracleTests(GameClubWebApplicationFactory fact
         var (customerId, sessionId) = await L12PrepareMemberPcSessionAsync(
             "PC-L12P",
             "09124441213",
-            walletTopUpToman: 20_000L,
-            graceMinuteEnabled: false);
+            walletTopUpToman: 10_000L,
+            graceMinuteEnabled: false,
+            onlineBilledMinutes: 11,
+            offlineBilledMinutes: 30);
         var op = await factory.CreateOperatorClientAsync();
         var api = factory.CreateClientWithKey();
         var endUtc = factory.Clock.UtcNow.UtcDateTime;
         var (charge, settlement) = await MemberPlaySettlementPreviewAsync(factory, sessionId, customerId, endUtc);
-        AssertL12SilverTenPercentSliceDiscounts(charge, settlement);
-        Assert.Equal(20_000, settlement.MoneyConsumedToman);
-        Assert.Equal(43_000, settlement.WriteOffToman);
+        AssertL12PartialWalletRoundDownDiscounts(charge, settlement);
+        Assert.Equal(10_000, settlement.MoneyConsumedToman);
+        Assert.Equal(30_201, settlement.WriteOffToman);
         Assert.Equal(0, settlement.UncoveredToman);
         Assert.Equal(0, settlement.OmittedToman);
         Assert.Equal(0, settlement.UpdatedAccount.MoneyBalanceToman);
         var bill = await BillAfterStopAsync(op, api, sessionId);
-        Assert.Equal(70_000, bill.GetProperty("timeGrossToman").GetInt64());
-        Assert.Equal(7_000, bill.GetProperty("levelDiscountToman").GetInt64());
-        Assert.Equal(20_000, bill.GetProperty("collectibleToman").GetInt64());
-        Assert.Equal(20_000, bill.GetProperty("unroundedPayableToman").GetInt64());
-        Assert.Equal(43_000, bill.GetProperty("writeOffToman").GetInt64());
+        Assert.Equal(44_667, bill.GetProperty("timeGrossToman").GetInt64());
+        Assert.Equal(4_466, bill.GetProperty("levelDiscountToman").GetInt64());
+        Assert.Equal(10_000, bill.GetProperty("collectibleToman").GetInt64());
+        Assert.Equal(10_000, bill.GetProperty("unroundedPayableToman").GetInt64());
+        Assert.Equal(30_201, bill.GetProperty("writeOffToman").GetInt64());
     }
 }
