@@ -1,5 +1,27 @@
 ﻿$ErrorActionPreference = "Stop"
 
+function Write-InnoSetupHangDiagnostics {
+    param([string] $LogPath)
+    Write-Host "installer hang diagnostics: === processes (setup/server/pg) ==="
+    $patterns = @("CheckpointServerSetup*", "GameClub.Server", "postgres", "CheckpointPostgres", "is*", "powershell")
+    foreach ($pat in $patterns) {
+        Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -like $pat } |
+            ForEach-Object {
+                Write-Host "installer hang diagnostics: proc pid=$($_.Id) name=$($_.ProcessName) start=$($_.StartTime)"
+            }
+    }
+    foreach ($svc in @("CheckpointServer", "CheckpointPostgres")) {
+        & sc.exe query $svc 2>&1 | ForEach-Object { Write-Host "installer hang diagnostics: sc $svc $_" }
+    }
+    if ($LogPath -and (Test-Path -LiteralPath $LogPath)) {
+        Write-Host "installer hang diagnostics: === tail $LogPath ==="
+        Get-Content -LiteralPath $LogPath -Tail 120 -ErrorAction SilentlyContinue |
+            ForEach-Object { Write-Host "installer hang diagnostics: $_" }
+    } else {
+        Write-Host "installer hang diagnostics: Inno log missing: $LogPath"
+    }
+}
+
 function Stop-CheckpointInnoSetupProcesses {
     foreach ($p in @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -like "CheckpointServerSetup*" })) {
         Write-Host "Stop-CheckpointInnoSetupProcesses: pid=$($p.Id) name=$($p.ProcessName)"
@@ -14,7 +36,7 @@ function Start-CheckpointServerSetup {
         [int] $TimeoutSeconds = 2700,
         [string] $LogPath = $null
     )
-  $proc = Start-Process -FilePath $Exe -ArgumentList $ArgumentList -PassThru
+    $proc = Start-Process -FilePath $Exe -ArgumentList $ArgumentList -PassThru
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
     $lastLog = [DateTime]::MinValue
     while ([DateTime]::UtcNow -lt $deadline) {
@@ -33,10 +55,7 @@ function Start-CheckpointServerSetup {
         }
         Start-Sleep -Seconds 5
     }
-    if ($LogPath -and (Test-Path -LiteralPath $LogPath)) {
-        Write-Host "=== tail $LogPath (setup timeout) ==="
-        Get-Content -LiteralPath $LogPath -Tail 40 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
-    }
+    Write-InnoSetupHangDiagnostics -LogPath $LogPath
     Write-InstallerAcceptanceFailureDiagnostics
     Stop-CheckpointInnoSetupProcesses
     if (-not $proc.HasExited) {

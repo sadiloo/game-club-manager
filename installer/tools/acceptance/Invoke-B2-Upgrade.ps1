@@ -32,9 +32,8 @@ function Install-ServerSetup {
     }
     $proc = Start-CheckpointServerSetup -Exe $Exe -ArgumentList $args -TimeoutSeconds 2700 -LogPath $logPath
     if ($proc.ExitCode -ne 0) {
+        Write-InnoSetupHangDiagnostics -LogPath $logPath
         if (Test-Path -LiteralPath $logPath) {
-            Write-Host "=== tail $logPath ==="
-            Get-Content -LiteralPath $logPath -Tail 80 | ForEach-Object { Write-Host $_ }
             $artifactDir = Join-Path $PSScriptRoot "..\..\..\artifacts\installer\acceptance-logs"
             New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
             Copy-Item -LiteralPath $logPath -Destination (Join-Path $artifactDir "acceptance-setup.log") -Force
@@ -60,6 +59,13 @@ $secrets = Get-ServerSecretsFingerprint
 Write-Host "B-2 ($Mode): fingerprint PostgreSQL\bin + pgdata before high upgrade"
 $pgBinBefore = Get-InstallerPostgreSqlBinFingerprint
 $pgDataListingBefore = Get-InstallerPgDataStableListingHash
+
+$defaultPinsFile = Join-Path $PSScriptRoot "..\..\ci\default-pins-silent-empty.json"
+$pinsRaw = (Get-Content -LiteralPath $defaultPinsFile -Raw).Trim()
+if ($pinsRaw -ne "[]") {
+    throw "B-2: expected empty DEFAULTPINS ([]); got: $pinsRaw"
+}
+Write-Host "B-2 ($Mode): DEFAULTPINS empty — upgrade-pins no-op; pin replacement asserted in B-13"
 
 Write-Host "B-2 ($Mode): silent high upgrade install"
 Install-ServerSetup -Exe $HighSetup -Accounts $AccountsFile -FromVer $LowVersion
