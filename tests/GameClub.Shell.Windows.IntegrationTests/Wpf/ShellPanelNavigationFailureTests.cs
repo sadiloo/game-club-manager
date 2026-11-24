@@ -424,12 +424,14 @@ public sealed class ShellPanelNavigationFailureTests
                     try
                     {
                         window = await StartWindowOnStubAsync(stub);
+                        if (ShellSeams.HttpProbe is StubAlignedHttpProbeSeam alignedProbeSeam)
+                        {
+                            alignedProbeSeam.ProbeOkTimeoutOverrideMilliseconds = 120_000;
+                        }
 
                         var wv = await WaitForPanelWebViewAsync(window, TimeSpan.FromSeconds(45));
                         ShellFileLog.Write("shell-probe-deadline-window-ready");
-                        var baseline = Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log")
-                            .Select(File.ReadAllText)
-                            .Aggregate("", string.Concat);
+                        var baseline = ReadShellLogSnapshot();
 
                         await AwaitShellLogLineAsync(
                             baseline,
@@ -1077,11 +1079,24 @@ public sealed class ShellPanelNavigationFailureTests
         return window;
     }
 
+    private static string ReadShellLogSnapshot()
+    {
+        var paths = Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log");
+        var builder = new System.Text.StringBuilder();
+        foreach (var path in paths)
+        {
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            using var reader = new StreamReader(stream);
+            builder.Append(reader.ReadToEnd());
+        }
+
+        return builder.ToString();
+    }
+
     private static string LogDelta(string baseline) =>
         baseline.Length == 0
-            ? Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log").Select(File.ReadAllText).Aggregate("", string.Concat)
-            : Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log").Select(File.ReadAllText).Aggregate("", string.Concat)
-                .Replace(baseline, "");
+            ? ReadShellLogSnapshot()
+            : ReadShellLogSnapshot().Replace(baseline, "");
 
     private static async Task AwaitTaskOrTimeoutAsync(Task task, TimeSpan timeout, string timeoutMessage)
     {
@@ -1104,42 +1119,32 @@ public sealed class ShellPanelNavigationFailureTests
         timeoutCts.Token.Register(() =>
             tcs.TrySetException(new System.TimeoutException("expected shell log line was not written")));
 
-        void TryMatch()
+        void TryMatch(object? _)
         {
             if (tcs.Task.IsCompleted)
             {
                 return;
             }
 
-            foreach (var line in LogDelta(baseline).Split('\n'))
+            try
             {
-                if (linePredicate(line))
+                foreach (var line in LogDelta(baseline).Split('\n'))
                 {
-                    tcs.TrySetResult(line);
-                    return;
+                    if (linePredicate(line))
+                    {
+                        tcs.TrySetResult(line);
+                        return;
+                    }
                 }
+            }
+            catch (IOException)
+            {
             }
         }
 
-        using var watcher = new FileSystemWatcher(ShellPaths.ShellLogsDir, "shell-*.log")
-        {
-            NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.Size,
-            EnableRaisingEvents = true,
-        };
-        FileSystemEventHandler onLogChanged = (_, _) => TryMatch();
-        watcher.Changed += onLogChanged;
-        watcher.Created += onLogChanged;
-        using var pollTimer = new Timer(_ => TryMatch(), null, TimeSpan.Zero, TimeSpan.FromMilliseconds(50));
-        TryMatch();
-        try
-        {
-            return await tcs.Task.ConfigureAwait(false);
-        }
-        finally
-        {
-            watcher.Changed -= onLogChanged;
-            watcher.Created -= onLogChanged;
-        }
+        using var pollTimer = new Timer(TryMatch, null, TimeSpan.Zero, TimeSpan.FromMilliseconds(50));
+        TryMatch(null);
+        return await tcs.Task.ConfigureAwait(false);
     }
 
     private static async Task WaitForOperatorPanelAsync(

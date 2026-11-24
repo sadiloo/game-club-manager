@@ -16,6 +16,9 @@ internal sealed class StubAlignedHttpProbeSeam : IHttpProbeSeam
     /// </summary>
     public int? PanelOkTimeoutOverrideMilliseconds { get; set; }
 
+    /// <summary>When set, overrides the caller timeout for <see cref="TryGetOperatorOk"/> (/shell-probe).</summary>
+    public int? ProbeOkTimeoutOverrideMilliseconds { get; set; }
+
     public bool TryGetOperatorOk(out int statusCode) =>
         TryGetOperatorOk(out statusCode, timeoutMilliseconds: 3000);
 
@@ -28,7 +31,8 @@ internal sealed class StubAlignedHttpProbeSeam : IHttpProbeSeam
         try
         {
             var request = WebRequest.Create(_probeUrl);
-            HttpProbeRequestTimeoutPolicy.Apply(request, timeoutMilliseconds);
+            var effectiveTimeout = ProbeOkTimeoutOverrideMilliseconds ?? timeoutMilliseconds;
+            HttpProbeRequestTimeoutPolicy.Apply(request, effectiveTimeout);
             using var response = (HttpWebResponse)request.GetResponse();
             statusCode = (int)response.StatusCode;
             return statusCode is >= 200 and < 300;
