@@ -37,6 +37,7 @@ RestartApplications=no
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 ChangesAssociations=no
+AllowSameAppVersion=yes
 
 [Languages]
 Name: "persian"; MessagesFile: "..\lang\Persian.isl"
