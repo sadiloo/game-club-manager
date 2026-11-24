@@ -39,11 +39,15 @@ $xml = @"
 "@
 $xmlPath = Join-Path $env:TEMP "checkpoint-daily-backup-task.xml"
 Set-Content -LiteralPath $xmlPath -Value $xml -Encoding Unicode
-schtasks.exe /Create /TN $taskName /XML $xmlPath /F | Out-Null
-if ($LASTEXITCODE -ne 0) {
-    throw "schtasks /Create failed for $taskName"
+$oldEap = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+try {
+    $null = & schtasks.exe /Create /TN $taskName /XML $xmlPath /F 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "schtasks /Create failed for $taskName (exit $LASTEXITCODE)"
+    }
+    $null = & schtasks.exe /Change /TN $taskName /TZ "Iran Standard Time" 2>&1
+} finally {
+    $ErrorActionPreference = $oldEap
 }
-# Also set /TZ so localized tools show Asia/Tehran intent.
-schtasks.exe /Change /TN $taskName /TZ "Iran Standard Time" 2>$null | Out-Null
 Write-Host "Register-CheckpointDailyBackup: task=$taskName startUtc=$startBoundary tehran=09:00"
-return $xmlPath
