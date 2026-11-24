@@ -278,6 +278,7 @@ namespace GameClub.Server.Data.Migrations
                        AND night_e->>'PlayMode' = 'Online'
                        AND night_e->>'PlayerCount' IS NULL
                        AND (night_e->>'IsSpecialBand')::boolean
+                     ORDER BY (day_e->>'HourlyToman')::bigint DESC, (night_e->>'HourlyToman')::bigint ASC
                      LIMIT 1),
                     (SELECT (night_e->>'HourlyToman')::bigint - (day_e->>'HourlyToman')::bigint
                      FROM jsonb_array_elements(COALESCE(j->'Lines', '[]'::jsonb)) day_e
@@ -290,6 +291,7 @@ namespace GameClub.Server.Data.Migrations
                        AND night_e->>'PlayMode' = 'Offline'
                        AND (night_e->>'PlayerCount')::int = 1
                        AND (night_e->>'IsSpecialBand')::boolean
+                     ORDER BY (day_e->>'HourlyToman')::bigint DESC, (night_e->>'HourlyToman')::bigint ASC
                      LIMIT 1),
                     20000
                   ) INTO surcharge;

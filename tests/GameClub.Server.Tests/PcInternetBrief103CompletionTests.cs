@@ -461,6 +461,72 @@ public sealed class PcInternetBrief103CompletionTests(GameClubWebApplicationFact
     }
 
     [Fact]
+    public async Task L2_post_logout_null_session_report_clears_pending()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var op = await factory.CreateOperatorClientAsync();
+        var mgr = await factory.CreateOperatorClientAsync("manager", "1234");
+        var api = factory.CreateClientWithKey();
+        await EnsureOfflineRatesAsync(mgr);
+        await S3TestHelpers.RegisterPc(api, "PC-L2", PilotSeed.PcNormalGroupId);
+        factory.Clock.SetTehran(2026, 6, 2, 12, 0);
+        var sessionId = await S3TestHelpers.StartSession(api, "PC-L2");
+        (await op.PostAsJsonAsync($"/api/operator/sessions/{sessionId}/internet", new
+        {
+            on = false,
+            expectedVersion = await RowVersionAsync(sessionId),
+            commandId = Guid.NewGuid(),
+        })).EnsureSuccessStatusCode();
+        var deviceId = await SeedKioskDeviceAsync("PC-L2");
+        using var scope = factory.Services.CreateScope();
+        var coordinator = scope.ServiceProvider.GetRequiredService<KioskCheckpointCoordinator>();
+        StationInternetStateEntity row;
+        await using (var readScope = factory.Services.CreateAsyncScope())
+        {
+            var readDb = readScope.ServiceProvider.GetRequiredService<AppDbContext>();
+            row = await readDb.StationInternetStates.AsNoTracking().SingleAsync(s => s.StationId == "PC-L2");
+        }
+
+        var appliedAt = factory.Clock.UtcNow.UtcDateTime;
+        await coordinator.OnHeartbeatAsync(deviceId, sessionId, 0, new KioskInternetAppliedReport
+        {
+            Epoch = row.Epoch,
+            Version = row.DesiredVersion,
+            On = false,
+            AppliedAtUtc = appliedAt,
+        }, CancellationToken.None);
+        (await api.PostAsync($"/api/sessions/{sessionId}/stop", null)).EnsureSuccessStatusCode();
+        await using (var pendingScope = factory.Services.CreateAsyncScope())
+        {
+            var pendingDb = pendingScope.ServiceProvider.GetRequiredService<AppDbContext>();
+            row = await pendingDb.StationInternetStates.AsNoTracking().SingleAsync(s => s.StationId == "PC-L2");
+            Assert.True(StationInternetStateService.IsPending(row));
+        }
+
+        await using (var hbScope = factory.Services.CreateAsyncScope())
+        {
+            row = await hbScope.ServiceProvider.GetRequiredService<AppDbContext>().StationInternetStates.AsNoTracking()
+                .SingleAsync(s => s.StationId == "PC-L2");
+        }
+
+        await coordinator.OnHeartbeatAsync(deviceId, null, 0, new KioskInternetAppliedReport
+        {
+            Epoch = row.Epoch,
+            Version = row.DesiredVersion,
+            On = true,
+            AppliedAtUtc = factory.Clock.UtcNow.UtcDateTime,
+        }, CancellationToken.None);
+        await using (var finalScope = factory.Services.CreateAsyncScope())
+        {
+            row = await finalScope.ServiceProvider.GetRequiredService<AppDbContext>().StationInternetStates.AsNoTracking()
+                .SingleAsync(s => s.StationId == "PC-L2");
+        }
+        Assert.Equal(row.DesiredVersion, row.AppliedVersion);
+        Assert.True(row.AppliedOn);
+        Assert.False(StationInternetStateService.IsPending(row));
+    }
+
+    [Fact]
     public async Task PcInternet_heartbeat_applied_audit_once_per_version()
     {
         await S3TestHelpers.ResetAsync(factory);
