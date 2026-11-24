@@ -3,9 +3,12 @@
 function Assert-InnoSetupLogNoFailedRuns {
     param([string] $LogPath)
     if (-not (Test-Path -LiteralPath $LogPath)) { return }
-    $failedRun = Select-String -LiteralPath $LogPath -Pattern 'Process exit code: ([1-9]\d*)' | Select-Object -First 1
-    if ($failedRun) {
-        throw "Inno [Run] postinstall failed ($($failedRun.Line))"
+    $lines = Get-Content -LiteralPath $LogPath
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -notmatch 'Process exit code: ([1-9]\d*)') { continue }
+        $phase = ($lines[[Math]::Max(0, $i - 6)..$i] | Where-Object { $_ -match 'InstallPhase' } | Select-Object -Last 1)
+        if (-not $phase) { $phase = "(unknown phase)" }
+        throw "Inno [Run] postinstall failed: $phase :: $($lines[$i])"
     }
 }
 
@@ -60,6 +63,12 @@ function Write-InstallerAcceptanceFailureDiagnostics {
         }
     }
     $logDir = "C:\ProgramData\Checkpoint\logs"
+    $pgInitLog = Join-Path $logDir "postgres-init.log"
+    if (Test-Path -LiteralPath $pgInitLog) {
+        Write-Host "installer acceptance diagnostics: === tail $pgInitLog ==="
+        Get-Content -LiteralPath $pgInitLog -Tail 40 -ErrorAction SilentlyContinue |
+            ForEach-Object { Write-Host "installer acceptance diagnostics: $_" }
+    }
     if (Test-Path -LiteralPath $logDir) {
         Get-ChildItem -LiteralPath $logDir -File -ErrorAction SilentlyContinue |
             Sort-Object LastWriteTime -Descending |
