@@ -1,5 +1,14 @@
 ﻿$ErrorActionPreference = "Stop"
 
+function Assert-InnoSetupLogNoFailedRuns {
+    param([string] $LogPath)
+    if (-not (Test-Path -LiteralPath $LogPath)) { return }
+    $failedRun = Select-String -LiteralPath $LogPath -Pattern 'Process exit code: ([1-9]\d*)' | Select-Object -First 1
+    if ($failedRun) {
+        throw "Inno [Run] postinstall failed ($($failedRun.Line))"
+    }
+}
+
 function Get-InstallerServerJson {
     $path = "C:\ProgramData\Checkpoint\config\server.json"
     if (-not (Test-Path -LiteralPath $path)) { throw "server.json missing" }

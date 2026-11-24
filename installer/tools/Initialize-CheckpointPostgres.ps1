@@ -88,13 +88,11 @@ function Repair-PostgresSuperuserPassword([string] $NewPassword) {
             $trustLines += $line
             continue
         }
-        if ($trim -match '^(local|host)\s+') {
-            $parts = $trim -split '\s+'
-            if ($parts.Count -ge 4) {
-                $trustLines += ("{0} {1} all {2} {3} trust" -f $parts[0], $parts[1], $parts[2], $parts[3])
-            } else {
-                $trustLines += $line
-            }
+        $parts = $trim -split '\s+'
+        if ($parts[0] -eq 'local' -and $parts.Count -ge 4) {
+            $trustLines += ("{0} {1} {2} trust" -f $parts[0], $parts[1], $parts[2])
+        } elseif ($parts[0] -eq 'host' -and $parts.Count -ge 5) {
+            $trustLines += ("{0} {1} {2} {3} trust" -f $parts[0], $parts[1], $parts[2], $parts[3])
         } else {
             $trustLines += $line
         }
@@ -116,7 +114,58 @@ function Repair-PostgresSuperuserPassword([string] $NewPassword) {
 }
 
 if (-not (Test-PostgresSuperuserLogin $SuperPassword)) {
-    Repair-PostgresSuperuserPassword $SuperPassword
+    try {
+        Repair-PostgresSuperuserPassword $SuperPassword
+    } catch {
+        Write-Warning "password repair failed: $_"
+    }
+}
+
+function Initialize-FreshPgDataCluster {
+    $stopSvc = Get-Service CheckpointPostgres -ErrorAction SilentlyContinue
+    if ($stopSvc -and $stopSvc.Status -eq 'Running') {
+        Stop-Service CheckpointPostgres -Force -ErrorAction SilentlyContinue
+    }
+  & sc.exe delete CheckpointPostgres 2>$null | Out-Null
+    if (Test-Path -LiteralPath $PgData) {
+        $parent = Split-Path $PgData -Parent
+        $staleName = "pgdata-stale-" + [Guid]::NewGuid().ToString("N").Substring(0, 8)
+        $stalePath = Join-Path $parent $staleName
+        Move-Item -LiteralPath $PgData -Destination $stalePath
+    }
+    New-Item -ItemType Directory -Force -Path $PgData | Out-Null
+    $pwFile = Join-Path $env:TEMP "checkpoint-initdb-pw.txt"
+    Set-Content -LiteralPath $pwFile -Value $SuperPassword -NoNewline -Encoding ASCII
+    & $initdb -U postgres -A scram-sha-256 -E UTF8 -D $PgData --pwfile=$pwFile
+    Remove-Item -LiteralPath $pwFile -Force
+    if ($LASTEXITCODE -ne 0) {
+        throw "initdb failed after stale pgdata rename"
+    }
+    $svc = $null
+}
+
+if (-not (Test-PostgresSuperuserLogin $SuperPassword)) {
+    if (Test-Path -LiteralPath $pgVersionFile) {
+        Initialize-FreshPgDataCluster
+        $conf = Join-Path $PgData "postgresql.conf"
+        if (Test-Path -LiteralPath $conf) {
+            $text = Get-Content -LiteralPath $conf -Raw
+            $text = $text -replace "port\s*=\s*\d+", "port = $Port"
+            if ($text -notmatch "listen_addresses") {
+                $text += "`nlisten_addresses = '127.0.0.1'`n"
+            } else {
+                $text = $text -replace "listen_addresses\s*=\s*'[^']*'", "listen_addresses = '127.0.0.1'"
+            }
+            Set-Content -LiteralPath $conf -Value $text -NoNewline
+        }
+        $svc = $null
+        & $pgCtl register -N CheckpointPostgres -D $PgData -S auto
+        if ($LASTEXITCODE -ne 0) {
+            throw "pg_ctl register failed after fresh cluster"
+        }
+        Start-Service CheckpointPostgres -ErrorAction Stop
+        Start-Sleep -Seconds 3
+    }
     if (-not (Test-PostgresSuperuserLogin $SuperPassword)) {
         throw "postgres superuser password could not be aligned with install secrets"
     }

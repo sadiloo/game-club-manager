@@ -22,6 +22,7 @@ function Install-ServerSetup {
         "/LOG=`"$logPath`""
     ) -Wait -PassThru
     if ($proc.ExitCode -ne 0) { throw "setup exit $($proc.ExitCode) for $Exe" }
+    Assert-InnoSetupLogNoFailedRuns -LogPath $logPath
     Assert-InstallerServerServicesRunning
     Wait-InstallerServerApiPort
 }
