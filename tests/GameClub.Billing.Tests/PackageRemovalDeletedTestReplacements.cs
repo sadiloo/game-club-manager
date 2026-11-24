@@ -22,7 +22,7 @@ public sealed class PackageRemovalDeletedTestReplacements
     var start = T.At(2026, 6, 2, 23, 50);
     var end = T.At(2026, 6, 3, 0, 20);
     var charge = SessionPricer.Price(
-      new Session("x", [new PlaySegment("a", start, end, "st", V, PlayMode.Offline, 1, StationKind.Pc)]),
+      new Session("x", [new PlaySegment("a", start, end, "st", V, PlayMode.Online, 1, StationKind.Pc)]),
       PilotSeed.CreateCard(),
       policy: G(1));
     var settled = AccountSettlement.Settle(charge, new PcAccount("m", balance), G(1), discount: discount);

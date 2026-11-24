@@ -95,7 +95,7 @@ public sealed class B2BurntAfterGraceServerTests(GameClubWebApplicationFactory f
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
             await db.Database.ExecuteSqlRawAsync(
-                """UPDATE rate_lines SET "HourlyToman" = 80000 WHERE "GroupId" = 'pc-normal' AND "PlayerCount" = 1""");
+                """UPDATE rate_lines SET "HourlyToman" = 80000 WHERE "GroupId" = 'pc-normal' AND "PlayMode" = 'Online' AND "PlayerCount" IS NULL""");
             var customer = new Data.Entities.CustomerEntity { Id = Guid.NewGuid(), Name = "B2Ex1", Mobile = "09128001833", CreatedAtUtc = DateTime.UtcNow };
             db.Customers.Add(customer);
             db.CustomerMembers.Add(new Data.Entities.CustomerMemberEntity { CustomerId = customer.Id, RealToman = 1_833 });

@@ -20,7 +20,7 @@ public sealed class KioskFixR5AcceptanceTests(GameClubWebApplicationFactory fact
         await using (var scope = factory.Services.CreateAsyncScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            await db.Database.ExecuteSqlRawAsync("UPDATE rate_lines SET \"HourlyToman\" = 80000 WHERE \"GroupId\" = 'pc-normal' AND \"PlayerCount\" = 1");
+            await db.Database.ExecuteSqlRawAsync("UPDATE rate_lines SET \"HourlyToman\" = 80000 WHERE \"GroupId\" = 'pc-normal' AND \"PlayMode\" = 'Online' AND \"PlayerCount\" IS NULL");
             var customer = new CustomerEntity { Id = Guid.NewGuid(), Name = "GraceR5", Mobile = "09121112233", CreatedAtUtc = DateTime.UtcNow };
             db.Customers.Add(customer);
             db.CustomerMembers.Add(new CustomerMemberEntity { CustomerId = customer.Id, RealToman = 500 });
@@ -85,7 +85,7 @@ public sealed class KioskFixR5AcceptanceTests(GameClubWebApplicationFactory fact
         await using (var setup = factory.Services.CreateAsyncScope())
         {
             var db0 = setup.ServiceProvider.GetRequiredService<AppDbContext>();
-            await db0.Database.ExecuteSqlRawAsync("UPDATE rate_lines SET \"HourlyToman\" = 120000 WHERE \"GroupId\" = 'pc-normal' AND \"PlayerCount\" = 1");
+            await db0.Database.ExecuteSqlRawAsync("UPDATE rate_lines SET \"HourlyToman\" = 120000 WHERE \"GroupId\" = 'pc-normal' AND \"PlayMode\" = 'Online' AND \"PlayerCount\" IS NULL");
             var customer = new CustomerEntity { Id = Guid.NewGuid(), Name = "OverGet", Mobile = "09127777001", CreatedAtUtc = DateTime.UtcNow };
             db0.Customers.Add(customer);
             db0.CustomerMembers.Add(new CustomerMemberEntity { CustomerId = customer.Id, RealToman = 500 });
@@ -121,7 +121,7 @@ public sealed class KioskFixR5AcceptanceTests(GameClubWebApplicationFactory fact
                 EndUtc = session.StartedAtUtc.AddMinutes(2),
                 StationId = session.StationId,
                 GroupId = session.Station!.GroupId,
-                Mode = PlayMode.Offline,
+                Mode = PlayMode.Online,
                 PlayerCount = 1,
                 Kind = StationKind.Pc,
             });

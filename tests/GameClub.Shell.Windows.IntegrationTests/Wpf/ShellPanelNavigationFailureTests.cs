@@ -616,7 +616,7 @@ public sealed class ShellPanelNavigationFailureTests
                         Assert.DoesNotContain("caller=ExhaustedRecover", tailAfterMeasure, StringComparison.Ordinal);
                         Assert.DoesNotContain(
                             "outcome=exhausted-long-retry action=panel-navigate",
-                            exhaustedTail,
+                            tailAfterMeasure,
                             StringComparison.Ordinal);
                         Assert.DoesNotContain(
                             "outcome=reload",
@@ -915,74 +915,6 @@ public sealed class ShellPanelNavigationFailureTests
             ? Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log").Select(File.ReadAllText).Aggregate("", string.Concat)
             : Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log").Select(File.ReadAllText).Aggregate("", string.Concat)
                 .Replace(baseline, "");
-
-    private static async Task<Microsoft.Web.WebView2.Wpf.WebView2> DriveToProcessRecoveryExhaustedAsync(
-        MainWindow window,
-        Microsoft.Web.WebView2.Wpf.WebView2 wv,
-        string logBaseline)
-    {
-        for (var attempt = 1; attempt <= 3; attempt++)
-        {
-            await ShellRendererCrashHarness.TriggerAsync(wv.CoreWebView2!);
-            await WaitForProcessRecoveryOutcomeAsync(logBaseline, attempt, TimeSpan.FromSeconds(60));
-            wv = await RefreshPanelWebViewAsync(window, TimeSpan.FromSeconds(45));
-        }
-
-        await ShellRendererCrashHarness.TriggerAsync(wv.CoreWebView2!);
-        var exhaustedDeadline = DateTime.UtcNow.AddSeconds(90);
-        var sawExhausted = false;
-        while (DateTime.UtcNow < exhaustedDeadline)
-        {
-            await Task.Delay(200);
-            if (LogDelta(logBaseline).Contains("attempt=exhausted outcome=offline-page", StringComparison.Ordinal))
-            {
-                sawExhausted = true;
-                break;
-            }
-        }
-
-        Assert.True(sawExhausted, "process recovery never entered exhausted offline-page mode");
-        return await RefreshPanelWebViewAsync(window, TimeSpan.FromSeconds(45));
-    }
-
-    private static async Task WaitForProcessRecoveryOutcomeAsync(
-        string logBaseline,
-        int attempt,
-        TimeSpan timeout)
-    {
-        var deadline = DateTime.UtcNow.Add(timeout);
-        while (DateTime.UtcNow < deadline)
-        {
-            await Task.Delay(200);
-            var delta = LogDelta(logBaseline);
-            if (delta.Contains($"attempt={attempt} ", StringComparison.Ordinal)
-                && (delta.Contains("outcome=reload", StringComparison.Ordinal)
-                    || delta.Contains("outcome=recreate-done", StringComparison.Ordinal)))
-            {
-                return;
-            }
-        }
-
-        throw new InvalidOperationException($"process recovery attempt={attempt} did not finish within {timeout.TotalSeconds:F0}s");
-    }
-
-    private static async Task<Microsoft.Web.WebView2.Wpf.WebView2> RefreshPanelWebViewAsync(
-        MainWindow window,
-        TimeSpan timeout)
-    {
-        var deadline = DateTime.UtcNow.Add(timeout);
-        while (DateTime.UtcNow < deadline)
-        {
-            await Task.Delay(200);
-            var wv = window.FindName("PanelWebView") as Microsoft.Web.WebView2.Wpf.WebView2;
-            if (wv?.CoreWebView2 is not null)
-            {
-                return wv;
-            }
-        }
-
-        throw new InvalidOperationException("Panel WebView2 did not become ready after process recovery");
-    }
 
     private static async Task WaitForOperatorPanelAsync(
         Microsoft.Web.WebView2.Wpf.WebView2 wv,

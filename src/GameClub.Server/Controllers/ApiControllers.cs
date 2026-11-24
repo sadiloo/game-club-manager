@@ -1,5 +1,6 @@
 using GameClub.Server.Data;
 using GameClub.Server.Services;
+using GameClub.Server.Time;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
@@ -175,3 +176,4 @@ public sealed class AuditController(AppDbContext db) : ControllerBase
         return Ok(rows);
     }
 }
+

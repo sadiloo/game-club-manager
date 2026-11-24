@@ -39,26 +39,16 @@ internal static class KioskLiveServerRegistry
     /// <summary>Handed-over live server stays on 127.0.0.1:5225 for later CI phases; do not kill at assembly teardown.</summary>
     public static void HandOverToCiIntegration(int processId, string reason)
     {
-        Tracked.TryRemove(processId, out _);
+        foreach (var trackedPid in Tracked.Keys.ToArray())
+        {
+            Tracked.TryRemove(trackedPid, out _);
+        }
+
         var repoRoot = ResolveRepoRoot();
         var logDir = Path.Combine(repoRoot, "artifacts", "kiosk-windows-logs");
         Directory.CreateDirectory(logDir);
         var path = Path.Combine(logDir, "live-server.pid");
-        var pids = new HashSet<int>();
-        if (File.Exists(path))
-        {
-            foreach (var line in File.ReadAllLines(path))
-            {
-                var trim = line.Trim();
-                if (int.TryParse(trim, out var existing) && existing > 0)
-                {
-                    pids.Add(existing);
-                }
-            }
-        }
-
-        pids.Add(processId);
-        File.WriteAllText(path, string.Join(Environment.NewLine, pids.OrderBy(id => id)));
+        File.WriteAllText(path, processId.ToString());
         TraceWrite($"HANDOVER_TO_CI pid={processId} reason={reason}");
     }
 

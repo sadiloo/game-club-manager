@@ -65,7 +65,9 @@ public sealed class KioskFixR4AcceptanceTests(GameClubWebApplicationFactory fact
                 """
                 INSERT INTO rate_lines ("GroupId", "PlayerCount", "PlayMode", "IsSpecialBand", "HourlyToman")
                 SELECT 'r3-overshoot', "PlayerCount", "PlayMode", "IsSpecialBand", 120000
-                FROM rate_lines WHERE "GroupId" = 'pc-normal' LIMIT 1
+                FROM rate_lines
+                WHERE "GroupId" = 'pc-normal' AND "PlayMode" = 'Online' AND "PlayerCount" IS NULL AND "IsSpecialBand" = false
+                LIMIT 1
                 """);
             await db.SaveChangesAsync();
         }
