@@ -427,6 +427,11 @@ public sealed class ShellPanelNavigationFailureTests
                             .Select(File.ReadAllText)
                             .Aggregate("", string.Concat);
                         window = await StartWindowOnStubAsync(stub);
+                        if (ShellSeams.HttpProbe is StubAlignedHttpProbeSeam alignedProbeSeam)
+                        {
+                            alignedProbeSeam.PanelOkTimeoutOverrideMilliseconds = 120_000;
+                        }
+
                         var wv = await WaitForPanelWebViewAsync(window, TimeSpan.FromSeconds(45));
                         var pendingDeadline = DateTime.UtcNow.AddSeconds(30);
                         while (DateTime.UtcNow < pendingDeadline && window.PanelNavigationPendingCountForTests < 1)
@@ -438,15 +443,19 @@ public sealed class ShellPanelNavigationFailureTests
                             window.PanelNavigationPendingCountForTests >= 1,
                             "expected in-flight panel navigation before the 10s loopback deadline");
 
+                        var operatorResponsesBefore = stub.OperatorResponseCount;
                         stub.HoldNextPanelOperatorProbe();
                         window.TriggerRunningPanelProbeForTests();
                         var probeWaitDeadline = DateTime.UtcNow.AddSeconds(20);
-                        while (DateTime.UtcNow < probeWaitDeadline && stub.ProbeRequestCount < 1)
+                        while (DateTime.UtcNow < probeWaitDeadline
+                               && stub.OperatorResponseCount <= operatorResponsesBefore)
                         {
                             await Task.Delay(50);
                         }
 
-                        Assert.True(stub.ProbeRequestCount >= 1, "panel probe did not start while held across deadline");
+                        Assert.True(
+                            stub.OperatorResponseCount > operatorResponsesBefore,
+                            "panel-recovery operator probe did not start while held across deadline");
 
                         string? timeoutConfirm = null;
                         var timeoutDeadline = DateTime.UtcNow.AddSeconds(20);
