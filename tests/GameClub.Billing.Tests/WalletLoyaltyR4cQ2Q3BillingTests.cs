@@ -397,6 +397,36 @@ public sealed class WalletLoyaltyR4cQ2Q3BillingTests
     }
 
     [Fact]
+    public void r14_f1_writeoff_apply_wallet_off_cash_only_20000_payable_15500()
+    {
+        var settings = PaymentRoundingSettings.Default with { ApplyToWallet = false };
+        var (_, ok) = InvoiceCalculator.Collect(
+            BuffetRequest(15_500),
+            [new Tender(PaymentMethod.Cash, 20_000)],
+            walletRoundsLikeCash: false,
+            roundingSettings: settings);
+        Assert.True(ok.IsValid, ok.Errors.FirstOrDefault()?.Message);
+        Assert.Equal(15_500, ok.PayableToman);
+        Assert.Equal(0, ok.RoundingToman);
+    }
+
+    [Fact]
+    public void r14_f1_writeoff_apply_wallet_off_wallet_only_500_payable_15500_preview_shape()
+    {
+        var settings = PaymentRoundingSettings.Default with { ApplyToWallet = false };
+        var (_, partial) = InvoiceCalculator.Collect(
+            BuffetRequest(15_500),
+            [new Tender(PaymentMethod.Wallet, 500, "m")],
+            [new MemberWallet("m", 10_000, 0)],
+            walletRoundsLikeCash: false,
+            roundingSettings: settings);
+        Assert.False(partial.IsValid);
+        Assert.Equal(15_500, partial.PayableToman);
+        Assert.Equal(0, partial.RoundingToman);
+        Assert.NotEqual(20_000, partial.PayableToman);
+    }
+
+    [Fact]
     public void q_a_ruled_apply_wallet_off_pc_balance_12000_pc1000_cash14000_valid_15000()
     {
         var settings = PaymentRoundingSettings.Default with { ApplyToWallet = false };

@@ -475,6 +475,20 @@ public sealed class OperatorBillService(
             }
         }
 
+        if (detail?.Allocation is { IsValid: true })
+        {
+            var tendered = payments.Sum(p => p.AmountToman);
+            if (tendered < collectibleToman)
+            {
+                throw new ApiException(
+                    StatusCodes.Status400BadRequest,
+                    "payment_invalid",
+                    OperatorPaymentErrors.Localize(new PaymentError(PaymentErrors.SumMismatch, ""), collectibleToman));
+            }
+
+            return;
+        }
+
         var split = PaymentSplitter.Split(collectibleToman, tenders);
         if (!split.IsValid)
         {
@@ -1008,6 +1022,7 @@ public sealed class OperatorBillService(
         var session = await db.Sessions.AsNoTracking()
             .Include(s => s.Customer)
             .Include(s => s.Segments).ThenInclude(seg => seg.GameTitle)
+            .Include(s => s.Pauses)
             .Include(s => s.PendingBill)
             .Include(s => s.Station)!.ThenInclude(st => st!.Group)
             .FirstOrDefaultAsync(s => s.Id == sessionId, ct)
@@ -1073,6 +1088,7 @@ public sealed class OperatorBillService(
         var session = await db.Sessions.AsNoTracking()
             .Include(s => s.Customer)
             .Include(s => s.Segments).ThenInclude(seg => seg.GameTitle)
+            .Include(s => s.Pauses)
             .Include(s => s.PendingBill)
             .Include(s => s.Station)!.ThenInclude(st => st!.Group)
             .FirstOrDefaultAsync(s => s.Id == sessionId, ct)

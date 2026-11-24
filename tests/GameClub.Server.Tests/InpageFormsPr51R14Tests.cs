@@ -221,6 +221,74 @@ public sealed class InpageFormsPr51R14Tests(GameClubWebApplicationFactory factor
             .Invoices.AsNoTracking().Select(i => i.CollectibleToman).SingleAsync());
     }
 
+    [Fact(Skip = "B-3 HOLD WM5: ledger debit 5000 vs invoice/payment line 3000 pending owner choice (Collect fixed 5k vs WalletMinBillToman 0).")]
+    public async Task r14_b3_wm5_wallet_ledger_must_match_invoice_and_payment_line_HOLD()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var manager = await factory.CreateOperatorClientAsync("manager", "1234");
+        var op = await factory.CreateOperatorClientAsync();
+        await PutRoundingAsync(manager, RoundingBody(walletMinBillToman: 0L));
+        var customerId = await CreateCustomerAsync(op);
+        (await op.PostAsJsonAsync(
+            $"/api/operator/members/customers/{customerId}/wallet/top-up",
+            new { method = "Cash", amountToman = 10_000L, commandId = Guid.NewGuid() })).EnsureSuccessStatusCode();
+        var openSaleId = await BuffetCheckoutAsync(op, customerId, 3_000L);
+        var confirm = await op.PostAsJsonAsync(
+            $"/api/operator/buffet-only/{openSaleId}/confirm",
+            new
+            {
+                previewCollectibleToman = 3_000L,
+                payments = new[] { new { method = "Wallet", amountToman = 3_000L } },
+            });
+        confirm.EnsureSuccessStatusCode();
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var invoice = await db.Invoices.AsNoTracking().SingleAsync();
+        var walletLine = await db.PaymentLines.AsNoTracking().SingleAsync(p => p.Method == PaymentMethod.Wallet);
+        var spend = await db.WalletLedger.AsNoTracking().SingleAsync(w => w.Kind == WalletLedgerKind.InvoiceSpend);
+        var ledgerDebit = -(spend.RealDeltaToman + spend.GiftDeltaToman);
+        var lineDrawn = walletLine.WalletRealDrawnToman + walletLine.WalletGiftDrawnToman;
+        Assert.Equal(invoice.CollectibleToman, lineDrawn);
+        Assert.Equal(invoice.CollectibleToman, ledgerDebit);
+        Assert.Equal(walletLine.AmountToman, ledgerDebit);
+    }
+
+    [Fact]
+    public async Task r14_po3_session_wallet_17000_lift_payment_line_matches_ledger_debit_20000()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var api = factory.CreateClientWithKey();
+        var op = await factory.CreateOperatorClientAsync();
+        var customerId = await CreateCustomerAsync(op);
+        (await op.PostAsJsonAsync(
+            $"/api/operator/members/customers/{customerId}/wallet/top-up",
+            new { method = "Cash", amountToman = 60_000L, commandId = Guid.NewGuid() })).EnsureSuccessStatusCode();
+        const string station = "ps5-r14po3b";
+        await S3TestHelpers.RegisterConsole(api, op, station, 1);
+        factory.Clock.SetTehran(2026, 6, 3, 14, 0);
+        var sessionId = await S3TestHelpers.StartSession(api, station, 1);
+        await op.PutAsJsonAsync($"/api/operator/sessions/{sessionId}/customer", new { customerId });
+        await op.PostAsJsonAsync(
+            $"/api/operator/sessions/{sessionId}/sale/lines",
+            new { catalogItemId = CustomServiceId, customAmountToman = 17_000L });
+        (await op.PostAsync($"/api/operator/sessions/{sessionId}/bill/open", null)).EnsureSuccessStatusCode();
+        (await op.PostAsJsonAsync(
+            $"/api/operator/sessions/{sessionId}/bill/confirm",
+            new
+            {
+                previewCollectibleToman = 20_000L,
+                payments = new[] { new { method = "Wallet", amountToman = 17_000L } },
+            })).EnsureSuccessStatusCode();
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var walletLine = await db.PaymentLines.AsNoTracking().SingleAsync(p => p.Method == PaymentMethod.Wallet);
+        var spend = await db.WalletLedger.AsNoTracking().SingleAsync(w => w.Kind == WalletLedgerKind.InvoiceSpend);
+        Assert.Equal(20_000, walletLine.AmountToman);
+        Assert.Equal(20_000, walletLine.WalletRealDrawnToman + walletLine.WalletGiftDrawnToman);
+        Assert.Equal(-20_000, spend.RealDeltaToman + spend.GiftDeltaToman);
+        Assert.Equal(20_000, await db.Invoices.AsNoTracking().Select(i => i.CollectibleToman).SingleAsync());
+    }
+
     [Fact]
     public async Task r14_po3_session_wallet_lift_payment_line_matches_ledger_debit()
     {

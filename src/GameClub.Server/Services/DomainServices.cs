@@ -395,6 +395,14 @@ public sealed class SessionCloser(
                 ? allocTenders?.FirstOrDefault(t => t.Method == PaymentMethod.Wallet && t.Accepted)
                 : null;
             var lineAmount = pay.AmountToman;
+            if (method is PaymentMethod.Cash or PaymentMethod.CardReader or PaymentMethod.CardToCard
+                && amounts.Detail?.Allocation is { IsValid: true }
+                && pay.AmountToman > amounts.CollectibleToman
+                && payments.All(p => OperatorPaymentMethods.Parse(p.Method) is not (PaymentMethod.Wallet or PaymentMethod.PcBalance)))
+            {
+                lineAmount = amounts.CollectibleToman;
+            }
+
             if (method == PaymentMethod.Wallet && allocTender is not null)
             {
                 var drawn = MoneyMath.CheckedAdd(allocTender.RealDrawnToman, allocTender.GiftDrawnToman);

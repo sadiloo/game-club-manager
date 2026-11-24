@@ -108,6 +108,68 @@ public sealed class KioskFixR7AcceptanceTests(GameClubWebApplicationFactory fact
     }
 
     [Fact]
+    public async Task r14_f1_writeoff_apply_wallet_off_cash_15500_exact_preview_equals_confirm()
+    {
+        var (sessionId, op) = await CreateOvershootSessionForF1Async();
+        await op.PostAsJsonAsync($"/api/operator/sessions/{sessionId}/sale/lines", new { catalogItemId = SodaId });
+        await op.PostAsync($"/api/operator/sessions/{sessionId}/force-logout", null);
+        var payments = new[] { new { method = "Cash", amountToman = 15_500L } };
+        var preview = await op.PostAsJsonAsync($"/api/operator/sessions/{sessionId}/bill/preview", new { payments });
+        preview.EnsureSuccessStatusCode();
+        var previewCollectible = (await preview.Content.ReadFromJsonAsync<JsonElement>())!.GetProperty("collectibleToman").GetInt64();
+        Assert.Equal(15_500, previewCollectible);
+        (await op.PostAsJsonAsync(
+            $"/api/operator/sessions/{sessionId}/bill/confirm",
+            new { previewCollectibleToman = previewCollectible, payments })).EnsureSuccessStatusCode();
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        Assert.Equal(15_500, await db.Invoices.Where(i => i.SessionId == sessionId).Select(i => i.CollectibleToman).SingleAsync());
+        var cashLine = await db.PaymentLines.AsNoTracking().SingleAsync(p => p.Method == PaymentMethod.Cash);
+        Assert.Equal(15_500, cashLine.AmountToman);
+    }
+
+    [Fact]
+    public async Task r14_f1_writeoff_apply_wallet_off_cash_20000_preview_confirm_15500_cash_line_15500()
+    {
+        var (sessionId, op) = await CreateOvershootSessionForF1Async();
+        await op.PostAsJsonAsync($"/api/operator/sessions/{sessionId}/sale/lines", new { catalogItemId = SodaId });
+        await op.PostAsync($"/api/operator/sessions/{sessionId}/force-logout", null);
+        var payments = new[] { new { method = "Cash", amountToman = 20_000L } };
+        var preview = await op.PostAsJsonAsync($"/api/operator/sessions/{sessionId}/bill/preview", new { payments });
+        preview.EnsureSuccessStatusCode();
+        var body = await preview.Content.ReadFromJsonAsync<JsonElement>();
+        var previewCollectible = body!.GetProperty("collectibleToman").GetInt64();
+        Assert.Equal(15_500, previewCollectible);
+        (await op.PostAsJsonAsync(
+            $"/api/operator/sessions/{sessionId}/bill/confirm",
+            new { previewCollectibleToman = previewCollectible, payments })).EnsureSuccessStatusCode();
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        Assert.Equal(15_500, await db.Invoices.Where(i => i.SessionId == sessionId).Select(i => i.CollectibleToman).SingleAsync());
+        var cashLine = await db.PaymentLines.AsNoTracking().SingleAsync(p => p.Method == PaymentMethod.Cash);
+        Assert.Equal(15_500, cashLine.AmountToman);
+    }
+
+    [Fact]
+    public async Task r14_f1_writeoff_apply_wallet_off_wallet_500_alone_preview_15500_confirm_rejected()
+    {
+        var (sessionId, op) = await CreateOvershootSessionForF1Async();
+        await op.PostAsJsonAsync($"/api/operator/sessions/{sessionId}/sale/lines", new { catalogItemId = SodaId });
+        await op.PostAsync($"/api/operator/sessions/{sessionId}/force-logout", null);
+        var payments = new[] { new { method = "Wallet", amountToman = 500L } };
+        var preview = await op.PostAsJsonAsync($"/api/operator/sessions/{sessionId}/bill/preview", new { payments });
+        preview.EnsureSuccessStatusCode();
+        var previewCollectible = (await preview.Content.ReadFromJsonAsync<JsonElement>())!.GetProperty("collectibleToman").GetInt64();
+        Assert.Equal(15_500, previewCollectible);
+        var confirm = await op.PostAsJsonAsync(
+            $"/api/operator/sessions/{sessionId}/bill/confirm",
+            new { previewCollectibleToman = previewCollectible, payments });
+        Assert.Equal(HttpStatusCode.BadRequest, confirm.StatusCode);
+        using var scope = factory.Services.CreateScope();
+        Assert.Equal(0, await scope.ServiceProvider.GetRequiredService<AppDbContext>().Invoices.CountAsync(i => i.SessionId == sessionId));
+    }
+
+    [Fact]
     public async Task f1_writeoff_apply_wallet_off_overpay_wallet500_cash19500_confirm_rejects_not_20000()
     {
         var (sessionId, op) = await CreateOvershootSessionAsync(graceOff: true);
@@ -183,6 +245,14 @@ public sealed class KioskFixR7AcceptanceTests(GameClubWebApplicationFactory fact
         }
 
         return sessionId;
+    }
+
+    private async Task<(Guid SessionId, HttpClient Op)> CreateOvershootSessionForF1Async()
+    {
+        var (sessionId, op) = await CreateOvershootSessionAsync(graceOff: true);
+        var manager = await factory.CreateOperatorClientAsync("manager", "1234");
+        await PutRoundingAsync(manager, applyToWallet: false);
+        return (sessionId, op);
     }
 
     private async Task<(Guid SessionId, HttpClient Op)> CreateOvershootSessionAsync(bool graceOff)

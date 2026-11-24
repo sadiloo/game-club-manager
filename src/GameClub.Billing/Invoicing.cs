@@ -832,13 +832,14 @@ public static class InvoiceCalculator
             && walletRoundsLikeCash;
         var useCashEquivalentForAllocate = walletLikeCash
             || mixedWholeBillWhenWalletCashOff
-            || (!belowWalletMinBill && walletOnlyPartial);
+            || (!belowWalletMinBill && walletOnlyPartial && walletRoundsLikeCash);
         var cashEquivalent = useCashEquivalentForAllocate ? branchRounded : priced;
         var nets = PayableNets(request, priced.NetBeforeRoundingToman);
+        var allocateRounding = walletRoundsLikeCash ? request.Rounding : RoundingPolicy.Off;
         var allocation = PaymentAllocator.Allocate(
             nets,
             tenders,
-            request.Rounding,
+            allocateRounding,
             wallets,
             walletDebt,
             pcBalance,
@@ -847,7 +848,8 @@ public static class InvoiceCalculator
             roundingSettings.AllowWalletShortBalanceDebt,
             roundingSettings.SuppressWalletDebtDraw,
             billBelowCashLikeThreshold,
-            belowWalletMinBill && mixedBalanceCounter);
+            belowWalletMinBill && mixedBalanceCounter,
+            allowCounterOverTender: !walletRoundsLikeCash);
         var date = TehranTime.Date(request.IssuedAt);
         var lines = new List<InvoiceLine>();
         foreach (var line in priced.Lines)
