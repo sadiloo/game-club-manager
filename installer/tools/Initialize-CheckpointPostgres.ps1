@@ -38,10 +38,23 @@ if (Test-Path -LiteralPath $conf) {
 }
 
 $svc = Get-Service CheckpointPostgres -ErrorAction SilentlyContinue
+if ($svc) {
+    if ($svc.Status -ne "Running") {
+        Start-Service CheckpointPostgres -ErrorAction SilentlyContinue
+        $svc.Refresh()
+    }
+    if ($svc.Status -ne "Running") {
+        & $pgCtl stop -D $PgData -m fast 2>&1 | Out-Null
+        & sc.exe delete CheckpointPostgres 2>&1 | Out-Null
+        $svc = $null
+    }
+}
+
 if (-not $svc) {
-    $binPath = "`"$pgCtl`" runservice -N `"CheckpointPostgres`" -D `"$PgData`" -w"
-    New-Service -Name CheckpointPostgres -BinaryPathName $binPath -DisplayName "Checkpoint PostgreSQL" -StartupType Automatic | Out-Null
-    sc.exe config CheckpointPostgres start= auto | Out-Null
+    & $pgCtl register -N CheckpointPostgres -D $PgData -S auto
+    if ($LASTEXITCODE -ne 0) {
+        throw "pg_ctl register CheckpointPostgres failed exit $LASTEXITCODE"
+    }
 }
 
 Start-Service CheckpointPostgres -ErrorAction Stop

@@ -225,6 +225,8 @@ $logRoot = Join-Path $root "artifacts/installer/acceptance-logs"
 $accounts = Join-Path $root "installer/ci/accounts-silent.json"
 $acceptance = Join-Path $root "installer/tools/acceptance"
 
+& (Join-Path $acceptance "Reset-InstallerAcceptanceMachine.ps1")
+
 & (Join-Path $acceptance "Invoke-B2-Upgrade.ps1") -LowSetup $serverLow -HighSetup $serverHigh -AccountsFile $accounts -LowVersion $lowVersion -HighVersion $appVersion -Mode WithoutOpenSessions
 & (Join-Path $acceptance "Invoke-B2-Upgrade.ps1") -LowSetup $serverHigh -HighSetup $serverHigh2 -AccountsFile $accounts -LowVersion $appVersion -HighVersion $high2Version -Mode WithOpenSessions -SkipDowngradeCheck
 & (Join-Path $acceptance "Invoke-B1-CleanServerInstall.ps1") -ServerSetup $serverHigh -AccountsFile $accounts -LogsDir $logRoot
