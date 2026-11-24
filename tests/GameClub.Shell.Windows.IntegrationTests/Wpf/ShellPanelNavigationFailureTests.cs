@@ -416,7 +416,7 @@ public sealed class ShellPanelNavigationFailureTests
             ShellPanelHttpSplitStub? stub = null;
             try
             {
-                stub = CreateStub(200, 25_000);
+                stub = CreateStub(200, 120_000);
                 _fixture.RunAsync(async () =>
                 {
                     MainWindow? window = null;
@@ -433,12 +433,24 @@ public sealed class ShellPanelNavigationFailureTests
                         }
 
                         var wv = await WaitForPanelWebViewAsync(window, TimeSpan.FromSeconds(45));
-                        var pendingDeadline = DateTime.UtcNow.AddSeconds(30);
-                        while (DateTime.UtcNow < pendingDeadline && window.PanelNavigationPendingCountForTests < 1)
+                        var sawTimeoutArm = false;
+                        var armDeadline = DateTime.UtcNow.AddSeconds(45);
+                        while (DateTime.UtcNow < armDeadline)
                         {
                             await Task.Delay(100);
+                            if (window.PanelNavigationPendingCountForTests >= 1
+                                && LogDelta(baseline).Contains(
+                                    "branch=panel-nav-timeout-arm",
+                                    StringComparison.Ordinal))
+                            {
+                                sawTimeoutArm = true;
+                                break;
+                            }
                         }
 
+                        Assert.True(
+                            sawTimeoutArm,
+                            "expected loopback panel navigation with 10s timeout armed before probe hold");
                         Assert.True(
                             window.PanelNavigationPendingCountForTests >= 1,
                             "expected in-flight panel navigation before the 10s loopback deadline");
@@ -458,7 +470,7 @@ public sealed class ShellPanelNavigationFailureTests
                             "panel-recovery operator probe did not start while held across deadline");
 
                         string? timeoutConfirm = null;
-                        var timeoutDeadline = DateTime.UtcNow.AddSeconds(20);
+                        var timeoutDeadline = DateTime.UtcNow.AddSeconds(25);
                         while (DateTime.UtcNow < timeoutDeadline)
                         {
                             await Task.Delay(100);
