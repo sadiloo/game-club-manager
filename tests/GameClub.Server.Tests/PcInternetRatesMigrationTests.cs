@@ -449,7 +449,7 @@ public sealed class PcInternetRatesMigrationTests(GameClubWebApplicationFactory 
     }
 
     [Fact]
-    public async Task Qa_Down_revert_snapshot_limit1_ordering_picks_lowest_day_rate_pair()
+    public async Task Qa_Down_revert_snapshot_online_night_limit1_ordering_picks_highest_day_rate()
     {
         try
         {
@@ -459,10 +459,41 @@ public sealed class PcInternetRatesMigrationTests(GameClubWebApplicationFactory 
             await EnsurePrePcInternetMigrationAsync(db);
             var start = TestTimes.T(2026, 6, 2, 10, 0).UtcDateTime;
             var checkpoint = TestTimes.T(2026, 6, 2, 11, 0).UtcDateTime;
-            var sessionId = await SeedOpenPreMigrationPcSessionAsync(db, "PC-QA-ORD", start, checkpoint);
+            var sessionId = await SeedOpenPreMigrationPcSessionAsync(db, "PC-QA-ON", start, checkpoint);
             await db.Database.MigrateAsync();
             var v2Json = await SessionSnapshotJsonAsync(db, sessionId);
-            var patched = AddDecoyPcNormalOnlinePairInSnapshot(v2Json, decoyDay: 70_000, decoyNight: 200_000);
+            var patched = InsertDecoyPcNormalOnlinePairAtStart(v2Json, decoyDay: 70_000, decoyNight: 200_000);
+            await ReplaceSessionSnapshotJsonAsync(db, sessionId, patched);
+            db.GetService<IMigrator>().Migrate(PrePcInternetMigration);
+            var revertedJson = await SessionSnapshotJsonAsync(db, sessionId);
+            using var doc = JsonDocument.Parse(revertedJson);
+            const long seedGap = 100_000 - 80_000;
+            Assert.Equal(seedGap, doc.RootElement.GetProperty("PcSpecialBandSurchargeToman").GetInt64());
+        }
+        finally
+        {
+            await using var scope = factory.Services.CreateAsyncScope();
+            await EnsureLatestMigrationAsync(scope.ServiceProvider.GetRequiredService<AppDbContext>());
+        }
+    }
+
+    [Fact]
+    public async Task Qa_Down_revert_snapshot_offline_night_fallback_limit1_ordering_picks_highest_day_rate()
+    {
+        try
+        {
+            await S3TestHelpers.ResetAsync(factory);
+            await using var scope = factory.Services.CreateAsyncScope();
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            await EnsurePrePcInternetMigrationAsync(db);
+            var start = TestTimes.T(2026, 6, 2, 10, 0).UtcDateTime;
+            var checkpoint = TestTimes.T(2026, 6, 2, 11, 0).UtcDateTime;
+            var sessionId = await SeedOpenPreMigrationPcSessionAsync(db, "PC-QA-OFF", start, checkpoint);
+            await db.Database.MigrateAsync();
+            var v2Json = await SessionSnapshotJsonAsync(db, sessionId);
+            var patched = RemovePcNormalOnlineSpecialNightLines(v2Json);
+            patched = EnsurePcNormalOfflineSpecialNightLine(patched, nightRate: 100_000);
+            patched = InsertDecoyPcNormalOfflineNightFallbackAtStart(patched, decoyDay: 70_000, decoyOfflineNight: 250_000);
             await ReplaceSessionSnapshotJsonAsync(db, sessionId, patched);
             db.GetService<IMigrator>().Migrate(PrePcInternetMigration);
             var revertedJson = await SessionSnapshotJsonAsync(db, sessionId);
@@ -628,11 +659,19 @@ public sealed class PcInternetRatesMigrationTests(GameClubWebApplicationFactory 
         return node.ToJsonString();
     }
 
-    private static string AddDecoyPcNormalOnlinePairInSnapshot(string json, long decoyDay, long decoyNight)
+    private static string InsertDecoyPcNormalOnlinePairAtStart(string json, long decoyDay, long decoyNight)
     {
         var node = JsonNode.Parse(json) ?? throw new InvalidOperationException("snapshot json");
         var lines = node["Lines"]!.AsArray();
-        lines.Add(new JsonObject
+        lines.Insert(0, new JsonObject
+        {
+            ["GroupId"] = PilotSeed.PcNormalGroupId,
+            ["PlayMode"] = nameof(PlayMode.Online),
+            ["PlayerCount"] = null,
+            ["IsSpecialBand"] = true,
+            ["HourlyToman"] = decoyNight,
+        });
+        lines.Insert(0, new JsonObject
         {
             ["GroupId"] = PilotSeed.PcNormalGroupId,
             ["PlayMode"] = nameof(PlayMode.Online),
@@ -640,13 +679,98 @@ public sealed class PcInternetRatesMigrationTests(GameClubWebApplicationFactory 
             ["IsSpecialBand"] = false,
             ["HourlyToman"] = decoyDay,
         });
+        return node.ToJsonString();
+    }
+
+    private static string RemovePcNormalOnlineSpecialNightLines(string json)
+    {
+        var node = JsonNode.Parse(json) ?? throw new InvalidOperationException("snapshot json");
+        var lines = node["Lines"]!.AsArray();
+        for (var i = lines.Count - 1; i >= 0; i--)
+        {
+            var line = lines[i];
+            if (line is null)
+            {
+                continue;
+            }
+
+            if (line["GroupId"]!.GetValue<string>() != PilotSeed.PcNormalGroupId)
+            {
+                continue;
+            }
+
+            if (line["PlayMode"]!.GetValue<string>() != nameof(PlayMode.Online))
+            {
+                continue;
+            }
+
+            if (!line["IsSpecialBand"]!.GetValue<bool>())
+            {
+                continue;
+            }
+
+            if (line["PlayerCount"] is JsonValue pc && pc.TryGetValue<int>(out _))
+            {
+                continue;
+            }
+
+            lines.RemoveAt(i);
+        }
+
+        return node.ToJsonString();
+    }
+
+    private static string EnsurePcNormalOfflineSpecialNightLine(string json, long nightRate)
+    {
+        var node = JsonNode.Parse(json) ?? throw new InvalidOperationException("snapshot json");
+        var lines = node["Lines"]!.AsArray();
+        foreach (var line in lines)
+        {
+            if (line is null)
+            {
+                continue;
+            }
+
+            if (line["GroupId"]!.GetValue<string>() == PilotSeed.PcNormalGroupId
+                && line["PlayMode"]!.GetValue<string>() == nameof(PlayMode.Offline)
+                && line["IsSpecialBand"]!.GetValue<bool>()
+                && line["PlayerCount"] is JsonValue pc && pc.GetValue<int>() == 1
+                && line["HourlyToman"]!.GetValue<long>() == nightRate)
+            {
+                return node.ToJsonString();
+            }
+        }
+
         lines.Add(new JsonObject
+        {
+            ["GroupId"] = PilotSeed.PcNormalGroupId,
+            ["PlayMode"] = nameof(PlayMode.Offline),
+            ["PlayerCount"] = 1,
+            ["IsSpecialBand"] = true,
+            ["HourlyToman"] = nightRate,
+        });
+        return node.ToJsonString();
+    }
+
+    private static string InsertDecoyPcNormalOfflineNightFallbackAtStart(string json, long decoyDay, long decoyOfflineNight)
+    {
+        var node = JsonNode.Parse(json) ?? throw new InvalidOperationException("snapshot json");
+        var lines = node["Lines"]!.AsArray();
+        lines.Insert(0, new JsonObject
+        {
+            ["GroupId"] = PilotSeed.PcNormalGroupId,
+            ["PlayMode"] = nameof(PlayMode.Offline),
+            ["PlayerCount"] = 1,
+            ["IsSpecialBand"] = true,
+            ["HourlyToman"] = decoyOfflineNight,
+        });
+        lines.Insert(0, new JsonObject
         {
             ["GroupId"] = PilotSeed.PcNormalGroupId,
             ["PlayMode"] = nameof(PlayMode.Online),
             ["PlayerCount"] = null,
-            ["IsSpecialBand"] = true,
-            ["HourlyToman"] = decoyNight,
+            ["IsSpecialBand"] = false,
+            ["HourlyToman"] = decoyDay,
         });
         return node.ToJsonString();
     }

@@ -3,6 +3,7 @@ using System.Text.Json;
 using GameClub.Billing;
 using GameClub.Server.Data;
 using GameClub.Server.Kiosk;
+using GameClub.Server.Operator;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -400,5 +401,49 @@ public sealed class PcInternetBillOracleTests(GameClubWebApplicationFactory fact
 
         var bill = await BillAfterStopAsync(op, api, sessionId);
         AssertBill(bill, 78_667, (15, 20_000), (32, 58_667));
+    }
+
+    /// <summary>Brief step-pc-internet-switch §246 / rr4 L-12: member level discount on toggled PC (online then offline).</summary>
+    [Fact]
+    public async Task L12_discount_on_toggled_pc_with_nonzero_member_level()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var op = await factory.CreateOperatorClientAsync();
+        var mgr = await factory.CreateOperatorClientAsync("manager", "1234");
+        var api = factory.CreateClientWithKey();
+        await EnsureOfflineRatesAsync(mgr);
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var settings = await db.BranchMemberSettings.SingleAsync();
+            settings.ApplyDiscountsToPc = true;
+            settings.LevelLadderJson = MemberSettingsMapper.SerializeLadder(LevelLadder.Default);
+            await db.SaveChangesAsync();
+        }
+
+        await S3TestHelpers.RegisterPc(api, "PC-L12", PilotSeed.PcNormalGroupId);
+        var created = await op.PostAsJsonAsync("/api/operator/customers", new { name = "L12", mobile = "09124441212" });
+        created.EnsureSuccessStatusCode();
+        var customerId = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetGuid();
+        (await mgr.PostAsJsonAsync(
+            $"/api/operator/members/customers/{customerId}/opening-balance",
+            new { lifetimeHours = 100L })).EnsureSuccessStatusCode();
+        (await mgr.PostAsJsonAsync(
+            $"/api/operator/members/customers/{customerId}/wallet/top-up",
+            new { method = "Cash", amountToman = 1_000_000L, commandId = Guid.NewGuid() })).EnsureSuccessStatusCode();
+
+        factory.Clock.SetTehran(2026, 6, 2, 14, 0);
+        var sessionId = await S3TestHelpers.StartSession(api, "PC-L12");
+        (await op.PutAsJsonAsync($"/api/operator/sessions/{sessionId}/customer", new { customerId })).EnsureSuccessStatusCode();
+        factory.Clock.SetTehran(2026, 6, 2, 14, 30);
+        await S3TestHelpers.CheckpointAsync(api, sessionId, factory.Clock.UtcNow);
+        await ToggleAsync(op, sessionId, false);
+        factory.Clock.SetTehran(2026, 6, 2, 15, 0);
+        await S3TestHelpers.CheckpointAsync(api, sessionId, factory.Clock.UtcNow);
+        var bill = await BillAfterStopAsync(op, api, sessionId);
+        const long expectedDiscount = 7_000;
+        Assert.Equal(70_000, bill.GetProperty("timeGrossToman").GetInt64());
+        Assert.Equal(expectedDiscount, bill.GetProperty("levelDiscountToman").GetInt64());
+        Assert.Equal(63_000, bill.GetProperty("collectibleToman").GetInt64());
     }
 }
