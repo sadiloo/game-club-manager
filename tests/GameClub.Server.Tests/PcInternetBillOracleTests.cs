@@ -4,6 +4,7 @@ using GameClub.Billing;
 using GameClub.Server.Data;
 using GameClub.Server.Kiosk;
 using GameClub.Server.Operator;
+using GameClub.Server.Services;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -57,6 +58,62 @@ public sealed class PcInternetBillOracleTests(GameClubWebApplicationFactory fact
             expectedVersion = await RowVersionAsync(sessionId),
             commandId = Guid.NewGuid(),
         })).EnsureSuccessStatusCode();
+    }
+
+    private static async Task<(SessionCharge Charge, Settlement Settlement)> MemberPlaySettlementPreviewAsync(
+        GameClubWebApplicationFactory factory,
+        Guid sessionId,
+        Guid customerId,
+        DateTime endUtc)
+    {
+        await using var scope = factory.Services.CreateAsyncScope();
+        var services = scope.ServiceProvider;
+        var db = services.GetRequiredService<AppDbContext>();
+        var session = await db.Sessions.AsNoTracking()
+            .Include(s => s.Segments)
+            .Include(s => s.Station)!.ThenInclude(st => st!.Group)
+            .SingleAsync(s => s.Id == sessionId);
+        var charge = await services.GetRequiredService<SessionBilling>().BuildChargeAsync(session, endUtc);
+        var settings = await db.BranchMemberSettings.AsNoTracking().SingleAsync();
+        var member = await db.CustomerMembers.AsNoTracking().SingleAsync(m => m.CustomerId == customerId);
+        var pricing = MemberSettingsMapper.BuildPricing(
+            member,
+            settings,
+            MemberSettingsMapper.LoadLadder(settings));
+        var walletSettings = MemberSettingsMapper.LoadWalletSettings(settings);
+        var money = MemberWalletMapper.ToPocket(member).TotalToman;
+        var spendable = money > 0 ? money : 0;
+        var inDebt = money < 0;
+        var discount = settings.ApplyDiscountsToPc && charge.Lines.Count > 0 && pricing is not null
+            ? new SessionDiscount(LevelPercent: pricing.LevelPercent, ValidFrom: charge.Lines[0].Start)
+            : SessionDiscount.Empty;
+        var settlement = AccountSettlement.Settle(
+            charge,
+            new PcAccount(member.CustomerId.ToString(), spendable),
+            BillingPolicy.Default,
+            walletSettings.GraceMinuteEnabled && !inDebt,
+            discount,
+            shortfallIsUncovered: inDebt);
+        return (charge, settlement);
+    }
+
+    private static void AssertL12SilverTenPercentSliceDiscounts(SessionCharge charge, Settlement settlement)
+    {
+        var onlineGross = charge.Lines.Where(l => l.Mode == PlayMode.Online).Sum(l => l.AmountToman);
+        var offlineGross = charge.Lines.Where(l => l.Mode == PlayMode.Offline).Sum(l => l.AmountToman);
+        Assert.Equal(40_000, onlineGross);
+        Assert.Equal(30_000, offlineGross);
+        Assert.Equal(4_000, onlineGross * 10 / 100);
+        Assert.Equal(3_000, offlineGross * 10 / 100);
+        Assert.Equal(70_000, charge.TotalAmountToman);
+        Assert.Equal(7_000, settlement.DiscountToman);
+        var conserved = settlement.MoneyConsumedToman
+            + settlement.DiscountToman
+            + settlement.UncoveredToman
+            + settlement.OmittedToman
+            + settlement.WriteOffToman
+            + (settlement.Grace?.WaivedToman ?? 0);
+        Assert.Equal(charge.TotalAmountToman, conserved);
     }
 
     [Fact]
@@ -403,47 +460,92 @@ public sealed class PcInternetBillOracleTests(GameClubWebApplicationFactory fact
         AssertBill(bill, 78_667, (15, 20_000), (32, 58_667));
     }
 
-    /// <summary>Brief step-pc-internet-switch §246 / rr4 L-12: member level discount on toggled PC (online then offline).</summary>
-    [Fact]
-    public async Task L12_discount_on_toggled_pc_with_nonzero_member_level()
+    private async Task<(Guid CustomerId, Guid SessionId)> L12PrepareMemberPcSessionAsync(
+        string stationId,
+        string mobile,
+        long walletTopUpToman,
+        bool graceMinuteEnabled = true)
     {
         await S3TestHelpers.ResetAsync(factory);
-        var op = await factory.CreateOperatorClientAsync();
         var mgr = await factory.CreateOperatorClientAsync("manager", "1234");
         var api = factory.CreateClientWithKey();
+        var op = await factory.CreateOperatorClientAsync();
         await EnsureOfflineRatesAsync(mgr);
         using (var scope = factory.Services.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
             var settings = await db.BranchMemberSettings.SingleAsync();
             settings.ApplyDiscountsToPc = true;
+            settings.GraceMinuteEnabled = graceMinuteEnabled;
             settings.LevelLadderJson = MemberSettingsMapper.SerializeLadder(LevelLadder.Default);
             await db.SaveChangesAsync();
         }
 
-        await S3TestHelpers.RegisterPc(api, "PC-L12", PilotSeed.PcNormalGroupId);
-        var created = await op.PostAsJsonAsync("/api/operator/customers", new { name = "L12", mobile = "09124441212" });
+        await S3TestHelpers.RegisterPc(api, stationId, PilotSeed.PcNormalGroupId);
+        var created = await op.PostAsJsonAsync("/api/operator/customers", new { name = "L12", mobile });
         created.EnsureSuccessStatusCode();
         var customerId = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetGuid();
         (await mgr.PostAsJsonAsync(
             $"/api/operator/members/customers/{customerId}/opening-balance",
             new { lifetimeHours = 100L })).EnsureSuccessStatusCode();
-        (await mgr.PostAsJsonAsync(
-            $"/api/operator/members/customers/{customerId}/wallet/top-up",
-            new { method = "Cash", amountToman = 1_000_000L, commandId = Guid.NewGuid() })).EnsureSuccessStatusCode();
+        if (walletTopUpToman > 0)
+        {
+            (await mgr.PostAsJsonAsync(
+                $"/api/operator/members/customers/{customerId}/wallet/top-up",
+                new { method = "Cash", amountToman = walletTopUpToman, commandId = Guid.NewGuid() })).EnsureSuccessStatusCode();
+        }
 
         factory.Clock.SetTehran(2026, 6, 2, 14, 0);
-        var sessionId = await S3TestHelpers.StartSession(api, "PC-L12");
+        var sessionId = await S3TestHelpers.StartSession(api, stationId);
         (await op.PutAsJsonAsync($"/api/operator/sessions/{sessionId}/customer", new { customerId })).EnsureSuccessStatusCode();
         factory.Clock.SetTehran(2026, 6, 2, 14, 30);
         await S3TestHelpers.CheckpointAsync(api, sessionId, factory.Clock.UtcNow);
         await ToggleAsync(op, sessionId, false);
         factory.Clock.SetTehran(2026, 6, 2, 15, 0);
         await S3TestHelpers.CheckpointAsync(api, sessionId, factory.Clock.UtcNow);
+        return (customerId, sessionId);
+    }
+
+    /// <summary>Brief step-pc-internet-switch §246 / rr4 L-12: member level discount on toggled PC (online then offline).</summary>
+    [Fact]
+    public async Task L12_discount_on_toggled_pc_with_nonzero_member_level()
+    {
+        var (customerId, sessionId) = await L12PrepareMemberPcSessionAsync("PC-L12", "09124441212", walletTopUpToman: 1_000_000L);
+        var op = await factory.CreateOperatorClientAsync();
+        var api = factory.CreateClientWithKey();
+        var endUtc = factory.Clock.UtcNow.UtcDateTime;
+        var (charge, settlement) = await MemberPlaySettlementPreviewAsync(factory, sessionId, customerId, endUtc);
+        AssertL12SilverTenPercentSliceDiscounts(charge, settlement);
         var bill = await BillAfterStopAsync(op, api, sessionId);
-        const long expectedDiscount = 7_000;
         Assert.Equal(70_000, bill.GetProperty("timeGrossToman").GetInt64());
-        Assert.Equal(expectedDiscount, bill.GetProperty("levelDiscountToman").GetInt64());
+        Assert.Equal(7_000, bill.GetProperty("levelDiscountToman").GetInt64());
         Assert.Equal(63_000, bill.GetProperty("collectibleToman").GetInt64());
+    }
+
+    /// <summary>L-12 variant: partial wallet forces pricingNet settlement (kills OFF-1).</summary>
+    [Fact]
+    public async Task L12_discount_on_toggled_pc_partial_wallet_covers_online_slice_only()
+    {
+        var (customerId, sessionId) = await L12PrepareMemberPcSessionAsync(
+            "PC-L12P",
+            "09124441213",
+            walletTopUpToman: 20_000L,
+            graceMinuteEnabled: false);
+        var op = await factory.CreateOperatorClientAsync();
+        var api = factory.CreateClientWithKey();
+        var endUtc = factory.Clock.UtcNow.UtcDateTime;
+        var (charge, settlement) = await MemberPlaySettlementPreviewAsync(factory, sessionId, customerId, endUtc);
+        AssertL12SilverTenPercentSliceDiscounts(charge, settlement);
+        Assert.Equal(20_000, settlement.MoneyConsumedToman);
+        Assert.Equal(43_000, settlement.WriteOffToman);
+        Assert.Equal(0, settlement.UncoveredToman);
+        Assert.Equal(0, settlement.OmittedToman);
+        Assert.Equal(0, settlement.UpdatedAccount.MoneyBalanceToman);
+        var bill = await BillAfterStopAsync(op, api, sessionId);
+        Assert.Equal(70_000, bill.GetProperty("timeGrossToman").GetInt64());
+        Assert.Equal(7_000, bill.GetProperty("levelDiscountToman").GetInt64());
+        Assert.Equal(20_000, bill.GetProperty("collectibleToman").GetInt64());
+        Assert.Equal(20_000, bill.GetProperty("unroundedPayableToman").GetInt64());
+        Assert.Equal(43_000, bill.GetProperty("writeOffToman").GetInt64());
     }
 }

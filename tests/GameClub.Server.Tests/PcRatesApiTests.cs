@@ -92,6 +92,51 @@ public sealed class PcRatesApiTests(GameClubWebApplicationFactory factory)
     }
 
     [Fact]
+    public async Task L5_PcRates_Manager_rejects_string_zero_online_night_rate()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var mgr = await factory.CreateOperatorClientAsync("manager", "1234");
+        var res = await mgr.PutAsync(
+            $"/api/operator/pc-rates/{PilotSeed.PcNormalGroupId}",
+            new StringContent(
+                """{"onlineDay":80000,"onlineNight":"0","offlineDay":60000,"offlineNight":80000}""",
+                Encoding.UTF8,
+                "application/json"));
+        Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
+        Assert.Equal("invalid_rate", (await res.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("code").GetString());
+    }
+
+    [Fact]
+    public async Task L5_PcRates_Manager_rejects_string_zero_offline_day_rate()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var mgr = await factory.CreateOperatorClientAsync("manager", "1234");
+        var res = await mgr.PutAsync(
+            $"/api/operator/pc-rates/{PilotSeed.PcNormalGroupId}",
+            new StringContent(
+                """{"onlineDay":80000,"onlineNight":100000,"offlineDay":"0","offlineNight":80000}""",
+                Encoding.UTF8,
+                "application/json"));
+        Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
+        Assert.Equal("invalid_rate", (await res.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("code").GetString());
+    }
+
+    [Fact]
+    public async Task L5_PcRates_Manager_rejects_string_zero_offline_night_rate()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var mgr = await factory.CreateOperatorClientAsync("manager", "1234");
+        var res = await mgr.PutAsync(
+            $"/api/operator/pc-rates/{PilotSeed.PcNormalGroupId}",
+            new StringContent(
+                """{"onlineDay":80000,"onlineNight":100000,"offlineDay":60000,"offlineNight":"0"}""",
+                Encoding.UTF8,
+                "application/json"));
+        Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
+        Assert.Equal("invalid_rate", (await res.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("code").GetString());
+    }
+
+    [Fact]
     public async Task PcRates_Manager_put_empty_body_returns_400_persian()
     {
         await S3TestHelpers.ResetAsync(factory);
