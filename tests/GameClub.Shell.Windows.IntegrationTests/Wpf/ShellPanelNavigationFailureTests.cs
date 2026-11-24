@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.ServiceProcess;
+using System.Threading;
 using System.Text.Json;
 using System.Threading.Tasks;
 using System.Windows;
@@ -416,7 +417,7 @@ public sealed class ShellPanelNavigationFailureTests
             ShellPanelHttpSplitStub? stub = null;
             try
             {
-                stub = CreateStub(200, 120_000);
+                stub = CreateStub(200, 25_000);
                 _fixture.RunAsync(async () =>
                 {
                     MainWindow? window = null;
@@ -433,56 +434,34 @@ public sealed class ShellPanelNavigationFailureTests
                         var baseline = Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log")
                             .Select(File.ReadAllText)
                             .Aggregate("", string.Concat);
-                        var sawTimeoutArm = false;
-                        var armDeadline = DateTime.UtcNow.AddSeconds(45);
-                        while (DateTime.UtcNow < armDeadline)
-                        {
-                            await Task.Delay(100);
-                            if (window.PanelNavigationPendingCountForTests >= 1
-                                && LogDelta(baseline).Contains(
-                                    "branch=panel-nav-timeout-arm",
-                                    StringComparison.Ordinal))
-                            {
-                                sawTimeoutArm = true;
-                                break;
-                            }
-                        }
 
-                        Assert.True(
-                            sawTimeoutArm,
-                            "expected loopback panel navigation with 10s timeout armed before probe hold");
+                        await AwaitShellLogLineAsync(
+                            baseline,
+                            line => line.Contains("branch=panel-nav-timeout-arm", StringComparison.Ordinal),
+                            TimeSpan.FromSeconds(45));
                         Assert.True(
                             window.PanelNavigationPendingCountForTests >= 1,
                             "expected in-flight panel navigation before the 10s loopback deadline");
 
+                        stub.OperatorDelayMilliseconds = 0;
+                        var probeEntered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                        stub.OperatorHandlerEnteredForTests = probeEntered;
                         var operatorResponsesBefore = stub.OperatorResponseCount;
                         stub.HoldNextPanelOperatorProbe();
                         window.TriggerRunningPanelProbeForTests();
-                        var probeWaitDeadline = DateTime.UtcNow.AddSeconds(20);
-                        while (DateTime.UtcNow < probeWaitDeadline
-                               && stub.OperatorResponseCount <= operatorResponsesBefore)
-                        {
-                            await Task.Delay(50);
-                        }
-
+                        await AwaitTaskOrTimeoutAsync(
+                            probeEntered.Task,
+                            TimeSpan.FromSeconds(20),
+                            "panel-recovery operator probe did not start while held across deadline");
                         Assert.True(
                             stub.OperatorResponseCount > operatorResponsesBefore,
                             "panel-recovery operator probe did not start while held across deadline");
 
-                        string? timeoutConfirm = null;
-                        var timeoutDeadline = DateTime.UtcNow.AddSeconds(25);
-                        while (DateTime.UtcNow < timeoutDeadline)
-                        {
-                            await Task.Delay(100);
-                            var delta = LogDelta(baseline);
-                            timeoutConfirm = delta.Split('\n').FirstOrDefault(l =>
-                                l.Contains("branch=panel-nav-timeout", StringComparison.Ordinal)
-                                && !l.Contains("panel-nav-timeout-", StringComparison.Ordinal));
-                            if (timeoutConfirm is not null)
-                            {
-                                break;
-                            }
-                        }
+                        var timeoutConfirm = await AwaitShellLogLineAsync(
+                            baseline,
+                            line => line.Contains("branch=panel-nav-timeout", StringComparison.Ordinal)
+                                && !line.Contains("panel-nav-timeout-", StringComparison.Ordinal),
+                            TimeSpan.FromSeconds(25));
 
                         Assert.False(string.IsNullOrEmpty(timeoutConfirm), "panel-nav-timeout was not confirmed");
                         Assert.Equal(0, window.PanelNavigationPendingCountForTests);
@@ -490,20 +469,11 @@ public sealed class ShellPanelNavigationFailureTests
                         var navAfterDeadline = window.NavigationStartingCount;
                         stub.ReleasePanelOperatorProbeHold();
 
-                        var staleDeadline = DateTime.UtcNow.AddSeconds(30);
-                        var sawStale = false;
-                        while (DateTime.UtcNow < staleDeadline)
-                        {
-                            await Task.Delay(100);
-                            var delta = LogDelta(baseline);
-                            if (delta.Contains("reason=stale-probe-generation", StringComparison.Ordinal))
-                            {
-                                sawStale = true;
-                                break;
-                            }
-                        }
+                        await AwaitShellLogLineAsync(
+                            baseline,
+                            line => line.Contains("reason=stale-probe-generation", StringComparison.Ordinal),
+                            TimeSpan.FromSeconds(15));
 
-                        Assert.True(sawStale, "expected stale-probe-generation after probe release post-deadline");
                         Assert.Equal(navAfterDeadline, window.NavigationStartingCount);
                         Assert.Equal(0, window.PanelNavigationPendingCountForTests);
                         var deltaFinal = LogDelta(baseline);
@@ -1118,6 +1088,64 @@ public sealed class ShellPanelNavigationFailureTests
             ? Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log").Select(File.ReadAllText).Aggregate("", string.Concat)
             : Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log").Select(File.ReadAllText).Aggregate("", string.Concat)
                 .Replace(baseline, "");
+
+    private static async Task AwaitTaskOrTimeoutAsync(Task task, TimeSpan timeout, string timeoutMessage)
+    {
+        var completed = await Task.WhenAny(task, Task.Delay(timeout)).ConfigureAwait(false);
+        if (completed != task)
+        {
+            throw new System.TimeoutException(timeoutMessage);
+        }
+
+        await task.ConfigureAwait(false);
+    }
+
+    private static async Task<string> AwaitShellLogLineAsync(
+        string baseline,
+        Func<string, bool> linePredicate,
+        TimeSpan timeout)
+    {
+        var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var timeoutCts = new CancellationTokenSource(timeout);
+        timeoutCts.Token.Register(() =>
+            tcs.TrySetException(new System.TimeoutException("expected shell log line was not written")));
+
+        void TryMatch()
+        {
+            if (tcs.Task.IsCompleted)
+            {
+                return;
+            }
+
+            foreach (var line in LogDelta(baseline).Split('\n'))
+            {
+                if (linePredicate(line))
+                {
+                    tcs.TrySetResult(line);
+                    return;
+                }
+            }
+        }
+
+        using var watcher = new FileSystemWatcher(ShellPaths.ShellLogsDir, "shell-*.log")
+        {
+            NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.Size,
+            EnableRaisingEvents = true,
+        };
+        FileSystemEventHandler onLogChanged = (_, _) => TryMatch();
+        watcher.Changed += onLogChanged;
+        watcher.Created += onLogChanged;
+        TryMatch();
+        try
+        {
+            return await tcs.Task.ConfigureAwait(false);
+        }
+        finally
+        {
+            watcher.Changed -= onLogChanged;
+            watcher.Created -= onLogChanged;
+        }
+    }
 
     private static async Task WaitForOperatorPanelAsync(
         Microsoft.Web.WebView2.Wpf.WebView2 wv,

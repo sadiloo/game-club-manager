@@ -16,7 +16,8 @@ internal sealed class ShellPanelHttpSplitStub : IDisposable
     private readonly List<Task> _inflightHandlers = new();
     private readonly object _handlerLock = new();
     private readonly object _telemetryLock = new();
-    private readonly ManualResetEventSlim _panelProbeHold = new(true);
+    private TaskCompletionSource<bool>? _releaseHeldOperatorResponse;
+    private int _holdNextOperatorResponse;
     private readonly List<DateTime> _probeSuccessUtcTimestamps = new();
     private readonly List<OperatorDelayWindow> _operatorDelayWindows = new();
     private Task? _listenTask;
@@ -51,14 +52,18 @@ internal sealed class ShellPanelHttpSplitStub : IDisposable
 
     public int ProbeRequestCount => _probeRequestCount;
 
+    /// <summary>Signaled when an /operator/ handler begins (after hold gate, before delay/response).</summary>
+    public TaskCompletionSource<bool>? OperatorHandlerEnteredForTests { get; set; }
+
     public void HoldNextPanelOperatorProbe()
     {
-        _panelProbeHold.Reset();
+        _holdNextOperatorResponse = 1;
+        _releaseHeldOperatorResponse = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
     }
 
     public void ReleasePanelOperatorProbeHold()
     {
-        _panelProbeHold.Set();
+        _releaseHeldOperatorResponse?.TrySetResult(true);
     }
 
     public int ProbeSuccessCount
@@ -159,7 +164,6 @@ internal sealed class ShellPanelHttpSplitStub : IDisposable
 
         _cts.Dispose();
         _started.Dispose();
-        _panelProbeHold.Dispose();
     }
 
     public string PanelOrigin => $"http://127.0.0.1:{Port}";
@@ -240,10 +244,16 @@ internal sealed class ShellPanelHttpSplitStub : IDisposable
             if (path.StartsWith("/operator", StringComparison.OrdinalIgnoreCase))
             {
                 Interlocked.Increment(ref _operatorResponseCount);
-                if (!_panelProbeHold.Wait(TimeSpan.FromSeconds(60)))
+                OperatorHandlerEnteredForTests?.TrySetResult(true);
+                if (Interlocked.Exchange(ref _holdNextOperatorResponse, 0) == 1)
                 {
-                    throw new TimeoutException("panel operator probe hold timed out");
+                    var release = _releaseHeldOperatorResponse;
+                    if (release is not null)
+                    {
+                        await release.Task.ConfigureAwait(false);
+                    }
                 }
+
                 var delayMs = OperatorDelayMilliseconds;
                 if (delayMs > 0)
                 {
