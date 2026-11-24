@@ -16,6 +16,7 @@ internal sealed class ShellPanelHttpSplitStub : IDisposable
     private readonly List<Task> _inflightHandlers = new();
     private readonly object _handlerLock = new();
     private readonly object _telemetryLock = new();
+    private readonly ManualResetEventSlim _panelProbeHold = new(true);
     private readonly List<DateTime> _probeSuccessUtcTimestamps = new();
     private readonly List<OperatorDelayWindow> _operatorDelayWindows = new();
     private Task? _listenTask;
@@ -49,6 +50,16 @@ internal sealed class ShellPanelHttpSplitStub : IDisposable
     private int _probeRequestCount;
 
     public int ProbeRequestCount => _probeRequestCount;
+
+    public void HoldNextPanelOperatorProbe()
+    {
+        _panelProbeHold.Reset();
+    }
+
+    public void ReleasePanelOperatorProbeHold()
+    {
+        _panelProbeHold.Set();
+    }
 
     public int ProbeSuccessCount
     {
@@ -148,6 +159,7 @@ internal sealed class ShellPanelHttpSplitStub : IDisposable
 
         _cts.Dispose();
         _started.Dispose();
+        _panelProbeHold.Dispose();
     }
 
     public string PanelOrigin => $"http://127.0.0.1:{Port}";
@@ -228,6 +240,10 @@ internal sealed class ShellPanelHttpSplitStub : IDisposable
             if (path.StartsWith("/operator", StringComparison.OrdinalIgnoreCase))
             {
                 Interlocked.Increment(ref _operatorResponseCount);
+                if (!_panelProbeHold.Wait(TimeSpan.FromSeconds(60)))
+                {
+                    throw new TimeoutException("panel operator probe hold timed out");
+                }
                 var delayMs = OperatorDelayMilliseconds;
                 if (delayMs > 0)
                 {

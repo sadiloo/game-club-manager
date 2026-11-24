@@ -477,8 +477,9 @@ public sealed class ShellPanelNavigationFailureTests
                         var wv = await WaitForPanelWebViewAsync(window, TimeSpan.FromSeconds(45));
                         await WaitForPanelUnavailableOfflineAsync(wv, TimeSpan.FromSeconds(90));
                         stub.OperatorStatusCode = 200;
-                        stub.OperatorDelayMilliseconds = 2_500;
+                        stub.OperatorDelayMilliseconds = 0;
                         stub.ProbeDelayMilliseconds = 0;
+                        stub.HoldNextPanelOperatorProbe();
 
                         var responsesBefore = stub.OperatorResponseCount;
                         window.TriggerRunningPanelProbeForTests();
@@ -495,8 +496,8 @@ public sealed class ShellPanelNavigationFailureTests
                         }
 
                         Assert.True(probeStarted, "panel-recovery probe did not start before reload invalidation");
-                        await Task.Delay(2_000);
                         window.ReloadPanel();
+                        stub.ReleasePanelOperatorProbeHold();
 
                         var staleLineDeadline = DateTime.UtcNow.AddSeconds(45);
                         var sawStale = false;
