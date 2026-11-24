@@ -252,7 +252,9 @@ public sealed class OperatorPanelController(
         return Ok(await bills.GetBillDetailAsync(sessionId, ct));
     }
 
-    public sealed record ConfirmRequest(IReadOnlyList<OperatorBillService.PaymentInput> Payments);
+    public sealed record ConfirmRequest(
+        IReadOnlyList<OperatorBillService.PaymentInput> Payments,
+        long? PreviewCollectibleToman = null);
 
     public sealed record PrepaidDurationBody(int Minutes);
 
@@ -280,7 +282,7 @@ public sealed class OperatorPanelController(
     [HttpPost("sessions/{sessionId:guid}/bill/confirm")]
     public async Task<IActionResult> ConfirmBill(Guid sessionId, ConfirmRequest body, CancellationToken ct)
     {
-        var invoice = await bills.ConfirmBillAsync(sessionId, body.Payments, ct);
+        var invoice = await bills.ConfirmBillAsync(sessionId, body.Payments, body.PreviewCollectibleToman, ct);
         return Ok(new
         {
             invoice.Number,
@@ -489,7 +491,7 @@ public sealed class OperatorPanelController(
     [HttpPost("buffet-only/{openSaleId:guid}/confirm")]
     public async Task<IActionResult> ConfirmBuffetOnly(Guid openSaleId, ConfirmRequest body, CancellationToken ct)
     {
-        var invoice = await buffetSales.ConfirmBuffetOnlyAsync(openSaleId, body.Payments, ct);
+        var invoice = await buffetSales.ConfirmBuffetOnlyAsync(openSaleId, body.Payments, body.PreviewCollectibleToman, ct);
         return Ok(new
         {
             invoice.Number,

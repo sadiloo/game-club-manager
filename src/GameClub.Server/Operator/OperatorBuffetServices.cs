@@ -428,6 +428,7 @@ public sealed class OperatorBuffetSaleService(
     public async Task<InvoiceEntity> ConfirmBuffetOnlyAsync(
         Guid openSaleId,
         IReadOnlyList<OperatorBillService.PaymentInput> payments,
+        long? previewCollectibleToman,
         CancellationToken ct)
     {
         return await WithOpenSaleLockAsync(openSaleId, async (sale, innerCt) =>
@@ -435,10 +436,11 @@ public sealed class OperatorBuffetSaleService(
             var bill = sale.PendingBill
                 ?? await db.PendingBills.FirstOrDefaultAsync(b => b.OpenSaleId == sale.Id, innerCt)
                 ?? throw new ApiException(StatusCodes.Status409Conflict, "no_bill", "صورتحسابی در انتظار تأیید نیست.");
+            var live = await calculator.ComputeBuffetOnlyAsync(sale.Lines, sale.CustomerId, null, innerCt);
             var effective = await bills.PreparePaymentsForAllocationAsync(
                 sale.CustomerId,
-                bill.CollectibleToman,
-                bill.UnroundedPayableToman,
+                live.CollectibleToman,
+                live.UnroundedPayableToman,
                 null,
                 payments,
                 innerCt);
@@ -448,6 +450,7 @@ public sealed class OperatorBuffetSaleService(
                 p.AmountToman,
                 OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet ? sale.CustomerId?.ToString() : null)).ToList();
             var amounts = await calculator.ComputeBuffetOnlyAsync(sale.Lines, sale.CustomerId, tenders, innerCt, effective);
+            OperatorBillService.EnsureClientPreviewCollectibleCurrent(previewCollectibleToman, amounts.CollectibleToman);
             bill.UnroundedPayableToman = amounts.UnroundedPayableToman;
             bill.RoundingToman = amounts.RoundingToman;
             bill.CollectibleToman = amounts.CollectibleToman;

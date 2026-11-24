@@ -54,15 +54,16 @@ public sealed class RoundingSettingsService(AppDbContext db, AuditService audit,
     public async Task<(RoundingPolicy Policy, PaymentRoundingSettings Settings)> LoadForPaymentAsync(CancellationToken ct = default)
         => RoundingSettingsResolver.ResolveRoundingSettingsForBill(await db.BranchRounding.AsNoTracking().SingleAsync(ct));
 
-    public async Task<BranchRatesSnapshot> ResolveRatesForSessionBillAsync(BranchRatesSnapshot ratesSnapshot, CancellationToken ct = default)
-        => RoundingSettingsResolver.ResolveSessionRatesSnapshot(
+    public async Task<BranchRatesSnapshot> ResolveRatesForPaymentAsync(BranchRatesSnapshot ratesSnapshot, CancellationToken ct = default)
+        => RoundingSettingsResolver.ResolveRatesForPayment(
             ratesSnapshot,
             await db.BranchRounding.AsNoTracking().SingleAsync(ct));
 
-    public async Task<BranchRatesSnapshot> ResolveRatesForOpenBillAsync(BranchRatesSnapshot ratesSnapshot, CancellationToken ct = default)
-        => RoundingSettingsResolver.ResolveOpenBillRatesSnapshot(
-            ratesSnapshot,
-            await db.BranchRounding.AsNoTracking().SingleAsync(ct));
+    public Task<BranchRatesSnapshot> ResolveRatesForSessionBillAsync(BranchRatesSnapshot ratesSnapshot, CancellationToken ct = default)
+        => ResolveRatesForPaymentAsync(ratesSnapshot, ct);
+
+    public Task<BranchRatesSnapshot> ResolveRatesForOpenBillAsync(BranchRatesSnapshot ratesSnapshot, CancellationToken ct = default)
+        => ResolveRatesForPaymentAsync(ratesSnapshot, ct);
 
     internal static RoundingPolicy BuildRoundingPolicy(BranchRoundingEntity row)
     {
@@ -98,26 +99,20 @@ public sealed class RoundingSettingsService(AppDbContext db, AuditService audit,
 
 public static class RoundingSettingsResolver
 {
-    // TODO_OWNER: open/pending bills — switch snapshot-at-open vs read-at-payment here only.
     public static (RoundingPolicy Policy, PaymentRoundingSettings Settings) ResolveRoundingSettingsForBill(BranchRoundingEntity row)
         => (RoundingSettingsService.BuildRoundingPolicy(row), RoundingSettingsService.BuildPaymentSettings(row));
 
-    /// <summary>
-    /// Invoice <see cref="RoundingPolicy"/> on session bills. Today: rate-card snapshot rounding is kept;
-    /// live branch settings must not replace it (see TODO_OWNER on <see cref="ResolveRoundingSettingsForBill"/>).
-    /// </summary>
-    public static BranchRatesSnapshot ResolveSessionRatesSnapshot(BranchRatesSnapshot ratesSnapshot, BranchRoundingEntity liveRow)
-    {
-        _ = liveRow;
-        return ratesSnapshot;
-    }
-
-    /// <summary>Open sale / buffet-only bills without a rate-card snapshot: read rounding at payment via resolver.</summary>
-    public static BranchRatesSnapshot ResolveOpenBillRatesSnapshot(BranchRatesSnapshot ratesSnapshot, BranchRoundingEntity liveRow)
+    public static BranchRatesSnapshot ResolveRatesForPayment(BranchRatesSnapshot ratesSnapshot, BranchRoundingEntity liveRow)
     {
         var (policy, _) = ResolveRoundingSettingsForBill(liveRow);
         return ratesSnapshot with { Rounding = policy };
     }
+
+    public static BranchRatesSnapshot ResolveOpenBillRatesSnapshot(BranchRatesSnapshot ratesSnapshot, BranchRoundingEntity liveRow)
+        => ResolveRatesForPayment(ratesSnapshot, liveRow);
+
+    public static BranchRatesSnapshot ResolveSessionRatesSnapshot(BranchRatesSnapshot ratesSnapshot, BranchRoundingEntity liveRow)
+        => ResolveRatesForPayment(ratesSnapshot, liveRow);
 }
 
 public sealed record RoundingSettingsResponse(

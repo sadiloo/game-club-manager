@@ -208,7 +208,7 @@ public static class WalletShortRemainderSupport
                 }
                 else
                 {
-                    list.Add(p with { AmountToman = snapshot.WalletAutoDrawToman });
+                    list.Add(p);
                 }
             }
             else
