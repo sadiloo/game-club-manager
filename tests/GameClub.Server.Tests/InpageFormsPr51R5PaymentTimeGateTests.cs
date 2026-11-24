@@ -323,6 +323,202 @@ public sealed class InpageFormsPr51R5PaymentTimeGateTests(GameClubWebApplication
     }
 
     [Fact]
+    public async Task gate_mutant_b4_buffet_l3_preview_confirm_50000_after_step_down_open_step_up()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var manager = await factory.CreateOperatorClientAsync("manager", "1234");
+        var op = await factory.CreateOperatorClientAsync();
+        await manager.PutAsJsonAsync("/api/operator/members/settings/debt-floor", new { floorToman = 0L });
+        await PutRoundingAsync(manager, RoundingBody(stepToman: 1_000L, direction: "Down"));
+        var customerId = await CreateCustomerAsync(op);
+        (await op.PostAsJsonAsync(
+            $"/api/operator/members/customers/{customerId}/wallet/top-up",
+            new { method = "Cash", amountToman = 49_700L, commandId = Guid.NewGuid() })).EnsureSuccessStatusCode();
+        var openSaleId = await BuffetCheckoutAsync(op, customerId, 49_000L);
+        await PutRoundingAsync(manager, RoundingBody(stepToman: 5_000L, direction: "Up"));
+        var payments = new[]
+        {
+            new { method = "Wallet", amountToman = 49_700L },
+            new { method = "Cash", amountToman = 300L },
+        };
+        var preview = await op.PostAsJsonAsync(
+            $"/api/operator/buffet-only/{openSaleId}/bill/preview",
+            new { payments });
+        preview.EnsureSuccessStatusCode();
+        var previewCollectible = (await preview.Content.ReadFromJsonAsync<JsonElement>())!
+            .GetProperty("bill").GetProperty("collectibleToman").GetInt64();
+        Assert.Equal(50_000, previewCollectible);
+        (await op.PostAsJsonAsync(
+            $"/api/operator/buffet-only/{openSaleId}/confirm",
+            new { previewCollectibleToman = previewCollectible, payments })).EnsureSuccessStatusCode();
+        using var scope = factory.Services.CreateScope();
+        Assert.Equal(50_000, await scope.ServiceProvider.GetRequiredService<AppDbContext>().Invoices.AsNoTracking().Select(i => i.CollectibleToman).SingleAsync());
+    }
+
+    [Fact]
+    public async Task gate_mutant_b4_session_l4_preview_confirm_50000_after_step_down_open_step_up()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var api = factory.CreateClientWithKey();
+        var manager = await factory.CreateOperatorClientAsync("manager", "1234");
+        var op = await factory.CreateOperatorClientAsync();
+        await manager.PutAsJsonAsync("/api/operator/members/settings/debt-floor", new { floorToman = 0L });
+        await PutRoundingAsync(manager, RoundingBody(stepToman: 1_000L, direction: "Down"));
+        var customerId = await CreateCustomerAsync(op);
+        (await op.PostAsJsonAsync(
+            $"/api/operator/members/customers/{customerId}/wallet/top-up",
+            new { method = "Cash", amountToman = 49_700L, commandId = Guid.NewGuid() })).EnsureSuccessStatusCode();
+        var sessionId = await SessionBillOpenAsync(api, op, customerId, "ps5-l4", customAmountToman: 49_000L);
+        await PutRoundingAsync(manager, RoundingBody(stepToman: 5_000L, direction: "Up"));
+        var payments = new[]
+        {
+            new { method = "Wallet", amountToman = 49_700L },
+            new { method = "Cash", amountToman = 300L },
+        };
+        var preview = await op.PostAsJsonAsync($"/api/operator/sessions/{sessionId}/bill/preview", new { payments });
+        preview.EnsureSuccessStatusCode();
+        var previewCollectible = (await preview.Content.ReadFromJsonAsync<JsonElement>())!.GetProperty("collectibleToman").GetInt64();
+        Assert.Equal(50_000, previewCollectible);
+        (await op.PostAsJsonAsync(
+            $"/api/operator/sessions/{sessionId}/bill/confirm",
+            new { previewCollectibleToman = previewCollectible, payments })).EnsureSuccessStatusCode();
+        using var scope = factory.Services.CreateScope();
+        Assert.Equal(50_000, await scope.ServiceProvider.GetRequiredService<AppDbContext>().Invoices.AsNoTracking().Select(i => i.CollectibleToman).SingleAsync());
+    }
+
+    [Fact]
+    public async Task gate_mutant_b4_buffet_l7_explicit_cash_preview_confirm_50000_after_step_down_open_step_up()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var manager = await factory.CreateOperatorClientAsync("manager", "1234");
+        var op = await factory.CreateOperatorClientAsync();
+        await manager.PutAsJsonAsync("/api/operator/members/settings/debt-floor", new { floorToman = -50_000L });
+        await PutRoundingAsync(manager, RoundingBody(stepToman: 1_000L, direction: "Down"));
+        var customerId = await CreateCustomerAsync(op);
+        (await op.PostAsJsonAsync(
+            $"/api/operator/members/customers/{customerId}/wallet/top-up",
+            new { method = "Cash", amountToman = 49_700L, commandId = Guid.NewGuid() })).EnsureSuccessStatusCode();
+        var openSaleId = await BuffetCheckoutAsync(op, customerId, 49_000L);
+        await PutRoundingAsync(manager, RoundingBody(stepToman: 5_000L, direction: "Up"));
+        const string json = """
+            {"payments":[
+            {"method":"Wallet","amountToman":49700,"shortRemainderMethod":"Cash"},
+            {"method":"Cash","amountToman":300}]}
+            """;
+        var preview = await op.PostAsync(
+            $"/api/operator/buffet-only/{openSaleId}/bill/preview",
+            new StringContent(json, Encoding.UTF8, "application/json"));
+        preview.EnsureSuccessStatusCode();
+        var previewCollectible = (await preview.Content.ReadFromJsonAsync<JsonElement>())!
+            .GetProperty("bill").GetProperty("collectibleToman").GetInt64();
+        Assert.Equal(50_000, previewCollectible);
+        var confirmJson = $$"""
+            {"previewCollectibleToman":{{previewCollectible}},"payments":[
+            {"method":"Wallet","amountToman":49700,"shortRemainderMethod":"Cash"},
+            {"method":"Cash","amountToman":300}]}
+            """;
+        (await op.PostAsync(
+            $"/api/operator/buffet-only/{openSaleId}/confirm",
+            new StringContent(confirmJson, Encoding.UTF8, "application/json"))).EnsureSuccessStatusCode();
+        using var scope = factory.Services.CreateScope();
+        Assert.Equal(50_000, await scope.ServiceProvider.GetRequiredService<AppDbContext>().Invoices.AsNoTracking().Select(i => i.CollectibleToman).SingleAsync());
+    }
+
+    [Fact]
+    public async Task gate_mutant_b4_session_l8_explicit_cash_preview_confirm_50000_after_step_down_open_step_up()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var api = factory.CreateClientWithKey();
+        var manager = await factory.CreateOperatorClientAsync("manager", "1234");
+        var op = await factory.CreateOperatorClientAsync();
+        await manager.PutAsJsonAsync("/api/operator/members/settings/debt-floor", new { floorToman = -50_000L });
+        await PutRoundingAsync(manager, RoundingBody(stepToman: 1_000L, direction: "Down"));
+        var customerId = await CreateCustomerAsync(op);
+        (await op.PostAsJsonAsync(
+            $"/api/operator/members/customers/{customerId}/wallet/top-up",
+            new { method = "Cash", amountToman = 49_700L, commandId = Guid.NewGuid() })).EnsureSuccessStatusCode();
+        var sessionId = await SessionBillOpenAsync(api, op, customerId, "ps5-l8", customAmountToman: 49_000L);
+        await PutRoundingAsync(manager, RoundingBody(stepToman: 5_000L, direction: "Up"));
+        const string json = """
+            {"payments":[
+            {"method":"Wallet","amountToman":49700,"shortRemainderMethod":"Cash"},
+            {"method":"Cash","amountToman":300}]}
+            """;
+        var preview = await op.PostAsync(
+            $"/api/operator/sessions/{sessionId}/bill/preview",
+            new StringContent(json, Encoding.UTF8, "application/json"));
+        preview.EnsureSuccessStatusCode();
+        var previewCollectible = (await preview.Content.ReadFromJsonAsync<JsonElement>())!.GetProperty("collectibleToman").GetInt64();
+        Assert.Equal(50_000, previewCollectible);
+        var confirmJson = $$"""
+            {"previewCollectibleToman":{{previewCollectible}},"payments":[
+            {"method":"Wallet","amountToman":49700,"shortRemainderMethod":"Cash"},
+            {"method":"Cash","amountToman":300}]}
+            """;
+        (await op.PostAsync(
+            $"/api/operator/sessions/{sessionId}/bill/confirm",
+            new StringContent(confirmJson, Encoding.UTF8, "application/json"))).EnsureSuccessStatusCode();
+        using var scope = factory.Services.CreateScope();
+        Assert.Equal(50_000, await scope.ServiceProvider.GetRequiredService<AppDbContext>().Invoices.AsNoTracking().Select(i => i.CollectibleToman).SingleAsync());
+    }
+
+    [Fact]
+    public async Task gate_mutant_b4_buffet_t07_preview_50000_over_tender_after_rounding_enabled_at_payment()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var manager = await factory.CreateOperatorClientAsync("manager", "1234");
+        var op = await factory.CreateOperatorClientAsync();
+        await PutRoundingAsync(manager, RoundingBody(enabled: false));
+        var customerId = await CreateCustomerAsync(op);
+        (await op.PostAsJsonAsync(
+            $"/api/operator/members/customers/{customerId}/wallet/top-up",
+            new { method = "Cash", amountToman = 200_000L, commandId = Guid.NewGuid() })).EnsureSuccessStatusCode();
+        var openSaleId = await BuffetCheckoutAsync(op, customerId, 49_500L);
+        await PutRoundingAsync(manager, RoundingBody(enabled: true));
+        var preview = await op.PostAsJsonAsync(
+            $"/api/operator/buffet-only/{openSaleId}/bill/preview",
+            new
+            {
+                payments = new[]
+                {
+                    new { method = "Wallet", amountToman = 49_500L },
+                    new { method = "Cash", amountToman = 1_000L },
+                },
+            });
+        preview.EnsureSuccessStatusCode();
+        Assert.Equal(50_000, (await preview.Content.ReadFromJsonAsync<JsonElement>())!
+            .GetProperty("bill").GetProperty("collectibleToman").GetInt64());
+    }
+
+    [Fact]
+    public async Task gate_mutant_b4_session_t08_preview_50000_over_tender_after_rounding_enabled_at_payment()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var api = factory.CreateClientWithKey();
+        var manager = await factory.CreateOperatorClientAsync("manager", "1234");
+        var op = await factory.CreateOperatorClientAsync();
+        await PutRoundingAsync(manager, RoundingBody(enabled: false));
+        var customerId = await CreateCustomerAsync(op);
+        (await op.PostAsJsonAsync(
+            $"/api/operator/members/customers/{customerId}/wallet/top-up",
+            new { method = "Cash", amountToman = 200_000L, commandId = Guid.NewGuid() })).EnsureSuccessStatusCode();
+        var sessionId = await SessionBillOpenAsync(api, op, customerId, "ps5-t08");
+        await PutRoundingAsync(manager, RoundingBody(enabled: true));
+        var preview = await op.PostAsJsonAsync(
+            $"/api/operator/sessions/{sessionId}/bill/preview",
+            new
+            {
+                payments = new[]
+                {
+                    new { method = "Wallet", amountToman = 49_500L },
+                    new { method = "Cash", amountToman = 1_000L },
+                },
+            });
+        preview.EnsureSuccessStatusCode();
+        Assert.Equal(50_000, (await preview.Content.ReadFromJsonAsync<JsonElement>())!.GetProperty("collectibleToman").GetInt64());
+    }
+
+    [Fact]
     public async Task gate_mutant_g2_buffet_x11_explicit_cash_wrong_wallet_preview_and_confirm_400()
     {
         await S3TestHelpers.ResetAsync(factory);
@@ -338,7 +534,7 @@ public sealed class InpageFormsPr51R5PaymentTimeGateTests(GameClubWebApplication
         const string json = """
             {"payments":[
             {"method":"Wallet","amountToman":49000,"shortRemainderMethod":"Cash"},
-            {"method":"Cash","amountToman":500}]}
+            {"method":"Cash","amountToman":300}]}
             """;
         var preview = await op.PostAsync(
             $"/api/operator/buffet-only/{openSaleId}/bill/preview",
@@ -370,7 +566,7 @@ public sealed class InpageFormsPr51R5PaymentTimeGateTests(GameClubWebApplication
         const string json = """
             {"payments":[
             {"method":"Wallet","amountToman":49000,"shortRemainderMethod":"Cash"},
-            {"method":"Cash","amountToman":500}]}
+            {"method":"Cash","amountToman":300}]}
             """;
         var preview = await op.PostAsync(
             $"/api/operator/sessions/{sessionId}/bill/preview",
