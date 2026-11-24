@@ -58,7 +58,12 @@ if ($isUpgrade -and (Test-Path -LiteralPath $configPath)) {
 if ($InstallMode -eq "upgrade") {
     if (Test-Phase @("upgrade-pins", "upgrade", "install-all")) {
         if ($DefaultPinsFile -and (Test-Path -LiteralPath $DefaultPinsFile)) {
-            & (Join-Path $PSScriptRoot "Apply-DefaultPinReplacements.ps1") -PinsFile $DefaultPinsFile -ServerExe $ServerExe
+            $pinsRaw = (Get-Content -LiteralPath $DefaultPinsFile -Raw).Trim()
+            if ($pinsRaw -ne '[]') {
+                & (Join-Path $PSScriptRoot "Apply-DefaultPinReplacements.ps1") -PinsFile $DefaultPinsFile -ServerExe $ServerExe
+            } else {
+                Write-Host "server-postinstall: upgrade-pins skip (empty DEFAULTPINS)"
+            }
         }
         if ($InstallPhase -eq "upgrade-pins") { exit 0 }
     }

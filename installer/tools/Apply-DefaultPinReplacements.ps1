@@ -24,8 +24,15 @@ if ($raw -is [System.Array]) {
     }
 }
 
-foreach ($e in $entries) {
-    if ([string]::IsNullOrWhiteSpace($e.username) -or [string]::IsNullOrWhiteSpace($e.pin)) { continue }
+$active = @($entries | Where-Object {
+        -not [string]::IsNullOrWhiteSpace($_.username) -and -not [string]::IsNullOrWhiteSpace($_.pin)
+    })
+if ($active.Count -eq 0) {
+    Write-Host "Apply-DefaultPinReplacements: skip (no pin entries)"
+    exit 0
+}
+
+foreach ($e in $active) {
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $ServerExe
     $psi.Arguments = "--set-pin $($e.username)"

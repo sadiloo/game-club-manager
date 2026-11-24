@@ -1,39 +1,48 @@
 ﻿$ErrorActionPreference = "Stop"
 
-function Wait-CheckpointInnoSetupProcesses {
-    param(
-        [int] $LeaderPid,
-        [int] $TimeoutSeconds = 3600
-    )
-    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
-    while ([DateTime]::UtcNow -lt $deadline) {
-        $setupProcs = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
-                $_.ProcessName -like "CheckpointServerSetup*"
-            })
-        $leader = Get-Process -Id $LeaderPid -ErrorAction SilentlyContinue
-        if (-not $setupProcs -and (-not $leader -or $leader.HasExited)) {
-            return
-        }
-        Start-Sleep -Seconds 5
-    }
+function Stop-CheckpointInnoSetupProcesses {
     foreach ($p in @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -like "CheckpointServerSetup*" })) {
-        Write-Host "Wait-CheckpointInnoSetupProcesses: still running pid=$($p.Id) name=$($p.ProcessName)"
+        Write-Host "Stop-CheckpointInnoSetupProcesses: pid=$($p.Id) name=$($p.ProcessName)"
+        Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
     }
-    throw "Checkpoint server Inno setup did not finish within ${TimeoutSeconds}s"
 }
 
 function Start-CheckpointServerSetup {
     param(
         [string] $Exe,
         [string[]] $ArgumentList,
-        [int] $TimeoutSeconds = 3600
+        [int] $TimeoutSeconds = 2700,
+        [string] $LogPath = $null
     )
-    $proc = Start-Process -FilePath $Exe -ArgumentList $ArgumentList -PassThru
-    Wait-CheckpointInnoSetupProcesses -LeaderPid $proc.Id -TimeoutSeconds $TimeoutSeconds
-    if (-not $proc.HasExited) {
-        $proc.WaitForExit()
+  $proc = Start-Process -FilePath $Exe -ArgumentList $ArgumentList -PassThru
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    $lastLog = [DateTime]::MinValue
+    while ([DateTime]::UtcNow -lt $deadline) {
+        if ($proc.HasExited) {
+            return $proc
+        }
+        $children = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
+                $_.ProcessName -like "CheckpointServerSetup*"
+            })
+        if ($children) {
+            $names = ($children | ForEach-Object { "$($_.ProcessName):$($_.Id)" }) -join ", "
+            if ((([DateTime]::UtcNow - $lastLog).TotalSeconds) -ge 120) {
+                Write-Host "Start-CheckpointServerSetup: waiting leader=$($proc.Id) children=$names"
+                $lastLog = [DateTime]::UtcNow
+            }
+        }
+        Start-Sleep -Seconds 5
     }
-    return $proc
+    if ($LogPath -and (Test-Path -LiteralPath $LogPath)) {
+        Write-Host "=== tail $LogPath (setup timeout) ==="
+        Get-Content -LiteralPath $LogPath -Tail 40 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
+    }
+    Write-InstallerAcceptanceFailureDiagnostics
+    Stop-CheckpointInnoSetupProcesses
+    if (-not $proc.HasExited) {
+        Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+    }
+    throw "Checkpoint server Inno setup did not finish within ${TimeoutSeconds}s (exe=$Exe)"
 }
 
 function Assert-InnoSetupLogNoFailedRuns {
