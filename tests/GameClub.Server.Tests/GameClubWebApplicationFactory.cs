@@ -10,10 +10,13 @@ using GameClub.Server.Time;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using System.Net;
 
 namespace GameClub.Server.Tests;
 
@@ -23,6 +26,15 @@ public class GameClubWebApplicationFactory : WebApplicationFactory<Program>
 
   /// <summary>When set, registers harness PC special-band times on the test host only.</summary>
     public PcSpecialBandHarnessOptions? HarnessPcSpecialBand { get; set; }
+
+    /// <summary>When set, all requests appear to come from this remote address (loopback tests).</summary>
+    public IPAddress? SimulatedRemoteIpAddress { get; set; }
+
+    /// <summary>Overrides the PostgreSQL connection string for this host only.</summary>
+    public string? ConnectionStringOverride { get; set; }
+
+    /// <summary>Makes <c>SELECT 1</c> fail so GET /api/local/server-status returns dbOk=false.</summary>
+    public bool FailSelectOneProbe { get; set; }
 
     /// <summary>
     /// When false (default), the test host does not run periodic dead-PC sweeps.
@@ -59,7 +71,8 @@ public class GameClubWebApplicationFactory : WebApplicationFactory<Program>
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
-        ConnectionString = Environment.GetEnvironmentVariable("GAMECLUB_TEST_DATABASE")
+        ConnectionString = ConnectionStringOverride
+            ?? Environment.GetEnvironmentVariable("GAMECLUB_TEST_DATABASE")
             ?? Environment.GetEnvironmentVariable("GAMECLUB_DATABASE")
             ?? "Host=localhost;Database=gameclub_test;Username=gameclub;Password=gameclub";
 
@@ -97,7 +110,21 @@ public class GameClubWebApplicationFactory : WebApplicationFactory<Program>
             services.AddHostedService<TestDeadPcSweepBackgroundService>();
             SaveTitleSecondSaveFaultInjectionRegistration.Register(services);
             KioskProfileInsertRaceInjectionRegistration.Register(services);
+            if (SimulatedRemoteIpAddress is not null)
+            {
+                services.AddSingleton<IStartupFilter>(new NonLoopbackRemoteIpStartupFilter(SimulatedRemoteIpAddress));
+            }
         });
+
+        if (FailSelectOneProbe)
+        {
+            builder.ConfigureTestServices(services =>
+            {
+                services.TryAddSingleton<SelectOneFaultInterceptor>();
+                services.TryAddEnumerable(
+                    ServiceDescriptor.Singleton<IDbContextOptionsConfiguration<AppDbContext>, SelectOneFaultDbContextOptions>());
+            });
+        }
     }
 
     protected override IHost CreateHost(IHostBuilder builder)
