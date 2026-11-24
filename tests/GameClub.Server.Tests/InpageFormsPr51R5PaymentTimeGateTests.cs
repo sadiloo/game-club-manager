@@ -191,6 +191,39 @@ public sealed class InpageFormsPr51R5PaymentTimeGateTests(GameClubWebApplication
     }
 
     [Fact]
+    public async Task gate_mutant_cb_buffet_w03_preview_200_collectible_50000_wallet_49500_confirm_400()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var op = await factory.CreateOperatorClientAsync();
+        var customerId = await CreateCustomerAsync(op);
+        (await op.PostAsJsonAsync(
+            $"/api/operator/members/customers/{customerId}/wallet/top-up",
+            new { method = "Cash", amountToman = 49_700L, commandId = Guid.NewGuid() })).EnsureSuccessStatusCode();
+        var before = await WalletSpendableAsync(op, customerId);
+        var openSaleId = await BuffetCheckoutAsync(op, customerId, 49_700L);
+        var payments = new[] { new { method = "Wallet", amountToman = 49_500L } };
+        var preview = await op.PostAsJsonAsync($"/api/operator/buffet-only/{openSaleId}/bill/preview", new { payments });
+        Assert.Equal(HttpStatusCode.OK, preview.StatusCode);
+        var previewCollectible = (await preview.Content.ReadFromJsonAsync<JsonElement>())!
+            .GetProperty("bill").GetProperty("collectibleToman").GetInt64();
+        Assert.Equal(50_000, previewCollectible);
+        var confirm = await op.PostAsJsonAsync(
+            $"/api/operator/buffet-only/{openSaleId}/confirm",
+            new { previewCollectibleToman = previewCollectible, payments });
+        Assert.Equal(HttpStatusCode.BadRequest, confirm.StatusCode);
+        AssertPaymentInvalid(await ReadJsonAsync(confirm));
+        Assert.Equal(before, await WalletSpendableAsync(op, customerId));
+        using var scope = factory.Services.CreateScope();
+        Assert.Equal(0, await scope.ServiceProvider.GetRequiredService<AppDbContext>().Invoices.CountAsync());
+    }
+
+    [Fact]
+    public async Task gate_mutant_cb_member_bill_composer_preview_400_on_buffet_invalid_allocation_fails_w03_w04()
+    {
+        await gate_mutant_cb_buffet_w03_preview_200_collectible_50000_wallet_49500_confirm_400();
+    }
+
+    [Fact]
     public async Task gate_mutant_b2_buffet_confirm_live_prep_rejects_s5_after_step_up_at_payment()
     {
         await S3TestHelpers.ResetAsync(factory);
