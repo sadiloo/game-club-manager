@@ -20,7 +20,7 @@ function Invoke-PostgresNative {
     $old = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     try {
-        & $FilePath @ArgumentList
+        $null = & $FilePath @ArgumentList 2>&1
         return $LASTEXITCODE
     } finally {
         $ErrorActionPreference = $old
