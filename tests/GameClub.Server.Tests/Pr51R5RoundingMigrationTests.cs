@@ -90,7 +90,6 @@ public sealed class Pr51R5RoundingMigrationTests
                 {
                     StepToman = 5_000,
                     Direction = "Up",
-                    PcSpecialBandSurchargeToman = 20_000,
                 });
                 await db.SaveChangesAsync();
             }

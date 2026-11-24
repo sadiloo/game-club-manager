@@ -138,9 +138,6 @@ namespace GameClub.Server.Data.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
-                    b.Property<long>("PcSpecialBandSurchargeToman")
-                        .HasColumnType("bigint");
-
                     b.Property<bool>("RoundingEnabled")
                         .HasColumnType("boolean");
 

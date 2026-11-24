@@ -10,33 +10,12 @@ namespace GameClub.Server.Data.Migrations
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
         {
-            migrationBuilder.AddColumn<bool>(
-                name: "AllowWalletShortBalanceDebt",
-                table: "branch_rounding",
-                type: "boolean",
-                nullable: false,
-                defaultValue: true);
-
-            migrationBuilder.AddColumn<bool>(
-                name: "ApplyToWallet",
-                table: "branch_rounding",
-                type: "boolean",
-                nullable: false,
-                defaultValue: true);
-
-            migrationBuilder.AddColumn<bool>(
-                name: "RoundingEnabled",
-                table: "branch_rounding",
-                type: "boolean",
-                nullable: false,
-                defaultValue: true);
-
-            migrationBuilder.AddColumn<long>(
-                name: "WalletMinBillToman",
-                table: "branch_rounding",
-                type: "bigint",
-                nullable: false,
-                defaultValue: 5000L);
+            migrationBuilder.Sql("""
+                ALTER TABLE branch_rounding ADD COLUMN IF NOT EXISTS "AllowWalletShortBalanceDebt" boolean NOT NULL DEFAULT true;
+                ALTER TABLE branch_rounding ADD COLUMN IF NOT EXISTS "ApplyToWallet" boolean NOT NULL DEFAULT true;
+                ALTER TABLE branch_rounding ADD COLUMN IF NOT EXISTS "RoundingEnabled" boolean NOT NULL DEFAULT true;
+                ALTER TABLE branch_rounding ADD COLUMN IF NOT EXISTS "WalletMinBillToman" bigint NOT NULL DEFAULT 5000;
+                """);
         }
 
         /// <inheritdoc />

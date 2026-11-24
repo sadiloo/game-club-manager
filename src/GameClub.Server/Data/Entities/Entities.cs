@@ -471,9 +471,6 @@ public sealed class BranchRoundingEntity
     public long WalletMinBillToman { get; set; } = WalletPaymentRounding.CashLikeThresholdToman;
 
     public bool AllowWalletShortBalanceDebt { get; set; } = true;
-
-    /// <summary>Added to PC base hourly rate inside 00:00–08:30 (pilot: 20,000).</summary>
-    public long PcSpecialBandSurchargeToman { get; set; } = 20_000;
 }
 
 public sealed class StationInternetStateEntity

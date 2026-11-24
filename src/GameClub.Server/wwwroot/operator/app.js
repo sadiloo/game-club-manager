@@ -3884,7 +3884,7 @@ async function pcInternetConfirmToggle(tile, turnOn) {
   const rate = pcInternetFormatToman(tile.nextHourlyToman);
   let body = `از همین لحظه نرخ می‌شود ${rate} تومان در ساعت (${modeWord} ${bandWord}).`;
   if (!tile.kioskConnected) body += "\n\nاین PC الان به سرور وصل نیست؛ دستور در صف می‌ماند.";
-  return Promise.resolve(window.confirm(`${title}\n\n${body}`));
+  return cpConfirm({ title, body, confirmLabel: turnOn ? "وصل" : "قطع", tone: turnOn ? "primary" : "danger" });
 }
 
 function pcInternetRefreshManagerRatesUi(isMgr) {

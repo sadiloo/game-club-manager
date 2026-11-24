@@ -23,10 +23,26 @@ public sealed class PcInternetRatesMigrationTests(GameClubWebApplicationFactory 
         await db.Database.MigrateAsync();
     }
 
+    private static async Task EnsurePr51RoundingColumnsForLegacyDownAsync(AppDbContext db)
+    {
+        await db.Database.ExecuteSqlRawAsync("""
+            ALTER TABLE branch_rounding ADD COLUMN IF NOT EXISTS "RoundingEnabled" boolean NOT NULL DEFAULT true;
+            ALTER TABLE branch_rounding ADD COLUMN IF NOT EXISTS "ApplyToWallet" boolean NOT NULL DEFAULT true;
+            ALTER TABLE branch_rounding ADD COLUMN IF NOT EXISTS "WalletMinBillToman" bigint NOT NULL DEFAULT 5000;
+            ALTER TABLE branch_rounding ADD COLUMN IF NOT EXISTS "AllowWalletShortBalanceDebt" boolean NOT NULL DEFAULT true;
+            """);
+    }
+
+    private static async Task MigrateToPrePcInternetForTestAsync(AppDbContext db)
+    {
+        db.GetService<IMigrator>().Migrate(PrePcInternetMigration);
+        await EnsurePr51RoundingColumnsForLegacyDownAsync(db);
+    }
+
     private static async Task EnsurePrePcInternetMigrationAsync(AppDbContext db)
     {
         await db.Database.MigrateAsync();
-        db.GetService<IMigrator>().Migrate(PrePcInternetMigration);
+        await MigrateToPrePcInternetForTestAsync(db);
         await DatabaseSeed.EnsureAsync(db);
     }
 
@@ -218,8 +234,7 @@ public sealed class PcInternetRatesMigrationTests(GameClubWebApplicationFactory 
             FROM information_schema.columns
             WHERE table_name = 'branch_rounding' AND column_name = 'PcSpecialBandSurchargeToman'
             """).SingleAsync());
-        var migrator = db.GetService<IMigrator>();
-        migrator.Migrate(PrePcInternetMigration);
+        await MigrateToPrePcInternetForTestAsync(db);
         surchargeBefore = await db.Database.SqlQueryRaw<long>(
             """SELECT "PcSpecialBandSurchargeToman" AS "Value" FROM branch_rounding LIMIT 1""").SingleAsync();
         Assert.Equal(20_000, surchargeBefore);
@@ -244,8 +259,7 @@ public sealed class PcInternetRatesMigrationTests(GameClubWebApplicationFactory 
             """UPDATE rate_lines SET "HourlyToman" = 90000 WHERE "GroupId"='pc-normal' AND "PlayMode"='Offline' AND "PlayerCount"=1 AND NOT "IsSpecialBand" """);
 
         await db.Database.MigrateAsync();
-        var migrator = db.GetService<IMigrator>();
-        migrator.Migrate(PrePcInternetMigration);
+        await MigrateToPrePcInternetForTestAsync(db);
         var surcharge = await db.Database.SqlQueryRaw<long>(
             """SELECT "PcSpecialBandSurchargeToman" AS "Value" FROM branch_rounding LIMIT 1""").SingleAsync();
         Assert.Equal(25_000, surcharge);
@@ -302,7 +316,7 @@ public sealed class PcInternetRatesMigrationTests(GameClubWebApplicationFactory 
             UPDATE rate_lines SET "HourlyToman" = 130000
             WHERE "GroupId"='pc-normal' AND "PlayMode"='Online' AND "PlayerCount" IS NULL AND "IsSpecialBand";
             """);
-        db.GetService<IMigrator>().Migrate(PrePcInternetMigration);
+        await MigrateToPrePcInternetForTestAsync(db);
 
         var json = await db.Sessions.AsNoTracking()
             .Where(s => s.Id == sessionId)
@@ -360,7 +374,7 @@ public sealed class PcInternetRatesMigrationTests(GameClubWebApplicationFactory 
                 UPDATE rate_lines SET "HourlyToman" = 145000
                 WHERE "GroupId"='pc-vip' AND "PlayMode"='Online' AND "PlayerCount" IS NULL AND "IsSpecialBand";
                 """);
-            db.GetService<IMigrator>().Migrate(PrePcInternetMigration);
+            await MigrateToPrePcInternetForTestAsync(db);
             var preSurcharge = await db.Database.SqlQueryRaw<long>(
                 """SELECT "PcSpecialBandSurchargeToman" AS "Value" FROM branch_rounding LIMIT 1""").SingleAsync();
             Assert.Equal(25_000, preSurcharge);
@@ -400,7 +414,7 @@ public sealed class PcInternetRatesMigrationTests(GameClubWebApplicationFactory 
                 UPDATE rate_lines SET "HourlyToman" = 180000
                 WHERE "GroupId"='pc-vip' AND "PlayMode"='Online' AND "PlayerCount" IS NULL AND "IsSpecialBand";
                 """);
-            db.GetService<IMigrator>().Migrate(PrePcInternetMigration);
+            await MigrateToPrePcInternetForTestAsync(db);
             const long pcNormalNightDayGap = 130_000 - 90_000;
             var preSurcharge = await db.Database.SqlQueryRaw<long>(
                 """SELECT "PcSpecialBandSurchargeToman" AS "Value" FROM branch_rounding LIMIT 1""").SingleAsync();
@@ -435,7 +449,7 @@ public sealed class PcInternetRatesMigrationTests(GameClubWebApplicationFactory 
             var patched = SetGroupOnlineDayNightInSnapshot(v2Json, PilotSeed.PcNormalGroupId, 90_000, 130_000);
             patched = SetGroupOnlineDayNightInSnapshot(patched, PilotSeed.PcVipGroupId, 120_000, 180_000);
             await ReplaceSessionSnapshotJsonAsync(db, sessionId, patched);
-            db.GetService<IMigrator>().Migrate(PrePcInternetMigration);
+            await MigrateToPrePcInternetForTestAsync(db);
             var revertedJson = await SessionSnapshotJsonAsync(db, sessionId);
             using var doc = JsonDocument.Parse(revertedJson);
             Assert.False(doc.RootElement.TryGetProperty("SchemaVersion", out _));
@@ -465,7 +479,7 @@ public sealed class PcInternetRatesMigrationTests(GameClubWebApplicationFactory 
             var v2Json = await SessionSnapshotJsonAsync(db, sessionId);
             var patched = InsertDecoyPcNormalOnlinePairAtStart(v2Json, decoyDay: 70_000, decoyNight: 200_000);
             await ReplaceSessionSnapshotJsonAsync(db, sessionId, patched);
-            db.GetService<IMigrator>().Migrate(PrePcInternetMigration);
+            await MigrateToPrePcInternetForTestAsync(db);
             var revertedJson = await SessionSnapshotJsonAsync(db, sessionId);
             using var doc = JsonDocument.Parse(revertedJson);
             const long seedGap = 100_000 - 80_000;
@@ -496,7 +510,7 @@ public sealed class PcInternetRatesMigrationTests(GameClubWebApplicationFactory 
             patched = EnsurePcNormalOfflineSpecialNightLine(patched, nightRate: 100_000);
             patched = InsertDecoyPcNormalOfflineNightFallbackAtStart(patched, decoyDay: 70_000, decoyOfflineNight: 250_000);
             await ReplaceSessionSnapshotJsonAsync(db, sessionId, patched);
-            db.GetService<IMigrator>().Migrate(PrePcInternetMigration);
+            await MigrateToPrePcInternetForTestAsync(db);
             var revertedJson = await SessionSnapshotJsonAsync(db, sessionId);
             using var doc = JsonDocument.Parse(revertedJson);
             const long seedGap = 100_000 - 80_000;
@@ -524,7 +538,7 @@ public sealed class PcInternetRatesMigrationTests(GameClubWebApplicationFactory 
             await db.Database.MigrateAsync();
             var jsonOriginalV2 = await SessionSnapshotJsonAsync(db, sessionId);
             var pricedBefore = PricedLinesFromSnapshot(jsonOriginalV2, pcGroupsOnly: true);
-            db.GetService<IMigrator>().Migrate(PrePcInternetMigration);
+            await MigrateToPrePcInternetForTestAsync(db);
             await db.Database.MigrateAsync();
             var jsonAfterRoundTrip = await SessionSnapshotJsonAsync(db, sessionId);
             var pricedAfter = PricedLinesFromSnapshot(jsonAfterRoundTrip, pcGroupsOnly: true);
@@ -565,7 +579,7 @@ public sealed class PcInternetRatesMigrationTests(GameClubWebApplicationFactory 
                 UPDATE rate_lines SET "HourlyToman" = 130000
                 WHERE "GroupId"='pc-normal' AND "PlayMode"='Online' AND "PlayerCount" IS NULL AND "IsSpecialBand";
                 """);
-            db.GetService<IMigrator>().Migrate(PrePcInternetMigration);
+            await MigrateToPrePcInternetForTestAsync(db);
             await db.Database.MigrateAsync();
             var night = await db.RateLines.SingleAsync(r =>
                 r.GroupId == PilotSeed.PcNormalGroupId && r.IsSpecialBand && r.PlayMode == nameof(PlayMode.Online));

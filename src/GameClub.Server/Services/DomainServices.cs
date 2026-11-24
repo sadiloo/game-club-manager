@@ -1251,7 +1251,6 @@ public sealed class DatabaseSeed
                 ApplyToWallet = true,
                 WalletMinBillToman = WalletPaymentRounding.CashLikeThresholdToman,
                 AllowWalletShortBalanceDebt = true,
-                PcSpecialBandSurchargeToman = 20_000,
             });
         }
 

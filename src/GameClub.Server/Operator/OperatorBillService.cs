@@ -549,6 +549,11 @@ public sealed class OperatorBillService(
             return true;
         }
 
+        if (effective.Any(p => !string.IsNullOrWhiteSpace(p.ShortRemainderMethod)))
+        {
+            return false;
+        }
+
         return tendered < amounts.CollectibleToman;
     }
 
