@@ -18,6 +18,15 @@ foreach ($keyPath in @(
     }
 }
 
+foreach ($dir in @(
+        "C:\Program Files\Checkpoint\Server",
+        "C:\Program Files\Checkpoint\PostgreSQL"
+    )) {
+    if (Test-Path -LiteralPath $dir) {
+        Remove-Item -LiteralPath $dir -Recurse -Force
+    }
+}
+
 foreach ($svc in @("CheckpointServer", "CheckpointPostgres")) {
     $s = Get-Service $svc -ErrorAction SilentlyContinue
     if ($s) {
