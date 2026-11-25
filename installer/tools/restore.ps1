@@ -24,7 +24,7 @@ $pre = Join-Path $safeDir "pre-restore-$stamp.dump"
 
 $env:PGPASSWORD = $cfg.Password
 $pgDump = Get-CheckpointPgExecutable -Name "pg_dump"
-& $pgDump -Fc -h $cfg.Host -p $cfg.Port -U $cfg.Username $cfg.Database -f $pre
+& $pgDump -Fc -h $cfg.Host -p $cfg.Port -U $cfg.Username -d $cfg.Database -f $pre
 if ($LASTEXITCODE -ne 0) {
     Write-Error "Safety pg_dump failed with exit code $LASTEXITCODE; restore aborted."
     exit 1

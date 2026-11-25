@@ -393,7 +393,7 @@ try {
 
     Assert-MutantKilled -Name 'no-safety-pgdump-exit' -SourcePath $goldenRestore -WorkDir $workDir -Transform {
         param($t)
-        $t -replace '(?ms)\$pgDump = Get-CheckpointPgExecutable -Name "pg_dump"\r?\n& \$pgDump[^\r\n]+\r?\nif \(\$LASTEXITCODE -ne 0\) \{\r?\n\s*Write-Error "Safety pg_dump failed[^"]*"\r?\n\s*exit 1\r?\n\}\r?\n\r?\n', "`$pgDump = Get-CheckpointPgExecutable -Name `"pg_dump`"`n& `$pgDump -Fc -h `$cfg.Host -p `$cfg.Port -U `$cfg.Username `$cfg.Database -f `$pre`n"
+        $t -replace '(?ms)\$pgDump = Get-CheckpointPgExecutable -Name "pg_dump"\r?\n& \$pgDump[^\r\n]+\r?\nif \(\$LASTEXITCODE -ne 0\) \{\r?\n\s*Write-Error "Safety pg_dump failed[^"]*"\r?\n\s*exit 1\r?\n\}\r?\n\r?\n', "`$pgDump = Get-CheckpointPgExecutable -Name `"pg_dump`"`n& `$pgDump -Fc -h `$cfg.Host -p `$cfg.Port -U `$cfg.Username -d `$cfg.Database -f `$pre`n"
     } -GoldenSafe {
         param([string]$ScriptPath)
         $stub = New-StubPgBinaries -PgDumpExit 4 -PgDumpWriteOnFailure

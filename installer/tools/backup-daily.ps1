@@ -28,7 +28,7 @@ try {
 
     $env:PGPASSWORD = $cfg.Password
     $pgDump = Get-CheckpointPgExecutable -Name "pg_dump"
-    & $pgDump -Fc -h $cfg.Host -p $cfg.Port -U $cfg.Username $cfg.Database -f $dump
+    & $pgDump -Fc -h $cfg.Host -p $cfg.Port -U $cfg.Username -d $cfg.Database -f $dump
     if ($LASTEXITCODE -ne 0) {
         throw "pg_dump failed with exit code $LASTEXITCODE"
     }
