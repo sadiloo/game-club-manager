@@ -406,26 +406,55 @@ function Get-InstallerServerJson {
     return Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
 }
 
-function Set-InstallerKioskDotNetTestEnvironment {
+function Set-InstallerKioskWpfLiveProcessEnvironment {
     param([string] $AccountsFile)
-    Assert-InstallerServerServicesRunning
-    Write-AcceptanceHarnessTrace "Set-InstallerKioskDotNetTestEnvironment" {
-        $json = Get-InstallerServerJson
-        $cs = [string]$json.ConnectionStrings.Default
-        if ([string]::IsNullOrWhiteSpace($cs)) { throw "server.json ConnectionStrings.Default missing" }
-        $env:CHECKPOINT_SERVER_URL = "http://127.0.0.1:5000"
-        $env:GAMECLUB_DATABASE = $cs
-        $env:GAMECLUB_TEST_DATABASE = $cs
-        $env:GAMECLUB_API_KEY = [string]$json.GAMECLUB_API_KEY
-        if ($json.OperatorSessionSecret) {
-            $env:OperatorSessionSecret = [string]$json.OperatorSessionSecret
+    $json = Get-InstallerServerJson
+    $cs = [string]$json.ConnectionStrings.Default
+    if ([string]::IsNullOrWhiteSpace($cs)) { throw "server.json ConnectionStrings.Default missing" }
+    $env:CHECKPOINT_SERVER_URL = "http://127.0.0.1:5000"
+    $env:GAMECLUB_DATABASE = $cs
+    $env:GAMECLUB_TEST_DATABASE = $cs
+    $env:GAMECLUB_API_KEY = [string]$json.GAMECLUB_API_KEY
+    if ($json.OperatorSessionSecret) {
+        $env:OperatorSessionSecret = [string]$json.OperatorSessionSecret
+    }
+    if ($AccountsFile -and (Test-Path -LiteralPath $AccountsFile)) {
+        $acc = Get-Content -LiteralPath $AccountsFile -Raw | ConvertFrom-Json
+        $env:CHECKPOINT_OPERATOR_USERNAME = [string]$acc.manager1User
+        $env:CHECKPOINT_OPERATOR_PIN = [string]$acc.manager1Pin
+    }
+}
+
+function Invoke-WithInstallerKioskWpfLiveEnvironment {
+    param(
+        [string] $AccountsFile,
+        [scriptblock] $ScriptBlock
+    )
+    $keys = @(
+        "CHECKPOINT_SERVER_URL", "GAMECLUB_DATABASE", "GAMECLUB_TEST_DATABASE",
+        "GAMECLUB_API_KEY", "OperatorSessionSecret",
+        "CHECKPOINT_OPERATOR_USERNAME", "CHECKPOINT_OPERATOR_PIN"
+    )
+    $saved = @{}
+    foreach ($key in $keys) {
+        $item = Get-Item -Path "Env:$key" -ErrorAction SilentlyContinue
+        $saved[$key] = if ($item) { @{ Present = $true; Value = $item.Value } } else { @{ Present = $false } }
+    }
+    try {
+        Assert-InstallerServerServicesRunning
+        Write-AcceptanceHarnessTrace "Invoke-WithInstallerKioskWpfLiveEnvironment" {
+            Set-InstallerKioskWpfLiveProcessEnvironment -AccountsFile $AccountsFile
+        } | Out-Null
+        & $ScriptBlock
+    } finally {
+        foreach ($key in $keys) {
+            if ($saved[$key].Present) {
+                Set-Item -Path "Env:$key" -Value $saved[$key].Value
+            } else {
+                Remove-Item -Path "Env:$key" -ErrorAction SilentlyContinue
+            }
         }
-        if ($AccountsFile -and (Test-Path -LiteralPath $AccountsFile)) {
-            $acc = Get-Content -LiteralPath $AccountsFile -Raw | ConvertFrom-Json
-            $env:CHECKPOINT_OPERATOR_USERNAME = [string]$acc.manager1User
-            $env:CHECKPOINT_OPERATOR_PIN = [string]$acc.manager1Pin
-        }
-    } | Out-Null
+    }
 }
 
 function Get-InstallerApiHeaders {
