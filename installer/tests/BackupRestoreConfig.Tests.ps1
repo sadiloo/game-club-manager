@@ -393,7 +393,7 @@ try {
 
     Assert-MutantKilled -Name 'no-safety-pgdump-exit' -SourcePath $goldenRestore -WorkDir $workDir -Transform {
         param($t)
-        $t -replace '(?ms)& pg_dump[^\r\n]+\r?\nif \(\$LASTEXITCODE -ne 0\) \{\r?\n\s*Write-Error "Safety pg_dump failed[^"]*"\r?\n\s*exit 1\r?\n\}\r?\n\r?\n', "& pg_dump -Fc -h `$cfg.Host -p `$cfg.Port -U `$cfg.Username `$cfg.Database -f `$pre`n"
+        $t -replace '(?ms)\$pgDump = Get-CheckpointPgExecutable -Name "pg_dump"\r?\n& \$pgDump[^\r\n]+\r?\nif \(\$LASTEXITCODE -ne 0\) \{\r?\n\s*Write-Error "Safety pg_dump failed[^"]*"\r?\n\s*exit 1\r?\n\}\r?\n\r?\n', "`$pgDump = Get-CheckpointPgExecutable -Name `"pg_dump`"`n& `$pgDump -Fc -h `$cfg.Host -p `$cfg.Port -U `$cfg.Username `$cfg.Database -f `$pre`n"
     } -GoldenSafe {
         param([string]$ScriptPath)
         $stub = New-StubPgBinaries -PgDumpExit 4 -PgDumpWriteOnFailure
@@ -408,7 +408,7 @@ try {
 
     Assert-MutantKilled -Name 'no-clean-exit' -SourcePath $goldenRestore -WorkDir $workDir -Transform {
         param($t)
-        $t -replace '(?ms)& pg_restore --clean[^\r\n]+\r?\nif \(\$LASTEXITCODE -ne 0\) \{\r?\n\s*Write-Error "pg_restore failed[^"]*"\r?\n\s*exit 1\r?\n\}\r?\n\r?\n', "& pg_restore --clean --if-exists -h `$cfg.Host -p `$cfg.Port -U `$cfg.Username -d `$cfg.Database `$DumpPath`n"
+        $t -replace '(?ms)\$pgRestore = Get-CheckpointPgExecutable -Name "pg_restore"\r?\n& \$pgRestore[^\r\n]+\r?\nif \(\$LASTEXITCODE -ne 0\) \{\r?\n\s*Write-Error "pg_restore failed[^"]*"\r?\n\s*exit 1\r?\n\}\r?\n\r?\n', "`$pgRestore = Get-CheckpointPgExecutable -Name `"pg_restore`"`n& `$pgRestore --clean --if-exists -h `$cfg.Host -p `$cfg.Port -U `$cfg.Username -d `$cfg.Database `$DumpPath`n"
     } -GoldenSafe {
         param([string]$ScriptPath)
         $stub = New-StubPgBinaries -PgDumpExit 0 -FirstListExit 0 -SecondListExit 0 -CleanExit 9
