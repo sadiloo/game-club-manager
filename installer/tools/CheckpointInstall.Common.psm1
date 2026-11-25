@@ -46,6 +46,18 @@ function New-CheckpointPlainSecureString {
     return $secure
 }
 
+function Test-CheckpointKioskPasswordLocked {
+    param([string] $AccountName = "CheckpointKiosk")
+    $localUser = Get-LocalUser -Name $AccountName -ErrorAction SilentlyContinue
+    if ($localUser -and (-not $localUser.UserMayChangePassword) -and $localUser.PasswordNeverExpires) {
+        return $true
+    }
+    $net = (& net.exe user $AccountName 2>&1 | Out-String)
+    $changeBlocked = ($net -match '(?i)Password changeable\s+No') -or ($net -match '(?i)User may change password\s+No')
+    $neverExpires = ($localUser -and $localUser.PasswordNeverExpires) -or ($net -match '(?i)Password expires\s+Never')
+    return $changeBlocked -and $neverExpires
+}
+
 function New-CheckpointRandomPassword {
     param([int] $Length = 24)
     $chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#"
@@ -174,6 +186,7 @@ function Get-CheckpointDailyBackupStartBoundaryUtc {
 
 Export-ModuleMember -Function @(
     "New-CheckpointPlainSecureString",
+    "Test-CheckpointKioskPasswordLocked",
     "Get-CheckpointRepoRoot",
     "Get-CheckpointAppVersion",
     "New-CheckpointRandomSecret",

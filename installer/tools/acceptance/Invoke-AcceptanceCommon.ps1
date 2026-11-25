@@ -380,10 +380,11 @@ function Assert-InnoSetupLogNoFailedRuns {
 function Assert-KioskPostinstallCompleted {
     param([string] $InnoLogPath)
     $kioskUser = "CheckpointKiosk"
-    Import-Module Microsoft.PowerShell.LocalAccounts -ErrorAction Stop
+    $common = Join-Path $PSScriptRoot "..\CheckpointInstall.Common.psm1"
+    Import-Module $common -Force
     $localUser = Get-LocalUser -Name $kioskUser -ErrorAction SilentlyContinue
     $userOk = $null -ne $localUser
-    $passwordLocked = $userOk -and (-not $localUser.UserMayChangePassword) -and $localUser.PasswordNeverExpires
+    $passwordLocked = Test-CheckpointKioskPasswordLocked -AccountName $kioskUser
     $envUser = [Environment]::GetEnvironmentVariable("CHECKPOINT_KIOSK_USER", "Machine")
     $envOk = [string]::Equals($envUser, $kioskUser, [StringComparison]::OrdinalIgnoreCase)
     $guardOk = $null -ne (Get-Service CheckpointGuard -ErrorAction SilentlyContinue)
