@@ -201,7 +201,7 @@ public sealed class InpageFormsPr51R5PaymentTimeGateTests(GameClubWebApplication
         var customerId = await CreateCustomerAsync(op);
         (await op.PostAsJsonAsync(
             $"/api/operator/members/customers/{customerId}/wallet/top-up",
-            new { method = "Cash", amountToman = 49_700L, commandId = Guid.NewGuid() })).EnsureSuccessStatusCode();
+            new { method = "Cash", amountToman = 100_000L, commandId = Guid.NewGuid() })).EnsureSuccessStatusCode();
         var before = await WalletSpendableAsync(op, customerId);
         var openSaleId = await BuffetCheckoutAsync(op, customerId, 49_500L);
         var payments = new[] { new { method = "Wallet", amountToman = 49_500L } };

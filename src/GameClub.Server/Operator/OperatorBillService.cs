@@ -638,6 +638,12 @@ public sealed class OperatorBillService(
             return false;
         }
 
+        var cashOnly = hasCash && effective.All(p => OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Cash);
+        if ((walletOnly || cashOnly) && tendered < amounts.CollectibleToman)
+        {
+            return true;
+        }
+
         return false;
     }
 
