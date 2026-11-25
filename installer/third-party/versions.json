@@ -12,8 +12,8 @@
   "webview2": {
     "label": "Evergreen Standalone Installer x64",
     "url": "https://go.microsoft.com/fwlink/?linkid=2124701",
-    "sha256": "47bc51387aff95c1275ce38cfbbb5fbab99b43b33214049877bbcdbcc7a970d5",
-    "documentedSizeBytes": 294099168
+    "sha256": "45769d66809a9652050f8a91ab5329881b65cc4123fe7c733841deefbef91bf6",
+    "documentedSizeBytes": 294302984
   },
   "innosetup": {
     "requiredVersion": "6.7.1"

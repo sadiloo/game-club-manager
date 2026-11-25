@@ -19,7 +19,8 @@ function Get-FileIfNeeded {
         [string] $Url,
         [string] $Dest,
         [string] $Sha256,
-        [string] $Label
+        [string] $Label,
+        [long] $DocumentedSizeBytes = 0
     )
     if ((Test-Path -LiteralPath $Dest) -and $SkipIfPresent) {
         $len = (Get-Item -LiteralPath $Dest).Length
@@ -29,19 +30,34 @@ function Get-FileIfNeeded {
         }
         return $Dest
     }
-    Write-Host "installer-fetch: downloading $Label"
-    Invoke-WebRequest -Uri $Url -OutFile $Dest -UseBasicParsing
-    $len = (Get-Item -LiteralPath $Dest).Length
-    Write-Host "installer-fetch: $Label downloaded bytes=$len documented=$($manifest.postgresql.documentedSizeBytes)"
-    Assert-FileSha256 -Path $Dest -ExpectedSha256 $Sha256 -Label $Label | Out-Null
+    $maxAttempts = 4
+    for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+        if (Test-Path -LiteralPath $Dest) {
+            Remove-Item -LiteralPath $Dest -Force
+        }
+        Write-Host "installer-fetch: downloading $Label attempt=$attempt"
+        Invoke-WebRequest -Uri $Url -OutFile $Dest -UseBasicParsing
+        $len = (Get-Item -LiteralPath $Dest).Length
+        $docHint = if ($DocumentedSizeBytes -gt 0) { $DocumentedSizeBytes } else { "n/a" }
+        Write-Host "installer-fetch: $Label downloaded bytes=$len documented=$docHint"
+        try {
+            Assert-FileSha256 -Path $Dest -ExpectedSha256 $Sha256 -Label $Label | Out-Null
+            return $Dest
+        } catch {
+            if ($attempt -ge $maxAttempts) { throw }
+            Write-Host "installer-fetch: $Label verify failed ($($_.Exception.Message)); retrying"
+        }
+    }
     return $Dest
 }
 
 $pgZip = Join-Path $CacheDir "postgresql-$($manifest.postgresql.version)-windows-x64-binaries.zip"
 $wv2Exe = Join-Path $CacheDir "MicrosoftEdgeWebView2RuntimeInstallerX64.exe"
 
-Get-FileIfNeeded -Url $manifest.postgresql.url -Dest $pgZip -Sha256 $manifest.postgresql.sha256 -Label "postgresql"
-Get-FileIfNeeded -Url $manifest.webview2.url -Dest $wv2Exe -Sha256 $manifest.webview2.sha256 -Label "webview2"
+Get-FileIfNeeded -Url $manifest.postgresql.url -Dest $pgZip -Sha256 $manifest.postgresql.sha256 -Label "postgresql" `
+    -DocumentedSizeBytes $manifest.postgresql.documentedSizeBytes
+Get-FileIfNeeded -Url $manifest.webview2.url -Dest $wv2Exe -Sha256 $manifest.webview2.sha256 -Label "webview2" `
+    -DocumentedSizeBytes $manifest.webview2.documentedSizeBytes
 
 $pgStage = Join-Path $root "artifacts/installer/stage-postgresql"
 if (Test-Path -LiteralPath $pgStage) {
