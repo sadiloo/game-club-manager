@@ -209,6 +209,16 @@ function Invoke-CheckpointDowngradeBlockedProbe {
     if ($appAfter -ne $AppFingerprintBefore) { throw "downgrade blocked: server app fingerprint changed" }
 }
 
+function Get-SetupProcessEnvironmentBlock {
+    param([hashtable] $Overrides = @{})
+    $block = @{}
+    Get-ChildItem Env: | ForEach-Object { $block[$_.Name] = [string]$_.Value }
+    foreach ($key in $Overrides.Keys) {
+        $block[$key] = [string]$Overrides[$key]
+    }
+    return $block
+}
+
 function Start-CheckpointServerSetup {
     param(
         [string] $LegLabel,
@@ -216,7 +226,8 @@ function Start-CheckpointServerSetup {
         [string[]] $ArgumentList,
         [int] $TimeoutSeconds = 2700,
         [string] $LogPath = $null,
-        [int] $ExpectExitCode = 0
+        [int] $ExpectExitCode = 0,
+        [hashtable] $SetupEnvironment = $null
     )
     $cmdLine = Format-SetupCommandLine -Exe $Exe -ArgumentList $ArgumentList
     Write-Host "Start-CheckpointServerSetup: leg=$LegLabel cmd=$cmdLine"
@@ -226,7 +237,12 @@ function Start-CheckpointServerSetup {
 
     $legStartUtc = [DateTime]::UtcNow
   $proc = Write-AcceptanceHarnessTrace "Start-Process leg=$LegLabel" {
-        Start-Process -FilePath $Exe -ArgumentList $ArgumentList -PassThru
+        if ($null -ne $SetupEnvironment -and $SetupEnvironment.Count -gt 0) {
+            $envBlock = Get-SetupProcessEnvironmentBlock -Overrides $SetupEnvironment
+            Start-Process -FilePath $Exe -ArgumentList $ArgumentList -PassThru -Environment $envBlock
+        } else {
+            Start-Process -FilePath $Exe -ArgumentList $ArgumentList -PassThru
+        }
     }
     $leaderId = $proc.Id
     Write-Host "Start-CheckpointServerSetup: leg=$LegLabel leader=$leaderId"
