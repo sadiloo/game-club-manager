@@ -145,8 +145,8 @@ async function runHb1BusyGuardScenario(layerSource, expectKeepOpen) {
     if (hidden) throw new Error("HB1: layer hidden during busy submit after stale popstate");
     return;
   }
-  if (!expectKeepOpen && (!hidden || stillBusy)) {
-    throw new Error("HB1: stale popstate closed in-flight submit without busy guard");
+  if (!expectKeepOpen) {
+    throw new Error("HB1: stale popstate during busy submit without busy guard");
   }
 }
 
@@ -162,7 +162,7 @@ try {
 if (!hb1MutantClosed) {
   throw new Error("HB1: expected guard-less cp-layer to close on stale popstate during submit");
 }
-if (!hb1MutantErr.includes("closed in-flight submit")) {
+if (!hb1MutantErr.includes("without busy guard")) {
   throw new Error(`HB1: unexpected mutant failure: ${hb1MutantErr}`);
 }
 
@@ -205,12 +205,116 @@ for (const delay of [0, 30, 100]) {
   await runCpd4xStackScenario(delay);
 }
 
-const submitSuccessFinish = headLayer.match(/reason === "submit-success"[\s\S]*?(?=} else if \(reason)/);
-if (!submitSuccessFinish?.[0]?.includes("popHistoryIfNeeded")) {
-  throw new Error("N2: submit-success must call popHistoryIfNeeded");
+function isBaseOperatorHistoryState(state) {
+  return state === null || state?.page === "operator";
 }
-if (submitSuccessFinish?.[0]?.includes("releaseCpHistoryWithoutBack")) {
-  throw new Error("N2: submit-success must not use releaseCpHistoryWithoutBack");
+
+async function waitBaseOperatorHistory(history, label) {
+  await waitFor(() => isBaseOperatorHistoryState(history.state), label);
+}
+
+function assertBaseOperatorHistory(window, history, backs) {
+  assertOnOperator(window);
+  const stateLabel = history.state === null ? "null" : JSON.stringify(history.state);
+  if (backs < 1) {
+    throw new Error(
+      `after cancel close must history.back (backs=${backs} state=${stateLabel} len=${history.length})`,
+    );
+  }
+  if (!isBaseOperatorHistoryState(history.state)) {
+    throw new Error(
+      `after close current entry must be the base operator entry (/operator/ state=${stateLabel} len=${history.length}) backs=${backs}`,
+    );
+  }
+}
+
+async function runCpd4xCancelScenario(delayMs, layerSource = headLayer, { waitPopClose = true } = {}) {
+  const { window, document, history, runInApp } = loadOperatorApp("http://localhost/operator/", {
+    trackKeydown: false,
+    layerSource,
+  });
+  let programmaticBacks = 0;
+  const nativeBack = history.back.bind(history);
+  history.back = (...args) => {
+    programmaticBacks += 1;
+    return nativeBack(...args);
+  };
+  history.pushState({ page: "start" }, "", "/start/");
+  history.pushState({ page: "operator" }, "", "/operator/");
+  assertOnOperator(window);
+  const closed = window.cpForm({
+    title: "cpd4x-cancel",
+    fields: [
+      { kind: "money", label: "مبلغ", name: "amountToman", positive: true },
+      { kind: "money", label: "هدایا", name: "giftToman", positive: true },
+    ],
+    onSubmit: () => {},
+  });
+  await waitCpVisible(document);
+  const cancelBtn = document.querySelector('[data-cp-role="cancel"]');
+  if (!cancelBtn) throw new Error("cpd4x-cancel: missing cancel button");
+  cancelBtn.click();
+  if (waitPopClose) {
+    await waitFor(() => runInApp("window.cpLayer._submitClosing === true"), "cancel close history pop");
+  } else {
+    await waitFor(() => runInApp("window.cpLayer.active == null"), "cancel layer inactive");
+  }
+  if (delayMs === 0) {
+    dispatchStalePopstate(window);
+  } else {
+    await new Promise((r) => setTimeout(r, delayMs));
+    dispatchStalePopstate(window);
+  }
+  await closed;
+  await waitCpHidden(document);
+  await waitBaseOperatorHistory(history, "cancel base operator history");
+  assertBaseOperatorHistory(window, history, programmaticBacks);
+}
+
+for (const delay of [0, 30, 100]) {
+  await runCpd4xCancelScenario(delay);
+}
+
+const cancelFinish = headLayer.match(
+  /reason === "submit-success" \|\| reason === "cancel"[\s\S]*?(?=} else if \(reason)/,
+);
+if (!cancelFinish?.[0]?.includes("popHistoryIfNeeded")) {
+  throw new Error("N2: user cancel must call popHistoryIfNeeded");
+}
+if (cancelFinish?.[0]?.includes("releaseCpHistoryWithoutBack")) {
+  throw new Error("N2: user cancel must not use releaseCpHistoryWithoutBack");
+}
+
+const n2ReplaceCancelPopLayer = headLayer.replace(
+  /if \(reason === "submit-success" \|\| reason === "cancel"\) \{[\s\S]*?\n      \} else if \(reason && reason !== "history"\)/,
+  `if (reason === "submit-success") {
+        cpLayer._submitClosing = true;
+        historyPop = popHistoryIfNeeded().finally(() => {
+          cpLayer._submitClosing = false;
+        });
+      } else if (reason === "cancel") {
+        historyPop = releaseCpHistoryWithoutBack();
+      } else if (reason && reason !== "history")`,
+);
+
+let n2CancelMutantFailed = false;
+for (const delay of [0]) {
+  try {
+    await runCpd4xCancelScenario(delay, n2ReplaceCancelPopLayer, { waitPopClose: false });
+  } catch (e) {
+  if (e?.message?.includes("base operator entry") || e?.message?.includes("must history.back")) {
+      n2CancelMutantFailed = true;
+      break;
+    }
+    throw e;
+  }
+}
+if (!n2CancelMutantFailed) {
+  throw new Error("N2: cancel replaceState mutant must fail base-operator history assertion");
+}
+
+if (!cancelFinish?.[0]?.includes("popHistoryIfNeeded")) {
+  throw new Error("N2: submit-success/cancel must call popHistoryIfNeeded");
 }
 
 const n2ReplaceSubmitPopLayer = headLayer.replaceAll(

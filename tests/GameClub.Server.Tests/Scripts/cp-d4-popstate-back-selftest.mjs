@@ -88,8 +88,8 @@ async function runViewport({ phone }) {
   await sleep(200);
   await waitCpHidden(document);
   assertOnOperator(window);
-  if (programmaticBacks > 0) {
-    throw new Error(`wallet correction cancel must not history.back (got ${programmaticBacks})`);
+  if (programmaticBacks < 1) {
+    throw new Error(`wallet correction cancel must pop cp history (got ${programmaticBacks})`);
   }
 }
 
