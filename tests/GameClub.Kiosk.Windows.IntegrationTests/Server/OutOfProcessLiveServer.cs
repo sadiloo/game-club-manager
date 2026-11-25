@@ -1,5 +1,7 @@
 #if NET10_0_OR_GREATER
 using System.Diagnostics;
+using System.Net;
+using System.Net.Sockets;
 using GameClub.Server.Testing;
 namespace GameClub.Kiosk.Windows.IntegrationTests.Server;
 
@@ -41,9 +43,8 @@ internal sealed class OutOfProcessLiveServer : IAsyncDisposable
     {
         var root = ResolveRepoRoot();
         var dll = ResolveTestHostDll(root);
-        var defaultPort = 5200 + Random.Shared.Next(200, 800);
         var baseUrl = Environment.GetEnvironmentVariable("CHECKPOINT_SERVER_URL")?.TrimEnd('/')
-            ?? $"http://127.0.0.1:{defaultPort}";
+            ?? $"http://127.0.0.1:{ReserveLoopbackHttpPort()}";
         var hostArgs = string.IsNullOrWhiteSpace(pcBandHostArgs)
             ? PcSpecialBandHarnessEnv.DayBandHostArgs()
             : pcBandHostArgs.Trim();
@@ -159,18 +160,33 @@ internal sealed class OutOfProcessLiveServer : IAsyncDisposable
         Environment.SetEnvironmentVariable("GAMECLUB_SERVER_DLL", _hostDll);
         Environment.SetEnvironmentVariable("GAMECLUB_SERVER_HOST_ARGS", _hostArgs);
 
-        BeginStreamingProcessLog(_process, outLog, errLog);
+        var hostStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        BeginStreamingProcessLog(_process, outLog, errLog, line =>
+        {
+            if (line.Contains("LEASE_KEY_FINGERPRINT", StringComparison.Ordinal)
+                || line.StartsWith("pc_band=", StringComparison.Ordinal))
+            {
+                hostStarted.TrySetResult();
+            }
+        });
 
         var apiKey = Environment.GetEnvironmentVariable("GAMECLUB_API_KEY") ?? "ci-test-key";
         using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
         http.DefaultRequestHeaders.Add("X-Api-Key", apiKey);
-        for (var i = 0; i < 60; i++)
+        var deadline = DateTime.UtcNow.AddMinutes(2);
+        while (DateTime.UtcNow < deadline)
         {
             ct.ThrowIfCancellationRequested();
+            if (_process.HasExited)
+            {
+                throw new InvalidOperationException(
+                    $"GameClub.Server.TestHost exited before becoming ready at {BaseUrl} (dll={_hostDll}).");
+            }
+
             try
             {
                 var response = await http.GetAsync($"{BaseUrl}/api/stations", ct);
-                if (response.IsSuccessStatusCode)
+                if (response.IsSuccessStatusCode && hostStarted.Task.IsCompleted)
                 {
                     if (_process is not null)
                     {
@@ -182,16 +198,42 @@ internal sealed class OutOfProcessLiveServer : IAsyncDisposable
             }
             catch
             {
-                // retry
+                // retry until deadline
             }
 
-            await Task.Delay(TimeSpan.FromSeconds(2), ct);
+            if (!hostStarted.Task.IsCompleted)
+            {
+                await Task.WhenAny(hostStarted.Task, Task.Delay(TimeSpan.FromMilliseconds(200), ct));
+            }
+            else
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(200), ct);
+            }
         }
 
         throw new InvalidOperationException($"GameClub.Server.TestHost did not become ready at {BaseUrl} (dll={_hostDll}).");
     }
 
-    private static void BeginStreamingProcessLog(Process process, string outLog, string errLog)
+    internal static int ReserveLoopbackHttpPort()
+    {
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        listener.Stop();
+        if (port is 5432 or 5433)
+        {
+            throw new InvalidOperationException(
+                $"Reserved HTTP port {port} overlaps the CI PostgreSQL listener; choose another loopback port.");
+        }
+
+        return port;
+    }
+
+    private static void BeginStreamingProcessLog(
+        Process process,
+        string outLog,
+        string errLog,
+        Action<string>? onStdoutLine = null)
     {
         var outWriter = new StreamWriter(outLog, append: true) { AutoFlush = true };
         var errWriter = new StreamWriter(errLog, append: true) { AutoFlush = true };
@@ -203,6 +245,7 @@ internal sealed class OutOfProcessLiveServer : IAsyncDisposable
             }
 
             outWriter.WriteLine(e.Data);
+            onStdoutLine?.Invoke(e.Data);
             if (e.Data.StartsWith("LEASE_BUILD", StringComparison.Ordinal))
             {
                 Console.WriteLine(e.Data);
