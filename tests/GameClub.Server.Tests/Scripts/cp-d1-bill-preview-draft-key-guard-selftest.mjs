@@ -14,7 +14,7 @@ function previewPostCount(log) {
 }
 
 const { window, document, runInApp, ctx } = loadOperatorApp();
-const debounce = captureBillPreviewDebounce(window);
+const debounce = captureBillPreviewDebounce(ctx);
 const cap = installFetchCapture(window, ctx);
 
 cap.stub(`/api/operator/sessions/${SESSION}/bill/preview`, "POST", {
@@ -43,10 +43,10 @@ debounce.flush();
 cap.reset();
 
 let debounceCalls = 0;
-const nativeSetTimeout = window.setTimeout.bind(window);
-window.setTimeout = (fn, ms, ...rest) => {
+const nativeCtxSetTimeout = ctx.setTimeout;
+ctx.setTimeout = (fn, ms, ...rest) => {
   if (ms === 200) debounceCalls += 1;
-  return nativeSetTimeout(fn, ms, ...rest);
+  return nativeCtxSetTimeout(fn, ms, ...rest);
 };
 
 runInApp(`
@@ -60,7 +60,7 @@ if (debounceCalls > 0) {
 }
 
 debounce.restore();
-window.setTimeout = nativeSetTimeout;
+ctx.setTimeout = nativeCtxSetTimeout;
 debounce.flush();
 
 if (previewPostCount(cap.log) > 0) {

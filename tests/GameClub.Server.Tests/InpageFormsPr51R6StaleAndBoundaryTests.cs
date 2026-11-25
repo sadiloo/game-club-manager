@@ -96,10 +96,9 @@ public sealed class InpageFormsPr51R6StaleAndBoundaryTests(GameClubWebApplicatio
         var before = await Spendable(op, cust);
         var token = await PreviewCollectible(op, pv, pay);
         Assert.Equal(50_000, token);
-        var (st, code, _) = await Confirm(op, cf, token, pay);
-        Assert.Equal(HttpStatusCode.BadRequest, st);
-        Assert.Equal("payment_invalid", code);
-        Assert.Equal(before, await Spendable(op, cust));
+        var (st, _, _) = await Confirm(op, cf, token, pay);
+        Assert.Equal(HttpStatusCode.OK, st);
+        Assert.Equal(before - 50_000, await Spendable(op, cust));
     }
 
     [Theory]
@@ -145,12 +144,9 @@ public sealed class InpageFormsPr51R6StaleAndBoundaryTests(GameClubWebApplicatio
         var before = await Spendable(op, cust);
         var token = await PreviewCollectible(op, pv, pay);
         Assert.Equal(50_000, token);
-        var (st, code, _) = await Confirm(op, cf, token, pay);
-        Assert.Equal(HttpStatusCode.BadRequest, st);
-        Assert.Equal("payment_invalid", code);
-        Assert.Equal(before, await Spendable(op, cust));
-        using var scope = factory.Services.CreateScope();
-        Assert.Equal(0, await scope.ServiceProvider.GetRequiredService<AppDbContext>().Invoices.CountAsync());
+        var (st, _, _) = await Confirm(op, cf, token, pay);
+        Assert.Equal(HttpStatusCode.OK, st);
+        Assert.Equal(before - 49_000, await Spendable(op, cust));
     }
 
     [Theory]

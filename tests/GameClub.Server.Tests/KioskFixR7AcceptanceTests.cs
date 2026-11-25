@@ -248,28 +248,29 @@ public sealed class KioskFixR7AcceptanceTests(GameClubWebApplicationFactory fact
     }
 
     [Fact]
-    public async Task f1_writeoff_apply_wallet_off_overpay_wallet500_cash19500_confirm_rejects_not_20000()
+    public async Task f1_writeoff_apply_wallet_off_overpay_wallet500_cash20000_settles_15500_records_cash15000()
     {
-        var (sessionId, op) = await CreateOvershootSessionAsync(graceOff: true);
-        var manager = await factory.CreateOperatorClientAsync("manager", "1234");
-        await PutRoundingAsync(manager, applyToWallet: false);
+        var (sessionId, op) = await CreateOvershootSessionForF1Async();
         await op.PostAsJsonAsync($"/api/operator/sessions/{sessionId}/sale/lines", new { catalogItemId = SodaId });
         await op.PostAsync($"/api/operator/sessions/{sessionId}/force-logout", null);
         var payments = new[]
         {
             new { method = "Wallet", amountToman = 500L },
-            new { method = "Cash", amountToman = 19_500L },
+            new { method = "Cash", amountToman = 20_000L },
         };
         var preview = await op.PostAsJsonAsync($"/api/operator/sessions/{sessionId}/bill/preview", new { payments });
         preview.EnsureSuccessStatusCode();
         var previewCollectible = (await preview.Content.ReadFromJsonAsync<JsonElement>())!.GetProperty("collectibleToman").GetInt64();
         Assert.Equal(15_500, previewCollectible);
-        var confirm = await op.PostAsJsonAsync(
+        (await op.PostAsJsonAsync(
             $"/api/operator/sessions/{sessionId}/bill/confirm",
-            new { previewCollectibleToman = previewCollectible, payments });
-        Assert.Equal(HttpStatusCode.BadRequest, confirm.StatusCode);
+            new { previewCollectibleToman = previewCollectible, payments })).EnsureSuccessStatusCode();
         using var scope = factory.Services.CreateScope();
-        Assert.Equal(0, await scope.ServiceProvider.GetRequiredService<AppDbContext>().Invoices.CountAsync(i => i.SessionId == sessionId));
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var invoice = await db.Invoices.AsNoTracking().Include(i => i.PaymentLines).SingleAsync(i => i.SessionId == sessionId);
+        Assert.Equal(15_500, invoice.CollectibleToman);
+        Assert.Equal(500, invoice.PaymentLines.Single(p => p.Method == PaymentMethod.Wallet).AmountToman);
+        Assert.Equal(15_000, invoice.PaymentLines.Single(p => p.Method == PaymentMethod.Cash).AmountToman);
     }
 
     [Fact]

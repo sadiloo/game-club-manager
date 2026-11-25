@@ -194,10 +194,4 @@ public sealed class InpageFormsPr51R14cOverpayTests(GameClubWebApplicationFactor
         Assert.Equal(PaymentMethod.Cash, lines[0].Method);
         Assert.Equal(15_500, lines[0].AmountToman);
     }
-
-    [Fact]
-    public async Task gate_mutant_r14c_exact_tender_payment_splitter_path()
-    {
-        await r14c_exact_tender_cash15500_confirms_without_zero_cash_line();
-    }
 }

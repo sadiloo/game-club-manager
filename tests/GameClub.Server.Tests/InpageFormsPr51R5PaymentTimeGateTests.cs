@@ -116,17 +116,19 @@ public sealed class InpageFormsPr51R5PaymentTimeGateTests(GameClubWebApplication
         var previewCollectible = (await preview.Content.ReadFromJsonAsync<JsonElement>())!
             .GetProperty("bill").GetProperty("collectibleToman").GetInt64();
         Assert.Equal(50_000, previewCollectible);
-        var confirm = await op.PostAsJsonAsync(
+        (await op.PostAsJsonAsync(
             $"/api/operator/buffet-only/{openSaleId}/confirm",
             new
             {
                 previewCollectibleToman = previewCollectible,
                 payments = body.payments,
-            });
-        Assert.Equal(HttpStatusCode.BadRequest, confirm.StatusCode);
-        var confirmBody = await ReadJsonAsync(confirm);
-        AssertPaymentInvalid(confirmBody);
-        Assert.NotEqual("stale_rounding_preview", confirmBody.GetProperty("code").GetString());
+            })).EnsureSuccessStatusCode();
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var invoice = await db.Invoices.AsNoTracking().Include(i => i.PaymentLines).SingleAsync();
+        Assert.Equal(50_000, invoice.CollectibleToman);
+        Assert.Equal(50_000, invoice.PaymentLines.Single(p => p.Method == PaymentMethod.Wallet).AmountToman);
+        Assert.Equal(0, invoice.PaymentLines.Count(p => p.Method == PaymentMethod.Cash));
     }
 
     [Fact]
@@ -152,15 +154,15 @@ public sealed class InpageFormsPr51R5PaymentTimeGateTests(GameClubWebApplication
         preview.EnsureSuccessStatusCode();
         var previewCollectible = (await preview.Content.ReadFromJsonAsync<JsonElement>())!.GetProperty("collectibleToman").GetInt64();
         Assert.Equal(50_000, previewCollectible);
-        var confirm = await op.PostAsJsonAsync(
+        (await op.PostAsJsonAsync(
             $"/api/operator/sessions/{sessionId}/bill/confirm",
             new
             {
                 previewCollectibleToman = previewCollectible,
                 payments = body.payments,
-            });
-        Assert.Equal(HttpStatusCode.BadRequest, confirm.StatusCode);
-        AssertPaymentInvalid(await ReadJsonAsync(confirm));
+            })).EnsureSuccessStatusCode();
+        using var scope = factory.Services.CreateScope();
+        Assert.Equal(50_000, await scope.ServiceProvider.GetRequiredService<AppDbContext>().Invoices.AsNoTracking().Select(i => i.CollectibleToman).SingleAsync());
     }
 
     [Fact]

@@ -14,13 +14,11 @@ export function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-/** Captures bill-preview debounce timers (200ms) for deterministic flush without wall sleep. */
-export function captureBillPreviewDebounce(window) {
+/** Captures bill-preview debounce timers (200ms) scheduled via VM ctx.setTimeout. */
+export function captureBillPreviewDebounce(ctx) {
   const queued = [];
-  const native = window.setTimeout.bind(window);
-  const nativeClear = window.clearTimeout.bind(window);
-  const prev = window.setTimeout;
-  window.setTimeout = (fn, ms, ...rest) => {
+  const native = ctx.setTimeout;
+  ctx.setTimeout = (fn, ms, ...rest) => {
     if (ms === 200) {
       const id = queued.length + 1;
       queued.push(fn);
@@ -37,7 +35,7 @@ export function captureBillPreviewDebounce(window) {
       return queued.length;
     },
     restore() {
-      window.setTimeout = prev;
+      ctx.setTimeout = native;
     },
   };
 }
@@ -157,6 +155,15 @@ export function installFetchCapture(window, ctx) {
     text: async () => "null",
     json: async () => null,
   };
+  const fetchKey = (url, method) => {
+    const raw = String(url);
+    try {
+      const p = new URL(raw, window.location.href).pathname;
+      return `${method || "GET"} ${p}`;
+    } catch {
+      return `${method || "GET"} ${raw}`;
+    }
+  };
   const fetchImpl = async (url, opts = {}) => {
     let body = null;
     if (opts.body) {
@@ -167,8 +174,7 @@ export function installFetchCapture(window, ctx) {
       }
     }
     log.push({ url: String(url), method: opts.method || "GET", body });
-    const pathOnly = String(url);
-    const key = `${opts.method || "GET"} ${pathOnly}`;
+    const key = fetchKey(url, opts.method || "GET");
     const stub = responses.get(key) ?? responses.get(pathOnly);
     if (stub) return stub;
     return defaultOk;

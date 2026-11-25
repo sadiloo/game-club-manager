@@ -450,11 +450,24 @@ public sealed class OperatorBuffetSaleService(
                 p.AmountToman,
                 OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet ? sale.CustomerId?.ToString() : null)).ToList();
             var amounts = await calculator.ComputeBuffetOnlyAsync(sale.Lines, sale.CustomerId, tenders, innerCt, effective);
+            var allocationPayments = CounterPaymentRecording.PaymentsForCollectAllocation(
+                amounts.CollectibleToman,
+                amounts.UnroundedPayableToman,
+                effective);
+            if (!OperatorBillService.TenderAmountsMatch(allocationPayments, effective))
+            {
+                tenders = allocationPayments.Select(p => new Tender(
+                    OperatorPaymentMethods.Parse(p.Method),
+                    p.AmountToman,
+                    OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet ? sale.CustomerId?.ToString() : null)).ToList();
+                amounts = await calculator.ComputeBuffetOnlyAsync(sale.Lines, sale.CustomerId, tenders, innerCt, effective);
+            }
             OperatorBillService.EnsureClientPreviewCollectibleCurrent(
                 previewCollectibleToman,
                 live.CollectibleToman,
                 amounts,
                 effective);
+            OperatorBillService.RejectBuffetWalletOnlyBelowUnroundedGap(amounts, effective);
             bills.ValidatePayments(amounts.CollectibleToman, effective, amounts.Detail, sale.CustomerId);
             await db.Entry(sale).Collection(o => o.Lines).Query().Include(l => l.CatalogItem).LoadAsync(innerCt);
             var invoice = await closer.FinalizeBuffetOnlyAsync(sale, bill, effective, amounts, innerCt);

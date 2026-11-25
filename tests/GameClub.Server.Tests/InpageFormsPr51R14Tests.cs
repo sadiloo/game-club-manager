@@ -149,8 +149,8 @@ public sealed class InpageFormsPr51R14Tests(GameClubWebApplicationFactory factor
             .Invoices.AsNoTracking().Select(i => i.CollectibleToman).SingleAsync());
     }
 
-    [Fact(Skip = "B-3 HOLD WM5: ledger debit 5000 vs invoice/payment line 3000 pending owner choice (Collect fixed 5k vs WalletMinBillToman 0).")]
-    public async Task r14_b3_wm5_wallet_ledger_must_match_invoice_and_payment_line_HOLD()
+    [Fact]
+    public async Task r14_b3_wm5_wallet_ledger_must_match_invoice_and_payment_line()
     {
         await S3TestHelpers.ResetAsync(factory);
         var manager = await factory.CreateOperatorClientAsync("manager", "1234");
@@ -161,13 +161,14 @@ public sealed class InpageFormsPr51R14Tests(GameClubWebApplicationFactory factor
             $"/api/operator/members/customers/{customerId}/wallet/top-up",
             new { method = "Cash", amountToman = 10_000L, commandId = Guid.NewGuid() })).EnsureSuccessStatusCode();
         var openSaleId = await BuffetCheckoutAsync(op, customerId, 3_000L);
+        var payments = new[] { new { method = "Wallet", amountToman = 3_000L } };
+        var preview = await op.PostAsJsonAsync($"/api/operator/buffet-only/{openSaleId}/bill/preview", new { payments });
+        preview.EnsureSuccessStatusCode();
+        var previewCollectible = (await preview.Content.ReadFromJsonAsync<JsonElement>())!
+            .GetProperty("bill").GetProperty("collectibleToman").GetInt64();
         var confirm = await op.PostAsJsonAsync(
             $"/api/operator/buffet-only/{openSaleId}/confirm",
-            new
-            {
-                previewCollectibleToman = 3_000L,
-                payments = new[] { new { method = "Wallet", amountToman = 3_000L } },
-            });
+            new { previewCollectibleToman = previewCollectible, payments });
         confirm.EnsureSuccessStatusCode();
         using var scope = factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
@@ -228,13 +229,14 @@ public sealed class InpageFormsPr51R14Tests(GameClubWebApplicationFactory factor
             $"/api/operator/members/customers/{customerId}/wallet/top-up",
             new { method = "Cash", amountToman = 60_000L, commandId = Guid.NewGuid() })).EnsureSuccessStatusCode();
         var sessionId = await OpenSessionBuffet49500Async(api, op, customerId);
+        var payments = new[] { new { method = "Wallet", amountToman = 49_500L } };
+        var preview = await op.PostAsJsonAsync($"/api/operator/sessions/{sessionId}/bill/preview", new { payments });
+        preview.EnsureSuccessStatusCode();
+        var previewCollectible = (await preview.Content.ReadFromJsonAsync<JsonElement>())!.GetProperty("collectibleToman").GetInt64();
+        Assert.Equal(50_000, previewCollectible);
         (await op.PostAsJsonAsync(
             $"/api/operator/sessions/{sessionId}/bill/confirm",
-            new
-            {
-                previewCollectibleToman = 50_000L,
-                payments = new[] { new { method = "Wallet", amountToman = 49_500L } },
-            })).EnsureSuccessStatusCode();
+            new { previewCollectibleToman = previewCollectible, payments })).EnsureSuccessStatusCode();
         using var scope = factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         var walletLine = await db.PaymentLines.AsNoTracking().SingleAsync(p => p.Method == PaymentMethod.Wallet);

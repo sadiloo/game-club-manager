@@ -816,7 +816,7 @@ public static class InvoiceCalculator
         var resolved = PaymentRounding.Resolve(unroundedPayable, request.Rounding, roundingSettings, walletRoundsLikeCash);
         var effectiveRounding = resolved.EffectiveRounding;
         var walletLikeCash = resolved.WalletRoundsLikeCash;
-        var billBelowCashLikeThreshold = unroundedPayable < WalletPaymentRounding.CashLikeThresholdToman;
+        var billBelowCashLikeThreshold = unroundedPayable < roundingSettings.WalletMinBillToman;
         var branchRounded = Calculate(request with { Rounding = resolved.BranchRounding });
         var hasBalanceTender = tenders.Any(t => t.Method is PaymentMethod.Wallet or PaymentMethod.PcBalance);
         var hasCounterTender = tenders.Any(t => t.Method is PaymentMethod.Cash or PaymentMethod.CardReader or PaymentMethod.CardToCard);
@@ -837,6 +837,8 @@ public static class InvoiceCalculator
         var nets = PayableNets(request, priced.NetBeforeRoundingToman);
         var f1WriteOffUnroundedPayable = !walletRoundsLikeCash && !roundingSettings.ApplyToWallet;
         var allocateRounding = f1WriteOffUnroundedPayable ? RoundingPolicy.Off : request.Rounding;
+        var tenderedTotal = tenders.Sum(t => t.AmountToman);
+        var mixedCounterOverTender = mixedBalanceCounter && tenderedTotal > branchRounded.PayableToman;
         var allocation = PaymentAllocator.Allocate(
             nets,
             tenders,
@@ -849,7 +851,7 @@ public static class InvoiceCalculator
             roundingSettings.AllowWalletShortBalanceDebt,
             roundingSettings.SuppressWalletDebtDraw,
             billBelowCashLikeThreshold,
-            allowCounterOverTender: f1WriteOffUnroundedPayable || !hasBalanceTender);
+            allowCounterOverTender: f1WriteOffUnroundedPayable || !hasBalanceTender || mixedCounterOverTender);
         var date = TehranTime.Date(request.IssuedAt);
         var lines = new List<InvoiceLine>();
         foreach (var line in priced.Lines)

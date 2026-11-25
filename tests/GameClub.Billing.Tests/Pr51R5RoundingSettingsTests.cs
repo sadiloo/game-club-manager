@@ -194,4 +194,37 @@ public sealed class Pr51R5RoundingSettingsTests
         Assert.True(alloc.IsValid);
         Assert.Equal(499, alloc.PayableToman);
     }
+
+    [Fact]
+    public void r14d_collect_mixed_threshold_uses_wallet_min_not_fixed_5k()
+    {
+        var request = BuffetRequest(9_999);
+        var settings = Defaults with { WalletMinBillToman = 10_000 };
+        var (_, alloc) = InvoiceCalculator.Collect(
+            request,
+            [new Tender(PaymentMethod.Wallet, 1_000, "m"), new Tender(PaymentMethod.Cash, 8_999)],
+            [new MemberWallet("m", 10_000, 0)],
+            roundingSettings: settings);
+        Assert.True(alloc.IsValid);
+        Assert.Equal(9_999, alloc.PayableToman);
+    }
+
+    [Fact]
+    public void r14d_mixed_4000_wallet_1000_cash_3000_exact_when_bill_below_wallet_min()
+    {
+        var request = BuffetRequest(4_000);
+        var (_, alloc) = InvoiceCalculator.Collect(
+            request,
+            [new Tender(PaymentMethod.Wallet, 1_000, "m"), new Tender(PaymentMethod.Cash, 3_000)],
+            [new MemberWallet("m", 10_000, 0)],
+            roundingSettings: Defaults);
+        Assert.True(alloc.IsValid);
+        Assert.Equal(4_000, alloc.PayableToman);
+    }
+
+    [Fact]
+    public void gate_mutant_r14d_collect_hardcoded_5k_threshold_fails_wallet_min_10k_pin()
+    {
+        r14d_collect_mixed_threshold_uses_wallet_min_not_fixed_5k();
+    }
 }

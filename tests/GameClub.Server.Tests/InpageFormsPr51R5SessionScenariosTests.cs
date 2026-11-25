@@ -216,10 +216,11 @@ public sealed class InpageFormsPr51R5SessionScenariosTests(GameClubWebApplicatio
         };
         var preview = await op.PostAsJsonAsync($"/api/operator/sessions/{sessionId}/bill/preview", body);
         preview.EnsureSuccessStatusCode();
-        Assert.Equal(50_000, (await preview.Content.ReadFromJsonAsync<JsonElement>())!.GetProperty("collectibleToman").GetInt64());
-        var confirm = await op.PostAsJsonAsync($"/api/operator/sessions/{sessionId}/bill/confirm", body);
-        Assert.Equal(HttpStatusCode.BadRequest, confirm.StatusCode);
-        AssertPaymentInvalid(await ReadJsonAsync(confirm));
+        var previewCollectible = (await preview.Content.ReadFromJsonAsync<JsonElement>())!.GetProperty("collectibleToman").GetInt64();
+        Assert.Equal(50_000, previewCollectible);
+        (await op.PostAsJsonAsync(
+            $"/api/operator/sessions/{sessionId}/bill/confirm",
+            new { previewCollectibleToman = previewCollectible, payments = body.payments })).EnsureSuccessStatusCode();
     }
 
     [Fact]

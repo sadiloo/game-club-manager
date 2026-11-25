@@ -9,6 +9,80 @@ namespace GameClub.Server.Operator;
 /// </summary>
 public static class CounterPaymentRecording
 {
+    /// <summary>
+    /// Mixed wallet+cash counter over-tender: Collect allocation uses exact cash (= collectible − wallet),
+    /// while typed payments stay for change and recorded lines.
+    /// </summary>
+    public static IReadOnlyList<OperatorBillService.PaymentInput> PaymentsForCollectAllocation(
+        long collectibleToman,
+        long unroundedPayableToman,
+        IReadOnlyList<OperatorBillService.PaymentInput> payments)
+    {
+        if (collectibleToman <= 0 || payments.Count == 0)
+        {
+            return payments;
+        }
+
+        var hasWallet = payments.Any(p => OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet);
+        var hasCash = payments.Any(p => OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Cash);
+        if (!hasWallet || !hasCash)
+        {
+            return payments;
+        }
+
+        var tendered = payments.Sum(p => p.AmountToman);
+        if (tendered <= collectibleToman)
+        {
+            return payments;
+        }
+
+        var walletTotal = payments
+            .Where(p => OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet)
+            .Sum(p => p.AmountToman);
+        var walletTowardCollectible = walletTotal;
+        if (walletTotal == unroundedPayableToman && collectibleToman > unroundedPayableToman)
+        {
+            walletTowardCollectible = collectibleToman;
+        }
+
+        var cashNeeded = collectibleToman - walletTowardCollectible;
+        if (cashNeeded <= 0)
+        {
+            if (walletTowardCollectible >= collectibleToman)
+            {
+                return payments
+                    .Where(p => OperatorPaymentMethods.Parse(p.Method) != PaymentMethod.Cash)
+                    .ToList();
+            }
+
+            return payments;
+        }
+
+        var result = new List<OperatorBillService.PaymentInput>(payments.Count);
+        var cashAssigned = false;
+        foreach (var pay in payments)
+        {
+            if (OperatorPaymentMethods.Parse(pay.Method) == PaymentMethod.Cash)
+            {
+                if (!cashAssigned)
+                {
+                    result.Add(pay with { AmountToman = cashNeeded });
+                    cashAssigned = true;
+                }
+                else
+                {
+                    result.Add(pay with { AmountToman = 0 });
+                }
+            }
+            else
+            {
+                result.Add(pay);
+            }
+        }
+
+        return result;
+    }
+
     public static long ComputeChangeToman(long collectibleToman, IReadOnlyList<OperatorBillService.PaymentInput> payments)
     {
         if (collectibleToman <= 0)
@@ -18,6 +92,38 @@ public static class CounterPaymentRecording
 
         var tendered = payments.Sum(p => p.AmountToman);
         return tendered > collectibleToman ? tendered - collectibleToman : 0;
+    }
+
+    public static bool NonCashExceedsCollectible(
+        long collectibleToman,
+        IReadOnlyList<OperatorBillService.PaymentInput> payments,
+        AllocationResult? allocation)
+    {
+        if (collectibleToman <= 0 || payments.Count == 0)
+        {
+            return false;
+        }
+
+        var walletOnly = payments.All(p => OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet);
+        var hasWallet = payments.Any(p => OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet);
+        var hasCash = payments.Any(p => OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Cash);
+        var hasCard = payments.Any(p =>
+        {
+            var method = OperatorPaymentMethods.Parse(p.Method);
+            return method is PaymentMethod.CardReader or PaymentMethod.CardToCard;
+        });
+        if (walletOnly && !hasCard)
+        {
+            return false;
+        }
+
+        var tendered = payments.Sum(p => p.AmountToman);
+        if (hasWallet && hasCash && !walletOnly && tendered > collectibleToman)
+        {
+            return false;
+        }
+
+        return SumNonCashRecorded(payments, allocation) > collectibleToman;
     }
 
     public static void EnsureRecordable(

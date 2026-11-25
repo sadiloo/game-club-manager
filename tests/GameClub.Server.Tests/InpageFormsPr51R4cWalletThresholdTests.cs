@@ -176,7 +176,7 @@ public sealed class InpageFormsPr51R4cWalletThresholdTests(GameClubWebApplicatio
     }
 
     [Fact]
-    public async Task buffet_mixed_5000_wallet_1000_cash_5000_rejected_wallet_uncharged()
+    public async Task buffet_mixed_5000_wallet_1000_cash_5000_over_tender_settles_with_change()
     {
         await S3TestHelpers.ResetAsync(factory);
         var op = await factory.CreateOperatorClientAsync();
@@ -186,20 +186,21 @@ public sealed class InpageFormsPr51R4cWalletThresholdTests(GameClubWebApplicatio
             new { method = "Cash", amountToman = 50_000L, commandId = Guid.NewGuid() })).EnsureSuccessStatusCode();
         var before = await WalletSpendableAsync(op, customerId);
         var openSaleId = await OpenCustomBuffetAsync(op, customerId, 5_000L);
-        var confirm = await op.PostAsJsonAsync(
+        var payments = new[]
+        {
+            new { method = "Wallet", amountToman = 1_000L },
+            new { method = "Cash", amountToman = 5_000L },
+        };
+        var preview = await op.PostAsJsonAsync($"/api/operator/buffet-only/{openSaleId}/bill/preview", new { payments });
+        preview.EnsureSuccessStatusCode();
+        Assert.Equal(5_000, BillCollectible(await preview.Content.ReadFromJsonAsync<JsonElement>()));
+        (await op.PostAsJsonAsync(
             $"/api/operator/buffet-only/{openSaleId}/confirm",
-            new
-            {
-                payments = new[]
-                {
-                    new { method = "Wallet", amountToman = 1_000L },
-                    new { method = "Cash", amountToman = 5_000L },
-                },
-            });
-        Assert.Equal(HttpStatusCode.BadRequest, confirm.StatusCode);
-        Assert.Equal(before, await WalletSpendableAsync(op, customerId));
+            new { previewCollectibleToman = 5_000L, payments })).EnsureSuccessStatusCode();
+        Assert.Equal(before - 1_000, await WalletSpendableAsync(op, customerId));
         using var scope = factory.Services.CreateScope();
-        Assert.Equal(0, await scope.ServiceProvider.GetRequiredService<AppDbContext>().Invoices.CountAsync());
+        var invoice = await scope.ServiceProvider.GetRequiredService<AppDbContext>().Invoices.AsNoTracking().Include(i => i.PaymentLines).SingleAsync();
+        Assert.Equal(4_000, invoice.PaymentLines.Single(p => p.Method == PaymentMethod.Cash).AmountToman);
     }
 
     [Fact]
@@ -237,7 +238,7 @@ public sealed class InpageFormsPr51R4cWalletThresholdTests(GameClubWebApplicatio
     }
 
     [Fact]
-    public async Task buffet_mixed_12000_wallet_1000_cash_15000_rejected_wallet_uncharged()
+    public async Task buffet_mixed_12000_wallet_1000_cash_15000_over_tender_settles_rounded_15000()
     {
         await S3TestHelpers.ResetAsync(factory);
         var op = await factory.CreateOperatorClientAsync();
@@ -247,17 +248,17 @@ public sealed class InpageFormsPr51R4cWalletThresholdTests(GameClubWebApplicatio
             new { method = "Cash", amountToman = 50_000L, commandId = Guid.NewGuid() })).EnsureSuccessStatusCode();
         var before = await WalletSpendableAsync(op, customerId);
         var openSaleId = await OpenCustomBuffetAsync(op, customerId, 12_000L);
-        var confirm = await op.PostAsJsonAsync(
+        var payments = new[]
+        {
+            new { method = "Wallet", amountToman = 1_000L },
+            new { method = "Cash", amountToman = 15_000L },
+        };
+        var preview = await op.PostAsJsonAsync($"/api/operator/buffet-only/{openSaleId}/bill/preview", new { payments });
+        preview.EnsureSuccessStatusCode();
+        Assert.Equal(15_000, BillCollectible(await preview.Content.ReadFromJsonAsync<JsonElement>()));
+        (await op.PostAsJsonAsync(
             $"/api/operator/buffet-only/{openSaleId}/confirm",
-            new
-            {
-                payments = new[]
-                {
-                    new { method = "Wallet", amountToman = 1_000L },
-                    new { method = "Cash", amountToman = 15_000L },
-                },
-            });
-        Assert.Equal(HttpStatusCode.BadRequest, confirm.StatusCode);
-        Assert.Equal(before, await WalletSpendableAsync(op, customerId));
+            new { previewCollectibleToman = 15_000L, payments })).EnsureSuccessStatusCode();
+        Assert.Equal(before - 1_000, await WalletSpendableAsync(op, customerId));
     }
 }

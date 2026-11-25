@@ -87,8 +87,8 @@ public sealed class InpageFormsPr51R6WholeBillSplitTests(GameClubWebApplicationF
     [InlineData(true, 49_500, 500, HttpStatusCode.OK, 50_000, 200)]
     [InlineData(false, 49_000, 1_000, HttpStatusCode.OK, 50_000, 700)]
     [InlineData(true, 49_000, 1_000, HttpStatusCode.OK, 50_000, 700)]
-    [InlineData(false, 49_000, 5_000, HttpStatusCode.BadRequest, 50_000, 49_700)]
-    [InlineData(true, 49_000, 5_000, HttpStatusCode.BadRequest, 50_000, 49_700)]
+    [InlineData(false, 49_000, 5_000, HttpStatusCode.OK, 50_000, 700)]
+    [InlineData(true, 49_000, 5_000, HttpStatusCode.OK, 50_000, 700)]
     public async Task pr51_r6_split_matrix_whole_bill_collectible(
         bool session,
         long walletToman,

@@ -23,7 +23,7 @@ async function waitForCondition(label, predicate, { timeout = 4000, interval = 2
 }
 
 const { window, document, runInApp, ctx } = loadOperatorApp();
-const debounce = captureBillPreviewDebounce(window);
+const debounce = captureBillPreviewDebounce(ctx);
 const cap = installFetchCapture(window, ctx);
 
 cap.stub(`/api/operator/sessions/${SESSION}/bill/preview`, "POST", {

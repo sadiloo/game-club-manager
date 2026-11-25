@@ -398,9 +398,9 @@ public sealed class InpageFormsPr51R5RoundingSettingsTests(GameClubWebApplicatio
         preview.EnsureSuccessStatusCode();
         var previewCollectible = (await preview.Content.ReadFromJsonAsync<JsonElement>())!
             .GetProperty("bill").GetProperty("collectibleToman").GetInt64();
-        var confirm = await op.PostAsJsonAsync($"/api/operator/buffet-only/{openSaleId}/confirm", body);
-        Assert.Equal(HttpStatusCode.BadRequest, confirm.StatusCode);
-        AssertPaymentInvalid(await ReadJsonAsync(confirm));
+        (await op.PostAsJsonAsync(
+            $"/api/operator/buffet-only/{openSaleId}/confirm",
+            new { previewCollectibleToman = previewCollectible, payments = body.payments })).EnsureSuccessStatusCode();
         Assert.Equal(50_000, previewCollectible);
     }
 
