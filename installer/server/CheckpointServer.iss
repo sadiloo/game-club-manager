@@ -35,7 +35,6 @@ OutputBaseFilename={#SetupBase}
 OutputDir=Output
 UninstallDisplayName={#AppName}
 SetupLogging=yes
-AbortInstallationOnRunFailure=yes
 CloseApplications=no
 RestartApplications=no
 ArchitecturesAllowed=x64compatible
