@@ -639,12 +639,22 @@ function Wait-InstallerServerApiPort {
     throw "installer acceptance: TCP 127.0.0.1:5000 not accepting connections within ${TimeoutSeconds}s"
 }
 
+function Clear-InstallerDotNetTestProcessEnvironment {
+    foreach ($key in @(
+            "CHECKPOINT_SERVER_URL", "GAMECLUB_DATABASE", "GAMECLUB_TEST_DATABASE",
+            "GAMECLUB_API_KEY", "OperatorSessionSecret",
+            "CHECKPOINT_OPERATOR_USERNAME", "CHECKPOINT_OPERATOR_PIN"
+        )) {
+        Remove-Item -Path "Env:$key" -ErrorAction SilentlyContinue
+    }
+}
+
 function New-InstallerOperatorClient {
     param([string] $Username, [string] $Pin)
     $session = New-Object Microsoft.PowerShell.Commands.WebRequestSession
-    $body = @{ Username = $Username; Pin = $Pin } | ConvertTo-Json
+    $body = @{ username = [string]$Username; pin = [string]$Pin } | ConvertTo-Json -Compress
     $resp = Invoke-WebRequest -Method Post -Uri "http://127.0.0.1:5000/api/operator/auth/login" -Body $body -ContentType "application/json" -WebSession $session -UseBasicParsing
-    if ($resp.StatusCode -ne 200) { throw "operator login failed" }
+    if ($resp.StatusCode -ne 200) { throw "operator login failed for user $Username" }
     return $session
 }
 
