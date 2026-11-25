@@ -54,12 +54,17 @@
   function settleHistoryPopWaiters() {
     const waiters = cpLayer._historyPopWaiters;
     cpLayer._historyPopWaiters = [];
-  for (const done of waiters) {
+    for (const done of waiters) {
       try {
         done();
       } catch (_) {}
     }
     cpLayer._closingViaHistory = false;
+    try {
+      if (!cpLayer.active && history.state && history.state.cpDialog) {
+        history.back();
+      }
+    } catch (_) {}
   }
 
   function popHistoryIfNeeded() {
@@ -94,8 +99,15 @@
       return;
     }
     const active = cpLayer.active;
-    if (!active) return;
-  if (active._onBackStep) {
+    if (!active) {
+      if (history.state && history.state.cpDialog) {
+        try {
+          history.back();
+        } catch (_) {}
+      }
+      return;
+    }
+    if (active._onBackStep) {
       const handled = active._onBackStep();
       if (handled) {
         pushHistory(active.id);

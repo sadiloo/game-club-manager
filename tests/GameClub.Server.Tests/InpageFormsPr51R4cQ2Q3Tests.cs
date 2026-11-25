@@ -146,8 +146,8 @@ public sealed class InpageFormsPr51R4cQ2Q3Tests(GameClubWebApplicationFactory fa
         var preview = await op.PostAsJsonAsync(
             $"/api/operator/buffet-only/{openSaleId}/bill/preview",
             new { payments = new[] { new { method = "Wallet", amountToman = 1_000L } } });
-        preview.EnsureSuccessStatusCode();
-        Assert.Equal(15_000, BillCollectible(await preview.Content.ReadFromJsonAsync<JsonElement>()));
+        Assert.Equal(HttpStatusCode.BadRequest, preview.StatusCode);
+        Assert.Equal("payment_invalid", (await preview.Content.ReadFromJsonAsync<JsonElement>())!.GetProperty("code").GetString());
     }
 
     [Fact]
@@ -163,8 +163,8 @@ public sealed class InpageFormsPr51R4cQ2Q3Tests(GameClubWebApplicationFactory fa
         var preview = await op.PostAsJsonAsync(
             $"/api/operator/buffet-only/{openSaleId}/bill/preview",
             new { payments = new[] { new { method = "Wallet", amountToman = 50_001L } } });
-        preview.EnsureSuccessStatusCode();
-        Assert.Equal(150_000, BillCollectible(await preview.Content.ReadFromJsonAsync<JsonElement>()));
+        Assert.Equal(HttpStatusCode.BadRequest, preview.StatusCode);
+        Assert.Equal("payment_invalid", (await preview.Content.ReadFromJsonAsync<JsonElement>())!.GetProperty("code").GetString());
     }
 
     [Fact]
@@ -379,7 +379,7 @@ public sealed class InpageFormsPr51R4cQ2Q3Tests(GameClubWebApplicationFactory fa
         var preview = await op.PostAsJsonAsync(
             $"/api/operator/buffet-only/{openSaleId}/bill/preview",
             new { payments = new[] { new { method = "Wallet", amountToman = 1_000L } } });
-        preview.EnsureSuccessStatusCode();
-        Assert.Equal(15_000, BillCollectible(await preview.Content.ReadFromJsonAsync<JsonElement>()));
+        Assert.Equal(HttpStatusCode.BadRequest, preview.StatusCode);
+        Assert.Equal("payment_invalid", (await preview.Content.ReadFromJsonAsync<JsonElement>())!.GetProperty("code").GetString());
     }
 }

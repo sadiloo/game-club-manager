@@ -852,12 +852,18 @@ public sealed class OperatorMemberBillingService(AppDbContext db, OperatorMember
         Guid customerId,
         CustomerMemberEntity _,
         AllocationResult allocation,
-        Guid invoiceId,
+        InvoiceEntity invoice,
         CancellationToken ct)
     {
         if (!allocation.IsValid)
         {
             throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", "تخصیص کیف پول انجام نشد.");
+        }
+
+        var walletLines = invoice.PaymentLines.Where(p => p.Method == PaymentMethod.Wallet).ToList();
+        if (walletLines.Count == 0)
+        {
+            return;
         }
 
         var member = await db.CustomerMembers.FirstAsync(m => m.CustomerId == customerId, ct);
@@ -866,26 +872,21 @@ public sealed class OperatorMemberBillingService(AppDbContext db, OperatorMember
             customerId);
         await db.Entry(member).ReloadAsync(ct);
 
-        var walletTenders = allocation.Tenders.Where(t => t.Method == PaymentMethod.Wallet && t.Accepted).ToList();
-        if (walletTenders.Count == 0)
-        {
-            return;
-        }
-
         var settings = await members.LoadSettingsAsync(ct);
         var debt = MemberSettingsMapper.LoadDebtPolicy(settings);
         var pocket = MemberWalletMapper.ToPocket(member);
-        long realDrawn = 0;
-        long giftDrawn = 0;
-        foreach (var t in walletTenders)
+        long realDrawn = walletLines.Sum(p => p.WalletRealDrawnToman);
+        long giftDrawn = walletLines.Sum(p => p.WalletGiftDrawnToman);
+        var spendTotal = walletLines.Sum(p => p.AmountToman);
+        if (!pocket.TrySpend(spendTotal, debt, out pocket, out var ledgerGift, out var ledgerReal))
         {
-            if (!pocket.TrySpend(t.AmountToman, debt, out pocket, out var gift, out var real))
-            {
-                throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", "خرج از کیف پول انجام نشد.");
-            }
+            throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", "خرج از کیف پول انجام نشد.");
+        }
 
-            realDrawn = MoneyMath.CheckedAdd(realDrawn, real);
-            giftDrawn = MoneyMath.CheckedAdd(giftDrawn, gift);
+        if (ledgerReal != realDrawn || ledgerGift != giftDrawn)
+        {
+            realDrawn = ledgerReal;
+            giftDrawn = ledgerGift;
         }
 
         MemberWalletMapper.ApplyPocket(member, pocket);
@@ -896,7 +897,7 @@ public sealed class OperatorMemberBillingService(AppDbContext db, OperatorMember
             Kind = WalletLedgerKind.InvoiceSpend,
             RealDeltaToman = -realDrawn,
             GiftDeltaToman = -giftDrawn,
-            InvoiceId = invoiceId,
+            InvoiceId = invoice.Id,
             Label = "invoice",
         });
     }

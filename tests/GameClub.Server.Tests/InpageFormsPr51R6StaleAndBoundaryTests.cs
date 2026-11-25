@@ -1,4 +1,5 @@
 using System.Net;
+using GameClub.Billing;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
@@ -86,11 +87,11 @@ public sealed class InpageFormsPr51R6StaleAndBoundaryTests(GameClubWebApplicatio
         => (await op.GetFromJsonAsync<JsonElement>($"/api/operator/members/customers/{id}/wallet")).GetProperty("spendableToman").GetInt64();
 
     [Theory]
-    [InlineData(false, """[{"method":"Wallet","amountToman":49500},{"method":"Cash","amountToman":1000}]""")]
-    [InlineData(true, """[{"method":"Wallet","amountToman":49500},{"method":"Cash","amountToman":1000}]""")]
-    [InlineData(false, """[{"method":"Wallet","amountToman":50000},{"method":"Cash","amountToman":1000}]""")]
-    [InlineData(true, """[{"method":"Wallet","amountToman":50000},{"method":"Cash","amountToman":1000}]""")]
-    public async Task Rr3_over_tender_unchanged_settings_is_400_not_409(bool session, string pay)
+    [InlineData(false, 49_500, 500, """[{"method":"Wallet","amountToman":49500},{"method":"Cash","amountToman":1000}]""")]
+    [InlineData(true, 49_500, 500, """[{"method":"Wallet","amountToman":49500},{"method":"Cash","amountToman":1000}]""")]
+    [InlineData(false, 50_000, 0, """[{"method":"Wallet","amountToman":50000},{"method":"Cash","amountToman":1000}]""")]
+    [InlineData(true, 50_000, 0, """[{"method":"Wallet","amountToman":50000},{"method":"Cash","amountToman":1000}]""")]
+    public async Task Rr3_over_tender_unchanged_settings_is_400_not_409(bool session, long walletLine, long cashLine, string pay)
     {
         var (op, _, pv, cf, cust) = await Setup(session, 60_000, null, On);
         var before = await Spendable(op, cust);
@@ -98,7 +99,21 @@ public sealed class InpageFormsPr51R6StaleAndBoundaryTests(GameClubWebApplicatio
         Assert.Equal(50_000, token);
         var (st, _, _) = await Confirm(op, cf, token, pay);
         Assert.Equal(HttpStatusCode.OK, st);
-        Assert.Equal(before - 50_000, await Spendable(op, cust));
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var invoice = await db.Invoices.AsNoTracking().Include(i => i.PaymentLines).SingleAsync();
+        Assert.Equal(50_000, invoice.CollectibleToman);
+        Assert.Equal(walletLine, invoice.PaymentLines.Single(p => p.Method == PaymentMethod.Wallet).AmountToman);
+        if (cashLine > 0)
+        {
+            Assert.Equal(cashLine, invoice.PaymentLines.Single(p => p.Method == PaymentMethod.Cash).AmountToman);
+        }
+        else
+        {
+            Assert.DoesNotContain(invoice.PaymentLines, p => p.Method == PaymentMethod.Cash);
+        }
+
+        Assert.Equal(before - walletLine, await Spendable(op, cust));
     }
 
     [Theory]

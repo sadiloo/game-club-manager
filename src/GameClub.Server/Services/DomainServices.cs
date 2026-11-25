@@ -291,7 +291,7 @@ public sealed class SessionCloser(
 
             if (amounts.Detail.Allocation is { } allocation)
             {
-                await memberBilling.ApplyWalletPaymentsAsync(customerId, member, allocation, invoice.Id, ct);
+                await memberBilling.ApplyWalletPaymentsAsync(customerId, member, allocation, invoice, ct);
             }
 
             var charge = await billing.BuildChargeAsync(session, bill.FrozenAtUtc, ct);
@@ -328,7 +328,7 @@ public sealed class SessionCloser(
 
             if (amounts.Detail.Allocation is { } allocation)
             {
-                await memberBilling.ApplyWalletPaymentsAsync(customerId, member, allocation, invoice.Id, ct);
+                await memberBilling.ApplyWalletPaymentsAsync(customerId, member, allocation, invoice, ct);
             }
 
             await memberBilling.PostConfirmEffectsAsync(customerId, member, amounts.Detail, invoice.Id, 0, ct);

@@ -127,8 +127,8 @@ public sealed class InpageFormsPr51R5PaymentTimeGateTests(GameClubWebApplication
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         var invoice = await db.Invoices.AsNoTracking().Include(i => i.PaymentLines).SingleAsync();
         Assert.Equal(50_000, invoice.CollectibleToman);
-        Assert.Equal(50_000, invoice.PaymentLines.Single(p => p.Method == PaymentMethod.Wallet).AmountToman);
-        Assert.Equal(0, invoice.PaymentLines.Count(p => p.Method == PaymentMethod.Cash));
+        Assert.Equal(49_500, invoice.PaymentLines.Single(p => p.Method == PaymentMethod.Wallet).AmountToman);
+        Assert.Equal(500, invoice.PaymentLines.Single(p => p.Method == PaymentMethod.Cash).AmountToman);
     }
 
     [Fact]

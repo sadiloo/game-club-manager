@@ -620,12 +620,12 @@ public sealed class OperatorBillService(
                 return false;
             }
 
-            if (!hasCash)
+            if (tendered != amounts.CollectibleToman)
             {
-                return false;
+                return true;
             }
 
-            return tendered != amounts.CollectibleToman;
+            return false;
         }
 
         if (tendered > livePaymentTimeCollectibleToman)
@@ -647,33 +647,31 @@ public sealed class OperatorBillService(
         return false;
     }
 
-    /// <summary>R14d-D / PO-3: wallet-only tender below unrounded in the rounding gap (e.g. W49,000 on 49,500) is rejected on preview and confirm.</summary>
+    /// <summary>R14d-D / PO-3: wallet-only tender below unrounded bill (any lines) rejected on preview and confirm; at-unrounded silent lift is wallet-only only.</summary>
     public static void RejectWalletOnlyBelowUnroundedGap(BillAmounts amounts, IReadOnlyList<PaymentInput> payments)
     {
-        var walletOnly = payments.Count > 0
-            && payments.All(p => OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet);
-        if (!walletOnly || payments.Count != 1)
+        if (payments.Count == 0 || payments.Any(p => p.AmountToman <= 0))
+        {
+            return;
+        }
+
+        var walletOnly = payments.All(p => OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet);
+        if (!walletOnly)
         {
             return;
         }
 
         var tendered = payments.Sum(p => p.AmountToman);
         var unrounded = amounts.UnroundedPayableToman;
-        if (tendered >= unrounded)
+        if (tendered >= unrounded || unrounded >= amounts.CollectibleToman)
         {
             return;
         }
 
-        var roundingGap = amounts.CollectibleToman - unrounded;
-        if (roundingGap > 0
-            && tendered >= unrounded - roundingGap
-            && tendered < unrounded)
-        {
-            throw new ApiException(
-                StatusCodes.Status400BadRequest,
-                "payment_invalid",
-                OperatorPaymentErrors.Localize(new PaymentError(PaymentErrors.SumMismatch, ""), amounts.CollectibleToman));
-        }
+        throw new ApiException(
+            StatusCodes.Status400BadRequest,
+            "payment_invalid",
+            OperatorPaymentErrors.Localize(new PaymentError(PaymentErrors.SumMismatch, ""), amounts.CollectibleToman));
     }
 
     public async Task<PaymentPreviewResult> BuildBuffetPaymentPreviewAsync(

@@ -292,22 +292,6 @@ export async function waitCpHidden(document, timeoutMs = 8000, runInApp = null) 
       settled = !el || el.classList.contains("hidden");
     }
     if (settled) return;
-    if (runInApp) {
-      try {
-        const needsPop = runInApp(
-          `(() => {
-            const el = document.getElementById("cpLayer");
-            const hidden = !el || el.classList.contains("hidden");
-            return hidden && window.cpLayer?._historyPopWaiters?.length > 0;
-          })()`,
-        );
-        if (needsPop) {
-          runInApp(`window.dispatchEvent(new PopStateEvent("popstate", { state: history.state }));`);
-        }
-      } catch {
-        /* ignore */
-      }
-    }
     await sleep(15);
   }
   throw new Error("cpLayer still visible");

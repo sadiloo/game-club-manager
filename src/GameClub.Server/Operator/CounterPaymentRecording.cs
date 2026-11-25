@@ -39,23 +39,13 @@ public static class CounterPaymentRecording
         var walletTotal = payments
             .Where(p => OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet)
             .Sum(p => p.AmountToman);
-        var walletTowardCollectible = walletTotal;
-        if (walletTotal == unroundedPayableToman && collectibleToman > unroundedPayableToman)
-        {
-            walletTowardCollectible = collectibleToman;
-        }
 
-        var cashNeeded = collectibleToman - walletTowardCollectible;
+        var cashNeeded = collectibleToman - walletTotal;
         if (cashNeeded <= 0)
         {
-            if (walletTowardCollectible >= collectibleToman)
-            {
-                return payments
-                    .Where(p => OperatorPaymentMethods.Parse(p.Method) != PaymentMethod.Cash)
-                    .ToList();
-            }
-
-            return payments;
+            return payments
+                .Where(p => OperatorPaymentMethods.Parse(p.Method) != PaymentMethod.Cash)
+                .ToList();
         }
 
         var result = new List<OperatorBillService.PaymentInput>(payments.Count);
@@ -167,6 +157,7 @@ public static class CounterPaymentRecording
         Guid? customerId)
     {
         EnsureRecordable(collectibleToman, payments, allocation);
+        var recordWalletAsTyped = RecordWalletLineAsTypedAmount(payments);
 
         long cardRecorded = 0;
         long walletRecorded = 0;
@@ -186,15 +177,22 @@ public static class CounterPaymentRecording
             if (method == PaymentMethod.Wallet)
             {
                 var alloc = allocation?.Tenders.FirstOrDefault(t => t.Method == PaymentMethod.Wallet && t.Accepted);
-                var recorded = WalletRecordedToman(pay, alloc);
+                var recorded = WalletRecordedToman(pay, alloc, recordWalletAsTyped);
                 walletRecorded = MoneyMath.CheckedAdd(walletRecorded, recorded);
+                var realDrawn = alloc?.RealDrawnToman ?? 0;
+                var giftDrawn = alloc?.GiftDrawnToman ?? 0;
+                if (recordWalletAsTyped)
+                {
+                    (realDrawn, giftDrawn) = CapWalletDrawToTyped(pay.AmountToman, realDrawn, giftDrawn);
+                }
+
                 lines.Add(new RecordedPaymentLine(
                     pay,
                     method,
                     recorded,
                     customerId,
-                    alloc?.RealDrawnToman ?? 0,
-                    alloc?.GiftDrawnToman ?? 0));
+                    realDrawn,
+                    giftDrawn));
                 continue;
             }
 
@@ -225,6 +223,7 @@ public static class CounterPaymentRecording
         IReadOnlyList<OperatorBillService.PaymentInput> payments,
         AllocationResult? allocation)
     {
+        var recordWalletAsTyped = RecordWalletLineAsTypedAmount(payments);
         long total = 0;
         foreach (var pay in payments)
         {
@@ -236,15 +235,47 @@ public static class CounterPaymentRecording
             else if (method == PaymentMethod.Wallet)
             {
                 var alloc = allocation?.Tenders.FirstOrDefault(t => t.Method == PaymentMethod.Wallet && t.Accepted);
-                total = MoneyMath.CheckedAdd(total, WalletRecordedToman(pay, alloc));
+                total = MoneyMath.CheckedAdd(total, WalletRecordedToman(pay, alloc, recordWalletAsTyped));
             }
         }
 
         return total;
     }
 
-    private static long WalletRecordedToman(OperatorBillService.PaymentInput pay, TenderResult? alloc)
+    /// <summary>Mixed wallet+cash: wallet payment line and debit match typed wallet (R14e-A); silent lift is wallet-only.</summary>
+    private static bool RecordWalletLineAsTypedAmount(IReadOnlyList<OperatorBillService.PaymentInput> payments)
     {
+        var hasWallet = payments.Any(p => OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet);
+        var hasCash = payments.Any(p => OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Cash);
+        return hasWallet && hasCash;
+    }
+
+    private static (long RealDrawn, long GiftDrawn) CapWalletDrawToTyped(long typedWalletToman, long realDrawn, long giftDrawn)
+    {
+        var drawn = MoneyMath.CheckedAdd(realDrawn, giftDrawn);
+        if (drawn <= typedWalletToman)
+        {
+            return (realDrawn, giftDrawn);
+        }
+
+        if (realDrawn >= typedWalletToman)
+        {
+            return (typedWalletToman, 0);
+        }
+
+        return (realDrawn, typedWalletToman - realDrawn);
+    }
+
+    private static long WalletRecordedToman(
+        OperatorBillService.PaymentInput pay,
+        TenderResult? alloc,
+        bool recordWalletAsTyped)
+    {
+        if (recordWalletAsTyped)
+        {
+            return pay.AmountToman;
+        }
+
         if (alloc is null)
         {
             return pay.AmountToman;
