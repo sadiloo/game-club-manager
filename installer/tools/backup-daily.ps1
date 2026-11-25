@@ -27,7 +27,8 @@ try {
     $dump = Join-Path $PrimaryBackupDir "checkpoint-$stamp.dump"
 
     $env:PGPASSWORD = $cfg.Password
-    & pg_dump -Fc -h $cfg.Host -p $cfg.Port -U $cfg.Username $cfg.Database -f $dump
+    $pgDump = Get-CheckpointPgExecutable -Name "pg_dump"
+    & $pgDump -Fc -h $cfg.Host -p $cfg.Port -U $cfg.Username $cfg.Database -f $dump
     if ($LASTEXITCODE -ne 0) {
         throw "pg_dump failed with exit code $LASTEXITCODE"
     }

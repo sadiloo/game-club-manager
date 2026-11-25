@@ -23,7 +23,8 @@ $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $pre = Join-Path $safeDir "pre-restore-$stamp.dump"
 
 $env:PGPASSWORD = $cfg.Password
-& pg_dump -Fc -h $cfg.Host -p $cfg.Port -U $cfg.Username $cfg.Database -f $pre
+$pgDump = Get-CheckpointPgExecutable -Name "pg_dump"
+& $pgDump -Fc -h $cfg.Host -p $cfg.Port -U $cfg.Username $cfg.Database -f $pre
 if ($LASTEXITCODE -ne 0) {
     Write-Error "Safety pg_dump failed with exit code $LASTEXITCODE; restore aborted."
     exit 1
@@ -49,7 +50,8 @@ Write-Host "خدمت سرور متوقف می‌شود …"
 Stop-Service CheckpointServer -ErrorAction SilentlyContinue
 
 Write-Host "بازیابی از $DumpPath …"
-& pg_restore --clean --if-exists -h $cfg.Host -p $cfg.Port -U $cfg.Username -d $cfg.Database $DumpPath
+$pgRestore = Get-CheckpointPgExecutable -Name "pg_restore"
+& $pgRestore --clean --if-exists -h $cfg.Host -p $cfg.Port -U $cfg.Username -d $cfg.Database $DumpPath
 if ($LASTEXITCODE -ne 0) {
     Write-Error "pg_restore failed with exit code $LASTEXITCODE"
     exit 1

@@ -4,6 +4,7 @@
 
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "Invoke-AcceptanceCommon.ps1")
+. (Join-Path (Split-Path $PSScriptRoot -Parent) "CheckpointDbConfig.ps1")
 New-Item -ItemType Directory -Force -Path $LogsDir | Out-Null
 
 $backupDir = "C:\ProgramData\Checkpoint\backups"
@@ -24,8 +25,9 @@ $dumps = Get-ChildItem $backupDir -Filter "checkpoint-*.dump"
 if ($dumps.Count -lt 16) { throw "B-3: expected >=16 dumps got $($dumps.Count)" }
 if (-not (Test-Path $handOld)) { throw "B-3: hand-made file deleted" }
 
+$pgRestore = Get-CheckpointPgExecutable -Name "pg_restore"
 foreach ($d in $dumps | Select-Object -First 1) {
-    & pg_restore --list $d.FullName 2>&1 | Out-Null
+    & $pgRestore --list $d.FullName 2>&1 | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "B-3: pg_restore --list failed $($d.Name)" }
 }
 

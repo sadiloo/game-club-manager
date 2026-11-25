@@ -41,6 +41,19 @@ function Read-CheckpointServerJsonConfig {
     return [pscustomobject]$map
 }
 
+function Get-CheckpointPgExecutable {
+    param(
+        [Parameter(Mandatory)][string]$Name
+    )
+
+    $installed = Join-Path "C:\Program Files\Checkpoint\PostgreSQL" "bin\$Name.exe"
+    if (Test-Path -LiteralPath $installed) {
+        return $installed
+    }
+
+    return $Name
+}
+
 function Test-PostgresDumpReadable {
     param([Parameter(Mandatory)][string]$DumpPath)
 
@@ -52,7 +65,8 @@ function Test-PostgresDumpReadable {
         throw "Dump file is empty: $DumpPath"
     }
 
-    & pg_restore --list $DumpPath 2>&1 | Out-Null
+    $pgRestore = Get-CheckpointPgExecutable -Name "pg_restore"
+    & $pgRestore --list $DumpPath 2>&1 | Out-Null
     if ($LASTEXITCODE -ne 0) {
         throw "pg_restore --list failed for $DumpPath"
     }
