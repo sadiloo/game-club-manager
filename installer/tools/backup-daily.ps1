@@ -23,7 +23,7 @@ try {
     }
 
     $cfg = Read-CheckpointServerJsonConfig -ServerJsonPath $ServerJsonPath
-    $stamp = Get-Date -Format "yyyyMMdd-HHmm"
+    $stamp = Get-Date -Format "yyyyMMdd-HHmmss.fff"
     $dump = Join-Path $PrimaryBackupDir "checkpoint-$stamp.dump"
 
     $env:PGPASSWORD = $cfg.Password
