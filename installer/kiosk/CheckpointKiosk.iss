@@ -25,6 +25,7 @@ DisableReadyPage=yes
 PrivilegesRequired=admin
 WizardStyle=modern
 ShowLanguageDialog=no
+SetupLogging=yes
 OutputBaseFilename={#SetupBase}
 OutputDir=Output
 UninstallDisplayName={#AppName}
@@ -48,7 +49,7 @@ Source: "..\..\docs\install\kiosk-install.fa.md"; DestDir: "{app}\docs"; Flags: 
 Name: "{commonappdata}\Checkpoint\kiosk"; Permissions: admins-full
 
 [Run]
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{pf}\Checkpoint\Guard\tools\kiosk-postinstall.ps1"""; StatusMsg: "پیکربندی کاربر کیوسک و نگهبان…"; Flags: runhidden waituntilidle
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{pf}\Checkpoint\Guard\tools\kiosk-postinstall.ps1"""; StatusMsg: "پیکربندی کاربر کیوسک و نگهبان…"; Flags: postinstall runhidden waituntilidle
 
 [UninstallRun]
 Filename: "sc.exe"; Parameters: "stop CheckpointGuard"; Flags: runhidden
@@ -67,6 +68,7 @@ end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
-  NeedsRestart := True;
+  { Must stay False: a True NeedsRestart at end of setup skips all [Run] entries (Inno 6.7.x). }
+  NeedsRestart := False;
   Result := '';
 end;

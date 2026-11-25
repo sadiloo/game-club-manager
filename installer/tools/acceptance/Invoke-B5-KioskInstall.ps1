@@ -6,31 +6,21 @@
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "Invoke-AcceptanceCommon.ps1")
 New-Item -ItemType Directory -Force -Path $LogsDir | Out-Null
+$log = Join-Path $LogsDir "b5-kiosk-install.log"
 
 Write-Host "B-5: silent kiosk install"
-$setupArgs = @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART")
-$maxPasses = 2
-for ($pass = 1; $pass -le $maxPasses; $pass++) {
-    $log = Join-Path $LogsDir "b5-kiosk-install-pass$pass.log"
-    $argList = $setupArgs + @("/LOG=$log")
-    $proc = Start-Process -FilePath $KioskSetup -ArgumentList $argList -Wait -PassThru
-    if ($proc.ExitCode -notin 0, 3010) {
-        throw "B-5: kiosk setup exit $($proc.ExitCode) pass $pass"
-    }
-    if ($proc.ExitCode -eq 3010) {
-        Write-Host "B-5: pass $pass exit 3010 (reboot needed, /NORESTART)"
-    }
-    Assert-InnoSetupLogNoFailedRuns -LogPath $log
-    $postinstallOk = $true
-    try {
-        Assert-KioskPostinstallCompleted -InnoLogPath $log
-    } catch {
-        $postinstallOk = $false
-        if ($pass -eq $maxPasses) { throw }
-        Write-Host "B-5: pass $pass postinstall incomplete; re-running installer (deferred-reboot flow)"
-    }
-    if ($postinstallOk) { break }
+$proc = Start-Process -FilePath $KioskSetup -ArgumentList @(
+    "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/LOG=$log"
+) -Wait -PassThru
+# Exit 3010 allowed when restart needed
+if ($proc.ExitCode -notin 0, 3010) {
+    throw "B-5: kiosk setup exit $($proc.ExitCode)"
 }
+if ($proc.ExitCode -eq 3010) {
+    Write-Host "B-5: exit 3010 (restart needed) with /NORESTART as expected"
+}
+Assert-InnoSetupLogNoFailedRuns -LogPath $log
+Assert-KioskPostinstallCompleted -InnoLogPath $log
 
 $reg = Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" -ErrorAction Stop
 if ($reg.DefaultPassword) {
