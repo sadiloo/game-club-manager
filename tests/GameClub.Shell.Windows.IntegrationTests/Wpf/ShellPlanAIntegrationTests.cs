@@ -1798,31 +1798,53 @@ public sealed class ShellPlanAIntegrationTests
         throw new InvalidOperationException("Panel WebView2 did not become ready");
     }
 
-    private static bool LogLineIsPanelUnavailableNavigated(string line) =>
-        line.Contains("branch=present-offline-navigated", StringComparison.Ordinal)
-            && line.Contains("offlineState=panel-unavailable", StringComparison.Ordinal);
+    private static bool LogLineIsPanelUnavailableOfflineReady(string line)
+    {
+        if (!line.Contains("offlineState=panel-unavailable", StringComparison.Ordinal))
+        {
+            return false;
+        }
 
-    private static bool LogTextContainsPanelUnavailableNavigated(string text) =>
-        text.Split('\n').Any(LogLineIsPanelUnavailableNavigated);
+        if (line.Contains("branch=nav-completed-offline-data", StringComparison.Ordinal)
+            && line.Contains("offlineShown=True", StringComparison.Ordinal)
+            && line.Contains("IsSuccess=True", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        return line.Contains("branch=present-offline-navigated", StringComparison.Ordinal);
+    }
+
+    private static bool LogTextContainsPanelUnavailableOfflineReady(string text) =>
+        text.Split('\n').Any(LogLineIsPanelUnavailableOfflineReady);
 
     private static async Task WaitForPanelUnavailableOfflineAsync(
         Microsoft.Web.WebView2.Wpf.WebView2 wv,
         TimeSpan timeout,
         string? logBaseline = null)
     {
+        try
+        {
+            await AssertPanelUnavailableOfflineDomAsync(wv, TimeSpan.FromSeconds(1));
+            return;
+        }
+        catch (InvalidOperationException)
+        {
+        }
+
         if (logBaseline is not null)
         {
-            if (!LogTextContainsPanelUnavailableNavigated(LogDelta(logBaseline)))
+            if (!LogTextContainsPanelUnavailableOfflineReady(LogDelta(logBaseline)))
             {
-                await AwaitShellLogLineAsync(logBaseline, LogLineIsPanelUnavailableNavigated, timeout);
+                await AwaitShellLogLineAsync(logBaseline, LogLineIsPanelUnavailableOfflineReady, timeout);
             }
         }
         else
         {
             var snapshot = ReadShellLogSnapshot();
-            if (!LogTextContainsPanelUnavailableNavigated(snapshot))
+            if (!LogTextContainsPanelUnavailableOfflineReady(snapshot))
             {
-                await AwaitShellLogLineAsync(snapshot, LogLineIsPanelUnavailableNavigated, timeout);
+                await AwaitShellLogLineAsync(snapshot, LogLineIsPanelUnavailableOfflineReady, timeout);
             }
         }
 
@@ -1896,13 +1918,32 @@ public sealed class ShellPlanAIntegrationTests
             var sample = UnquoteWebViewScriptString(
                 await wv.CoreWebView2.ExecuteScriptAsync(
                     "JSON.stringify({protocol: location.protocol, offline: document.documentElement.getAttribute('data-shell-offline-page'), title: (document.getElementById('title') || {}).innerText || ''})"));
-            using var doc = JsonDocument.Parse(sample);
-            if (doc.RootElement.GetProperty("protocol").GetString() == "data:"
-                && doc.RootElement.GetProperty("offline").GetString() == "1"
-                && (doc.RootElement.GetProperty("title").GetString() ?? "")
-                    .Contains("پنل در دسترس نیست", StringComparison.Ordinal))
+            if (string.IsNullOrWhiteSpace(sample))
             {
-                return;
+                await Task.Delay(50);
+                continue;
+            }
+
+            JsonDocument doc;
+            try
+            {
+                doc = JsonDocument.Parse(sample);
+            }
+            catch (JsonException)
+            {
+                await Task.Delay(50);
+                continue;
+            }
+
+            using (doc)
+            {
+                if (doc.RootElement.GetProperty("protocol").GetString() == "data:"
+                    && doc.RootElement.GetProperty("offline").GetString() == "1"
+                    && (doc.RootElement.GetProperty("title").GetString() ?? "")
+                        .Contains("پنل در دسترس نیست", StringComparison.Ordinal))
+                {
+                    return;
+                }
             }
 
             await Task.Delay(50);
