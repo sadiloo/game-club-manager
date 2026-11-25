@@ -6,6 +6,14 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+function Assert-LastExitCode {
+    param([string] $Label)
+    if ($LASTEXITCODE -ne 0) {
+        throw "${Label}: exit code $LASTEXITCODE"
+    }
+}
+
 Import-Module (Join-Path $PSScriptRoot "CheckpointInstall.Common.psm1") -Force
 
 $kioskExe = Join-Path $KioskDir "GameClub.Kiosk.exe"
@@ -43,14 +51,21 @@ Set-KioskTrustFileAcl -KioskAccount $KioskUser -Root $programDataKiosk
 $guardAcl = "D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;CCLCSWLOCRRC;;;IU)(A;;CCLCSWLOCRRC;;;SU)(A;;CCLCSWLOCRRC;;;S-1-5-32-545)(A;;CCLCSWLOCRRC;;;$sid)"
 $svc = Get-Service CheckpointGuard -ErrorAction SilentlyContinue
 if (-not $svc) {
-    sc.exe create CheckpointGuard binPath= "`"$guardExe`"" | Out-Null
-    sc.exe config CheckpointGuard start= auto | Out-Null
+    New-Service -Name CheckpointGuard -BinaryPathName $guardExe -DisplayName "Checkpoint Guard" -StartupType Automatic -ErrorAction Stop | Out-Null
     sc.exe failure CheckpointGuard reset= 86400 actions= restart/60000/restart/60000/restart/60000 | Out-Null
+    Assert-LastExitCode "sc.exe failure CheckpointGuard"
     sc.exe sdset CheckpointGuard $guardAcl | Out-Null
+    Assert-LastExitCode "sc.exe sdset CheckpointGuard"
 }
 icacls $kioskExe /deny "${KioskUser}:(WD,AD,WEA,WA)" | Out-Null
+Assert-LastExitCode "icacls deny on kiosk exe"
 
-Start-Service CheckpointGuard -ErrorAction Stop
+try {
+    Start-Service CheckpointGuard -ErrorAction Stop
+} catch {
+    $q = sc.exe query CheckpointGuard 2>&1
+    throw "Start-Service CheckpointGuard failed: $($_.Exception.Message); sc query: $q"
+}
 
 $bytes = [Text.Encoding]::UTF8.GetBytes($password)
 $fp = [System.BitConverter]::ToString([System.Security.Cryptography.SHA256]::Create().ComputeHash($bytes)).Replace("-", "").ToLowerInvariant()

@@ -49,7 +49,7 @@ Source: "..\..\docs\install\kiosk-install.fa.md"; DestDir: "{app}\docs"; Flags: 
 Name: "{commonappdata}\Checkpoint\kiosk"; Permissions: admins-full
 
 [Run]
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{pf}\Checkpoint\Guard\tools\kiosk-postinstall.ps1"""; StatusMsg: "پیکربندی کاربر کیوسک و نگهبان…"; Flags: runhidden
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{pf}\Checkpoint\Guard\tools\kiosk-postinstall.ps1"""; StatusMsg: "پیکربندی کاربر کیوسک و نگهبان…"; Flags: runhidden logoutput
 
 [UninstallRun]
 Filename: "sc.exe"; Parameters: "stop CheckpointGuard"; Flags: runhidden
