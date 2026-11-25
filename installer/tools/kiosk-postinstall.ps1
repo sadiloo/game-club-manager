@@ -6,8 +6,8 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-Import-Module Microsoft.PowerShell.Security -ErrorAction Stop
-Import-Module Microsoft.PowerShell.LocalAccounts -ErrorAction Stop
+Import-Module (Join-Path $PSScriptRoot "CheckpointInstall.Common.psm1") -Force
+Import-Module Microsoft.PowerShell.LocalAccounts -ErrorAction SilentlyContinue
 
 function Write-KioskInstallStep {
     param([string] $Message)
@@ -21,8 +21,6 @@ function Assert-LastExitCode {
     }
 }
 
-Import-Module (Join-Path $PSScriptRoot "CheckpointInstall.Common.psm1") -Force
-
 $kioskExe = Join-Path $KioskDir "GameClub.Kiosk.exe"
 $guardExe = Join-Path $GuardDir "GameClub.Kiosk.Guard.exe"
 if (-not (Test-Path -LiteralPath $kioskExe)) { throw "Kiosk exe missing" }
@@ -30,18 +28,33 @@ if (-not (Test-Path -LiteralPath $guardExe)) { throw "Guard exe missing" }
 
 Write-KioskInstallStep "creating kiosk user"
 $password = New-CheckpointRandomPassword -Length 32
-$securePassword = ConvertTo-SecureString $password -AsPlainText -Force
+$securePassword = New-CheckpointPlainSecureString -Plain $password
 try {
-    $existing = Get-LocalUser -Name $KioskUser -ErrorAction SilentlyContinue
-    if ($existing) {
-        Set-LocalUser -Name $KioskUser -Password $securePassword -ErrorAction Stop | Out-Null
-        Write-KioskInstallStep "updated existing local user"
+    if (Get-Command Get-LocalUser -ErrorAction SilentlyContinue) {
+        $existing = Get-LocalUser -Name $KioskUser -ErrorAction SilentlyContinue
+        if ($existing) {
+            Set-LocalUser -Name $KioskUser -Password $securePassword -ErrorAction Stop | Out-Null
+            Write-KioskInstallStep "updated existing local user"
+        } else {
+            New-LocalUser -Name $KioskUser -Password $securePassword -PasswordNeverExpires -UserMayNotChangePassword -ErrorAction Stop | Out-Null
+            Add-LocalGroupMember -Group "Users" -Member $KioskUser -ErrorAction SilentlyContinue
+            Write-KioskInstallStep "created local user"
+        }
+        Set-LocalUser -Name $KioskUser -UserMayNotChangePassword $true -PasswordNeverExpires $true -ErrorAction Stop | Out-Null
     } else {
-        New-LocalUser -Name $KioskUser -Password $securePassword -PasswordNeverExpires -UserMayNotChangePassword -ErrorAction Stop | Out-Null
-        Add-LocalGroupMember -Group "Users" -Member $KioskUser -ErrorAction SilentlyContinue
-        Write-KioskInstallStep "created local user"
+        & net.exe user $KioskUser $password /add /y | Out-Null
+        if ($LASTEXITCODE -eq 2) {
+            & net.exe user $KioskUser $password | Out-Null
+            Assert-LastExitCode "net user set password"
+        } elseif ($LASTEXITCODE -ne 0) {
+            throw "net user add failed exit $LASTEXITCODE"
+        }
+        & net.exe user $KioskUser /passwordchg:no | Out-Null
+        Assert-LastExitCode "net user passwordchg"
+        & net.exe user $KioskUser /expires:never | Out-Null
+        Assert-LastExitCode "net user expires"
+        Write-KioskInstallStep "created local user via net.exe"
     }
-    Set-LocalUser -Name $KioskUser -UserMayNotChangePassword $true -PasswordNeverExpires $true -ErrorAction Stop | Out-Null
     Write-KioskInstallStep "kiosk account password change disabled"
 } catch {
     Write-Host "kiosk-postinstall: user setup failed: $($_.Exception.Message)"

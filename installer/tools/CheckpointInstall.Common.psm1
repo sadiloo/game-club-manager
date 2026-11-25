@@ -36,6 +36,16 @@ function New-CheckpointRandomSecret {
     return [Convert]::ToBase64String($bytes)
 }
 
+function New-CheckpointPlainSecureString {
+    param([Parameter(Mandatory)][string] $Plain)
+    $secure = New-Object System.Security.SecureString
+    foreach ($ch in $Plain.ToCharArray()) {
+        [void]$secure.AppendChar($ch)
+    }
+    $secure.MakeReadOnly()
+    return $secure
+}
+
 function New-CheckpointRandomPassword {
     param([int] $Length = 24)
     $chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#"
@@ -163,6 +173,7 @@ function Get-CheckpointDailyBackupStartBoundaryUtc {
 }
 
 Export-ModuleMember -Function @(
+    "New-CheckpointPlainSecureString",
     "Get-CheckpointRepoRoot",
     "Get-CheckpointAppVersion",
     "New-CheckpointRandomSecret",
