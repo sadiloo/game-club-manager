@@ -423,6 +423,7 @@ public sealed class ShellPanelNavigationFailureTests
                     MainWindow? window = null;
                     try
                     {
+                        var baseline = ReadShellLogSnapshot();
                         window = await StartWindowOnStubAsync(stub);
                         if (ShellSeams.HttpProbe is StubAlignedHttpProbeSeam alignedProbeSeam)
                         {
@@ -431,7 +432,6 @@ public sealed class ShellPanelNavigationFailureTests
 
                         var wv = await WaitForPanelWebViewAsync(window, TimeSpan.FromSeconds(45));
                         ShellFileLog.Write("shell-probe-deadline-window-ready");
-                        var baseline = ReadShellLogSnapshot();
 
                         await AwaitShellLogLineAsync(
                             baseline,
