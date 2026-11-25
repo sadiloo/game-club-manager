@@ -49,7 +49,7 @@ Source: "..\..\docs\install\kiosk-install.fa.md"; DestDir: "{app}\docs"; Flags: 
 Name: "{commonappdata}\Checkpoint\kiosk"; Permissions: admins-full
 
 [Run]
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{pf}\Checkpoint\Guard\tools\kiosk-postinstall.ps1"""; StatusMsg: "پیکربندی کاربر کیوسک و نگهبان…"; Flags: postinstall runhidden waituntilidle
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{pf}\Checkpoint\Guard\tools\kiosk-postinstall.ps1"""; StatusMsg: "پیکربندی کاربر کیوسک و نگهبان…"; Flags: runhidden
 
 [UninstallRun]
 Filename: "sc.exe"; Parameters: "stop CheckpointGuard"; Flags: runhidden
@@ -68,7 +68,7 @@ end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
-  { Must stay False: a True NeedsRestart at end of setup skips all [Run] entries (Inno 6.7.x). }
+  { Must stay False: NeedsRestart True can skip deferred [Run] at Finish (Inno 6.7.x). Mandatory config uses a normal [Run] (no postinstall). }
   NeedsRestart := False;
   Result := '';
 end;

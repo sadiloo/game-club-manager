@@ -29,6 +29,18 @@ foreach ($logFile in $innoLogs | Select-Object -First 3) {
 }
 if ($innoLogs.Count -eq 0) { Add-DiagLine "inno: (no acceptance-setup*.log)" }
 
+$b5Candidates = @(
+    (Join-Path $root "artifacts/installer/acceptance-logs/b5-kiosk-install.log"),
+    (Join-Path "C:\ProgramData\Checkpoint\logs" "b5-kiosk-install.log")
+)
+foreach ($b5Path in $b5Candidates) {
+    if (-not (Test-Path -LiteralPath $b5Path)) { continue }
+    Add-DiagLine "=== tail Inno /LOG: $b5Path ==="
+    @(Get-Content -LiteralPath $b5Path -Tail 120 -Encoding UTF8 -ErrorAction SilentlyContinue) | ForEach-Object { Add-DiagLine "inno: $_" }
+    Copy-Item -LiteralPath $b5Path -Destination (Join-Path $artifactDir "b5-kiosk-install.log") -Force -ErrorAction SilentlyContinue
+    break
+}
+
 foreach ($svc in @("CheckpointServer", "CheckpointPostgres")) {
     Add-DiagLine "=== sc query $svc ==="
     & sc.exe query $svc 2>&1 | ForEach-Object { Add-DiagLine "sc: $_" }

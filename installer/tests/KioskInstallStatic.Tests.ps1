@@ -10,9 +10,15 @@ if ($text -notmatch 'DisableWelcomePage\s*=\s*yes') {
     throw "Kiosk installer must keep welcome page disabled (no input pages)"
 }
 if ($text -notmatch 'NeedsRestart\s*:=\s*False') {
-    throw "Kiosk PrepareToInstall must set NeedsRestart False so [Run] postinstall runs on one silent pass"
+    throw "Kiosk PrepareToInstall must set NeedsRestart False"
 }
 if ($text -match 'NeedsRestart\s*:=\s*True') {
-    throw "Kiosk PrepareToInstall must not set NeedsRestart True (Inno 6.7.x skips [Run] when NeedsRestart remains set)"
+    throw "Kiosk PrepareToInstall must not set NeedsRestart True"
+}
+if ($text -match 'kiosk-postinstall\.ps1"[^\r\n]*Flags:[^\r\n]*postinstall') {
+    throw "Kiosk kiosk-postinstall [Run] must not use postinstall (interactive checkbox can skip mandatory config)"
+}
+if ($text -notmatch 'Flags:\s*runhidden[^\r\n]*kiosk-postinstall|kiosk-postinstall[^\r\n]*Flags:\s*runhidden') {
+    throw "Kiosk kiosk-postinstall [Run] must use Flags: runhidden only (install-phase, like server)"
 }
 Write-Host "KioskInstallStatic: ok"
