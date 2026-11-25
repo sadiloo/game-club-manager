@@ -8,7 +8,7 @@ New-Item -ItemType Directory -Force -Path $LogsDir | Out-Null
 
 $backupDir = "C:\ProgramData\Checkpoint\backups"
 $handOld = Join-Path $backupDir "hand-made-old.dump"
-Set-Content -LiteralPath $handOld -Value "not a dump" -Encoding Byte
+[System.IO.File]::WriteAllText($handOld, "not a dump", [System.Text.UTF8Encoding]::new($false))
 
 $scriptPath = "C:\Program Files\Checkpoint\Server\tools\backup-daily.ps1"
 if (-not (Test-Path $scriptPath)) {
