@@ -209,6 +209,21 @@ function Invoke-CheckpointDowngradeBlockedProbe {
     if ($appAfter -ne $AppFingerprintBefore) { throw "downgrade blocked: server app fingerprint changed" }
 }
 
+function Set-AcceptancePostinstallFailPhase {
+    param([string] $Phase)
+    $configDir = "C:\ProgramData\Checkpoint\config"
+    New-Item -ItemType Directory -Force -Path $configDir | Out-Null
+    $path = Join-Path $configDir ".internal-test-fail-phase"
+    Set-Content -LiteralPath $path -Value $Phase -Encoding utf8NoBOM
+}
+
+function Clear-AcceptancePostinstallFailPhase {
+    $path = "C:\ProgramData\Checkpoint\config\.internal-test-fail-phase"
+    if (Test-Path -LiteralPath $path) {
+        Remove-Item -LiteralPath $path -Force
+    }
+}
+
 function Get-SetupProcessEnvironmentBlock {
     param([hashtable] $Overrides = @{})
     $block = @{}

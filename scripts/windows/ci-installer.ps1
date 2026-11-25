@@ -253,7 +253,7 @@ $serverHighHooks = Invoke-IsccCompile -IssPath $serverIss -Version $appVersion -
 $kioskLow = Invoke-IsccCompile -IssPath $kioskIss -Version $lowVersion
 $kioskHigh = Invoke-IsccCompile -IssPath $kioskIss -Version $appVersion
 
-foreach ($outPath in @($serverLow, $serverHigh, $serverHigh2, $kioskLow, $kioskHigh)) {
+foreach ($outPath in @($serverLow, $serverHigh, $serverHigh2, $serverHighHooks, $kioskLow, $kioskHigh)) {
     $len = (Get-Item -LiteralPath $outPath).Length
     Write-Host ("ci-installer: installer path={0} bytes={1}" -f $outPath, $len)
 }

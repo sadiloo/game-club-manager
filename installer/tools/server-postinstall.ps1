@@ -27,6 +27,15 @@ function Test-Phase([string[]] $Names) {
 
 New-Item -ItemType Directory -Force -Path $configDir, $logsDir, $backupsDir | Out-Null
 
+$failPhasePath = Join-Path $configDir ".internal-test-fail-phase"
+if (Test-Path -LiteralPath $failPhasePath) {
+    $failPhase = (Get-Content -LiteralPath $failPhasePath -Raw).Trim()
+    if ($failPhase -eq $InstallPhase) {
+        Write-Host "CHECKPOINT_POSTINSTALL_FAILED phase=$InstallPhase (acceptance file hook)"
+        exit 17
+    }
+}
+
 if ($env:CHECKPOINT_INTERNAL_TEST_HOOKS -eq "1" -and $env:CHECKPOINT_TEST_FAIL_PHASE -eq $InstallPhase) {
     Write-Host "CHECKPOINT_POSTINSTALL_FAILED phase=$InstallPhase (internal test hook)"
     exit 17

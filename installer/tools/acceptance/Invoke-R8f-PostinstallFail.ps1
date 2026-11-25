@@ -22,12 +22,13 @@ $setupArgs = @(
     "/SKIPSESSIONCHECK=1",
     "/LOG=`"$r8fFreshLog`""
 )
-Start-CheckpointServerSetup -LegLabel "r8f-postinstall-fail-fresh" -Exe $ServerSetup -ArgumentList $setupArgs `
-    -TimeoutSeconds 900 -LogPath $r8fFreshLog -ExpectExitCode $script:CheckpointSetupExitPostinstallFailed `
-    -SetupEnvironment @{
-        CHECKPOINT_INTERNAL_TEST_HOOKS = "1"
-        CHECKPOINT_TEST_FAIL_PHASE     = "start"
-    } | Out-Null
+Set-AcceptancePostinstallFailPhase -Phase "start"
+try {
+    Start-CheckpointServerSetup -LegLabel "r8f-postinstall-fail-fresh" -Exe $ServerSetup -ArgumentList $setupArgs `
+        -TimeoutSeconds 900 -LogPath $r8fFreshLog -ExpectExitCode $script:CheckpointSetupExitPostinstallFailed | Out-Null
+} finally {
+    Clear-AcceptancePostinstallFailPhase
+}
 
 Write-Host "R8f-1 upgrade: postinstall fail hook (upgrade-backup)"
 & (Join-Path $PSScriptRoot "Reset-InstallerAcceptanceMachine.ps1")
@@ -41,12 +42,13 @@ $upgradeArgs = @(
     "/SKIPSESSIONCHECK=1",
     "/LOG=`"$r8fUpgradeLog`""
 )
-Start-CheckpointServerSetup -LegLabel "r8f-postinstall-fail-upgrade" -Exe $ServerSetup -ArgumentList $upgradeArgs `
-    -TimeoutSeconds 900 -LogPath $r8fUpgradeLog -ExpectExitCode $script:CheckpointSetupExitPostinstallFailed `
-    -SetupEnvironment @{
-        CHECKPOINT_INTERNAL_TEST_HOOKS = "1"
-        CHECKPOINT_TEST_FAIL_PHASE     = "upgrade-backup"
-    } | Out-Null
+Set-AcceptancePostinstallFailPhase -Phase "upgrade-backup"
+try {
+    Start-CheckpointServerSetup -LegLabel "r8f-postinstall-fail-upgrade" -Exe $ServerSetup -ArgumentList $upgradeArgs `
+        -TimeoutSeconds 900 -LogPath $r8fUpgradeLog -ExpectExitCode $script:CheckpointSetupExitPostinstallFailed | Out-Null
+} finally {
+    Clear-AcceptancePostinstallFailPhase
+}
 
 if (-not (Get-Service CheckpointServer -ErrorAction SilentlyContinue)) {
     throw "R8f-1 upgrade: CheckpointServer service missing after failed upgrade (DeinitializeSetup restore expected)"
