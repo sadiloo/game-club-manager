@@ -406,12 +406,32 @@ function Get-InstallerServerJson {
     return Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
 }
 
+function Get-InstallerLiveServerBaseUrl {
+    $json = Get-InstallerServerJson
+    $urls = [string]$json.Urls
+    if ([string]::IsNullOrWhiteSpace($urls)) {
+        return "http://127.0.0.1:5000"
+    }
+    foreach ($part in ($urls.Split(';', [StringSplitOptions]::RemoveEmptyEntries))) {
+        $token = $part.Trim()
+        if (-not ($token -match '^https?://')) { continue }
+        $uri = [Uri]$token
+        $hostName = $uri.Host
+        if ($hostName -eq '0.0.0.0' -or $hostName -eq '+' -or $hostName -eq '*') {
+            $hostName = '127.0.0.1'
+        }
+        $port = if ($uri.Port -gt 0) { $uri.Port } else { 5000 }
+        return "$($uri.Scheme)://${hostName}:$port"
+    }
+    return "http://127.0.0.1:5000"
+}
+
 function Set-InstallerKioskWpfLiveProcessEnvironment {
     param([string] $AccountsFile)
     $json = Get-InstallerServerJson
     $cs = [string]$json.ConnectionStrings.Default
     if ([string]::IsNullOrWhiteSpace($cs)) { throw "server.json ConnectionStrings.Default missing" }
-    $env:CHECKPOINT_SERVER_URL = "http://127.0.0.1:5000"
+    $env:CHECKPOINT_SERVER_URL = Get-InstallerLiveServerBaseUrl
     $env:GAMECLUB_DATABASE = $cs
     $env:GAMECLUB_TEST_DATABASE = $cs
     $env:GAMECLUB_API_KEY = [string]$json.GAMECLUB_API_KEY
@@ -514,10 +534,6 @@ function Invoke-WithInstallerKioskWpfLiveEnvironment {
         } | Out-Null
         & $ScriptBlock
         if ($LASTEXITCODE -ne 0) { throw "installer live env script exit $LASTEXITCODE" }
-        if ($AccountsFile -and (Test-Path -LiteralPath $AccountsFile)) {
-            $acc = Get-Content -LiteralPath $AccountsFile -Raw | ConvertFrom-Json
-            $null = New-InstallerOperatorClient -Username $acc.manager1User -Pin $acc.manager1Pin
-        }
     } finally {
         foreach ($key in $keys) {
             if ($saved[$key].Present) {
@@ -692,7 +708,7 @@ function Get-InstallerOperatorUsernames {
     $oldEap = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
-        $out = & $psql -h 127.0.0.1 -p 5433 -U postgres -d checkpoint -At -c 'SELECT username FROM operator_users ORDER BY username;' 2>&1
+        $out = & $psql -h 127.0.0.1 -p 5433 -U postgres -d checkpoint -At -c 'SELECT "Username" FROM operator_users ORDER BY "Username";' 2>&1
     } finally {
         $ErrorActionPreference = $oldEap
     }
@@ -704,16 +720,24 @@ function New-InstallerOperatorClient {
     param([string] $Username, [string] $Pin)
     $Username = [string]$Username
     $Pin = [string]$Pin
+    $base = (Get-InstallerLiveServerBaseUrl).TrimEnd('/')
     $session = New-Object Microsoft.PowerShell.Commands.WebRequestSession
     $body = (@{ Username = $Username; Pin = $Pin } | ConvertTo-Json -Compress)
-    try {
-        $null = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:5000/api/operator/auth/login" `
-            -Body $body -ContentType "application/json; charset=utf-8" -WebSession $session
-    } catch {
-        $names = Get-InstallerOperatorUsernames
-        throw "operator login failed for user '$Username' (db users: $($names -join ', ')): $_"
+    $lastErr = $null
+    for ($attempt = 1; $attempt -le 4; $attempt++) {
+        try {
+            $null = Invoke-RestMethod -Method Post -Uri "$base/api/operator/auth/login" `
+                -Body $body -ContentType "application/json; charset=utf-8" -WebSession $session
+            return $session
+        } catch {
+            $lastErr = $_
+            if ($attempt -lt 4) {
+                Start-Sleep -Seconds 2
+            }
+        }
     }
-    return $session
+    $names = Get-InstallerOperatorUsernames
+    throw "operator login failed for user '$Username' on $base (db users: $($names -join ', ')): $lastErr"
 }
 
 function Invoke-InstallerApiJson {
