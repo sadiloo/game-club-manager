@@ -38,8 +38,8 @@ Name: "persian"; MessagesFile: "..\lang\Persian.isl"
 RightToLeft=yes
 
 [Files]
-Source: "{#StagingKioskDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Check: KioskPayloadDirExists('{#StagingKioskDir}')
-Source: "{#StagingGuardDir}\*"; DestDir: "{pf}\Checkpoint\Guard"; Flags: ignoreversion recursesubdirs createallsubdirs; Check: KioskPayloadDirExists('{#StagingGuardDir}')
+Source: "{#StagingKioskDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#StagingGuardDir}\*"; DestDir: "{pf}\Checkpoint\Guard"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\tools\kiosk-postinstall.ps1"; DestDir: "{pf}\Checkpoint\Guard\tools"; Flags: ignoreversion
 Source: "..\tools\CheckpointInstall.Common.psm1"; DestDir: "{pf}\Checkpoint\Guard\tools"; Flags: ignoreversion
 Source: "..\..\docs\install\kiosk-install.fa.md"; DestDir: "{app}\docs"; Flags: ignoreversion
@@ -63,11 +63,6 @@ Type: filesandordirs; Name: "{pf}\Checkpoint\Guard"
 function InitializeSetup: Boolean;
 begin
   Result := True;
-end;
-
-function KioskPayloadDirExists(const Dir: string): Boolean;
-begin
-  Result := DirExists(Dir);
 end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;

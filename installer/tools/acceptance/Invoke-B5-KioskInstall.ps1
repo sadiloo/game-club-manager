@@ -4,6 +4,7 @@
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "Invoke-AcceptanceCommon.ps1")
 New-Item -ItemType Directory -Force -Path $LogsDir | Out-Null
 $log = Join-Path $LogsDir "b5-kiosk-install.log"
 
@@ -18,6 +19,7 @@ if ($proc.ExitCode -notin 0, 3010) {
 if ($proc.ExitCode -eq 3010) {
     Write-Host "B-5: exit 3010 (restart needed) with /NORESTART as expected"
 }
+Assert-InnoSetupLogNoFailedRuns -LogPath $log
 
 $user = Get-LocalUser -Name CheckpointKiosk -ErrorAction Stop
 if (-not $user) { throw "B-5: CheckpointKiosk user missing" }
