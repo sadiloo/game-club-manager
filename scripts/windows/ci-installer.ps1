@@ -24,6 +24,7 @@ if ($Phase -eq "Acceptance") {
     $serverLow = $manifest.ServerLow
     $serverHigh = $manifest.ServerHigh
     $serverHigh2 = $manifest.ServerHigh2
+    $serverHighHooks = $manifest.ServerHighHooks
     $kioskLow = $manifest.KioskLow
     $kioskHigh = $manifest.KioskHigh
     $accounts = $manifest.AccountsFile
