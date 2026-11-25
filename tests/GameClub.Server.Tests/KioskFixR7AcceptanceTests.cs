@@ -359,7 +359,7 @@ public sealed class KioskFixR7AcceptanceTests(GameClubWebApplicationFactory fact
         return (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetGuid();
     }
 
-    private async Task<(Guid SessionId, HttpClient Op)> CreateOvershootSessionAsync(bool graceOff)
+    public async Task<(Guid SessionId, HttpClient Op)> CreateOvershootSessionAsync(bool graceOff)
     {
         await S3TestHelpers.ResetAsync(factory);
         await S3TestHelpers.RegisterPc(factory.CreateClientWithKey(), "PC-1", PilotSeed.PcNormalGroupId);

@@ -472,6 +472,108 @@ public sealed class InpageFormsPr51R14gParityTests(GameClubWebApplicationFactory
     }
 
     [Fact]
+    public async Task parity_d11s_session_mixed_wallet_cash_under_rounded_collectible()
+    {
+        await parity_session_mixed_under_rounded_same_as_buffet();
+    }
+
+    [Fact]
+    public async Task parity_i8a_buffet_wallet500_card20k_non_cash_over_payable_400()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var manager = await factory.CreateOperatorClientAsync("manager", "1234");
+        await PutRoundingOffAsync(manager);
+        var op = await factory.CreateOperatorClientAsync();
+        var customerId = await CreateCustomerAsync(op);
+        var openSaleId = await OpenBuffetAsync(op, customerId, 15_500L);
+        var body = new
+        {
+            payments = new[]
+            {
+                new { method = "Wallet", amountToman = 500L },
+                new { method = "CardReader", amountToman = 20_000L },
+            },
+        };
+        await AssertEndpointsParityAsync(
+            op,
+            $"/api/operator/buffet-only/{openSaleId}/bill/preview",
+            $"/api/operator/buffet-only/{openSaleId}/confirm",
+            body,
+            body,
+            buffetShape: true);
+        var preview = await op.PostAsJsonAsync($"/api/operator/buffet-only/{openSaleId}/bill/preview", body);
+        Assert.Equal(NonCashOverPayablePersian, (await ReadJsonAsync(preview)).GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public async Task parity_i8f_buffet_wallet60k_card1k_insufficient_mixed_400()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var manager = await factory.CreateOperatorClientAsync("manager", "1234");
+        await PutRoundingOffAsync(manager);
+        var op = await factory.CreateOperatorClientAsync();
+        var customerId = await CreateCustomerAsync(op);
+        (await op.PostAsJsonAsync(
+            $"/api/operator/members/customers/{customerId}/wallet/top-up",
+            new { method = "Cash", amountToman = 10_000L, commandId = Guid.NewGuid() })).EnsureSuccessStatusCode();
+        var openSaleId = await OpenBuffetAsync(op, customerId, 15_500L);
+        var body = new
+        {
+            payments = new[]
+            {
+                new { method = "Wallet", amountToman = 60_000L },
+                new { method = "CardReader", amountToman = 1_000L },
+            },
+        };
+        await AssertEndpointsParityAsync(
+            op,
+            $"/api/operator/buffet-only/{openSaleId}/bill/preview",
+            $"/api/operator/buffet-only/{openSaleId}/confirm",
+            body,
+            body,
+            buffetShape: true);
+        var preview = await op.PostAsJsonAsync($"/api/operator/buffet-only/{openSaleId}/bill/preview", body);
+        Assert.Equal(NonCashOverPayablePersian, (await ReadJsonAsync(preview)).GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public async Task parity_wc15_buffet_wallet500_card15k_under_rounded_20000_collectible()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var manager = await factory.CreateOperatorClientAsync("manager", "1234");
+        await PutRoundingUp5kAsync(manager);
+        var op = await factory.CreateOperatorClientAsync();
+        var customerId = await CreateCustomerAsync(op);
+        (await op.PostAsJsonAsync(
+            $"/api/operator/members/customers/{customerId}/wallet/top-up",
+            new { method = "Cash", amountToman = 500L, commandId = Guid.NewGuid() })).EnsureSuccessStatusCode();
+        var openSaleId = await OpenBuffetAsync(op, customerId, 15_500L);
+        var body = new
+        {
+            payments = new[]
+            {
+                new { method = "Wallet", amountToman = 500L },
+                new { method = "CardReader", amountToman = 15_000L },
+            },
+        };
+        await AssertEndpointsParityAsync(
+            op,
+            $"/api/operator/buffet-only/{openSaleId}/bill/preview",
+            $"/api/operator/buffet-only/{openSaleId}/confirm",
+            body,
+            body,
+            buffetShape: true);
+        var preview = await op.PostAsJsonAsync($"/api/operator/buffet-only/{openSaleId}/bill/preview", body);
+        Assert.Contains("۲۰٬۰۰۰", (await ReadJsonAsync(preview)).GetProperty("message").GetString()!);
+    }
+
+    [Fact]
+    public async Task parity_aon_mixed_under_rounded_confirm_uses_same_tender_as_preview()
+    {
+        await new KioskFixR7AcceptanceTests(factory).r14b_aon_writeoff_mixed_under_rounded_preview_confirm_15000();
+    }
+
+    [Fact]
     public async Task parity_over_tender_wallet_cash_change_matches()
     {
         await S3TestHelpers.ResetAsync(factory);
