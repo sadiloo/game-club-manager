@@ -366,6 +366,25 @@ function Assert-InnoSetupLogNoFailedRuns {
     }
 }
 
+function Assert-KioskPostinstallCompleted {
+    param([string] $InnoLogPath)
+    $kioskUser = "CheckpointKiosk"
+    $userOk = $null -ne (Get-LocalUser -Name $kioskUser -ErrorAction SilentlyContinue)
+    $envUser = [Environment]::GetEnvironmentVariable("CHECKPOINT_KIOSK_USER", "Machine")
+    $envOk = [string]::Equals($envUser, $kioskUser, [StringComparison]::OrdinalIgnoreCase)
+    $guardOk = $null -ne (Get-Service CheckpointGuard -ErrorAction SilentlyContinue)
+    $logRun = $false
+    if (Test-Path -LiteralPath $InnoLogPath) {
+        $raw = Get-Content -LiteralPath $InnoLogPath -Raw -Encoding UTF8 -ErrorAction Stop
+        if ($raw -match '(?i)kiosk-postinstall\.ps1') {
+            $logRun = $true
+        }
+    }
+    if (-not $logRun -or -not $userOk -or -not $envOk -or -not $guardOk) {
+        throw "B-5: kiosk-postinstall did not complete (innoRun=$logRun user=$userOk kioskUserEnv=$envOk guardSvc=$guardOk)"
+    }
+}
+
 function Get-InstallerServerJson {
     $path = "C:\ProgramData\Checkpoint\config\server.json"
     if (-not (Test-Path -LiteralPath $path)) { throw "server.json missing" }

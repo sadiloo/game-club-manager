@@ -67,6 +67,6 @@ end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
-  NeedsRestart := False;
+  NeedsRestart := True;
   Result := '';
 end;

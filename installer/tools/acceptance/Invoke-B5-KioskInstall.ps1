@@ -20,9 +20,7 @@ if ($proc.ExitCode -eq 3010) {
     Write-Host "B-5: exit 3010 (restart needed) with /NORESTART as expected"
 }
 Assert-InnoSetupLogNoFailedRuns -LogPath $log
-
-$user = Get-LocalUser -Name CheckpointKiosk -ErrorAction Stop
-if (-not $user) { throw "B-5: CheckpointKiosk user missing" }
+Assert-KioskPostinstallCompleted -InnoLogPath $log
 
 $reg = Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" -ErrorAction Stop
 if ($reg.DefaultPassword) {
