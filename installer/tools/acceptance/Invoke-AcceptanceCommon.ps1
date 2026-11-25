@@ -425,6 +425,73 @@ function Set-InstallerKioskWpfLiveProcessEnvironment {
     }
 }
 
+function New-InstallerB6PrefixedTestDatabase {
+    $json = Get-InstallerServerJson
+    $cs = [string]$json.ConnectionStrings.Default
+    $m = [regex]::Match($cs, 'Password=([^;]+)')
+    if (-not $m.Success) { throw "server.json connection string missing Password=" }
+    $pw = $m.Groups[1].Value
+    $dbName = "gameclub_test_b6" + ([guid]::NewGuid().ToString("N").Substring(0, 12))
+    if ($dbName -notmatch '^gameclub_test_') { throw "B-6 test db name guard" }
+    $psql = Get-InstallerPsqlExecutable
+    $env:PGPASSWORD = $pw
+    $oldEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $out = & $psql -h 127.0.0.1 -p 5433 -U postgres -d postgres -v ON_ERROR_STOP=1 -c "CREATE DATABASE `"$dbName`";" 2>&1
+    } finally {
+        $ErrorActionPreference = $oldEap
+    }
+    if ($LASTEXITCODE -ne 0) { throw "B-6: create test database failed: $out" }
+    return [PSCustomObject]@{
+        Name             = $dbName
+        ConnectionString = "Host=127.0.0.1;Port=5433;Database=$dbName;Username=postgres;Password=$pw;SSL Mode=Disable"
+    }
+}
+
+function Remove-InstallerB6PrefixedTestDatabase {
+    param([string] $DatabaseName)
+    if ([string]::IsNullOrWhiteSpace($DatabaseName)) { return }
+    $json = Get-InstallerServerJson
+    $cs = [string]$json.ConnectionStrings.Default
+    $m = [regex]::Match($cs, 'Password=([^;]+)')
+    if (-not $m.Success) { return }
+    $pw = $m.Groups[1].Value
+    $psql = Get-InstallerPsqlExecutable
+    $env:PGPASSWORD = $pw
+    $null = & $psql -h 127.0.0.1 -p 5433 -U postgres -d postgres -c "DROP DATABASE IF EXISTS `"$DatabaseName`" WITH (FORCE);" 2>&1
+}
+
+function Invoke-WithInstallerKioskServerVerifyTestEnvironment {
+    param([scriptblock] $ScriptBlock)
+    $keys = @("GAMECLUB_TEST_DATABASE", "GAMECLUB_DATABASE")
+    $saved = @{}
+    foreach ($key in $keys) {
+        $item = Get-Item -Path "Env:$key" -ErrorAction SilentlyContinue
+        $saved[$key] = if ($item) { @{ Present = $true; Value = $item.Value } } else { @{ Present = $false } }
+    }
+    $testDb = $null
+    try {
+        Write-AcceptanceHarnessTrace "Invoke-WithInstallerKioskServerVerifyTestEnvironment" {
+            $testDb = New-InstallerB6PrefixedTestDatabase
+            $env:GAMECLUB_TEST_DATABASE = $testDb.ConnectionString
+            Remove-Item Env:GAMECLUB_DATABASE -ErrorAction SilentlyContinue
+        } | Out-Null
+        & $ScriptBlock
+    } finally {
+        if ($testDb) {
+            Remove-InstallerB6PrefixedTestDatabase -DatabaseName $testDb.Name
+        }
+        foreach ($key in $keys) {
+            if ($saved[$key].Present) {
+                Set-Item -Path "Env:$key" -Value $saved[$key].Value
+            } else {
+                Remove-Item -Path "Env:$key" -ErrorAction SilentlyContinue
+            }
+        }
+    }
+}
+
 function Invoke-WithInstallerKioskWpfLiveEnvironment {
     param(
         [string] $AccountsFile,
