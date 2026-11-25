@@ -513,6 +513,11 @@ function Invoke-WithInstallerKioskWpfLiveEnvironment {
             Set-InstallerKioskWpfLiveProcessEnvironment -AccountsFile $AccountsFile
         } | Out-Null
         & $ScriptBlock
+        if ($LASTEXITCODE -ne 0) { throw "installer live env script exit $LASTEXITCODE" }
+        if ($AccountsFile -and (Test-Path -LiteralPath $AccountsFile)) {
+            $acc = Get-Content -LiteralPath $AccountsFile -Raw | ConvertFrom-Json
+            $null = New-InstallerOperatorClient -Username $acc.manager1User -Pin $acc.manager1Pin
+        }
     } finally {
         foreach ($key in $keys) {
             if ($saved[$key].Present) {
@@ -649,12 +654,37 @@ function Clear-InstallerDotNetTestProcessEnvironment {
     }
 }
 
+function Get-InstallerOperatorUsernames {
+    $json = Get-InstallerServerJson
+    $cs = [string]$json.ConnectionStrings.Default
+    $m = [regex]::Match($cs, 'Password=([^;]+)')
+    if (-not $m.Success) { return @() }
+    $env:PGPASSWORD = $m.Groups[1].Value
+    $psql = Get-InstallerPsqlExecutable
+    $oldEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $out = & $psql -h 127.0.0.1 -p 5433 -U postgres -d checkpoint -At -c 'SELECT username FROM operator_users ORDER BY username;' 2>&1
+    } finally {
+        $ErrorActionPreference = $oldEap
+    }
+    if ($LASTEXITCODE -ne 0) { return @($out) }
+    return @($out -split "`n" | Where-Object { $_ })
+}
+
 function New-InstallerOperatorClient {
     param([string] $Username, [string] $Pin)
+    $Username = [string]$Username
+    $Pin = [string]$Pin
     $session = New-Object Microsoft.PowerShell.Commands.WebRequestSession
-    $body = @{ username = [string]$Username; pin = [string]$Pin } | ConvertTo-Json -Compress
-    $resp = Invoke-WebRequest -Method Post -Uri "http://127.0.0.1:5000/api/operator/auth/login" -Body $body -ContentType "application/json" -WebSession $session -UseBasicParsing
-    if ($resp.StatusCode -ne 200) { throw "operator login failed for user $Username" }
+    $body = (@{ Username = $Username; Pin = $Pin } | ConvertTo-Json -Compress)
+    try {
+        $null = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:5000/api/operator/auth/login" `
+            -Body $body -ContentType "application/json; charset=utf-8" -WebSession $session
+    } catch {
+        $names = Get-InstallerOperatorUsernames
+        throw "operator login failed for user '$Username' (db users: $($names -join ', ')): $_"
+    }
     return $session
 }
 

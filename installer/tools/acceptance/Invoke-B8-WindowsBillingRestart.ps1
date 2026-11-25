@@ -7,11 +7,7 @@ $ErrorActionPreference = "Stop"
 Write-Host "B-8 Windows: restart billing parity via live services"
 Clear-InstallerDotNetTestProcessEnvironment
 Assert-InstallerServerServicesRunning
-Write-AcceptanceHarnessTrace "B-8 CheckpointServer bounce after B-6 dotnet" {
-    Restart-Service CheckpointServer -Force
-    Wait-InstallerServerApiPort
-    Start-Sleep -Seconds 2
-} | Out-Null
+Wait-InstallerServerApiPort
 
 $acc = Get-Content -LiteralPath $AccountsFile -Raw | ConvertFrom-Json
 $opSession = New-InstallerOperatorClient -Username $acc.manager1User -Pin $acc.manager1Pin
