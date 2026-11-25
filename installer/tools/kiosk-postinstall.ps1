@@ -7,6 +7,11 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+function Write-KioskInstallStep {
+    param([string] $Message)
+    Write-Host "kiosk-postinstall: $Message"
+}
+
 function Assert-LastExitCode {
     param([string] $Label)
     if ($LASTEXITCODE -ne 0) {
@@ -21,6 +26,7 @@ $guardExe = Join-Path $GuardDir "GameClub.Kiosk.Guard.exe"
 if (-not (Test-Path -LiteralPath $kioskExe)) { throw "Kiosk exe missing" }
 if (-not (Test-Path -LiteralPath $guardExe)) { throw "Guard exe missing" }
 
+Write-KioskInstallStep "creating kiosk user"
 $password = New-CheckpointRandomPassword -Length 32
 $existing = Get-LocalUser -Name $KioskUser -ErrorAction SilentlyContinue
 if ($existing) {
@@ -46,20 +52,24 @@ $credential = New-Object System.Management.Automation.PSCredential($KioskUser, $
 
 $programDataKiosk = "C:\ProgramData\Checkpoint\kiosk"
 New-Item -ItemType Directory -Force -Path $programDataKiosk | Out-Null
+Write-KioskInstallStep "trust file ACL"
 Set-KioskTrustFileAcl -KioskAccount $KioskUser -Root $programDataKiosk
 
 $guardAcl = "D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;CCLCSWLOCRRC;;;IU)(A;;CCLCSWLOCRRC;;;SU)(A;;CCLCSWLOCRRC;;;S-1-5-32-545)(A;;CCLCSWLOCRRC;;;$sid)"
 $svc = Get-Service CheckpointGuard -ErrorAction SilentlyContinue
 if (-not $svc) {
+    Write-KioskInstallStep "register CheckpointGuard service"
     New-Service -Name CheckpointGuard -BinaryPathName $guardExe -DisplayName "Checkpoint Guard" -StartupType Automatic -ErrorAction Stop | Out-Null
     sc.exe failure CheckpointGuard reset= 86400 actions= restart/60000/restart/60000/restart/60000 | Out-Null
     Assert-LastExitCode "sc.exe failure CheckpointGuard"
     sc.exe sdset CheckpointGuard $guardAcl | Out-Null
     Assert-LastExitCode "sc.exe sdset CheckpointGuard"
 }
-icacls $kioskExe /deny "${KioskUser}:(WD,AD,WEA,WA)" | Out-Null
+Write-KioskInstallStep "harden kiosk exe ACL"
+icacls $kioskExe /deny "${KioskUser}:(WD,AD,WA)" | Out-Null
 Assert-LastExitCode "icacls deny on kiosk exe"
 
+Write-KioskInstallStep "start CheckpointGuard"
 try {
     Start-Service CheckpointGuard -ErrorAction Stop
 } catch {
