@@ -34,7 +34,7 @@ $psql = Get-InstallerPsqlExecutable
 $oldEap = $ErrorActionPreference
 $ErrorActionPreference = 'Continue'
 try {
-    $null = & $psql -h 127.0.0.1 -p 5433 -U postgres -d checkpoint -c "UPDATE operator_users SET pin_hash='$hash1111' WHERE username='$operatorUser';" 2>&1
+    $null = & $psql -h 127.0.0.1 -p 5433 -U postgres -d checkpoint -c "UPDATE operator_users SET ""PinHash""='$hash1111' WHERE ""Username""='$operatorUser';" 2>&1
 } finally {
     $ErrorActionPreference = $oldEap
 }
@@ -64,17 +64,18 @@ if ($checkAfter.Trim()) {
     throw "B-13: default pins remain: $checkAfter"
 }
 
+$base = (Get-InstallerLiveServerBaseUrl).TrimEnd('/')
 $replacement = (Get-Content -LiteralPath $DefaultPinsFile -Raw | ConvertFrom-Json)[0].pin
-$loginBody = @{ username = $operatorUser; pin = $replacement } | ConvertTo-Json
+$loginBody = @{ Username = $operatorUser; Pin = $replacement } | ConvertTo-Json
 try {
-    Invoke-RestMethod -Uri "http://127.0.0.1:5000/api/operator/login" -Method POST -Body $loginBody -ContentType "application/json" | Out-Null
+    Invoke-RestMethod -Uri "$base/api/operator/auth/login" -Method POST -Body $loginBody -ContentType "application/json" | Out-Null
 } catch {
     throw "B-13: login with replacement pin failed: $_"
 }
 
-$badBody = @{ username = $operatorUser; pin = "1111" } | ConvertTo-Json
+$badBody = @{ Username = $operatorUser; Pin = "1111" } | ConvertTo-Json
 try {
-    Invoke-RestMethod -Uri "http://127.0.0.1:5000/api/operator/login" -Method POST -Body $badBody -ContentType "application/json" | Out-Null
+    Invoke-RestMethod -Uri "$base/api/operator/auth/login" -Method POST -Body $badBody -ContentType "application/json" | Out-Null
     throw "B-13: old pin 1111 must not work"
 } catch {
     if ($_.ErrorDetails.Message -notmatch "401" -and $_.Exception.Message -notmatch "401") {

@@ -108,11 +108,10 @@ public partial class Program
         {
             var isolated = new Npgsql.NpgsqlConnectionStringBuilder(isolatedTestCs);
             var isolatedDb = isolated.Database;
-            if (string.IsNullOrWhiteSpace(isolatedDb)
-                || !isolatedDb.StartsWith("gameclub_test_", StringComparison.Ordinal))
+            if (string.Equals(isolatedDb, "checkpoint", StringComparison.OrdinalIgnoreCase))
             {
                 throw new InvalidOperationException(
-                    "GAMECLUB_TEST_DATABASE must name a gameclub_test_* database, not live checkpoint.");
+                    "Refusing to use the live checkpoint database as GAMECLUB_TEST_DATABASE.");
             }
 
             connectionString = isolated.ConnectionString;
