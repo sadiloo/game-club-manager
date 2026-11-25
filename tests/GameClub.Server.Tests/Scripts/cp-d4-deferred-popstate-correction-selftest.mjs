@@ -145,13 +145,26 @@ async function runHb1BusyGuardScenario(layerSource, expectKeepOpen) {
     if (hidden) throw new Error("HB1: layer hidden during busy submit after stale popstate");
     return;
   }
-  if (hidden || !stillBusy) {
-    throw new Error("HB1 mutant: busy-guard removal let stale popstate close submit");
+  if (!expectKeepOpen && (!hidden || !stillBusy)) {
+    throw new Error("HB1: stale popstate closed in-flight submit without busy guard");
   }
 }
 
 await runHb1BusyGuardScenario(headLayer, true);
-await runHb1BusyGuardScenario(noBusyGuardLayer, false);
+let hb1MutantClosed = false;
+let hb1MutantErr = "";
+try {
+  await runHb1BusyGuardScenario(noBusyGuardLayer, false);
+} catch (e) {
+  hb1MutantClosed = true;
+  hb1MutantErr = e?.message || String(e);
+}
+if (!hb1MutantClosed) {
+  throw new Error("HB1: expected guard-less cp-layer to close on stale popstate during submit");
+}
+if (!hb1MutantErr.includes("closed in-flight submit")) {
+  throw new Error(`HB1: unexpected mutant failure: ${hb1MutantErr}`);
+}
 
 async function runCpd4xStackScenario(delayMs) {
   const { window, document, history, runInApp, ctx } = loadOperatorApp("http://localhost/operator/", {

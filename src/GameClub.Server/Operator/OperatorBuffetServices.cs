@@ -438,51 +438,36 @@ public sealed class OperatorBuffetSaleService(
             var bill = sale.PendingBill
                 ?? await db.PendingBills.FirstOrDefaultAsync(b => b.OpenSaleId == sale.Id, innerCt)
                 ?? throw new ApiException(StatusCodes.Status409Conflict, "no_bill", "صورتحسابی در انتظار تأیید نیست.");
+            await db.Entry(sale).Collection(o => o.Lines).Query().Include(l => l.CatalogItem).LoadAsync(innerCt);
             var live = await calculator.ComputeBuffetOnlyAsync(sale.Lines, sale.CustomerId, null, innerCt);
-            var effective = await bills.PreparePaymentsForAllocationAsync(
+            var effectiveForLock = await bills.PreparePaymentsForAllocationAsync(
                 sale.CustomerId,
                 live.CollectibleToman,
                 live.UnroundedPayableToman,
                 null,
                 payments,
                 innerCt);
-            await bills.LockMemberWalletRowIfNeededAsync(sale.CustomerId, effective, innerCt);
-            var tenders = effective.Select(p => new Tender(
-                OperatorPaymentMethods.Parse(p.Method),
-                p.AmountToman,
-                OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet ? sale.CustomerId?.ToString() : null)).ToList();
-            var amounts = await calculator.ComputeBuffetOnlyAsync(sale.Lines, sale.CustomerId, tenders, innerCt, effective);
-            var allocationPayments = CounterPaymentRecording.PaymentsForCollectAllocation(
-                amounts.CollectibleToman,
-                amounts.UnroundedPayableToman,
-                effective);
-            if (!OperatorBillService.TenderAmountsMatch(allocationPayments, effective))
-            {
-                tenders = allocationPayments.Select(p => new Tender(
-                    OperatorPaymentMethods.Parse(p.Method),
-                    p.AmountToman,
-                    OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet ? sale.CustomerId?.ToString() : null)).ToList();
-                amounts = await calculator.ComputeBuffetOnlyAsync(sale.Lines, sale.CustomerId, tenders, innerCt, effective);
-            }
+            await bills.LockMemberWalletRowIfNeededAsync(sale.CustomerId, effectiveForLock, innerCt);
+            var settlement = await bills.ComputeBuffetPaymentSettlementAsync(sale, payments, innerCt);
             OperatorBillService.EnsureClientPreviewCollectibleCurrent(
                 previewCollectibleToman,
                 live.CollectibleToman,
-                amounts,
-                effective);
-            OperatorBillService.RejectWalletOnlyBelowUnroundedGap(amounts, effective);
-            await bills.RejectWalletTypedAboveAutoDrawAsync(sale.CustomerId, amounts.CollectibleToman, null, effective, innerCt);
-            await bills.RejectWalletTypedAboveSpendableInMixedAsync(sale.CustomerId, amounts.CollectibleToman, null, effective, innerCt);
-            OperatorBillService.RejectMixedUnderRoundedCollectible(amounts, effective);
-            bills.ValidatePayments(amounts.CollectibleToman, effective, amounts.Detail, sale.CustomerId);
-            await db.Entry(sale).Collection(o => o.Lines).Query().Include(l => l.CatalogItem).LoadAsync(innerCt);
-            var invoice = await closer.FinalizeBuffetOnlyAsync(sale, bill, effective, amounts, innerCt);
+                settlement.Amounts,
+                settlement.Effective);
+            await bills.ApplyPaymentSettlementValidationAsync(
+                settlement.Amounts,
+                settlement.Effective,
+                sale.CustomerId,
+                null,
+                innerCt);
+            var invoice = await closer.FinalizeBuffetOnlyAsync(sale, bill, settlement.Effective, settlement.Amounts, innerCt);
             await audit.AppendAsync("buffet_only.confirm", new { openSaleId, invoice.Number, invoice.CollectibleToman }, innerCt);
-            var changeToman = CounterPaymentRecording.ComputeChangeToman(amounts.CollectibleToman, effective);
+            var changeToman = CounterPaymentRecording.ComputeChangeToman(settlement.Amounts.CollectibleToman, settlement.Effective);
             return new BuffetOnlyConfirmResult(invoice, changeToman);
         }, ct);
     }
 
-    public async Task<object> PreviewBuffetOnlyBillAsync(
+    public async Task<OperatorBillService.PaymentPreviewHttpResult> PreviewBuffetOnlyBillAsync(
         Guid openSaleId,
         IReadOnlyList<OperatorBillService.PaymentInput> payments,
         CancellationToken ct)
@@ -495,25 +480,42 @@ public sealed class OperatorBuffetSaleService(
             ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "فروش بوفهٔ مستقل یافت نشد.");
         var bill = sale.PendingBill
             ?? throw new ApiException(StatusCodes.Status409Conflict, "no_bill", "برای این فروش صورتحسابی نیست.");
-        var preview = await bills.BuildBuffetPaymentPreviewAsync(sale, bill, payments, ct);
-        var walletShort = await bills.GetWalletShortRemainderSnapshotAsync(sale.CustomerId, preview.CollectibleToman, null, ct);
-        return new
+        var settlement = await bills.ComputeBuffetPaymentSettlementAsync(sale, payments, ct);
+        try
+        {
+            await bills.ApplyPaymentSettlementValidationAsync(
+                settlement.Amounts,
+                settlement.Effective,
+                sale.CustomerId,
+                null,
+                ct);
+        }
+        catch (ApiException ex) when (ex.Status is StatusCodes.Status400BadRequest)
+        {
+            return new OperatorBillService.PaymentPreviewHttpResult(
+                400,
+                OperatorBillService.BuildPaymentPreviewRejectionBody(ex, settlement));
+        }
+
+        var walletShort = await bills.GetWalletShortRemainderSnapshotAsync(sale.CustomerId, settlement.CollectibleToman, null, ct);
+        var body = new
         {
             openSaleId = sale.Id,
             lines = OpenSaleMapper.ToDtos(sale.Lines),
             linkedCustomer = CustomerMapper.ToLinkedChip(sale.Customer),
             bill = new
             {
-                unroundedPayableToman = preview.Amounts.UnroundedPayableToman,
-                roundingToman = preview.Amounts.RoundingToman,
-                collectibleToman = preview.CollectibleToman,
-                changeToman = CounterPaymentRecording.ComputeChangeToman(preview.CollectibleToman, preview.Effective),
-                timeGrossToman = preview.Amounts.TimeGrossToman,
-                buffetGrossToman = preview.Amounts.BuffetGrossToman,
-                servicesGrossToman = preview.Amounts.ServicesGrossToman,
+                unroundedPayableToman = settlement.Amounts.UnroundedPayableToman,
+                roundingToman = settlement.Amounts.RoundingToman,
+                collectibleToman = settlement.CollectibleToman,
+                changeToman = CounterPaymentRecording.ComputeChangeToman(settlement.CollectibleToman, settlement.Effective),
+                timeGrossToman = settlement.Amounts.TimeGrossToman,
+                buffetGrossToman = settlement.Amounts.BuffetGrossToman,
+                servicesGrossToman = settlement.Amounts.ServicesGrossToman,
                 walletShortRemainder = OperatorBillService.ToWalletShortRemainderDto(walletShort),
             },
         };
+        return new OperatorBillService.PaymentPreviewHttpResult(StatusCodes.Status200OK, body);
     }
 
     public async Task<object> GetBuffetOnlyBillAsync(Guid openSaleId, CancellationToken ct)

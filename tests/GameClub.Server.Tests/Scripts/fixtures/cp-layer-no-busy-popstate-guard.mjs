@@ -379,7 +379,7 @@
     }
 
     cancel(reason) {
-      if (this.busy) return;
+      if (this.busy && reason !== "history") return;
       if (reason === "history") cpLayer._closingViaHistory = true;
       this._finish(null);
     }

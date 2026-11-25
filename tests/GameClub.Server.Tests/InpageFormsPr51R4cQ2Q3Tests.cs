@@ -168,7 +168,7 @@ public sealed class InpageFormsPr51R4cQ2Q3Tests(GameClubWebApplicationFactory fa
     }
 
     [Fact]
-    public async Task r4c_preview_server_buffet_3000_wallet_1000_only_collectible_3000()
+    public async Task r4c_preview_server_buffet_3000_wallet_1000_only_preview_confirm_400()
     {
         await S3TestHelpers.ResetAsync(factory);
         var op = await factory.CreateOperatorClientAsync();
@@ -177,11 +177,11 @@ public sealed class InpageFormsPr51R4cQ2Q3Tests(GameClubWebApplicationFactory fa
             $"/api/operator/members/customers/{customerId}/wallet/top-up",
             new { method = "Cash", amountToman = 50_000L, commandId = Guid.NewGuid() })).EnsureSuccessStatusCode();
         var openSaleId = await OpenCustomBuffetAsync(op, customerId, 3_000L);
-        var preview = await op.PostAsJsonAsync(
-            $"/api/operator/buffet-only/{openSaleId}/bill/preview",
-            new { payments = new[] { new { method = "Wallet", amountToman = 1_000L } } });
-        preview.EnsureSuccessStatusCode();
-        Assert.Equal(3_000, BillCollectible(await preview.Content.ReadFromJsonAsync<JsonElement>()));
+        var body = new { payments = new[] { new { method = "Wallet", amountToman = 1_000L } } };
+        var preview = await op.PostAsJsonAsync($"/api/operator/buffet-only/{openSaleId}/bill/preview", body);
+        Assert.Equal(HttpStatusCode.BadRequest, preview.StatusCode);
+        var confirm = await op.PostAsJsonAsync($"/api/operator/buffet-only/{openSaleId}/confirm", body);
+        Assert.Equal(HttpStatusCode.BadRequest, confirm.StatusCode);
     }
 
     [Fact]

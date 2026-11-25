@@ -199,7 +199,10 @@ public sealed class OperatorPanelController(
 
     [HttpPost("sessions/{sessionId:guid}/bill/preview")]
     public async Task<IActionResult> PreviewBill(Guid sessionId, ConfirmRequest body, CancellationToken ct)
-        => Ok(await bills.PreviewBillAsync(sessionId, body.Payments, ct));
+    {
+        var result = await bills.PreviewBillAsync(sessionId, body.Payments, ct);
+        return result.StatusCode == StatusCodes.Status200OK ? Ok(result.Body) : BadRequest(result.Body);
+    }
 
     [HttpPost("sessions/{sessionId:guid}/pause")]
     public async Task<IActionResult> PauseSession(Guid sessionId, CancellationToken ct)
@@ -493,7 +496,10 @@ public sealed class OperatorPanelController(
 
     [HttpPost("buffet-only/{openSaleId:guid}/bill/preview")]
     public async Task<IActionResult> PreviewBuffetOnlyBill(Guid openSaleId, ConfirmRequest body, CancellationToken ct)
-        => Ok(await buffetSales.PreviewBuffetOnlyBillAsync(openSaleId, body.Payments, ct));
+    {
+        var result = await buffetSales.PreviewBuffetOnlyBillAsync(openSaleId, body.Payments, ct);
+        return result.StatusCode == StatusCodes.Status200OK ? Ok(result.Body) : BadRequest(result.Body);
+    }
 
     [HttpPost("buffet-only/{openSaleId:guid}/checkout")]
     public async Task<IActionResult> CheckoutBuffetOnly(Guid openSaleId, CancellationToken ct)

@@ -687,6 +687,16 @@ async function api(path, options = {}) {
     err.status = res.status;
     err.code = code;
     if (serverMessage) err.serverMessage = serverMessage;
+    if (res.status === 400 && code === "payment_invalid") {
+      try {
+        const body = JSON.parse(text);
+        if (typeof body.collectibleToman === "number") err.collectibleToman = body.collectibleToman;
+        if (typeof body.unroundedPayableToman === "number") err.unroundedPayableToman = body.unroundedPayableToman;
+        if (typeof body.roundingToman === "number") err.roundingToman = body.roundingToman;
+        if (typeof body.tenderedToman === "number") err.tenderedToman = body.tenderedToman;
+        if (typeof body.remainingToman === "number") err.remainingToman = body.remainingToman;
+      } catch (_) {}
+    }
     throw err;
   }
   if (isBackground && cpBgPollFailures > 0) {
@@ -921,6 +931,21 @@ function paymentDraftPreviewKey() {
   return JSON.stringify(paymentDraftForApi());
 }
 
+function applyPaymentPreviewRejectionUi(e) {
+  const d = document.getElementById("billDetail");
+  if (d && typeof e.collectibleToman === "number") {
+    const unrounded = e.unroundedPayableToman ?? 0;
+    const round = e.roundingToman ?? 0;
+    d.textContent = `جمع ${unrounded} + رند ${round} = ${e.collectibleToman}`;
+  }
+  const changeEl = document.getElementById("cashChange");
+  if (changeEl && typeof e.remainingToman === "number" && e.remainingToman > 0) {
+    changeEl.textContent = `کسری ${e.remainingToman.toLocaleString("fa-IR")}`;
+  } else if (changeEl) {
+    changeEl.textContent = "";
+  }
+}
+
 function scheduleBillPreview() {
   if (!paymentDraft.length) return;
   const key = paymentDraftPreviewKey();
@@ -958,7 +983,15 @@ async function refreshBillPreview() {
       if (bill.walletShortRemainder) lastWalletShortRemainder = bill.walletShortRemainder;
       renderBill(bill);
     }
-  } catch (_) {}
+  } catch (e) {
+    if (e && e.status === 400 && e.code === "payment_invalid" && typeof e.message === "string") {
+      showError(e.message);
+      if (typeof e.collectibleToman === "number") {
+        lastCollectibleToman = e.collectibleToman;
+        applyPaymentPreviewRejectionUi(e);
+      }
+    }
+  }
 }
 
 function walletTopUpTitle(method) {

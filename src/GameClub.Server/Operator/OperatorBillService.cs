@@ -544,9 +544,7 @@ public sealed class OperatorBillService(
                 var mixedRoundedShortfall = !walletOnly
                     && tendered < collectibleToman
                     && tendered >= unrounded
-                    && collectibleToman > unrounded
-                    && !(detail!.BuffetGrossToman == 0 && detail.TimeGrossToman == 0
-                        && detail.ServicesGrossToman >= unrounded);
+                    && collectibleToman > unrounded;
                 if (mixedRoundedShortfall
                     || (!typedUnroundedFullPay && !walletCounterOverTender && tendered != allocPayable))
                 {
@@ -596,19 +594,31 @@ public sealed class OperatorBillService(
         IReadOnlyList<PaymentInput> Effective,
         long CollectibleToman);
 
-    public static long ResolvePreviewCollectibleToman(
-        long paymentTimeCollectibleToman,
-        BillAmounts amounts,
-        IReadOnlyList<PaymentInput> effective)
-    {
-        if (amounts.Detail?.Allocation is { IsValid: true })
-        {
-            return amounts.CollectibleToman;
-        }
+    public sealed record PaymentPreviewHttpResult(int StatusCode, object Body);
 
-        var tendered = effective.Sum(p => p.AmountToman);
-        return tendered > paymentTimeCollectibleToman ? paymentTimeCollectibleToman : amounts.CollectibleToman;
+    public static object BuildPaymentPreviewRejectionBody(
+        ApiException ex,
+        PaymentPreviewResult settlement)
+    {
+        var collectible = settlement.CollectibleToman;
+        var tendered = settlement.Effective.Sum(p => p.AmountToman);
+        return new
+        {
+            code = ex.Code,
+            message = ex.Message,
+            collectibleToman = collectible,
+            unroundedPayableToman = settlement.Amounts.UnroundedPayableToman,
+            roundingToman = settlement.Amounts.RoundingToman,
+            tenderedToman = tendered,
+            remainingToman = Math.Max(0, collectible - tendered),
+        };
     }
+
+    public static long ResolvePreviewCollectibleToman(
+        long _,
+        BillAmounts amounts,
+        IReadOnlyList<PaymentInput> _effective)
+        => amounts.CollectibleToman;
 
     public static void EnsureClientPreviewCollectibleCurrent(
         long? previewCollectibleToman,
@@ -657,125 +667,37 @@ public sealed class OperatorBillService(
             OperatorPaymentErrors.Localize(new PaymentError(PaymentErrors.SumMismatch, ""), amounts.CollectibleToman));
     }
 
-    public void EnsurePreviewMatchesConfirmValidation(
-        long livePaymentTimeCollectibleToman,
+    /// <summary>R14g: single settlement validation path for preview and confirm.</summary>
+    public async Task ApplyPaymentSettlementValidationAsync(
         BillAmounts amounts,
         IReadOnlyList<PaymentInput> effective,
-        Guid? customerId)
+        Guid? customerId,
+        StationKind? stationKind,
+        CancellationToken ct)
     {
-        try
+        foreach (var payment in effective)
         {
-            ValidatePayments(amounts.CollectibleToman, effective, amounts.Detail, customerId);
+            OperatorMoneyValidation.EnsureNonNegativeBounded(payment.AmountToman, "payment_invalid");
         }
-        catch (ApiException)
+
+        if (amounts.CollectibleToman == 0)
         {
-            if (AllowsInformationalPaymentPreview(livePaymentTimeCollectibleToman, amounts, effective))
+            if (effective.Count > 0
+                && effective.All(p => OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet)
+                && effective.Sum(p => p.AmountToman) > 0)
             {
                 return;
             }
 
-            throw;
-        }
-    }
-
-    private static bool AllowsInformationalPaymentPreview(
-        long livePaymentTimeCollectibleToman,
-        BillAmounts amounts,
-        IReadOnlyList<PaymentInput> effective)
-    {
-        var tendered = effective.Sum(p => p.AmountToman);
-        var hasWallet = effective.Any(p => OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet);
-        var hasCash = effective.Any(p => OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Cash);
-        var hasCard = effective.Any(p =>
-        {
-            var method = OperatorPaymentMethods.Parse(p.Method);
-            return method is PaymentMethod.CardReader or PaymentMethod.CardToCard;
-        });
-        var walletOnlyPreview = hasWallet && effective.All(p => OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet);
-        if (!(hasWallet && hasCash && !hasCard && !walletOnlyPreview && tendered > amounts.CollectibleToman)
-            && CounterPaymentRecording.NonCashExceedsCollectible(
-                amounts.CollectibleToman,
-                effective,
-                amounts.Detail?.Allocation))
-        {
-            return false;
-        }
-        var walletOnly = hasWallet && effective.All(p => OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet);
-        if (hasWallet && !walletOnly)
-        {
-            if (effective.Any(p => !string.IsNullOrWhiteSpace(p.ShortRemainderMethod)))
-            {
-                return false;
-            }
-
-            if (tendered > amounts.CollectibleToman)
-            {
-                return true;
-            }
-
-            var collectibleLift = amounts.CollectibleToman - amounts.UnroundedPayableToman;
-            var writeOffLift = amounts.Detail?.PlaySettlement?.WriteOffToman ?? 0;
-            var overshootWriteOff = amounts.Detail?.OvershootAlert is not null;
-            if (tendered < amounts.CollectibleToman
-                && tendered >= amounts.UnroundedPayableToman
-                && (writeOffLift > 0
-                    || overshootWriteOff
-                    || (amounts.BuffetGrossToman == 0 && amounts.TimeGrossToman == 0
-                        && amounts.ServicesGrossToman >= amounts.UnroundedPayableToman
-                        && amounts.CollectibleToman > amounts.UnroundedPayableToman)))
-            {
-                return true;
-            }
-
-            return false;
+            ValidatePayments(amounts.CollectibleToman, effective, amounts.Detail, customerId);
+            return;
         }
 
-        if (tendered > livePaymentTimeCollectibleToman)
-        {
-            if (amounts.Detail?.Allocation is not { IsValid: true })
-            {
-                return false;
-            }
-
-            return true;
-        }
-
-        if (effective.Any(p => !string.IsNullOrWhiteSpace(p.ShortRemainderMethod)))
-        {
-            return false;
-        }
-
-        var cashOnly = hasCash && effective.All(p => OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Cash);
-        if (walletOnly && tendered < amounts.CollectibleToman)
-        {
-            if (amounts.Detail?.Allocation is { IsValid: true } validAlloc)
-            {
-                var walletLine = validAlloc.Tenders.FirstOrDefault(t => t.Method == PaymentMethod.Wallet);
-                if (walletLine is not { Accepted: true })
-                {
-                    return false;
-                }
-
-                return true;
-            }
-
-            if (amounts.UnroundedPayableToman >= amounts.CollectibleToman
-                && amounts.Detail?.Allocation is { IsValid: false } badAlloc
-                && !badAlloc.Errors.Any(e => e.Code == PaymentErrors.InsufficientWallet)
-                && badAlloc.Tenders.Any(t => t.Method == PaymentMethod.Wallet && t.Accepted))
-            {
-                return true;
-            }
-
-            return false;
-        }
-
-        if (cashOnly && tendered < amounts.CollectibleToman)
-        {
-            return true;
-        }
-
-        return false;
+        RejectWalletOnlyBelowUnroundedGap(amounts, effective);
+        await RejectWalletTypedAboveAutoDrawAsync(customerId, amounts.CollectibleToman, stationKind, effective, ct);
+        await RejectWalletTypedAboveSpendableInMixedAsync(customerId, amounts.CollectibleToman, stationKind, effective, ct);
+        RejectMixedUnderRoundedCollectible(amounts, effective);
+        ValidatePayments(amounts.CollectibleToman, effective, amounts.Detail, customerId);
     }
 
     /// <summary>R14e-2: wallet-only typed amount cannot exceed spendable auto-draw when short remainder applies and debt is off.</summary>
@@ -852,14 +774,10 @@ public sealed class OperatorBillService(
             return;
         }
 
-        long nonCashTyped = 0;
-        foreach (var pay in payments)
+        var snapshot = await GetWalletShortRemainderSnapshotAsync(customerId, collectibleToman, stationKind, ct);
+        if (snapshot.DebtRemainderAllowed)
         {
-            var method = OperatorPaymentMethods.Parse(pay.Method);
-            if (method is PaymentMethod.Wallet or PaymentMethod.CardReader or PaymentMethod.CardToCard)
-            {
-                nonCashTyped = MoneyMath.CheckedAdd(nonCashTyped, pay.AmountToman);
-            }
+            return;
         }
 
         var member = await db.CustomerMembers.AsNoTracking().FirstOrDefaultAsync(m => m.CustomerId == customerId, ct);
@@ -868,21 +786,19 @@ public sealed class OperatorBillService(
             return;
         }
 
-        var spendable = Math.Max(0, MemberWalletMapper.ToPocket(member).TotalToman);
+        var pocket = MemberWalletMapper.ToPocket(member);
+        var settings = await db.BranchMemberSettings.AsNoTracking().FirstAsync(ct);
+        var debt = MemberSettingsMapper.LoadDebtPolicy(settings);
+        var spendableCap = pocket.SpendRoom(debt);
+        var spendable = spendableCap == long.MaxValue
+            ? long.MaxValue
+            : Math.Max(0, spendableCap);
         if (walletTyped > spendable)
         {
             throw new ApiException(
                 StatusCodes.Status400BadRequest,
                 "payment_invalid",
                 OperatorPaymentErrors.Localize(new PaymentError(PaymentErrors.InsufficientWallet, ""), collectibleToman));
-        }
-
-        var snapshot = await GetWalletShortRemainderSnapshotAsync(customerId, collectibleToman, stationKind, ct);
-        var walletLine = payments.FirstOrDefault(p => OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet);
-        var debtExplicit = string.Equals(walletLine?.ShortRemainderMethod, "Debt", StringComparison.OrdinalIgnoreCase);
-        if (snapshot.DebtRemainderAllowed && debtExplicit)
-        {
-            return;
         }
     }
 
@@ -913,9 +829,8 @@ public sealed class OperatorBillService(
             OperatorPaymentErrors.Localize(new PaymentError(PaymentErrors.SumMismatch, ""), amounts.CollectibleToman));
     }
 
-    public async Task<PaymentPreviewResult> BuildBuffetPaymentPreviewAsync(
+    public async Task<PaymentPreviewResult> ComputeBuffetPaymentSettlementAsync(
         OpenSaleEntity sale,
-        PendingBillEntity bill,
         IReadOnlyList<PaymentInput> payments,
         CancellationToken ct)
     {
@@ -939,18 +854,21 @@ public sealed class OperatorBillService(
             amounts = await calculator.ComputeBuffetOnlyAsync(sale.Lines, sale.CustomerId, tenders, ct, effective);
         }
 
-        RejectWalletOnlyBelowUnroundedGap(amounts, effective);
-        await RejectWalletTypedAboveAutoDrawAsync(sale.CustomerId, amounts.CollectibleToman, null, effective, ct);
-        await RejectWalletTypedAboveSpendableInMixedAsync(sale.CustomerId, amounts.CollectibleToman, null, effective, ct);
-        RejectMixedUnderRoundedCollectible(amounts, effective);
-        EnsurePreviewMatchesConfirmValidation(live.CollectibleToman, amounts, effective, sale.CustomerId);
-        return new PaymentPreviewResult(
-            amounts,
-            effective,
-            ResolvePreviewCollectibleToman(live.CollectibleToman, amounts, effective));
+        return new PaymentPreviewResult(amounts, effective, amounts.CollectibleToman);
     }
 
-    public async Task<PaymentPreviewResult> BuildSessionPaymentPreviewAsync(
+    public async Task<PaymentPreviewResult> BuildBuffetPaymentPreviewAsync(
+        OpenSaleEntity sale,
+        PendingBillEntity bill,
+        IReadOnlyList<PaymentInput> payments,
+        CancellationToken ct)
+    {
+        var settlement = await ComputeBuffetPaymentSettlementAsync(sale, payments, ct);
+        await ApplyPaymentSettlementValidationAsync(settlement.Amounts, settlement.Effective, sale.CustomerId, null, ct);
+        return settlement;
+    }
+
+    public async Task<PaymentPreviewResult> ComputeSessionPaymentSettlementAsync(
         PlaySessionEntity session,
         PendingBillEntity bill,
         IReadOnlyList<OpenSaleLineEntity> saleLines,
@@ -998,14 +916,25 @@ public sealed class OperatorBillService(
                 effective);
         }
 
-        RejectWalletOnlyBelowUnroundedGap(amounts, effective);
-        await RejectWalletTypedAboveAutoDrawAsync(session.CustomerId, amounts.CollectibleToman, stationKind, effective, ct);
-        await RejectWalletTypedAboveSpendableInMixedAsync(session.CustomerId, amounts.CollectibleToman, stationKind, effective, ct);
-        EnsurePreviewMatchesConfirmValidation(live.CollectibleToman, amounts, effective, session.CustomerId);
-        return new PaymentPreviewResult(
-            amounts,
-            effective,
-            ResolvePreviewCollectibleToman(live.CollectibleToman, amounts, effective));
+        return new PaymentPreviewResult(amounts, effective, amounts.CollectibleToman);
+    }
+
+    public async Task<PaymentPreviewResult> BuildSessionPaymentPreviewAsync(
+        PlaySessionEntity session,
+        PendingBillEntity bill,
+        IReadOnlyList<OpenSaleLineEntity> saleLines,
+        IReadOnlyList<PaymentInput> payments,
+        CancellationToken ct)
+    {
+        var settlement = await ComputeSessionPaymentSettlementAsync(session, bill, saleLines, payments, ct);
+        var stationKind = session.Station?.Group?.Kind;
+        await ApplyPaymentSettlementValidationAsync(
+            settlement.Amounts,
+            settlement.Effective,
+            session.CustomerId,
+            stationKind,
+            ct);
+        return settlement;
     }
 
     private async Task<IReadOnlyList<OpenSaleLineEntity>> LoadSaleLinesAsync(Guid sessionId, CancellationToken ct)
@@ -1272,48 +1201,29 @@ public sealed class OperatorBillService(
                 saleLines,
                 [],
                 innerCt);
-            var effective = await PreparePaymentsForAllocationAsync(
+            var effectiveForLock = await PreparePaymentsForAllocationAsync(
                 session.CustomerId,
                 live.CollectibleToman,
                 live.UnroundedPayableToman,
                 stationKind,
                 payments,
                 innerCt);
-            await LockMemberWalletRowIfNeededAsync(session.CustomerId, effective, innerCt);
-            var tenders = ToTenders(effective, session.CustomerId);
-            var amounts = await calculator.ComputeWithTendersAsync(
+            await LockMemberWalletRowIfNeededAsync(session.CustomerId, effectiveForLock, innerCt);
+            var settlement = await ComputeSessionPaymentSettlementAsync(session, bill, saleLines, payments, innerCt);
+            EnsureClientPreviewCollectibleCurrent(previewCollectibleToman, live.CollectibleToman, settlement.Amounts, settlement.Effective);
+            await ApplyPaymentSettlementValidationAsync(
+                settlement.Amounts,
+                settlement.Effective,
+                session.CustomerId,
+                stationKind,
+                innerCt);
+
+            var invoice = await closer.FinalizeFromPendingAsync(
                 session,
-                bill.FrozenAtUtc,
-                bill.SurchargeToman,
-                saleLines,
-                tenders,
-                innerCt,
-                effective);
-            var allocationPayments = CounterPaymentRecording.PaymentsForCollectAllocation(
-                amounts.CollectibleToman,
-                amounts.UnroundedPayableToman,
-                effective);
-            if (!TenderAmountsMatch(allocationPayments, effective))
-            {
-                tenders = ToTenders(allocationPayments, session.CustomerId);
-                amounts = await calculator.ComputeWithTendersAsync(
-                    session,
-                    bill.FrozenAtUtc,
-                    bill.SurchargeToman,
-                    saleLines,
-                    tenders,
-                    innerCt,
-                    effective);
-            }
-
-            EnsureClientPreviewCollectibleCurrent(previewCollectibleToman, live.CollectibleToman, amounts, effective);
-            RejectWalletOnlyBelowUnroundedGap(amounts, effective);
-            await RejectWalletTypedAboveAutoDrawAsync(session.CustomerId, amounts.CollectibleToman, stationKind, effective, innerCt);
-            await RejectWalletTypedAboveSpendableInMixedAsync(session.CustomerId, amounts.CollectibleToman, stationKind, effective, innerCt);
-            RejectMixedUnderRoundedCollectible(amounts, effective);
-            ValidatePayments(amounts.CollectibleToman, effective, amounts.Detail, session.CustomerId);
-
-            var invoice = await closer.FinalizeFromPendingAsync(session, bill, effective, amounts, innerCt);
+                bill,
+                settlement.Effective,
+                settlement.Amounts,
+                innerCt);
             await audit.AppendAsync("bill.confirm", new { sessionId, invoiceNumber = invoice.Number, collectible = invoice.CollectibleToman }, innerCt);
             return invoice;
         }, ct);
@@ -1406,7 +1316,7 @@ public sealed class OperatorBillService(
         return bill;
     }
 
-    public async Task<object> PreviewBillAsync(
+    public async Task<PaymentPreviewHttpResult> PreviewBillAsync(
         Guid sessionId,
         IReadOnlyList<PaymentInput> payments,
         CancellationToken ct)
@@ -1427,11 +1337,25 @@ public sealed class OperatorBillService(
             .SelectMany(o => o.Lines)
             .ToListAsync(ct);
         var stationKind = session.Station?.Group?.Kind;
-        var preview = await BuildSessionPaymentPreviewAsync(session, bill, saleLines, payments, ct);
-        var amounts = preview.Amounts;
+        var settlement = await ComputeSessionPaymentSettlementAsync(session, bill, saleLines, payments, ct);
+        try
+        {
+            await ApplyPaymentSettlementValidationAsync(
+                settlement.Amounts,
+                settlement.Effective,
+                session.CustomerId,
+                stationKind,
+                ct);
+        }
+        catch (ApiException ex) when (ex.Status is StatusCodes.Status400BadRequest)
+        {
+            return new PaymentPreviewHttpResult(400, BuildPaymentPreviewRejectionBody(ex, settlement));
+        }
+
+        var amounts = settlement.Amounts;
         var walletShort = await GetWalletShortRemainderSnapshotAsync(
             session.CustomerId,
-            preview.CollectibleToman,
+            settlement.CollectibleToman,
             stationKind,
             ct);
         var charge = await billing.BuildChargeAsync(session, bill.FrozenAtUtc, ct);
@@ -1449,15 +1373,15 @@ public sealed class OperatorBillService(
         var overshootAlert = amounts.Detail?.OvershootAlert is { } alert
             ? new { alert.Code, alert.AmountToman, alert.Message }
             : null;
-        return new
+        var body = new
         {
             bill.SessionId,
             playerCount = session.PlayerCount,
             groupId = session.Station!.GroupId,
             unroundedPayableToman = amounts.UnroundedPayableToman,
             roundingToman = amounts.RoundingToman,
-            collectibleToman = preview.CollectibleToman,
-            changeToman = CounterPaymentRecording.ComputeChangeToman(preview.CollectibleToman, preview.Effective),
+            collectibleToman = settlement.CollectibleToman,
+            changeToman = CounterPaymentRecording.ComputeChangeToman(settlement.CollectibleToman, settlement.Effective),
             surchargeToman = bill.SurchargeToman,
             timeGrossToman = amounts.TimeGrossToman,
             buffetGrossToman = amounts.BuffetGrossToman,
@@ -1474,6 +1398,7 @@ public sealed class OperatorBillService(
             linkedCustomer = CustomerMapper.ToLinkedChip(session.Customer),
             walletShortRemainder = ToWalletShortRemainderDto(walletShort),
         };
+        return new PaymentPreviewHttpResult(StatusCodes.Status200OK, body);
     }
 
     public async Task<object> GetBillDetailAsync(Guid sessionId, CancellationToken ct)

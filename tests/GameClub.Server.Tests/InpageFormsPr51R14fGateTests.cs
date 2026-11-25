@@ -293,7 +293,7 @@ public sealed class InpageFormsPr51R14fGateTests(GameClubWebApplicationFactory f
     }
 
     [Fact]
-    public async Task r14f_x14_session_wallet49900_cash300_balance49700_insufficient_both()
+    public async Task r14f_x14_session_wallet49900_cash300_balance49700_debt_floor_settles_both()
     {
         await S3TestHelpers.ResetAsync(factory);
         var manager = await factory.CreateOperatorClientAsync("manager", "1234");
@@ -321,11 +321,14 @@ public sealed class InpageFormsPr51R14fGateTests(GameClubWebApplicationFactory f
                 new { method = "Cash", amountToman = 300L },
             },
         };
-        await AssertInsufficientBoth400SameAsync(
-            op,
-            $"/api/operator/sessions/{sessionId}/bill/preview",
+        var preview = await op.PostAsJsonAsync($"/api/operator/sessions/{sessionId}/bill/preview", body);
+        preview.EnsureSuccessStatusCode();
+        Assert.Equal(50_000, (await preview.Content.ReadFromJsonAsync<JsonElement>())!.GetProperty("collectibleToman").GetInt64());
+        (await op.PostAsJsonAsync(
             $"/api/operator/sessions/{sessionId}/bill/confirm",
-            body);
+            new { previewCollectibleToman = 50_000L, payments = body.payments })).EnsureSuccessStatusCode();
+        using var scope = factory.Services.CreateScope();
+        Assert.Equal(1, await scope.ServiceProvider.GetRequiredService<AppDbContext>().Invoices.CountAsync());
     }
 
     [Fact]

@@ -117,6 +117,9 @@
         } catch (_) {
           settleHistoryPopWaiters();
         }
+        if (cpLayer._historyPopWaiters.length) {
+          settleHistoryPopWaiters();
+        }
       }
       return Promise.resolve();
     }

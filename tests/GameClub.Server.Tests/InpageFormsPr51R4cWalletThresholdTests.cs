@@ -125,15 +125,20 @@ public sealed class InpageFormsPr51R4cWalletThresholdTests(GameClubWebApplicatio
         var op = await factory.CreateOperatorClientAsync();
         var customerId = await CreateCustomerAsync(op);
         var openSaleId = await OpenCustomBuffetAsync(op, customerId, net);
+        var shortPayments = new[] { new { method = "Cash", amountToman = net } };
         var preview = await op.PostAsJsonAsync(
             $"/api/operator/buffet-only/{openSaleId}/bill/preview",
-            new { payments = new[] { new { method = "Cash", amountToman = net } } });
-        preview.EnsureSuccessStatusCode();
-        Assert.Equal(expectedCollectible, BillCollectible(await preview.Content.ReadFromJsonAsync<JsonElement>()));
+            new { payments = shortPayments });
+        Assert.Equal(HttpStatusCode.BadRequest, preview.StatusCode);
+        var previewBody = await preview.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("payment_invalid", previewBody!.GetProperty("code").GetString());
         var shortCash = await op.PostAsJsonAsync(
             $"/api/operator/buffet-only/{openSaleId}/confirm",
-            new { payments = new[] { new { method = "Cash", amountToman = net } } });
+            new { payments = shortPayments });
         Assert.Equal(HttpStatusCode.BadRequest, shortCash.StatusCode);
+        Assert.Equal(
+            previewBody.GetProperty("message").GetString(),
+            (await shortCash.Content.ReadFromJsonAsync<JsonElement>())!.GetProperty("message").GetString());
         (await op.PostAsJsonAsync(
             $"/api/operator/buffet-only/{openSaleId}/confirm",
             new { payments = new[] { new { method = "Cash", amountToman = expectedCollectible } } })).EnsureSuccessStatusCode();

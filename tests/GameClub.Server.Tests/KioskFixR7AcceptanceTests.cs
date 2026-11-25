@@ -151,39 +151,43 @@ public sealed class KioskFixR7AcceptanceTests(GameClubWebApplicationFactory fact
     }
 
     [Fact]
-    public async Task r14_f1_writeoff_apply_wallet_off_wallet_500_alone_preview_15500_confirm_rejected()
+    public async Task r14_f1_writeoff_apply_wallet_off_wallet_500_alone_preview_confirm_both_rejected()
     {
         var (sessionId, op) = await CreateOvershootSessionForF1Async();
         await op.PostAsJsonAsync($"/api/operator/sessions/{sessionId}/sale/lines", new { catalogItemId = SodaId });
         await op.PostAsync($"/api/operator/sessions/{sessionId}/force-logout", null);
         var payments = new[] { new { method = "Wallet", amountToman = 500L } };
-        var preview = await op.PostAsJsonAsync($"/api/operator/sessions/{sessionId}/bill/preview", new { payments });
-        preview.EnsureSuccessStatusCode();
-        var previewCollectible = (await preview.Content.ReadFromJsonAsync<JsonElement>())!.GetProperty("collectibleToman").GetInt64();
-        Assert.Equal(15_500, previewCollectible);
+        var body = new { payments };
+        var preview = await op.PostAsJsonAsync($"/api/operator/sessions/{sessionId}/bill/preview", body);
+        Assert.Equal(HttpStatusCode.BadRequest, preview.StatusCode);
+        var previewMsg = (await preview.Content.ReadFromJsonAsync<JsonElement>())!.GetProperty("message").GetString();
         var confirm = await op.PostAsJsonAsync(
             $"/api/operator/sessions/{sessionId}/bill/confirm",
-            new { previewCollectibleToman = previewCollectible, payments });
+            new { previewCollectibleToman = 15_500L, payments });
         Assert.Equal(HttpStatusCode.BadRequest, confirm.StatusCode);
+        Assert.Equal(previewMsg, (await confirm.Content.ReadFromJsonAsync<JsonElement>())!.GetProperty("message").GetString());
         using var scope = factory.Services.CreateScope();
         Assert.Equal(0, await scope.ServiceProvider.GetRequiredService<AppDbContext>().Invoices.CountAsync(i => i.SessionId == sessionId));
     }
 
     [Fact]
-    public async Task r14b_aon_writeoff_cash_15500_preview_20000_confirm_rejected_400()
+    public async Task r14b_aon_writeoff_cash_15500_preview_confirm_both_400()
     {
         var (sessionId, op) = await CreateOvershootSessionAsync(graceOff: true);
         await op.PostAsJsonAsync($"/api/operator/sessions/{sessionId}/sale/lines", new { catalogItemId = SodaId });
         await op.PostAsync($"/api/operator/sessions/{sessionId}/force-logout", null);
         var payments = new[] { new { method = "Cash", amountToman = 15_500L } };
         var preview = await op.PostAsJsonAsync($"/api/operator/sessions/{sessionId}/bill/preview", new { payments });
-        preview.EnsureSuccessStatusCode();
-        var previewCollectible = (await preview.Content.ReadFromJsonAsync<JsonElement>())!.GetProperty("collectibleToman").GetInt64();
-        Assert.Equal(20_000, previewCollectible);
+        Assert.Equal(HttpStatusCode.BadRequest, preview.StatusCode);
+        var previewBody = await preview.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("payment_invalid", previewBody!.GetProperty("code").GetString());
+        Assert.Contains("۲۰٬۰۰۰", previewBody.GetProperty("message").GetString());
         var confirm = await op.PostAsJsonAsync(
             $"/api/operator/sessions/{sessionId}/bill/confirm",
-            new { previewCollectibleToman = previewCollectible, payments });
+            new { previewCollectibleToman = 20_000L, payments });
         Assert.Equal(HttpStatusCode.BadRequest, confirm.StatusCode);
+        var confirmBody = await confirm.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(previewBody.GetProperty("message").GetString(), confirmBody!.GetProperty("message").GetString());
     }
 
     [Fact]
@@ -207,7 +211,7 @@ public sealed class KioskFixR7AcceptanceTests(GameClubWebApplicationFactory fact
     }
 
     [Fact]
-    public async Task r14b_aon_writeoff_mixed_12000_wallet_1000_cash_11000_preview_confirm_15000()
+    public async Task r14b_aon_writeoff_mixed_under_rounded_preview_confirm_15000()
     {
         await S3TestHelpers.ResetAsync(factory);
         var api = factory.CreateClientWithKey();
@@ -225,23 +229,37 @@ public sealed class KioskFixR7AcceptanceTests(GameClubWebApplicationFactory fact
             $"/api/operator/sessions/{sessionId}/sale/lines",
             new { catalogItemId = CustomServiceId, customAmountToman = 12_000L });
         (await op.PostAsync($"/api/operator/sessions/{sessionId}/bill/open", null)).EnsureSuccessStatusCode();
+        var partialPayments = new[]
+        {
+            new { method = "Wallet", amountToman = 1_000L },
+            new { method = "Cash", amountToman = 11_000L },
+        };
         var previewPartial = await op.PostAsJsonAsync(
             $"/api/operator/sessions/{sessionId}/bill/preview",
-            new { payments = new[] { new { method = "Wallet", amountToman = 1_000L }, new { method = "Cash", amountToman = 11_000L } } });
-        previewPartial.EnsureSuccessStatusCode();
-        Assert.Equal(15_000, (await previewPartial.Content.ReadFromJsonAsync<JsonElement>())!.GetProperty("collectibleToman").GetInt64());
-        var payments = new[]
+            new { payments = partialPayments });
+        Assert.Equal(HttpStatusCode.BadRequest, previewPartial.StatusCode);
+        var partialBody = (await previewPartial.Content.ReadFromJsonAsync<JsonElement>())!;
+        Assert.Contains("۱۵٬۰۰۰", partialBody.GetProperty("message").GetString());
+        var confirmPartial = await op.PostAsJsonAsync(
+            $"/api/operator/sessions/{sessionId}/bill/confirm",
+            new { payments = partialPayments });
+        Assert.Equal(HttpStatusCode.BadRequest, confirmPartial.StatusCode);
+        Assert.Equal(
+            partialBody.GetProperty("message").GetString(),
+            (await confirmPartial.Content.ReadFromJsonAsync<JsonElement>())!.GetProperty("message").GetString());
+        var fullPayments = new[]
         {
             new { method = "Wallet", amountToman = 1_000L },
             new { method = "Cash", amountToman = 14_000L },
         };
-        var preview = await op.PostAsJsonAsync($"/api/operator/sessions/{sessionId}/bill/preview", new { payments });
+        var preview = await op.PostAsJsonAsync($"/api/operator/sessions/{sessionId}/bill/preview", new { payments = fullPayments });
         preview.EnsureSuccessStatusCode();
         var previewCollectible = (await preview.Content.ReadFromJsonAsync<JsonElement>())!.GetProperty("collectibleToman").GetInt64();
         Assert.Equal(15_000, previewCollectible);
-        (await op.PostAsJsonAsync(
+        var confirm = await op.PostAsJsonAsync(
             $"/api/operator/sessions/{sessionId}/bill/confirm",
-            new { previewCollectibleToman = previewCollectible, payments })).EnsureSuccessStatusCode();
+            new { previewCollectibleToman = previewCollectible, payments = fullPayments });
+        confirm.EnsureSuccessStatusCode();
         using var scope = factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         Assert.Equal(15_000, await db.Invoices.Where(i => i.SessionId == sessionId).Select(i => i.CollectibleToman).SingleAsync());
