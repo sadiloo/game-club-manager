@@ -644,6 +644,34 @@ function Wait-InstallerServerApiPort {
     throw "installer acceptance: TCP 127.0.0.1:5000 not accepting connections within ${TimeoutSeconds}s"
 }
 
+function Start-InstallerCheckpointGuard {
+    param([int] $MaxAttempts = 6)
+    if (-not (Get-Service CheckpointGuard -ErrorAction SilentlyContinue)) {
+        throw "CheckpointGuard service not registered"
+    }
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        try {
+            $svc = Get-Service CheckpointGuard -ErrorAction Stop
+            if ($svc.Status -eq "Running") {
+                Restart-Service CheckpointGuard -Force -ErrorAction Stop
+            } else {
+                Start-Service CheckpointGuard -ErrorAction Stop
+            }
+            $deadline = (Get-Date).AddSeconds(45)
+            while ((Get-Date) -lt $deadline) {
+                if ((Get-Service CheckpointGuard).Status -eq "Running") {
+                    return
+                }
+                Start-Sleep -Seconds 1
+            }
+            throw "CheckpointGuard not Running after start attempt $attempt"
+        } catch {
+            if ($attempt -ge $MaxAttempts) { throw }
+            Start-Sleep -Seconds 3
+        }
+    }
+}
+
 function Clear-InstallerDotNetTestProcessEnvironment {
     foreach ($key in @(
             "CHECKPOINT_SERVER_URL", "GAMECLUB_DATABASE", "GAMECLUB_TEST_DATABASE",

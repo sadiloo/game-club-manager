@@ -32,5 +32,5 @@ foreach ($name in @("CHECKPOINT_SERVER_URL", "CHECKPOINT_ADMIN_PASSWORD")) {
     if ($val) { throw "B-5: machine env $name must not be set" }
 }
 
-Restart-Service CheckpointGuard -ErrorAction Stop
+Start-InstallerCheckpointGuard
 Write-Host "B-5: ok"
