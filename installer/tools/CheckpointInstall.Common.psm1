@@ -46,6 +46,67 @@ function New-CheckpointPlainSecureString {
     return $secure
 }
 
+function Set-CheckpointWinlogonAutoLogonPassword {
+    param([Parameter(Mandatory)][string] $Password)
+    if (-not ('CheckpointInstallWinlogonLsa' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class CheckpointInstallWinlogonLsa {
+    const int PolicyCreateSecret = 0x00000020;
+    [StructLayout(LayoutKind.Sequential)]
+    struct LsaUnicodeString {
+        public ushort Length;
+        public ushort MaximumLength;
+        public IntPtr Buffer;
+    }
+    [StructLayout(LayoutKind.Sequential)]
+    struct LsaObjectAttributes {
+        public int Length;
+        public IntPtr RootDirectory;
+        public IntPtr ObjectName;
+        public uint Attributes;
+        public IntPtr SecurityDescriptor;
+        public IntPtr SecurityQualityOfService;
+    }
+    [DllImport("advapi32.dll", SetLastError = true)]
+    static extern uint LsaOpenPolicy(IntPtr SystemName, ref LsaObjectAttributes ObjectAttributes, int DesiredAccess, out IntPtr PolicyHandle);
+    [DllImport("advapi32.dll", SetLastError = true)]
+    static extern uint LsaStorePrivateData(IntPtr PolicyHandle, IntPtr KeyName, IntPtr PrivateData);
+    [DllImport("advapi32.dll")]
+    static extern uint LsaClose(IntPtr ObjectHandle);
+    static LsaUnicodeString NewLsaString(string value) {
+        var s = new LsaUnicodeString();
+        s.Buffer = Marshal.StringToHGlobalUni(value);
+        s.Length = (ushort)(value.Length * 2);
+        s.MaximumLength = (ushort)(s.Length + 2);
+        return s;
+    }
+    public static void StoreDefaultPassword(string password) {
+        var attrs = new LsaObjectAttributes();
+        attrs.Length = Marshal.SizeOf(typeof(LsaObjectAttributes));
+        IntPtr policy;
+        uint err = LsaOpenPolicy(IntPtr.Zero, ref attrs, PolicyCreateSecret, out policy);
+        if (err != 0) { throw new InvalidOperationException("LsaOpenPolicy: " + err); }
+        try {
+            var keyName = NewLsaString("DefaultPassword");
+            IntPtr keyPtr = Marshal.AllocHGlobal(Marshal.SizeOf(typeof(LsaUnicodeString)));
+            Marshal.StructureToPtr(keyName, keyPtr, false);
+            var secret = NewLsaString(password);
+            IntPtr secretPtr = Marshal.AllocHGlobal(Marshal.SizeOf(typeof(LsaUnicodeString)));
+            Marshal.StructureToPtr(secret, secretPtr, false);
+            err = LsaStorePrivateData(policy, keyPtr, secretPtr);
+            if (err != 0) { throw new InvalidOperationException("LsaStorePrivateData: " + err); }
+        } finally {
+            LsaClose(policy);
+        }
+    }
+}
+'@
+    }
+    [CheckpointInstallWinlogonLsa]::StoreDefaultPassword($Password)
+}
+
 function Test-CheckpointKioskPasswordLocked {
     param([string] $AccountName = "CheckpointKiosk")
     $localUser = Get-LocalUser -Name $AccountName -ErrorAction SilentlyContinue
@@ -187,6 +248,7 @@ function Get-CheckpointDailyBackupStartBoundaryUtc {
 Export-ModuleMember -Function @(
     "New-CheckpointPlainSecureString",
     "Test-CheckpointKioskPasswordLocked",
+    "Set-CheckpointWinlogonAutoLogonPassword",
     "Get-CheckpointRepoRoot",
     "Get-CheckpointAppVersion",
     "New-CheckpointRandomSecret",

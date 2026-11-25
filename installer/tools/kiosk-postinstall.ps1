@@ -76,7 +76,8 @@ $RegPath = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
 Set-ItemProperty -Path $RegPath -Name "AutoAdminLogon" -Value "1"
 Set-ItemProperty -Path $RegPath -Name "DefaultUserName" -Value $KioskUser
 Set-ItemProperty -Path $RegPath -Name "DefaultDomainName" -Value $env:COMPUTERNAME
-# Password stored via Win32 API LSA secret (simplified: use sysinternal autologon pattern in full R8; CI validates length + fingerprint)
+Set-CheckpointWinlogonAutoLogonPassword -Password $password
+Remove-ItemProperty -Path $RegPath -Name "DefaultPassword" -ErrorAction SilentlyContinue
 
 $programDataKiosk = "C:\ProgramData\Checkpoint\kiosk"
 New-Item -ItemType Directory -Force -Path $programDataKiosk | Out-Null
@@ -107,5 +108,6 @@ try {
 
 $bytes = [Text.Encoding]::UTF8.GetBytes($password)
 $fp = [System.BitConverter]::ToString([System.Security.Cryptography.SHA256]::Create().ComputeHash($bytes)).Replace("-", "").ToLowerInvariant()
+Remove-ItemProperty -Path $RegPath -Name "DefaultPassword" -ErrorAction SilentlyContinue
 Write-Host "kiosk-postinstall: CheckpointKiosk password fingerprint sha256=$fp length=$($password.Length)"
 # Never log password; fingerprint is over bytes for CI B-5 comparison between installs.
