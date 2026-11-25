@@ -1839,7 +1839,7 @@ public sealed class ShellPlanAIntegrationTests
         var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
         using var timeoutCts = new CancellationTokenSource(timeout);
         timeoutCts.Token.Register(() =>
-            tcs.TrySetException(new TimeoutException("expected shell log line was not written")));
+            tcs.TrySetException(new System.TimeoutException("expected shell log line was not written")));
 
         void TryMatch(object? _)
         {
@@ -1864,7 +1864,7 @@ public sealed class ShellPlanAIntegrationTests
             }
         }
 
-        using var pollTimer = new Timer(TryMatch, null, TimeSpan.Zero, TimeSpan.FromMilliseconds(50));
+        using var pollTimer = new System.Threading.Timer(TryMatch, null, TimeSpan.Zero, TimeSpan.FromMilliseconds(50));
         TryMatch(null);
         return await tcs.Task.ConfigureAwait(false);
     }
