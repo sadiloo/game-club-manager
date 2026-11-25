@@ -638,16 +638,11 @@ public sealed class OperatorBillService(
             return false;
         }
 
-        if (walletOnly)
-        {
-            return tendered < amounts.CollectibleToman;
-        }
-
-        return tendered < amounts.CollectibleToman;
+        return false;
     }
 
-    /// <summary>R14d-D: wallet-only tender in the rounding gap below unrounded (e.g. W49,000 on 49,500) is rejected on buffet preview.</summary>
-    public static void RejectBuffetWalletOnlyBelowUnroundedGap(BillAmounts amounts, IReadOnlyList<PaymentInput> payments)
+    /// <summary>R14d-D / PO-3: wallet-only tender below unrounded in the rounding gap (e.g. W49,000 on 49,500) is rejected on preview and confirm.</summary>
+    public static void RejectWalletOnlyBelowUnroundedGap(BillAmounts amounts, IReadOnlyList<PaymentInput> payments)
     {
         var walletOnly = payments.Count > 0
             && payments.All(p => OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet);
@@ -701,7 +696,7 @@ public sealed class OperatorBillService(
             amounts = await calculator.ComputeBuffetOnlyAsync(sale.Lines, sale.CustomerId, tenders, ct, effective);
         }
 
-        RejectBuffetWalletOnlyBelowUnroundedGap(amounts, effective);
+        RejectWalletOnlyBelowUnroundedGap(amounts, effective);
         EnsurePreviewMatchesConfirmValidation(live.CollectibleToman, amounts, effective, sale.CustomerId);
         return new PaymentPreviewResult(
             amounts,
@@ -757,6 +752,7 @@ public sealed class OperatorBillService(
                 effective);
         }
 
+        RejectWalletOnlyBelowUnroundedGap(amounts, effective);
         EnsurePreviewMatchesConfirmValidation(live.CollectibleToman, amounts, effective, session.CustomerId);
         return new PaymentPreviewResult(
             amounts,
@@ -1063,6 +1059,7 @@ public sealed class OperatorBillService(
             }
 
             EnsureClientPreviewCollectibleCurrent(previewCollectibleToman, live.CollectibleToman, amounts, effective);
+            RejectWalletOnlyBelowUnroundedGap(amounts, effective);
             ValidatePayments(amounts.CollectibleToman, effective, amounts.Detail, session.CustomerId);
 
             var invoice = await closer.FinalizeFromPendingAsync(session, bill, effective, amounts, innerCt);

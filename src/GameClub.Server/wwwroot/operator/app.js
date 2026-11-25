@@ -1012,27 +1012,26 @@ async function walletTopUp(method) {
       return Object.keys(errs).length ? errs : null;
     },
     onSubmit: async (v) => {
-      const amountToman = v.amountToman;
-      const giftToman = v.giftToman == null ? 0 : v.giftToman;
-      const destinationCardId = v.destinationCardId;
-      if (method === "CardToCard" && !destinationCardId) {
-        const err = new Error("کارت مقصد الزامی است.");
-        throw err;
-      }
-      const draftKey = buildWalletTopUpDraftKey(linked.id, method, amountToman, giftToman, destinationCardId);
-      ensureWalletTopUpCommandIdForDraft(draftKey);
-      const commandId = method === "CardToCard"
-        ? (walletC2cCommandId ||= walletTopUpCommandId)
-        : walletTopUpCommandId;
-      const body = { method, amountToman, giftToman, commandId };
-      if (method === "CardToCard") {
-        body.destinationCardId = destinationCardId;
-        if (v.reference) body.reference = v.reference;
-      }
       if (walletTopUpInFlight) return;
       walletTopUpInFlight = true;
       setWalletTopUpButtonsDisabled(true);
       try {
+        const amountToman = v.amountToman;
+        const giftToman = v.giftToman == null ? 0 : v.giftToman;
+        const destinationCardId = v.destinationCardId;
+        if (method === "CardToCard" && !destinationCardId) {
+          throw new Error("کارت مقصد الزامی است.");
+        }
+        const draftKey = buildWalletTopUpDraftKey(linked.id, method, amountToman, giftToman, destinationCardId);
+        ensureWalletTopUpCommandIdForDraft(draftKey);
+        const commandId = method === "CardToCard"
+          ? (walletC2cCommandId ||= walletTopUpCommandId)
+          : walletTopUpCommandId;
+        const body = { method, amountToman, giftToman, commandId };
+        if (method === "CardToCard") {
+          body.destinationCardId = destinationCardId;
+          if (v.reference) body.reference = v.reference;
+        }
         await api(`/api/operator/members/customers/${linked.id}/wallet/top-up`, {
           method: "POST",
           body: JSON.stringify(body),

@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -13,7 +13,6 @@ import {
 const CUSTOMER = "11111111-1111-4111-8111-111111111111";
 const TOPUP_GROUP = "33333333-3333-4333-8333-333333333333";
 const here = path.dirname(fileURLToPath(import.meta.url));
-const repo = path.resolve(here, "../../..");
 
 function assertOnOperator(window) {
   if (!String(window.location.href).includes("/operator/")) {
@@ -87,12 +86,11 @@ async function runStalePopstateScenario(delayMs, layerSource) {
   }
 }
 
-const headLayer = await import("node:fs").then((fs) =>
-  fs.readFileSync(path.join(repo, "src/GameClub.Server/wwwroot/operator/cp-layer.js"), "utf8"),
+const headLayer = fs.readFileSync(
+  path.join(here, "../../../src/GameClub.Server/wwwroot/operator/cp-layer.js"),
+  "utf8",
 );
-const oldLayer = execFileSync("git", ["-C", repo, "show", "94ef4ff:src/GameClub.Server/wwwroot/operator/cp-layer.js"], {
-  encoding: "utf8",
-});
+const oldLayer = fs.readFileSync(path.join(here, "fixtures/cp-layer-pre-r14d-popstate.mjs"), "utf8");
 
 for (const delay of [0, 30, 100]) {
   await runStalePopstateScenario(delay, headLayer);
@@ -110,23 +108,10 @@ for (const delay of [0, 30, 100]) {
   }
 }
 
-const hb1Layer = headLayer
-  .replace(
-    "if (cpLayer._closingViaHistory) {\n      settleHistoryPopWaiters();\n      return;\n    }",
-    "/* HB1 removed guard */",
-  )
-  .replace(
-    "if (active.busy || active._submitInFlight) {\n      return;\n    }",
-    "/* HB1 removed busy guard */",
-  )
-  .replace(
-    "active.cancel(\"history\");",
-    "window.__hb1StaleCancel = true; active.cancel(\"history\");",
-  );
 {
   const { window, document, history, runInApp, ctx } = loadOperatorApp("http://localhost/operator/", {
     trackKeydown: false,
-    layerSource: hb1Layer,
+    layerSource: headLayer,
   });
   history.pushState({ page: "start" }, "", "/start/");
   history.pushState({ page: "operator" }, "", "/operator/");
@@ -140,19 +125,25 @@ const hb1Layer = headLayer
   await waitCpVisible(document);
   document.querySelector(".cp-pick-row")?.click();
   await waitCpVisible(document);
-  cap.stub(`/api/operator/members/wallet/top-ups/${TOPUP_GROUP}/correct`, "POST", {});
+  const correctPath = `/api/operator/members/wallet/top-ups/${TOPUP_GROUP}/correct`;
+  cap.hangingPost(correctPath);
   await fillMoneyField(document, "newAmountToman", "2000");
   await fillMoneyField(document, "newGiftToman", "0");
   document.querySelector('[data-cp-field="description"]').value = "stale popstate";
   await clickCpSubmit(document);
+  await waitFor(() => runInApp("window.cpLayer.active?.busy === true"), "HB1 submit busy");
   dispatchStalePopstate(window);
-  if (!runInApp("window.__hb1StaleCancel === true")) {
-    throw new Error("HB1 mutant survived: stale popstate did not cancel via history");
+  if (runInApp("window.__hb1StaleCancel === true")) {
+    throw new Error("HB1: stale popstate cancelled during busy submit");
+  }
+  const root = document.getElementById("cpLayer");
+  if (!root || root.classList.contains("hidden")) {
+    throw new Error("HB1: layer hidden during busy submit after stale popstate");
   }
 }
 
 if (!oldFailed) {
-  throw new Error("expected failure on 94ef4ff cp-layer stale popstate");
+  throw new Error("expected failure on pre-r14d cp-layer stale popstate");
 }
 
 if (

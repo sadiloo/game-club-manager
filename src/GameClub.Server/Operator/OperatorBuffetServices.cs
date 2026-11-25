@@ -467,7 +467,7 @@ public sealed class OperatorBuffetSaleService(
                 live.CollectibleToman,
                 amounts,
                 effective);
-            OperatorBillService.RejectBuffetWalletOnlyBelowUnroundedGap(amounts, effective);
+            OperatorBillService.RejectWalletOnlyBelowUnroundedGap(amounts, effective);
             bills.ValidatePayments(amounts.CollectibleToman, effective, amounts.Detail, sale.CustomerId);
             await db.Entry(sale).Collection(o => o.Lines).Query().Include(l => l.CatalogItem).LoadAsync(innerCt);
             var invoice = await closer.FinalizeBuffetOnlyAsync(sale, bill, effective, amounts, innerCt);

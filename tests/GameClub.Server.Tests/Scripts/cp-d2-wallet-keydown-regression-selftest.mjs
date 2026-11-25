@@ -58,6 +58,7 @@ assertPostsCount(cap.log, "/wallet/top-up", 1);
 const post = lastPost(cap.log, "/wallet/top-up");
 if (post?.body?.amountToman !== 7777) throw new Error(`wrong top-up amount ${post?.body?.amountToman}`);
 
+cap.releaseHangingPost("/wallet/top-up", {});
 await waitCpHidden(document, 8000);
 if (window.__cpKeydownListenerCount() !== 0) throw new Error("after wallet close expected 0 listeners");
 

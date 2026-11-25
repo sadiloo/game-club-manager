@@ -175,15 +175,26 @@ export function installFetchCapture(window, ctx) {
     }
     log.push({ url: String(url), method: opts.method || "GET", body });
     const key = fetchKey(url, opts.method || "GET");
-    const stub = responses.get(key) ?? responses.get(pathOnly);
+    const method = opts.method || "GET";
+    let stub = responses.get(key);
+    if (!stub && method === "POST") {
+      for (const [k, v] of responses.entries()) {
+        if (k.startsWith("HANG:") && key.includes(k.slice(5))) {
+          stub = v;
+          break;
+        }
+      }
+    }
     if (stub) return stub;
     return defaultOk;
   };
   window.fetch = fetchImpl;
   globalThis.fetch = fetchImpl;
   if (ctx) ctx.fetch = fetchImpl;
+  const hangingPosts = new Map();
   return {
     log,
+    hangingPosts,
     reset() {
       log.length = 0;
     },
@@ -208,11 +219,28 @@ export function installFetchCapture(window, ctx) {
       });
     },
     hangingPost(pathPart) {
-      responses.set(`POST ${pathPart}`, {
+      const state = { pending: true, value: null, resolve: null };
+      const stub = {
         ok: true,
         status: 200,
-        text: () => new Promise(() => {}),
-      });
+        text: () => {
+          if (!state.pending) return Promise.resolve(JSON.stringify(state.value));
+          return new Promise((resolve) => {
+            state.resolve = resolve;
+          });
+        },
+        json: async () => (state.pending ? JSON.parse(await stub.text()) : state.value),
+      };
+      responses.set(`HANG:${pathPart}`, stub);
+      hangingPosts.set(pathPart, state);
+    },
+    releaseHangingPost(pathPart, value = null) {
+      const state = hangingPosts.get(pathPart);
+      if (!state?.pending) throw new Error(`no hanging POST for ${pathPart}`);
+      state.pending = false;
+      state.value = value;
+      const body = JSON.stringify(value);
+      state.resolve?.(body);
     },
   };
 }
@@ -267,6 +295,13 @@ export async function waitCpVisible(document, timeoutMs = 5000) {
     await sleep(15);
   }
   throw new Error("cpLayer not visible");
+}
+
+/** Await an onclick handler that opens cpLayer (e.g. addCatalogLine → cpPrompt). */
+export async function openCpFromClick(document, click) {
+  const pending = click();
+  await waitCpVisible(document);
+  return pending;
 }
 
 export function assertNumberFields(body, expected) {

@@ -9,6 +9,7 @@ import {
   clickCpSubmit,
   waitCpHidden,
   waitCpVisible,
+  openCpFromClick,
   lastPost,
   assertNumberFields,
 } from "./operator-jsdom-harness.mjs";
@@ -338,15 +339,19 @@ async function main() {
     const cap = installFetchCapture(window, ctx);
     baseStubs(cap);
     selectSession(runInApp);
+    cap.stub(`/api/operator/sessions/${SESSION}/sale/lines`, "POST", { ok: true });
     runInApp(
       `catalog = [{ name: "Food", items: [{ id: 42, kind: "ServiceCustom", name: "خدمت دلخواه" }] }];`,
     );
     globalThis.renderBuffetCategories();
-    document.querySelector(".cat-item")?.click();
-    await waitCpVisible(document);
+    const addLine = await openCpFromClick(document, () =>
+      document.querySelector(".cat-item")?.onclick?.({ stopPropagation: () => {} }),
+    );
     await fillCpPromptValue(document, "12345");
     cap.reset();
-    await submitMoneyForm(document);
+    await clickCpSubmit(document);
+    await addLine;
+    await waitCpHidden(document, 8000);
     const post = lastPost(cap.log, "/sale/lines");
     assertNumberFields(post.body, { customAmountToman: 12345 });
     results.push({ qaRow: 15, formId: "F05 custom service", endpoint: post.url, body: { customAmountToman: 12345 } });

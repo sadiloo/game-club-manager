@@ -139,8 +139,11 @@ public sealed class InpageFormsPr51R14dTests(GameClubWebApplicationFactory facto
         var invoice = await db.Invoices.AsNoTracking().Include(i => i.PaymentLines).SingleAsync();
         Assert.Equal(15_500, invoice.PaymentLines.Sum(p => p.AmountToman));
         Assert.Equal(500, invoice.PaymentLines.Single(p => p.Method == PaymentMethod.Wallet).AmountToman);
-        Assert.Equal(15_000, invoice.PaymentLines.Single(p => p.Method == PaymentMethod.Cash).AmountToman);
-        Assert.Equal(5_000, previewChange);
+        var cashRecorded = invoice.PaymentLines.Single(p => p.Method == PaymentMethod.Cash).AmountToman;
+        Assert.Equal(15_000, cashRecorded);
+        var confirmChange = 20_000L - cashRecorded;
+        Assert.Equal(5_000, confirmChange);
+        Assert.Equal(previewChange, confirmChange);
     }
 
     [Fact]
@@ -334,6 +337,34 @@ public sealed class InpageFormsPr51R14dTests(GameClubWebApplicationFactory facto
         Assert.Equal(50_000, walletLine.AmountToman);
         Assert.Equal(50_000, walletLine.WalletRealDrawnToman + walletLine.WalletGiftDrawnToman);
         Assert.Equal(-50_000, spend.RealDeltaToman + spend.GiftDeltaToman);
+    }
+
+    [Fact]
+    public async Task r14d_d_wallet49000_session_below_unrounded_preview_equals_confirm_400()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var api = factory.CreateClientWithKey();
+        var op = await factory.CreateOperatorClientAsync();
+        var customerId = await CreateCustomerAsync(op);
+        (await op.PostAsJsonAsync(
+            $"/api/operator/members/customers/{customerId}/wallet/top-up",
+            new { method = "Cash", amountToman = 100_000L, commandId = Guid.NewGuid() })).EnsureSuccessStatusCode();
+        await S3TestHelpers.RegisterConsole(api, op, "PS5-R14D-D49K", 1);
+        factory.Clock.SetTehran(2026, 6, 3, 14, 0);
+        var sessionId = await S3TestHelpers.StartSession(api, "PS5-R14D-D49K", 1);
+        await op.PutAsJsonAsync($"/api/operator/sessions/{sessionId}/customer", new { customerId });
+        factory.Clock.SetTehran(2026, 6, 3, 14, 27);
+        (await op.PostAsync($"/api/operator/sessions/{sessionId}/bill/open", null)).EnsureSuccessStatusCode();
+        var payments = new[] { new { method = "Wallet", amountToman = 49_000L } };
+        var preview = await op.PostAsJsonAsync($"/api/operator/sessions/{sessionId}/bill/preview", new { payments });
+        Assert.Equal(HttpStatusCode.BadRequest, preview.StatusCode);
+        var previewBody = await ReadJsonAsync(preview);
+        AssertPaymentInvalid(previewBody);
+        var confirm = await op.PostAsJsonAsync($"/api/operator/sessions/{sessionId}/bill/confirm", new { payments });
+        Assert.Equal(HttpStatusCode.BadRequest, confirm.StatusCode);
+        var confirmBody = await ReadJsonAsync(confirm);
+        AssertPaymentInvalid(confirmBody);
+        Assert.Equal(previewBody.GetProperty("message").GetString(), confirmBody.GetProperty("message").GetString());
     }
 
     [Fact]

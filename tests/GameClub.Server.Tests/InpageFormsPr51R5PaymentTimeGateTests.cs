@@ -166,7 +166,7 @@ public sealed class InpageFormsPr51R5PaymentTimeGateTests(GameClubWebApplication
     }
 
     [Fact]
-    public async Task gate_mutant_cb_session_w03_preview_200_collectible_50000_when_wallet_under_rounded()
+    public async Task gate_mutant_cb_session_w03_wallet49000_preview_and_confirm_400_payment_invalid()
     {
         await S3TestHelpers.ResetAsync(factory);
         var api = factory.CreateClientWithKey();
@@ -181,15 +181,16 @@ public sealed class InpageFormsPr51R5PaymentTimeGateTests(GameClubWebApplication
         await op.PutAsJsonAsync($"/api/operator/sessions/{sessionId}/customer", new { customerId });
         factory.Clock.SetTehran(2026, 6, 3, 14, 27);
         (await op.PostAsync($"/api/operator/sessions/{sessionId}/bill/open", null)).EnsureSuccessStatusCode();
-        var preview = await op.PostAsJsonAsync(
-            $"/api/operator/sessions/{sessionId}/bill/preview",
-            new { payments = new[] { new { method = "Wallet", amountToman = 49_000L } } });
-        Assert.Equal(HttpStatusCode.OK, preview.StatusCode);
-        Assert.Equal(50_000, (await preview.Content.ReadFromJsonAsync<JsonElement>())!.GetProperty("collectibleToman").GetInt64());
-        var confirm = await op.PostAsJsonAsync(
-            $"/api/operator/sessions/{sessionId}/bill/confirm",
-            new { payments = new[] { new { method = "Wallet", amountToman = 49_000L } } });
+        var payments = new[] { new { method = "Wallet", amountToman = 49_000L } };
+        var preview = await op.PostAsJsonAsync($"/api/operator/sessions/{sessionId}/bill/preview", new { payments });
+        Assert.Equal(HttpStatusCode.BadRequest, preview.StatusCode);
+        var previewBody = await ReadJsonAsync(preview);
+        AssertPaymentInvalid(previewBody);
+        var confirm = await op.PostAsJsonAsync($"/api/operator/sessions/{sessionId}/bill/confirm", new { payments });
         Assert.Equal(HttpStatusCode.BadRequest, confirm.StatusCode);
+        var confirmBody = await ReadJsonAsync(confirm);
+        AssertPaymentInvalid(confirmBody);
+        Assert.Equal(previewBody.GetProperty("message").GetString(), confirmBody.GetProperty("message").GetString());
     }
 
     [Fact]

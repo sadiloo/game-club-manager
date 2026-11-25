@@ -79,13 +79,11 @@
           if (!cpLayer._historyPopWaiters.length) cpLayer._closingViaHistory = false;
         }
       }, 1500);
-      queueMicrotask(() => {
-        try {
-          history.back();
-        } catch (_) {
-          settleHistoryPopWaiters();
-        }
-      });
+      try {
+        history.back();
+      } catch (_) {
+        settleHistoryPopWaiters();
+      }
     });
   }
 
@@ -104,8 +102,11 @@
         return;
       }
     }
+    if (active.busy || active._submitInFlight) {
+      return;
+    }
     cpLayer._closingViaHistory = true;
-    if (!active.busy) active.cancel("history");
+    active.cancel("history");
   });
   }
 
@@ -357,6 +358,7 @@
       this.fieldEls = {};
       this.serverErrorEl = null;
       this._rejectCancel = null;
+      this._submitInFlight = false;
     }
 
     setServerError(msg) {
@@ -396,8 +398,11 @@
     }
 
     async submit(values) {
-      if (this.busy || this._submitInFlight) return;
-      this._submitInFlight = true;
+      if (this.busy) return;
+      const ownedSubmitLock = !this._submitInFlight;
+      if (ownedSubmitLock) {
+        this._submitInFlight = true;
+      }
       try {
         const spec = this.spec;
         if (spec.validate) {
@@ -431,7 +436,9 @@
           this._finish(values);
         }
       } finally {
-        this._submitInFlight = false;
+        if (ownedSubmitLock) {
+          this._submitInFlight = false;
+        }
       }
     }
 
@@ -572,6 +579,7 @@
     submitBtn.dataset.cpRole = "submit";
     submitBtn.textContent = session.spec.confirmLabel || "ثبت";
     submitBtn.onclick = () => {
+      if (session.busy || session._submitInFlight) return;
       const run = session.spec.collectAndSubmit;
       if (typeof run === "function") void run();
     };
@@ -870,6 +878,8 @@
 
           session.spec.collectAndSubmit = async () => {
             if (session.busy || session._submitInFlight) return;
+            session._submitInFlight = true;
+            session._setBusyUi(true);
             const values = {};
             const errs = {};
             const initials = spec.initialValues || {};
@@ -913,16 +923,27 @@
             }
             if (Object.keys(errs).length) {
               session._applyFieldErrors(errs);
+              session._submitInFlight = false;
+              session._setBusyUi(false);
               return;
             }
             if (spec.validate) {
               const v = spec.validate(values);
               if (v) {
                 session._applyFieldErrors(v);
+                session._submitInFlight = false;
+                session._setBusyUi(false);
                 return;
               }
             }
-            await session.submit(values);
+            try {
+              await session.submit(values);
+            } finally {
+              if (!session.busy) {
+                session._submitInFlight = false;
+                session._setBusyUi(false);
+              }
+            }
           };
 
           render();
