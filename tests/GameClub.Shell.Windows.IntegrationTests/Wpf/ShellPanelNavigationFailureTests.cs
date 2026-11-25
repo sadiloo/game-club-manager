@@ -1217,17 +1217,34 @@ public sealed class ShellPanelNavigationFailureTests
         throw new InvalidOperationException("Panel WebView2 did not become ready");
     }
 
+    private static bool LogLineIsPanelUnavailableNavigated(string line) =>
+        line.Contains("branch=present-offline-navigated", StringComparison.Ordinal)
+            && line.Contains("offlineState=panel-unavailable", StringComparison.Ordinal);
+
+    private static bool LogTextContainsPanelUnavailableNavigated(string text) =>
+        text.Split('\n').Any(LogLineIsPanelUnavailableNavigated);
+
     private static async Task WaitForPanelUnavailableOfflineAsync(
         Microsoft.Web.WebView2.Wpf.WebView2 wv,
         TimeSpan timeout,
         string? logBaseline = null)
     {
-        var baseline = logBaseline ?? ReadShellLogSnapshot();
-        await AwaitShellLogLineAsync(
-            baseline,
-            line => line.Contains("branch=present-offline-navigated", StringComparison.Ordinal)
-                && line.Contains("offlineState=panel-unavailable", StringComparison.Ordinal),
-            timeout);
+        if (logBaseline is not null)
+        {
+            if (!LogTextContainsPanelUnavailableNavigated(LogDelta(logBaseline)))
+            {
+                await AwaitShellLogLineAsync(logBaseline, LogLineIsPanelUnavailableNavigated, timeout);
+            }
+        }
+        else
+        {
+            var snapshot = ReadShellLogSnapshot();
+            if (!LogTextContainsPanelUnavailableNavigated(snapshot))
+            {
+                await AwaitShellLogLineAsync(snapshot, LogLineIsPanelUnavailableNavigated, timeout);
+            }
+        }
+
         await AssertPanelUnavailableOfflineDomAsync(wv, TimeSpan.FromSeconds(10));
     }
 
