@@ -376,7 +376,7 @@ function Assert-KioskPostinstallCompleted {
     $logRun = $false
     if (Test-Path -LiteralPath $InnoLogPath) {
         $raw = Get-Content -LiteralPath $InnoLogPath -Raw -Encoding UTF8 -ErrorAction Stop
-        if ($raw -match '(?i)kiosk-postinstall\.ps1') {
+        if ($raw -match '(?m)Parameters:\s+.*kiosk-postinstall\.ps1') {
             $logRun = $true
         }
     }
