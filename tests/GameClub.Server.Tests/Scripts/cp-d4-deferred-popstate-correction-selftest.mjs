@@ -91,10 +91,7 @@ const headLayer = fs.readFileSync(
   "utf8",
 );
 const oldLayer = fs.readFileSync(path.join(here, "fixtures/cp-layer-pre-r14d-popstate.mjs"), "utf8");
-const noBusyGuardLayer = fs.readFileSync(
-  path.join(here, "fixtures/cp-layer-no-busy-popstate-guard.mjs"),
-  "utf8",
-);
+const hb1BusyPopstateGuardNeedle = "if (active && (active.busy || active._submitInFlight)) {";
 
 for (const delay of [0, 30, 100]) {
   await runStalePopstateScenario(delay, headLayer);
@@ -112,7 +109,24 @@ for (const delay of [0, 30, 100]) {
   }
 }
 
-async function runHb1BusyGuardScenario(layerSource, expectKeepOpen) {
+function assertHb1BusySubmitStillInFlight({ runInApp, document, cap, correctPath }) {
+  if (runInApp("window.cpLayer.active == null")) {
+    throw new Error("HB1: cp session must remain active during busy submit after stale popstate");
+  }
+  if (!runInApp("window.cpLayer.active?.busy === true")) {
+    throw new Error("HB1: submit must stay busy after stale popstate");
+  }
+  const root = document.getElementById("cpLayer");
+  if (!root || root.classList.contains("hidden")) {
+    throw new Error("HB1: layer must stay visible during busy submit after stale popstate");
+  }
+  const hang = cap.hangingPosts.get(correctPath);
+  if (!hang?.pending) {
+    throw new Error("HB1: wallet correct POST must remain in-flight (no double submit)");
+  }
+}
+
+async function runHb1BusyGuardScenario(layerSource, delayMs) {
   const { window, document, history, runInApp, ctx } = loadOperatorApp("http://localhost/operator/", {
     trackKeydown: false,
     layerSource,
@@ -136,34 +150,43 @@ async function runHb1BusyGuardScenario(layerSource, expectKeepOpen) {
   document.querySelector('[data-cp-field="description"]').value = "stale popstate";
   await clickCpSubmit(document);
   await waitFor(() => runInApp("window.cpLayer.active?.busy === true"), "HB1 submit busy");
-  dispatchStalePopstate(window);
-  const stillBusy = runInApp("window.cpLayer.active?.busy === true");
-  const root = document.getElementById("cpLayer");
-  const hidden = !root || root.classList.contains("hidden");
-  if (expectKeepOpen) {
-    if (!stillBusy) throw new Error("HB1: submit must stay busy after stale popstate");
-    if (hidden) throw new Error("HB1: layer hidden during busy submit after stale popstate");
-    return;
+  if (delayMs === 0) {
+    dispatchStalePopstate(window);
+  } else {
+    await new Promise((r) => setTimeout(r, delayMs));
+    dispatchStalePopstate(window);
   }
-  if (!expectKeepOpen) {
-    throw new Error("HB1: stale popstate during busy submit without busy guard");
-  }
+  await new Promise((r) => setTimeout(r, 0));
+  assertHb1BusySubmitStillInFlight({ runInApp, document, cap, correctPath });
 }
 
-await runHb1BusyGuardScenario(headLayer, true);
-let hb1MutantClosed = false;
-let hb1MutantErr = "";
-try {
-  await runHb1BusyGuardScenario(noBusyGuardLayer, false);
-} catch (e) {
-  hb1MutantClosed = true;
-  hb1MutantErr = e?.message || String(e);
+if (!headLayer.includes(hb1BusyPopstateGuardNeedle)) {
+  throw new Error("HB1: head cp-layer must guard popstate while submit is busy");
 }
-if (!hb1MutantClosed) {
-  throw new Error("HB1: expected guard-less cp-layer to close on stale popstate during submit");
+
+const hb1GuardlessLayer = headLayer.replace(
+  /if \(active && \(active\.busy \|\| active\._submitInFlight\)\) \{\s*\n\s*return;\s*\n\s*\}/,
+  "/* HB1 mutant: busy popstate guard removed */",
+);
+
+for (const delay of [0, 30, 100]) {
+  await runHb1BusyGuardScenario(headLayer, delay);
 }
-if (!hb1MutantErr.includes("without busy guard")) {
-  throw new Error(`HB1: unexpected mutant failure: ${hb1MutantErr}`);
+
+let hb1MutantFailed = false;
+for (const delay of [0]) {
+  try {
+    await runHb1BusyGuardScenario(hb1GuardlessLayer, delay);
+  } catch (e) {
+    if (e?.message?.startsWith("HB1:")) {
+      hb1MutantFailed = true;
+      break;
+    }
+    throw e;
+  }
+}
+if (!hb1MutantFailed) {
+  throw new Error("HB1: cp-layer without popstate busy guard must fail busy-submit visibility assertion");
 }
 
 async function runCpd4xStackScenario(delayMs, layerSource = headLayer) {

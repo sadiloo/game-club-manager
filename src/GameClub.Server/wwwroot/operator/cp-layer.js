@@ -152,11 +152,17 @@
       settleHistoryPopWaiters();
       return;
     }
-    if (cpLayer._closingViaHistory) {
+    const active = cpLayer.active;
+    if (active && (active.busy || active._submitInFlight)) {
+      return;
+    }
+    if (
+      cpLayer._closingViaHistory
+      && !(active?.busy || active?._submitInFlight)
+    ) {
       settleHistoryPopWaiters();
       return;
     }
-    const active = cpLayer.active;
     if (!active) {
       if (!cpLayer._historyPushed && history.state && history.state.cpDialog) {
         try {
@@ -171,9 +177,6 @@
         pushHistory(active.id);
         return;
       }
-    }
-    if (active.busy || active._submitInFlight) {
-      return;
     }
     cpLayer._popstateClosing = true;
     cpLayer._closingViaHistory = true;
@@ -440,7 +443,7 @@
     }
 
     cancel(reason) {
-      if (this.busy) return;
+      if (this.busy && reason !== "history") return;
       if (reason === "history") cpLayer._closingViaHistory = true;
       this._finish(null, reason);
     }
