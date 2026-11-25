@@ -151,7 +151,8 @@ end;
 
 procedure EvaluatePgDataForFreshInstall;
 var
-  PgPath, VerFile, MajorRead, Content: String;
+  PgPath, VerFile, MajorRead: String;
+  Content: AnsiString;
 begin
   if not IsFirstInstall then Exit;
   PgPath := ExpandConstant('{commonappdata}\Checkpoint\pgdata');
