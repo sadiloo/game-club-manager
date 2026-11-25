@@ -91,6 +91,10 @@ const headLayer = fs.readFileSync(
   "utf8",
 );
 const oldLayer = fs.readFileSync(path.join(here, "fixtures/cp-layer-pre-r14d-popstate.mjs"), "utf8");
+const noBusyGuardLayer = fs.readFileSync(
+  path.join(here, "fixtures/cp-layer-no-busy-popstate-guard.mjs"),
+  "utf8",
+);
 
 for (const delay of [0, 30, 100]) {
   await runStalePopstateScenario(delay, headLayer);
@@ -108,16 +112,16 @@ for (const delay of [0, 30, 100]) {
   }
 }
 
-{
+async function runHb1BusyGuardScenario(layerSource, expectKeepOpen) {
   const { window, document, history, runInApp, ctx } = loadOperatorApp("http://localhost/operator/", {
     trackKeydown: false,
-    layerSource: headLayer,
+    layerSource,
   });
   history.pushState({ page: "start" }, "", "/start/");
   history.pushState({ page: "operator" }, "", "/operator/");
   const cap = installFetchCapture(window, ctx);
   cap.stub(`/api/operator/members/customers/${CUSTOMER}/wallet`, "GET", { realToman: 0, giftToman: 0, spendableToman: 0 });
-  runInApp(`displayedLinkedCustomer = { id: "${CUSTOMER}", name: "T" }; window.__hb1StaleCancel = false;`);
+  runInApp(`displayedLinkedCustomer = { id: "${CUSTOMER}", name: "T" };`);
   cap.stub(`/api/operator/members/customers/${CUSTOMER}/wallet/top-ups`, "GET", [
     { topUpGroupId: TOPUP_GROUP, method: "Cash", currentAmountToman: 1000, currentGiftToman: 0, atUtc: "2025-01-01T00:00:00Z" },
   ]);
@@ -133,13 +137,25 @@ for (const delay of [0, 30, 100]) {
   await clickCpSubmit(document);
   await waitFor(() => runInApp("window.cpLayer.active?.busy === true"), "HB1 submit busy");
   dispatchStalePopstate(window);
-  if (runInApp("window.__hb1StaleCancel === true")) {
-    throw new Error("HB1: stale popstate cancelled during busy submit");
-  }
+  const stillBusy = runInApp("window.cpLayer.active?.busy === true");
   const root = document.getElementById("cpLayer");
-  if (!root || root.classList.contains("hidden")) {
-    throw new Error("HB1: layer hidden during busy submit after stale popstate");
+  const hidden = !root || root.classList.contains("hidden");
+  if (expectKeepOpen) {
+    if (!stillBusy) throw new Error("HB1: submit must stay busy after stale popstate");
+    if (hidden) throw new Error("HB1: layer hidden during busy submit after stale popstate");
+  } else if (!hidden && stillBusy) {
+    throw new Error("mutant busy-guard: stale popstate must cancel during busy submit");
   }
+}
+
+await runHb1BusyGuardScenario(headLayer, true);
+
+if (!headLayer.includes("active.busy || active._submitInFlight")) {
+  throw new Error("HB1: shipped cp-layer must ignore stale popstate while submit busy");
+}
+
+if (!noBusyGuardLayer.includes("mutant R14e-N2: busy guard removed")) {
+  throw new Error("HB1 mutant fixture missing busy-guard removal");
 }
 
 if (!oldFailed) {

@@ -440,11 +440,10 @@ public sealed class InpageFormsPr51R14dTests(GameClubWebApplicationFactory facto
         var manager = await factory.CreateOperatorClientAsync("manager", "1234");
         var api = factory.CreateClientWithKey();
         var op = await factory.CreateOperatorClientAsync();
-        await manager.PutAsJsonAsync("/api/operator/members/settings/debt-floor", new { floorToman = 0L });
         var customerId = await CreateCustomerAsync(op);
         (await op.PostAsJsonAsync(
             $"/api/operator/members/customers/{customerId}/wallet/top-up",
-            new { method = "Cash", amountToman = 49_700L, commandId = Guid.NewGuid() })).EnsureSuccessStatusCode();
+            new { method = "Cash", amountToman = 60_000L, commandId = Guid.NewGuid() })).EnsureSuccessStatusCode();
         const string station = "PS5-R14D-ML2";
         await S3TestHelpers.RegisterConsole(api, op, station, 1);
         factory.Clock.SetTehran(2026, 6, 3, 14, 0);
@@ -463,18 +462,19 @@ public sealed class InpageFormsPr51R14dTests(GameClubWebApplicationFactory facto
             },
         };
         var preview = await op.PostAsJsonAsync($"/api/operator/sessions/{sessionId}/bill/preview", body);
-        Assert.Equal(HttpStatusCode.BadRequest, preview.StatusCode);
-        AssertPaymentInvalid(await ReadJsonAsync(preview));
-        var confirm = await op.PostAsJsonAsync($"/api/operator/sessions/{sessionId}/bill/confirm", body);
-        Assert.Equal(HttpStatusCode.BadRequest, confirm.StatusCode);
+        preview.EnsureSuccessStatusCode();
+        var confirm = await op.PostAsJsonAsync(
+            $"/api/operator/sessions/{sessionId}/bill/confirm",
+            new { previewCollectibleToman = 50_000L, payments = body.payments });
+        confirm.EnsureSuccessStatusCode();
         using var scope = factory.Services.CreateScope();
-        Assert.Equal(0, await scope.ServiceProvider.GetRequiredService<AppDbContext>().Invoices.CountAsync());
+        Assert.Equal(1, await scope.ServiceProvider.GetRequiredService<AppDbContext>().Invoices.CountAsync());
     }
 
     [Fact]
     public async Task gate_mutant_r14d_ml2_splitter_check_blocks_exact_mismatch_combo()
     {
-        await r14d_ml2_session_exact_wallet_cash_split_rejected_400();
+        await r14d_ml2_exact_wallet_tender_unknown_member_rejected_by_splitter();
     }
 
     [Fact]

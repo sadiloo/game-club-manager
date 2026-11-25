@@ -10,8 +10,8 @@ namespace GameClub.Server.Operator;
 public static class CounterPaymentRecording
 {
     /// <summary>
-    /// Mixed wallet+cash counter over-tender: Collect allocation uses exact cash (= collectible − wallet),
-    /// while typed payments stay for change and recorded lines.
+    /// Mixed wallet+cash (± card) counter over-tender: Collect allocation uses cash
+    /// (= collectible − wallet − non-cash except cash), while typed payments stay for change and recorded lines.
     /// </summary>
     public static IReadOnlyList<OperatorBillService.PaymentInput> PaymentsForCollectAllocation(
         long collectibleToman,
@@ -40,12 +40,31 @@ public static class CounterPaymentRecording
             .Where(p => OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet)
             .Sum(p => p.AmountToman);
 
-        var cashNeeded = collectibleToman - walletTotal;
+        var cardTotal = payments
+            .Where(p =>
+            {
+                var method = OperatorPaymentMethods.Parse(p.Method);
+                return method is PaymentMethod.CardReader or PaymentMethod.CardToCard;
+            })
+            .Sum(p => p.AmountToman);
+
+        var cashNeeded = collectibleToman - walletTotal - cardTotal;
         if (cashNeeded <= 0)
         {
-            return payments
-                .Where(p => OperatorPaymentMethods.Parse(p.Method) != PaymentMethod.Cash)
-                .ToList();
+            var resultNoCash = new List<OperatorBillService.PaymentInput>(payments.Count);
+            foreach (var pay in payments)
+            {
+                if (OperatorPaymentMethods.Parse(pay.Method) == PaymentMethod.Cash)
+                {
+                    resultNoCash.Add(pay with { AmountToman = 0 });
+                }
+                else
+                {
+                    resultNoCash.Add(pay);
+                }
+            }
+
+            return resultNoCash;
         }
 
         var result = new List<OperatorBillService.PaymentInput>(payments.Count);
@@ -113,6 +132,11 @@ public static class CounterPaymentRecording
             return false;
         }
 
+        if (hasWallet && hasCard && tendered > collectibleToman)
+        {
+            return false;
+        }
+
         return SumNonCashRecorded(payments, allocation) > collectibleToman;
     }
 
@@ -126,6 +150,18 @@ public static class CounterPaymentRecording
             return;
         }
 
+        var hasWallet = payments.Any(p => OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet);
+        var hasCard = payments.Any(p =>
+        {
+            var method = OperatorPaymentMethods.Parse(p.Method);
+            return method is PaymentMethod.CardReader or PaymentMethod.CardToCard;
+        });
+        var tendered = payments.Sum(p => p.AmountToman);
+        if (hasWallet && hasCard && tendered > collectibleToman)
+        {
+            return;
+        }
+
         var nonCashRecorded = SumNonCashRecorded(payments, allocation);
         if (nonCashRecorded > collectibleToman)
         {
@@ -135,7 +171,6 @@ public static class CounterPaymentRecording
                 "جمع پرداخت غیرنقدی از مبلغ قابل پرداخت بیشتر است.");
         }
 
-        var tendered = payments.Sum(p => p.AmountToman);
         if (tendered < collectibleToman)
         {
             var walletOnly = payments.All(p => OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet);

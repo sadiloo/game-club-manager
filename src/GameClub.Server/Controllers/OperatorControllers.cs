@@ -302,6 +302,9 @@ public sealed class OperatorPanelController(
     public async Task<IActionResult> ConfirmBill(Guid sessionId, ConfirmRequest body, CancellationToken ct)
     {
         var invoice = await bills.ConfirmBillAsync(sessionId, body.Payments, body.PreviewCollectibleToman, ct);
+        var changeToman = CounterPaymentRecording.ComputeChangeToman(
+            invoice.CollectibleToman,
+            body.Payments ?? Array.Empty<OperatorBillService.PaymentInput>());
         return Ok(new
         {
             invoice.Number,
@@ -311,6 +314,7 @@ public sealed class OperatorPanelController(
             surchargeToman = invoice.SurchargeToman,
             billedToUtc = invoice.BilledToUtc,
             status = invoice.Status,
+            changeToman,
         });
     }
 
