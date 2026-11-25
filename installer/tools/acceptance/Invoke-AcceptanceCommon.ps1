@@ -244,6 +244,17 @@ function Start-CheckpointServerSetup {
 
         $foreign = @(Get-CheckpointServerSetupProcesses | Where-Object { $legPids -notcontains $_.Id })
         if ($foreign.Count -gt 0) {
+            $bootstrapTmpOnly = (
+                ($foreign | Where-Object { $_.ProcessName -like 'CheckpointServerSetup*.tmp' }).Count -eq $foreign.Count
+            )
+            if ($bootstrapTmpOnly -and -not $leaderDone) {
+                foreach ($tmp in $foreign) {
+                    if ($legPids -notcontains $tmp.Id) { $legPids += $tmp.Id }
+                }
+                $foreign = @()
+            }
+        }
+        if ($foreign.Count -gt 0) {
             Write-SetupProcessFailureUiText -Reason "foreign CheckpointServerSetup* during leg $LegLabel" -ProcessIds @($foreign | ForEach-Object { $_.Id })
             throw "setup leg pin: foreign setup PID(s) during $LegLabel : $(($foreign | ForEach-Object { $_.ProcessName + ':' + $_.Id }) -join ', ')"
         }
@@ -362,14 +373,17 @@ function Assert-InnoSetupLogNoFailedRuns {
         $phase = ($lines[[Math]::Max(0, $i - 6)..$i] | Where-Object { $_ -match 'InstallPhase' } | Select-Object -Last 1)
         if (-not $phase) { $phase = "(unknown phase)" }
         Write-InstallerAcceptanceFailureDiagnostics
-        throw "Inno [Run] postinstall failed: $phase :: $($lines[$i])"
+        throw "Inno [Run] failed: $phase :: $($lines[$i])"
     }
 }
 
 function Assert-KioskPostinstallCompleted {
     param([string] $InnoLogPath)
     $kioskUser = "CheckpointKiosk"
-    $userOk = $null -ne (Get-LocalUser -Name $kioskUser -ErrorAction SilentlyContinue)
+    Import-Module Microsoft.PowerShell.LocalAccounts -ErrorAction Stop
+    $localUser = Get-LocalUser -Name $kioskUser -ErrorAction SilentlyContinue
+    $userOk = $null -ne $localUser
+    $passwordLocked = $userOk -and (-not $localUser.UserMayChangePassword) -and $localUser.PasswordNeverExpires
     $envUser = [Environment]::GetEnvironmentVariable("CHECKPOINT_KIOSK_USER", "Machine")
     $envOk = [string]::Equals($envUser, $kioskUser, [StringComparison]::OrdinalIgnoreCase)
     $guardOk = $null -ne (Get-Service CheckpointGuard -ErrorAction SilentlyContinue)
@@ -380,8 +394,8 @@ function Assert-KioskPostinstallCompleted {
             $logRun = $true
         }
     }
-    if (-not $logRun -or -not $userOk -or -not $envOk -or -not $guardOk) {
-        throw "B-5: kiosk-postinstall did not complete (innoRun=$logRun user=$userOk kioskUserEnv=$envOk guardSvc=$guardOk)"
+    if (-not $logRun -or -not $userOk -or -not $passwordLocked -or -not $envOk -or -not $guardOk) {
+        throw "B-5: kiosk-postinstall did not complete (innoRun=$logRun user=$userOk passwordLocked=$passwordLocked kioskUserEnv=$envOk guardSvc=$guardOk)"
     }
 }
 
@@ -453,6 +467,20 @@ function Write-InstallerAcceptanceFailureDiagnostics {
             }
     } else {
         Write-Host "installer acceptance diagnostics: log dir missing: $logDir"
+    }
+    $repoRoot = (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent)
+    $artifactLogRoot = Join-Path $repoRoot "artifacts/installer/acceptance-logs"
+    New-Item -ItemType Directory -Force -Path $artifactLogRoot | Out-Null
+    foreach ($b5Path in @(
+            (Join-Path $artifactLogRoot "b5-kiosk-install.log"),
+            (Join-Path $logDir "b5-kiosk-install.log")
+        )) {
+        if (-not (Test-Path -LiteralPath $b5Path)) { continue }
+        Write-Host "installer acceptance diagnostics: === tail b5 $b5Path ==="
+        Get-Content -LiteralPath $b5Path -Tail 120 -ErrorAction SilentlyContinue |
+            ForEach-Object { Write-Host "installer acceptance diagnostics: $_" }
+        Copy-Item -LiteralPath $b5Path -Destination (Join-Path $artifactLogRoot "b5-kiosk-install.log") -Force -ErrorAction SilentlyContinue
+        break
     }
 }
 

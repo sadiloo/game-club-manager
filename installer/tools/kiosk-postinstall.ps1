@@ -6,6 +6,8 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+Import-Module Microsoft.PowerShell.Security -ErrorAction Stop
+Import-Module Microsoft.PowerShell.LocalAccounts -ErrorAction Stop
 
 function Write-KioskInstallStep {
     param([string] $Message)
@@ -32,13 +34,15 @@ $securePassword = ConvertTo-SecureString $password -AsPlainText -Force
 try {
     $existing = Get-LocalUser -Name $KioskUser -ErrorAction SilentlyContinue
     if ($existing) {
-        Set-LocalUser -Name $KioskUser -Password $securePassword | Out-Null
+        Set-LocalUser -Name $KioskUser -Password $securePassword -ErrorAction Stop | Out-Null
         Write-KioskInstallStep "updated existing local user"
     } else {
-        New-LocalUser -Name $KioskUser -Password $securePassword -PasswordNeverExpires -ErrorAction Stop | Out-Null
+        New-LocalUser -Name $KioskUser -Password $securePassword -PasswordNeverExpires -UserMayNotChangePassword -ErrorAction Stop | Out-Null
         Add-LocalGroupMember -Group "Users" -Member $KioskUser -ErrorAction SilentlyContinue
         Write-KioskInstallStep "created local user"
     }
+    Set-LocalUser -Name $KioskUser -UserMayNotChangePassword $true -PasswordNeverExpires $true -ErrorAction Stop | Out-Null
+    Write-KioskInstallStep "kiosk account password change disabled"
 } catch {
     Write-Host "kiosk-postinstall: user setup failed: $($_.Exception.Message)"
     throw
