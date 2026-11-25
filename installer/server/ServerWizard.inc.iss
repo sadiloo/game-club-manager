@@ -974,13 +974,16 @@ begin
   ScriptPath := ExpandConstant('{app}\tools\Test-CheckpointPgDataCluster.ps1');
   OutFile := ExpandConstant('{tmp}\pgdata-probe.txt');
   if not FileExists(ScriptPath) then Exit;
-  if Exec('powershell.exe', '-NoProfile -ExecutionPolicy Bypass -File "' + ScriptPath + '" > "' + OutFile + '"', '', SW_HIDE, ewWaitUntilTerminated, Rc) then
-    if LoadStringsFromFile(OutFile, Lines) and (GetArrayLength(Lines) > 0) then
+  DeleteFile(OutFile);
+  if Exec('powershell.exe', '-NoProfile -ExecutionPolicy Bypass -File "' + ScriptPath + '" -ResultFile "' + OutFile + '"', '', SW_HIDE, ewWaitUntilTerminated, Rc) then
+    if (Rc = 0) and LoadStringsFromFile(OutFile, Lines) and (GetArrayLength(Lines) > 0) then
     begin
       Line := Trim(Lines[0]);
       Result := (Line = 'VALID');
       Log('CHECKPOINT_PGDATA_PROBE result=' + Line);
-    end;
+    end
+  else
+    Log('CHECKPOINT_PGDATA_PROBE exec_failed rc=' + IntToStr(Rc));
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
