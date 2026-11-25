@@ -471,6 +471,8 @@ public sealed class OperatorBuffetSaleService(
                 effective);
             OperatorBillService.RejectWalletOnlyBelowUnroundedGap(amounts, effective);
             await bills.RejectWalletTypedAboveAutoDrawAsync(sale.CustomerId, amounts.CollectibleToman, null, effective, innerCt);
+            await bills.RejectWalletTypedAboveSpendableInMixedAsync(sale.CustomerId, amounts.CollectibleToman, null, effective, innerCt);
+            OperatorBillService.RejectMixedUnderRoundedCollectible(amounts, effective);
             bills.ValidatePayments(amounts.CollectibleToman, effective, amounts.Detail, sale.CustomerId);
             await db.Entry(sale).Collection(o => o.Lines).Query().Include(l => l.CatalogItem).LoadAsync(innerCt);
             var invoice = await closer.FinalizeBuffetOnlyAsync(sale, bill, effective, amounts, innerCt);

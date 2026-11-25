@@ -434,16 +434,17 @@ public sealed class InpageFormsPr51R14dTests(GameClubWebApplicationFactory facto
     }
 
     [Fact]
-    public async Task r14d_ml2_session_exact_wallet_cash_split_rejected_400()
+    public async Task r14d_ml2_session_exact_wallet_cash_split_settles_50000()
     {
         await S3TestHelpers.ResetAsync(factory);
         var manager = await factory.CreateOperatorClientAsync("manager", "1234");
         var api = factory.CreateClientWithKey();
         var op = await factory.CreateOperatorClientAsync();
+        await manager.PutAsJsonAsync("/api/operator/members/settings/debt-floor", new { floorToman = 0L });
         var customerId = await CreateCustomerAsync(op);
         (await op.PostAsJsonAsync(
             $"/api/operator/members/customers/{customerId}/wallet/top-up",
-            new { method = "Cash", amountToman = 60_000L, commandId = Guid.NewGuid() })).EnsureSuccessStatusCode();
+            new { method = "Cash", amountToman = 49_700L, commandId = Guid.NewGuid() })).EnsureSuccessStatusCode();
         const string station = "PS5-R14D-ML2";
         await S3TestHelpers.RegisterConsole(api, op, station, 1);
         factory.Clock.SetTehran(2026, 6, 3, 14, 0);

@@ -134,6 +134,12 @@ public static class WalletShortRemainderSupport
             return;
         }
 
+        if (wallet.AmountToman + cashTotal == collectibleToman
+            && wallet.AmountToman <= snapshot.WalletAutoDrawToman)
+        {
+            return;
+        }
+
         if (wallet.AmountToman == snapshot.WalletAutoDrawToman && cashTotal == snapshot.RemainderToman)
         {
             return;

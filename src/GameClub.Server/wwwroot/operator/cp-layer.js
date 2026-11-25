@@ -10,7 +10,9 @@
     _toastTimer: null,
     _historyPushed: false,
     _closingViaHistory: false,
+    _popstateClosing: false,
     _historyPopWaiters: [],
+    _submitClosing: false,
   };
 
   function isPhone() {
@@ -43,6 +45,18 @@
     }
   }
 
+  function releaseCpHistoryWithoutBack() {
+    cpLayer._historyPushed = false;
+    cpLayer._closingViaHistory = false;
+    cpLayer._popstateClosing = false;
+    try {
+      if (history.state && history.state.cpDialog) {
+        history.replaceState(null, "", window.location.href);
+      }
+    } catch (_) {}
+    return Promise.resolve();
+  }
+
   function pushHistory(id) {
     try {
       const url = typeof window !== "undefined" && window.location ? window.location.href : "";
@@ -60,17 +74,50 @@
       } catch (_) {}
     }
     cpLayer._closingViaHistory = false;
+    cpLayer._popstateClosing = false;
     try {
-      if (!cpLayer.active && history.state && history.state.cpDialog) {
+      if (!cpLayer.active && cpLayer._historyPushed && history.state && history.state.cpDialog) {
         history.back();
       }
     } catch (_) {}
   }
 
   function popHistoryIfNeeded() {
-    if (!cpLayer._historyPushed) return Promise.resolve();
+    if (!cpLayer._historyPushed) {
+      if (cpLayer._closingViaHistory && !cpLayer._historyPopWaiters.length) {
+        cpLayer._closingViaHistory = false;
+      }
+      return Promise.resolve();
+    }
     if (cpLayer._closingViaHistory) {
+      if (cpLayer._popstateClosing) {
+        cpLayer._popstateClosing = false;
+        cpLayer._historyPushed = false;
+        cpLayer._closingViaHistory = false;
+        return Promise.resolve();
+      }
+      if (cpLayer.active) {
+        cpLayer._closingViaHistory = false;
+        cpLayer._historyPushed = true;
+        try {
+          history.back();
+        } catch (_) {
+          settleHistoryPopWaiters();
+        }
+        return new Promise((resolve) => {
+          cpLayer._historyPopWaiters.push(resolve);
+        });
+      }
+      const hadHistory = cpLayer._historyPushed;
       cpLayer._historyPushed = false;
+      cpLayer._closingViaHistory = false;
+      if (hadHistory) {
+        try {
+          history.back();
+        } catch (_) {
+          settleHistoryPopWaiters();
+        }
+      }
       return Promise.resolve();
     }
     cpLayer._closingViaHistory = true;
@@ -94,13 +141,21 @@
 
   if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
   window.addEventListener("popstate", (ev) => {
+    const root = document.getElementById("cpLayer");
+    if (cpLayer.active && root && root.classList.contains("hidden")) {
+      cpLayer.active = null;
+    }
+    if (cpLayer._submitClosing) {
+      settleHistoryPopWaiters();
+      return;
+    }
     if (cpLayer._closingViaHistory) {
       settleHistoryPopWaiters();
       return;
     }
     const active = cpLayer.active;
     if (!active) {
-      if (history.state && history.state.cpDialog) {
+      if (!cpLayer._historyPushed && history.state && history.state.cpDialog) {
         try {
           history.back();
         } catch (_) {}
@@ -117,6 +172,7 @@
     if (active.busy || active._submitInFlight) {
       return;
     }
+    cpLayer._popstateClosing = true;
     cpLayer._closingViaHistory = true;
     active.cancel("history");
   });
@@ -383,7 +439,7 @@
     cancel(reason) {
       if (this.busy) return;
       if (reason === "history") cpLayer._closingViaHistory = true;
-      this._finish(null);
+      this._finish(null, reason);
     }
 
     _detachKeydown() {
@@ -394,18 +450,38 @@
       }
     }
 
-    _finish(value) {
+    async _finish(value, reason) {
       this._detachKeydown();
-      const historyPop = popHistoryIfNeeded();
       lockBodyScroll(false);
       const root = ensureRoot();
       root.replaceChildren();
       root.classList.add("hidden");
       const prev = cpLayer.active;
       cpLayer.active = null;
+      let historyPop;
+      if (reason === "submit-success") {
+        if ((this.spec.fields?.length ?? 0) > 1) {
+          cpLayer._closingViaHistory = true;
+          historyPop = releaseCpHistoryWithoutBack();
+          settleHistoryPopWaiters();
+        } else {
+          cpLayer._submitClosing = true;
+          historyPop = popHistoryIfNeeded().finally(() => {
+            cpLayer._submitClosing = false;
+          });
+        }
+      } else if (reason && reason !== "history") {
+        historyPop = releaseCpHistoryWithoutBack();
+      } else {
+        historyPop = popHistoryIfNeeded();
+      }
       if (prev === this) {
         this.resolve(value);
-        void historyPop.then(() => drainQueue());
+        await historyPop;
+        if (root.classList.contains("hidden")) {
+          cpLayer.active = null;
+        }
+        drainQueue();
       }
     }
 
@@ -429,7 +505,7 @@
           this._setBusyUi(true);
           try {
             await spec.onSubmit(values);
-            this._finish(values);
+            await this._finish(values, "submit-success");
           } catch (e) {
             if (typeof spec.mapApiError === "function") {
               const fieldErrs = spec.mapApiError(e, values);
@@ -445,7 +521,7 @@
             this._setBusyUi(false);
           }
         } else {
-          this._finish(values);
+          await this._finish(values);
         }
       } finally {
         if (ownedSubmitLock) {
@@ -603,6 +679,9 @@
 
     root.replaceChildren(scrim, sheet);
     lockBodyScroll(true);
+    if (cpLayer._closingViaHistory && !cpLayer._historyPopWaiters.length) {
+      cpLayer._closingViaHistory = false;
+    }
     pushHistory(session.id);
     session._detachKeydown();
     const fieldCount = session.spec.fields?.length ?? 0;

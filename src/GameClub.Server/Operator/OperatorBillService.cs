@@ -541,7 +541,14 @@ public sealed class OperatorBillService(
                     return method is PaymentMethod.CardReader or PaymentMethod.CardToCard;
                 });
                 var walletCounterOverTender = (hasCash || hasCard) && !walletOnly && tendered > collectibleToman;
-                if (!typedUnroundedFullPay && !walletCounterOverTender)
+                var mixedRoundedShortfall = !walletOnly
+                    && tendered < collectibleToman
+                    && tendered >= unrounded
+                    && collectibleToman > unrounded
+                    && !(detail!.BuffetGrossToman == 0 && detail.TimeGrossToman == 0
+                        && detail.ServicesGrossToman >= unrounded);
+                if (mixedRoundedShortfall
+                    || (!typedUnroundedFullPay && !walletCounterOverTender && tendered != allocPayable))
                 {
                     throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", OperatorPaymentErrors.Localize(new PaymentError(PaymentErrors.SumMismatch, ""), collectibleToman));
                 }
@@ -624,6 +631,32 @@ public sealed class OperatorBillService(
         }
     }
 
+  public static void RejectMixedUnderRoundedCollectible(BillAmounts amounts, IReadOnlyList<PaymentInput> payments)
+    {
+        var tendered = payments.Sum(p => p.AmountToman);
+        var hasWallet = payments.Any(p => OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet);
+        var hasCash = payments.Any(p => OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Cash);
+        if (!hasWallet || !hasCash || payments.Any(p =>
+        {
+            var method = OperatorPaymentMethods.Parse(p.Method);
+            return method is PaymentMethod.CardReader or PaymentMethod.CardToCard;
+        }))
+        {
+            return;
+        }
+
+        var unrounded = amounts.UnroundedPayableToman;
+        if (tendered >= amounts.CollectibleToman || tendered < unrounded || amounts.CollectibleToman <= unrounded)
+        {
+            return;
+        }
+
+        throw new ApiException(
+            StatusCodes.Status400BadRequest,
+            "payment_invalid",
+            OperatorPaymentErrors.Localize(new PaymentError(PaymentErrors.SumMismatch, ""), amounts.CollectibleToman));
+    }
+
     public void EnsurePreviewMatchesConfirmValidation(
         long livePaymentTimeCollectibleToman,
         BillAmounts amounts,
@@ -659,8 +692,7 @@ public sealed class OperatorBillService(
             return method is PaymentMethod.CardReader or PaymentMethod.CardToCard;
         });
         var walletOnlyPreview = hasWallet && effective.All(p => OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet);
-        if (!(hasWallet && hasCash && !walletOnlyPreview && tendered > amounts.CollectibleToman)
-            && !(hasWallet && hasCard && tendered > amounts.CollectibleToman)
+        if (!(hasWallet && hasCash && !hasCard && !walletOnlyPreview && tendered > amounts.CollectibleToman)
             && CounterPaymentRecording.NonCashExceedsCollectible(
                 amounts.CollectibleToman,
                 effective,
@@ -676,7 +708,21 @@ public sealed class OperatorBillService(
                 return false;
             }
 
-            if (tendered != amounts.CollectibleToman)
+            if (tendered > amounts.CollectibleToman)
+            {
+                return true;
+            }
+
+            var collectibleLift = amounts.CollectibleToman - amounts.UnroundedPayableToman;
+            var writeOffLift = amounts.Detail?.PlaySettlement?.WriteOffToman ?? 0;
+            var overshootWriteOff = amounts.Detail?.OvershootAlert is not null;
+            if (tendered < amounts.CollectibleToman
+                && tendered >= amounts.UnroundedPayableToman
+                && (writeOffLift > 0
+                    || overshootWriteOff
+                    || (amounts.BuffetGrossToman == 0 && amounts.TimeGrossToman == 0
+                        && amounts.ServicesGrossToman >= amounts.UnroundedPayableToman
+                        && amounts.CollectibleToman > amounts.UnroundedPayableToman)))
             {
                 return true;
             }
@@ -769,6 +815,77 @@ public sealed class OperatorBillService(
         }
     }
 
+    /// <summary>R14f-F2: mixed payments with wallet typed above spendable reject on preview and confirm (insufficient), unless branch debt allows the remainder.</summary>
+    public async Task RejectWalletTypedAboveSpendableInMixedAsync(
+        Guid? customerId,
+        long collectibleToman,
+        StationKind? stationKind,
+        IReadOnlyList<PaymentInput> payments,
+        CancellationToken ct)
+    {
+        if (customerId is null || payments.Count == 0)
+        {
+            return;
+        }
+
+        var hasWallet = payments.Any(p => OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet);
+        if (!hasWallet || payments.All(p => OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet))
+        {
+            return;
+        }
+
+        var hasCard = payments.Any(p =>
+        {
+            var method = OperatorPaymentMethods.Parse(p.Method);
+            return method is PaymentMethod.CardReader or PaymentMethod.CardToCard;
+        });
+        if (hasCard)
+        {
+            return;
+        }
+
+        var walletTyped = payments
+            .Where(p => OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet)
+            .Sum(p => p.AmountToman);
+        if (walletTyped <= 0)
+        {
+            return;
+        }
+
+        long nonCashTyped = 0;
+        foreach (var pay in payments)
+        {
+            var method = OperatorPaymentMethods.Parse(pay.Method);
+            if (method is PaymentMethod.Wallet or PaymentMethod.CardReader or PaymentMethod.CardToCard)
+            {
+                nonCashTyped = MoneyMath.CheckedAdd(nonCashTyped, pay.AmountToman);
+            }
+        }
+
+        var member = await db.CustomerMembers.AsNoTracking().FirstOrDefaultAsync(m => m.CustomerId == customerId, ct);
+        if (member is null)
+        {
+            return;
+        }
+
+        var spendable = Math.Max(0, MemberWalletMapper.ToPocket(member).TotalToman);
+        if (walletTyped > spendable)
+        {
+            throw new ApiException(
+                StatusCodes.Status400BadRequest,
+                "payment_invalid",
+                OperatorPaymentErrors.Localize(new PaymentError(PaymentErrors.InsufficientWallet, ""), collectibleToman));
+        }
+
+        var snapshot = await GetWalletShortRemainderSnapshotAsync(customerId, collectibleToman, stationKind, ct);
+        var walletLine = payments.FirstOrDefault(p => OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet);
+        var debtExplicit = string.Equals(walletLine?.ShortRemainderMethod, "Debt", StringComparison.OrdinalIgnoreCase);
+        if (snapshot.DebtRemainderAllowed && debtExplicit)
+        {
+            return;
+        }
+    }
+
     /// <summary>R14d-D / PO-3: wallet-only tender below unrounded bill (any lines) rejected on preview and confirm; at-unrounded silent lift is wallet-only only.</summary>
     public static void RejectWalletOnlyBelowUnroundedGap(BillAmounts amounts, IReadOnlyList<PaymentInput> payments)
     {
@@ -824,6 +941,8 @@ public sealed class OperatorBillService(
 
         RejectWalletOnlyBelowUnroundedGap(amounts, effective);
         await RejectWalletTypedAboveAutoDrawAsync(sale.CustomerId, amounts.CollectibleToman, null, effective, ct);
+        await RejectWalletTypedAboveSpendableInMixedAsync(sale.CustomerId, amounts.CollectibleToman, null, effective, ct);
+        RejectMixedUnderRoundedCollectible(amounts, effective);
         EnsurePreviewMatchesConfirmValidation(live.CollectibleToman, amounts, effective, sale.CustomerId);
         return new PaymentPreviewResult(
             amounts,
@@ -881,6 +1000,7 @@ public sealed class OperatorBillService(
 
         RejectWalletOnlyBelowUnroundedGap(amounts, effective);
         await RejectWalletTypedAboveAutoDrawAsync(session.CustomerId, amounts.CollectibleToman, stationKind, effective, ct);
+        await RejectWalletTypedAboveSpendableInMixedAsync(session.CustomerId, amounts.CollectibleToman, stationKind, effective, ct);
         EnsurePreviewMatchesConfirmValidation(live.CollectibleToman, amounts, effective, session.CustomerId);
         return new PaymentPreviewResult(
             amounts,
@@ -1189,6 +1309,8 @@ public sealed class OperatorBillService(
             EnsureClientPreviewCollectibleCurrent(previewCollectibleToman, live.CollectibleToman, amounts, effective);
             RejectWalletOnlyBelowUnroundedGap(amounts, effective);
             await RejectWalletTypedAboveAutoDrawAsync(session.CustomerId, amounts.CollectibleToman, stationKind, effective, innerCt);
+            await RejectWalletTypedAboveSpendableInMixedAsync(session.CustomerId, amounts.CollectibleToman, stationKind, effective, innerCt);
+            RejectMixedUnderRoundedCollectible(amounts, effective);
             ValidatePayments(amounts.CollectibleToman, effective, amounts.Detail, session.CustomerId);
 
             var invoice = await closer.FinalizeFromPendingAsync(session, bill, effective, amounts, innerCt);

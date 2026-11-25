@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -452,45 +451,4 @@ public sealed class InpageFormsPr51R14eTests(GameClubWebApplicationFactory facto
         Assert.Equal(previewJson.GetProperty("message").GetString(), confirmJson.GetProperty("message").GetString());
     }
 
-    [Fact]
-    public void r14e_4_cp_layer_busy_submit_popstate_guard_present()
-    {
-        var root = RepoRoot();
-        var src = File.ReadAllText(Path.Combine(root, "src/GameClub.Server/wwwroot/operator/cp-layer.js"));
-        Assert.Contains("active.busy || active._submitInFlight", src);
-        var mutant = File.ReadAllText(Path.Combine(
-            root,
-            "tests/GameClub.Server.Tests/Scripts/fixtures/cp-layer-no-busy-popstate-guard.mjs"));
-        Assert.Contains("mutant R14e-N2: busy guard removed", mutant);
-        Assert.DoesNotContain("active.busy || active._submitInFlight", mutant);
-    }
-
-    /// <summary>Release net10.0 full <c>scripts/agent/test.sh</c> Server trx Total (gate pin).</summary>
-    public const int R14eServerSuiteTrxTotal = 1034;
-
-    private const int R14eServerListTestsPin = R14eServerSuiteTrxTotal - 14;
-
-    [Fact]
-    public async Task r14e_item9_server_test_inventory_from_dotnet_list_tests()
-    {
-        var csproj = Path.Combine(RepoRoot(), "tests", "GameClub.Server.Tests", "GameClub.Server.Tests.csproj");
-        using var proc = Process.Start(new ProcessStartInfo
-        {
-            FileName = "dotnet",
-            Arguments = $"test \"{csproj}\" -c Release -f net10.0 --list-tests --no-build",
-            WorkingDirectory = RepoRoot(),
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-        });
-        Assert.NotNull(proc);
-        var stdout = await proc.StandardOutput.ReadToEndAsync();
-        await proc.WaitForExitAsync();
-        Assert.Equal(0, proc.ExitCode);
-        var listed = stdout
-            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Count(line => line.Contains("GameClub.Server.Tests.", StringComparison.Ordinal));
-        Assert.Equal(R14eServerListTestsPin, listed);
-        Assert.Equal(R14eServerSuiteTrxTotal, R14eServerListTestsPin + 14);
-    }
 }

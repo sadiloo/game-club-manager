@@ -347,7 +347,7 @@ public sealed class InpageFormsPr51R5RoundingSettingsTests(GameClubWebApplicatio
     }
 
     [Fact]
-    public async Task f05_scenario_s5_short_wallet_wrong_split_no_method_rejected_400()
+    public async Task f05_scenario_s5_ml2_wallet49500_cash500_floor_zero_settles_50000()
     {
         await S3TestHelpers.ResetAsync(factory);
         var manager = await factory.CreateOperatorClientAsync("manager", "1234");
@@ -359,21 +359,24 @@ public sealed class InpageFormsPr51R5RoundingSettingsTests(GameClubWebApplicatio
             new { method = "Cash", amountToman = 49_700L, commandId = Guid.NewGuid() })).EnsureSuccessStatusCode();
         var before = await WalletSpendableAsync(op, customerId);
         var openSaleId = await BuffetOpenAsync(op, customerId, 49_500L);
+        var payments = new[]
+        {
+            new { method = "Wallet", amountToman = 49_500L },
+            new { method = "Cash", amountToman = 500L },
+        };
+        var preview = await op.PostAsJsonAsync(
+            $"/api/operator/buffet-only/{openSaleId}/bill/preview",
+            new { payments });
+        preview.EnsureSuccessStatusCode();
+        var previewCollectible = (await preview.Content.ReadFromJsonAsync<JsonElement>())!.GetProperty("bill").GetProperty("collectibleToman").GetInt64();
+        Assert.Equal(50_000, previewCollectible);
         var confirm = await op.PostAsJsonAsync(
             $"/api/operator/buffet-only/{openSaleId}/confirm",
-            new
-            {
-                payments = new[]
-                {
-                    new { method = "Wallet", amountToman = 49_500L },
-                    new { method = "Cash", amountToman = 500L },
-                },
-            });
-        Assert.Equal(HttpStatusCode.BadRequest, confirm.StatusCode);
-        AssertPaymentInvalid(await ReadJsonAsync(confirm));
-        Assert.Equal(before, await WalletSpendableAsync(op, customerId));
+            new { payments });
+        confirm.EnsureSuccessStatusCode();
+        Assert.Equal(before - 49_500, await WalletSpendableAsync(op, customerId));
         using var scope = factory.Services.CreateScope();
-        Assert.Equal(0, await scope.ServiceProvider.GetRequiredService<AppDbContext>().Invoices.CountAsync());
+        Assert.Equal(1, await scope.ServiceProvider.GetRequiredService<AppDbContext>().Invoices.CountAsync());
     }
 
     [Fact]

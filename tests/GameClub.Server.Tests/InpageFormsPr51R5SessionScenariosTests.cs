@@ -163,7 +163,7 @@ public sealed class InpageFormsPr51R5SessionScenariosTests(GameClubWebApplicatio
     }
 
     [Fact]
-    public async Task f05_scenario_ss5_session_wrong_split_floor_zero_rejected_400()
+    public async Task f05_scenario_ss5_session_ml2_wallet49500_cash500_floor_zero_settles_50000()
     {
         await S3TestHelpers.ResetAsync(factory);
         var manager = await factory.CreateOperatorClientAsync("manager", "1234");
@@ -185,14 +185,16 @@ public sealed class InpageFormsPr51R5SessionScenariosTests(GameClubWebApplicatio
             },
         };
         var preview = await op.PostAsJsonAsync($"/api/operator/sessions/{sessionId}/bill/preview", body);
-        Assert.Equal(HttpStatusCode.BadRequest, preview.StatusCode);
-        AssertPaymentInvalid(await ReadJsonAsync(preview));
-        var confirm = await op.PostAsJsonAsync($"/api/operator/sessions/{sessionId}/bill/confirm", body);
-        Assert.Equal(HttpStatusCode.BadRequest, confirm.StatusCode);
-        AssertPaymentInvalid(await ReadJsonAsync(confirm));
-        Assert.Equal(before, await WalletSpendableAsync(op, customerId));
+        preview.EnsureSuccessStatusCode();
+        var previewCollectible = (await preview.Content.ReadFromJsonAsync<JsonElement>())!.GetProperty("collectibleToman").GetInt64();
+        Assert.Equal(50_000, previewCollectible);
+        var confirm = await op.PostAsJsonAsync(
+            $"/api/operator/sessions/{sessionId}/bill/confirm",
+            new { previewCollectibleToman = previewCollectible, payments = body.payments });
+        confirm.EnsureSuccessStatusCode();
+        Assert.Equal(before - 49_500, await WalletSpendableAsync(op, customerId));
         using var scope = factory.Services.CreateScope();
-        Assert.Equal(0, await scope.ServiceProvider.GetRequiredService<AppDbContext>().Invoices.CountAsync());
+        Assert.Equal(1, await scope.ServiceProvider.GetRequiredService<AppDbContext>().Invoices.CountAsync());
     }
 
     [Fact]

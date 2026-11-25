@@ -127,12 +127,7 @@ public static class CounterPaymentRecording
         }
 
         var tendered = payments.Sum(p => p.AmountToman);
-        if (hasWallet && hasCash && !walletOnly && tendered > collectibleToman)
-        {
-            return false;
-        }
-
-        if (hasWallet && hasCard && tendered > collectibleToman)
+        if (hasWallet && hasCash && !hasCard && !walletOnly && tendered > collectibleToman)
         {
             return false;
         }
@@ -150,18 +145,7 @@ public static class CounterPaymentRecording
             return;
         }
 
-        var hasWallet = payments.Any(p => OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet);
-        var hasCard = payments.Any(p =>
-        {
-            var method = OperatorPaymentMethods.Parse(p.Method);
-            return method is PaymentMethod.CardReader or PaymentMethod.CardToCard;
-        });
         var tendered = payments.Sum(p => p.AmountToman);
-        if (hasWallet && hasCard && tendered > collectibleToman)
-        {
-            return;
-        }
-
         var nonCashRecorded = SumNonCashRecorded(payments, allocation);
         if (nonCashRecorded > collectibleToman)
         {

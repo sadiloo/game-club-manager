@@ -249,7 +249,7 @@ public sealed class InpageFormsPr51R5PaymentTimeGateTests(GameClubWebApplication
                 payments = new[]
                 {
                     new { method = "Wallet", amountToman = 49_500L },
-                    new { method = "Cash", amountToman = 500L },
+                    new { method = "Cash", amountToman = 200L },
                 },
             });
         Assert.Equal(HttpStatusCode.BadRequest, confirm.StatusCode);
@@ -282,7 +282,7 @@ public sealed class InpageFormsPr51R5PaymentTimeGateTests(GameClubWebApplication
                 payments = new[]
                 {
                     new { method = "Wallet", amountToman = 49_500L },
-                    new { method = "Cash", amountToman = 500L },
+                    new { method = "Cash", amountToman = 200L },
                 },
             });
         Assert.Equal(HttpStatusCode.BadRequest, confirm.StatusCode);
