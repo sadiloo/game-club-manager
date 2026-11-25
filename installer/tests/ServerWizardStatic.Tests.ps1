@@ -84,8 +84,8 @@
         $script:Inc | Should -Match "procedure CurRunFailed"
         $script:Inc | Should -Match "CHECKPOINT_POSTINSTALL_FAILED"
         $script:Inc | Should -Match "ExitProcess\(CHECKPOINT_EXIT_POSTINSTALL_FAILED\)"
-        $script:Iss | Should -Match "procedure AbortExistingDataKept"
-        $script:Iss | Should -Match "CHECKPOINT_EXISTING_DATA_KEPT"
+        $script:Inc | Should -Match "procedure AbortExistingDataKept"
+        $script:Inc | Should -Match "CHECKPOINT_EXISTING_DATA_KEPT"
         $exitCodes = Get-Content -LiteralPath (Join-Path $PSScriptRoot "..\ci\checkpoint-setup-exit-codes.ps1") -Raw
         $exitCodes | Should -Match "CheckpointSetupExitPostinstallFailed = 129"
         $exitCodes | Should -Match "CheckpointSetupExitExistingDataKept = 130"

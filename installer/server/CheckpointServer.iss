@@ -130,20 +130,6 @@ begin
   ExitProcess(CHECKPOINT_EXIT_DOWNGRADE_BLOCKED);
 end;
 
-procedure AbortExistingDataKept(const Reason: String);
-var
-  PgPath, LogPath: String;
-begin
-  PgPath := ExpandConstant('{commonappdata}\Checkpoint\pgdata');
-  Log('CHECKPOINT_EXISTING_DATA_KEPT reason=' + Reason + ' pgdata=' + PgPath);
-  LogPath := ExpandConstant('{log}');
-  if not WizardSilent then
-    MsgBox(
-      Format('پوشهٔ دادهٔ PostgreSQL از قبل وجود دارد و دست نخورده نگه داشته شد.%nمسیر: %s%nگزارش: %s', [PgPath, LogPath]),
-      mbError, MB_OK);
-  ExitProcess(CHECKPOINT_EXIT_EXISTING_DATA_KEPT);
-end;
-
 function InitializeSetup: Boolean;
 var Installed, NewVer: String; Cmp: Integer;
 begin
