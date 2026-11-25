@@ -9,7 +9,7 @@ const
 procedure ExitProcess(uExitCode: UINT);
   external 'ExitProcess@kernel32 stdcall';
 
-function SetEnvironmentVariable(lpName, lpValue: PChar; dwFlags: DWORD): BOOL;
+function SetEnvironmentVariable(lpName, lpValue: String; dwFlags: DWORD): BOOL;
   external 'SetEnvironmentVariableW@kernel32 stdcall';
 
 var
@@ -172,7 +172,7 @@ begin
   Phase := ExpandConstant('{param:TESTFAILPHASE|}');
   if Phase = '' then Exit;
   SetEnvironmentVariable('CHECKPOINT_INTERNAL_TEST_HOOKS', '1', 0);
-  SetEnvironmentVariable('CHECKPOINT_TEST_FAIL_PHASE', PChar(Phase), 0);
+  SetEnvironmentVariable('CHECKPOINT_TEST_FAIL_PHASE', Phase, 0);
   Log('CHECKPOINT_INTERNAL_TEST_HOOK phase=' + Phase);
 end;
 #endif
