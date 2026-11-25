@@ -28,12 +28,20 @@ if (-not (Test-Path -LiteralPath $guardExe)) { throw "Guard exe missing" }
 
 Write-KioskInstallStep "creating kiosk user"
 $password = New-CheckpointRandomPassword -Length 32
-$existing = Get-LocalUser -Name $KioskUser -ErrorAction SilentlyContinue
-if ($existing) {
-    Set-LocalUser -Name $KioskUser -Password (ConvertTo-SecureString $password -AsPlainText -Force) | Out-Null
-} else {
-    New-LocalUser -Name $KioskUser -Password (ConvertTo-SecureString $password -AsPlainText -Force) -UserMayNotChangePassword -PasswordNeverExpires | Out-Null
-    Add-LocalGroupMember -Group "Users" -Member $KioskUser -ErrorAction SilentlyContinue
+$securePassword = ConvertTo-SecureString $password -AsPlainText -Force
+try {
+    $existing = Get-LocalUser -Name $KioskUser -ErrorAction SilentlyContinue
+    if ($existing) {
+        Set-LocalUser -Name $KioskUser -Password $securePassword | Out-Null
+        Write-KioskInstallStep "updated existing local user"
+    } else {
+        New-LocalUser -Name $KioskUser -Password $securePassword -PasswordNeverExpires -ErrorAction Stop | Out-Null
+        Add-LocalGroupMember -Group "Users" -Member $KioskUser -ErrorAction SilentlyContinue
+        Write-KioskInstallStep "created local user"
+    }
+} catch {
+    Write-Host "kiosk-postinstall: user setup failed: $($_.Exception.Message)"
+    throw
 }
 
 $sid = (New-Object System.Security.Principal.NTAccount($KioskUser)).Translate([System.Security.Principal.SecurityIdentifier]).Value
