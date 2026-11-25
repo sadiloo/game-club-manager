@@ -1800,12 +1800,82 @@ public sealed class ShellPlanAIntegrationTests
 
     private static async Task WaitForPanelUnavailableOfflineAsync(
         Microsoft.Web.WebView2.Wpf.WebView2 wv,
+        TimeSpan timeout,
+        string? logBaseline = null)
+    {
+        var baseline = logBaseline ?? ReadShellLogSnapshot();
+        await AwaitShellLogLineAsync(
+            baseline,
+            line => line.Contains("branch=present-offline-navigated", StringComparison.Ordinal)
+                && line.Contains("offlineState=panel-unavailable", StringComparison.Ordinal),
+            timeout);
+        await AssertPanelUnavailableOfflineDomAsync(wv, TimeSpan.FromSeconds(10));
+    }
+
+    private static string ReadShellLogSnapshot()
+    {
+        var paths = Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log");
+        var builder = new System.Text.StringBuilder();
+        foreach (var path in paths)
+        {
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            using var reader = new StreamReader(stream);
+            builder.Append(reader.ReadToEnd());
+        }
+
+        return builder.ToString();
+    }
+
+    private static string LogDelta(string baseline) =>
+        baseline.Length == 0
+            ? ReadShellLogSnapshot()
+            : ReadShellLogSnapshot().Replace(baseline, "");
+
+    private static async Task<string> AwaitShellLogLineAsync(
+        string baseline,
+        Func<string, bool> linePredicate,
         TimeSpan timeout)
     {
-        var deadline = DateTime.UtcNow.Add(timeout);
+        var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var timeoutCts = new CancellationTokenSource(timeout);
+        timeoutCts.Token.Register(() =>
+            tcs.TrySetException(new TimeoutException("expected shell log line was not written")));
+
+        void TryMatch(object? _)
+        {
+            if (tcs.Task.IsCompleted)
+            {
+                return;
+            }
+
+            try
+            {
+                foreach (var line in LogDelta(baseline).Split('\n'))
+                {
+                    if (linePredicate(line))
+                    {
+                        tcs.TrySetResult(line);
+                        return;
+                    }
+                }
+            }
+            catch (IOException)
+            {
+            }
+        }
+
+        using var pollTimer = new Timer(TryMatch, null, TimeSpan.Zero, TimeSpan.FromMilliseconds(50));
+        TryMatch(null);
+        return await tcs.Task.ConfigureAwait(false);
+    }
+
+    private static async Task AssertPanelUnavailableOfflineDomAsync(
+        Microsoft.Web.WebView2.Wpf.WebView2 wv,
+        TimeSpan confirmTimeout)
+    {
+        var deadline = DateTime.UtcNow.Add(confirmTimeout);
         while (DateTime.UtcNow < deadline)
         {
-            await Task.Delay(300);
             var sample = UnquoteWebViewScriptString(
                 await wv.CoreWebView2.ExecuteScriptAsync(
                     "JSON.stringify({protocol: location.protocol, offline: document.documentElement.getAttribute('data-shell-offline-page'), title: (document.getElementById('title') || {}).innerText || ''})"));
@@ -1817,6 +1887,8 @@ public sealed class ShellPlanAIntegrationTests
             {
                 return;
             }
+
+            await Task.Delay(50);
         }
 
         throw new InvalidOperationException("panel-unavailable offline page did not appear");
