@@ -698,6 +698,44 @@ function Clear-InstallerDotNetTestProcessEnvironment {
     }
 }
 
+function Ensure-InstallerLiveOperatorUsersFromServerJson {
+    $json = Get-InstallerServerJson
+    $entries = @($json.InitialUsers)
+    if ($entries.Count -lt 1) { throw "server.json InitialUsers missing (cannot repair live operators)" }
+
+    $cs = [string]$json.ConnectionStrings.Default
+    $m = [regex]::Match($cs, 'Password=([^;]+)')
+    if (-not $m.Success) { throw "server.json connection string missing Password=" }
+    $env:PGPASSWORD = $m.Groups[1].Value
+    $psql = Get-InstallerPsqlExecutable
+
+    $existing = @(Get-InstallerOperatorUsernames)
+    $expected = @($entries | ForEach-Object { [string]$_.username })
+    $missing = @($expected | Where-Object { $existing -notcontains $_ })
+    if ($missing.Count -eq 0) { return }
+
+    Write-Host "installer acceptance: repairing live operator_users (missing: $($missing -join ', '))"
+    $sql = "DELETE FROM operator_users;"
+    foreach ($entry in $entries) {
+        $user = [string]$entry.username
+        $role = [string]$entry.role
+        if ($role -eq "Manager") { $roleNum = 1 } elseif ($role -eq "Operator") { $roleNum = 2 } else { $roleNum = 2 }
+        $hash = [string]$entry.pinHash
+        $id = [guid]::NewGuid().ToString()
+        $hashEsc = $hash.Replace("'", "''")
+        $userEsc = $user.Replace("'", "''")
+        $sql += "INSERT INTO operator_users (""Id"", ""Username"", ""PinHash"", ""Role"", ""IsActive"") VALUES ('$id', '$userEsc', '$hashEsc', $roleNum, true);"
+    }
+    $oldEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $out = & $psql -h 127.0.0.1 -p 5433 -U postgres -d checkpoint -v ON_ERROR_STOP=1 -c $sql 2>&1
+    } finally {
+        $ErrorActionPreference = $oldEap
+    }
+    if ($LASTEXITCODE -ne 0) { throw "repair operator_users failed: $out" }
+}
+
 function Get-InstallerOperatorUsernames {
     $json = Get-InstallerServerJson
     $cs = [string]$json.ConnectionStrings.Default

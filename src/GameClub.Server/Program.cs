@@ -103,6 +103,21 @@ public partial class Program
             ?? Environment.GetEnvironmentVariable("GAMECLUB_DATABASE")
             ?? "Host=localhost;Database=gameclub;Username=postgres;Password=postgres";
 
+        var isolatedTestCs = Environment.GetEnvironmentVariable("GAMECLUB_TEST_DATABASE");
+        if (!string.IsNullOrWhiteSpace(isolatedTestCs))
+        {
+            var isolated = new Npgsql.NpgsqlConnectionStringBuilder(isolatedTestCs);
+            var isolatedDb = isolated.Database;
+            if (string.IsNullOrWhiteSpace(isolatedDb)
+                || !isolatedDb.StartsWith("gameclub_test_", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "GAMECLUB_TEST_DATABASE must name a gameclub_test_* database, not live checkpoint.");
+            }
+
+            connectionString = isolated.ConnectionString;
+        }
+
         if (!builder.Environment.IsDevelopment())
         {
             var operatorSecret = builder.Configuration["OperatorSessionSecret"];

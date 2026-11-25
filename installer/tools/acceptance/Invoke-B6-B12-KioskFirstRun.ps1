@@ -18,6 +18,7 @@ try {
         & dotnet test tests/GameClub.Server.Tests/GameClub.Server.Tests.csproj -c Release -f net10.0 --filter "FullyQualifiedName~KioskSetupVerifyLockTests" --nologo
     }
     if ($LASTEXITCODE -ne 0) { throw "B-6 server verify tests failed" }
+    Ensure-InstallerLiveOperatorUsersFromServerJson
 }
 finally {
     Pop-Location
