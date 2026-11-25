@@ -406,6 +406,28 @@ function Get-InstallerServerJson {
     return Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
 }
 
+function Set-InstallerKioskDotNetTestEnvironment {
+    param([string] $AccountsFile)
+    Assert-InstallerServerServicesRunning
+    Write-AcceptanceHarnessTrace "Set-InstallerKioskDotNetTestEnvironment" {
+        $json = Get-InstallerServerJson
+        $cs = [string]$json.ConnectionStrings.Default
+        if ([string]::IsNullOrWhiteSpace($cs)) { throw "server.json ConnectionStrings.Default missing" }
+        $env:CHECKPOINT_SERVER_URL = "http://127.0.0.1:5000"
+        $env:GAMECLUB_DATABASE = $cs
+        $env:GAMECLUB_TEST_DATABASE = $cs
+        $env:GAMECLUB_API_KEY = [string]$json.GAMECLUB_API_KEY
+        if ($json.OperatorSessionSecret) {
+            $env:OperatorSessionSecret = [string]$json.OperatorSessionSecret
+        }
+        if ($AccountsFile -and (Test-Path -LiteralPath $AccountsFile)) {
+            $acc = Get-Content -LiteralPath $AccountsFile -Raw | ConvertFrom-Json
+            $env:CHECKPOINT_OPERATOR_USERNAME = [string]$acc.manager1User
+            $env:CHECKPOINT_OPERATOR_PIN = [string]$acc.manager1Pin
+        }
+    } | Out-Null
+}
+
 function Get-InstallerApiHeaders {
     $json = Get-InstallerServerJson
     $key = [string]$json.GAMECLUB_API_KEY

@@ -1,8 +1,11 @@
 ﻿param(
-    [string] $RepoRoot
+    [string] $RepoRoot,
+    [string] $AccountsFile
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "Invoke-AcceptanceCommon.ps1")
+Set-InstallerKioskDotNetTestEnvironment -AccountsFile $AccountsFile
 Write-Host "B-6 + B-12: dotnet tests (kiosk setup, admin lock, WPF smoke)"
 Push-Location $RepoRoot
 try {
