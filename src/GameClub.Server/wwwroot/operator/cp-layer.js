@@ -464,9 +464,10 @@
       let historyPop;
       if (reason === "submit-success") {
         if ((this.spec.fields?.length ?? 0) > 1) {
-          cpLayer._closingViaHistory = true;
-          historyPop = releaseCpHistoryWithoutBack();
-          settleHistoryPopWaiters();
+          cpLayer._submitClosing = true;
+          historyPop = popHistoryIfNeeded().finally(() => {
+            cpLayer._submitClosing = false;
+          });
         } else {
           cpLayer._submitClosing = true;
           historyPop = popHistoryIfNeeded().finally(() => {

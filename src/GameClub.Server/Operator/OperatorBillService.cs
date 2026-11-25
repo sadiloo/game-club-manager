@@ -468,7 +468,22 @@ public sealed class OperatorBillService(
                 throw new ApiException(StatusCodes.Status400BadRequest, "wallet_requires_member", "پرداخت کیف پول به عضو پیوسته نیاز دارد.");
             }
 
+            var tenderedForCounter = payments.Sum(p => p.AmountToman);
             var walletOnlyPay = payments.All(p => OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet);
+            var hasCashForCounter = payments.Any(p => OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Cash);
+            var hasCardForCounter = payments.Any(p =>
+            {
+                var method = OperatorPaymentMethods.Parse(p.Method);
+                return method is PaymentMethod.CardReader or PaymentMethod.CardToCard;
+            });
+            var mixedCounterOverTenderSettles = (hasCashForCounter || hasCardForCounter)
+                && !walletOnlyPay
+                && tenderedForCounter > collectibleToman;
+            if (mixedCounterOverTenderSettles)
+            {
+                CounterPaymentRecording.EnsureRecordable(collectibleToman, payments, detail?.Allocation);
+                return;
+            }
 
             if (detail is null || detail.Allocation is not { IsValid: true } alloc)
             {

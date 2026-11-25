@@ -25,6 +25,7 @@ namespace GameClub.Server.Tests;
 
 public class GameClubWebApplicationFactory : WebApplicationFactory<Program>
 {
+    private static readonly SemaphoreSlim OperatorLoginGate = new(1, 1);
     private bool _dropGeneratedDatabaseOnDispose;
     private string? _generatedDatabaseName;
     public TestMutableClock Clock { get; } = new(DateTimeOffset.UtcNow);
@@ -70,10 +71,18 @@ public class GameClubWebApplicationFactory : WebApplicationFactory<Program>
 
     public async Task<HttpClient> CreateOperatorClientAsync(string username = "operator", string pin = "1111")
     {
-        var client = CreateClient();
-        var login = await client.PostAsJsonAsync("/api/operator/auth/login", new { username, pin });
-        login.EnsureSuccessStatusCode();
-        return client;
+        await OperatorLoginGate.WaitAsync();
+        try
+        {
+            var client = CreateClient();
+            var login = await client.PostAsJsonAsync("/api/operator/auth/login", new { username, pin });
+            login.EnsureSuccessStatusCode();
+            return client;
+        }
+        finally
+        {
+            OperatorLoginGate.Release();
+        }
     }
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)

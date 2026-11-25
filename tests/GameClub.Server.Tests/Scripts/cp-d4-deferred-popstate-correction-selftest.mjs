@@ -145,7 +145,7 @@ async function runHb1BusyGuardScenario(layerSource, expectKeepOpen) {
     if (hidden) throw new Error("HB1: layer hidden during busy submit after stale popstate");
     return;
   }
-  if (!expectKeepOpen && (!hidden || !stillBusy)) {
+  if (!expectKeepOpen && (!hidden || stillBusy)) {
     throw new Error("HB1: stale popstate closed in-flight submit without busy guard");
   }
 }
@@ -166,45 +166,60 @@ if (!hb1MutantErr.includes("closed in-flight submit")) {
   throw new Error(`HB1: unexpected mutant failure: ${hb1MutantErr}`);
 }
 
-async function runCpd4xStackScenario(delayMs) {
-  const { window, document, history, runInApp, ctx } = loadOperatorApp("http://localhost/operator/", {
+async function runCpd4xStackScenario(delayMs, layerSource = headLayer) {
+  const { window, document, history, runInApp } = loadOperatorApp("http://localhost/operator/", {
     trackKeydown: false,
-    layerSource: headLayer,
+    layerSource,
   });
   history.pushState({ page: "start" }, "", "/start/");
   history.pushState({ page: "operator" }, "", "/operator/");
-  const cap = installFetchCapture(window, ctx);
-  cap.stub(`/api/operator/members/customers/${CUSTOMER}/wallet`, "GET", { realToman: 0, giftToman: 0, spendableToman: 0 });
-  runInApp(`displayedLinkedCustomer = { id: "${CUSTOMER}", name: "T" };`);
-  cap.stub(`/api/operator/members/customers/${CUSTOMER}/wallet/top-ups`, "GET", [
-    { topUpGroupId: TOPUP_GROUP, method: "Cash", currentAmountToman: 1000, currentGiftToman: 0, atUtc: "2025-01-01T00:00:00Z" },
-  ]);
-  void globalThis.walletCorrectTopUp();
-  await waitCpVisible(document);
-  history.back();
-  void window.cpPrompt({
-    title: "cpd4x B",
-    field: { kind: "money", label: "مبلغ", name: "amountToman", positive: true },
+  assertOnOperator(window);
+  const submitDone = window.cpForm({
+    title: "cpd4x",
+    fields: [
+      { kind: "money", label: "مبلغ", name: "amountToman", positive: true },
+      { kind: "money", label: "هدایا", name: "giftToman", positive: true },
+    ],
     onSubmit: () => {},
   });
   await waitCpVisible(document);
-  const input = document.querySelector('[data-cp-field="amountToman"] input');
-  if (input) input.value = "1000";
+  await fillMoneyField(document, "amountToman", "1000");
+  await fillMoneyField(document, "giftToman", "100");
   await clickCpSubmit(document);
+  await waitFor(() => runInApp("window.cpLayer._submitClosing === true"), "multi-field submit-success pop");
   if (delayMs === 0) {
     dispatchStalePopstate(window);
   } else {
     await new Promise((r) => setTimeout(r, delayMs));
     dispatchStalePopstate(window);
   }
+  await submitDone;
   await waitCpHidden(document);
   if (runInApp("window.cpLayer.active != null")) {
     throw new Error("cpd4x: stale cp dialog must not remain after submit-close");
   }
+  assertOnOperator(window);
 }
 
 for (const delay of [0, 30, 100]) {
   await runCpd4xStackScenario(delay);
+}
+
+const submitSuccessFinish = headLayer.match(/reason === "submit-success"[\s\S]*?(?=} else if \(reason)/);
+if (!submitSuccessFinish?.[0]?.includes("popHistoryIfNeeded")) {
+  throw new Error("N2: submit-success must call popHistoryIfNeeded");
+}
+if (submitSuccessFinish?.[0]?.includes("releaseCpHistoryWithoutBack")) {
+  throw new Error("N2: submit-success must not use releaseCpHistoryWithoutBack");
+}
+
+const n2ReplaceSubmitPopLayer = headLayer.replaceAll(
+  "historyPop = popHistoryIfNeeded()",
+  "historyPop = releaseCpHistoryWithoutBack()",
+);
+const n2MutantFinish = n2ReplaceSubmitPopLayer.match(/reason === "submit-success"[\s\S]*?(?=} else if \(reason)/);
+if (!n2MutantFinish?.[0]?.includes("releaseCpHistoryWithoutBack")) {
+  throw new Error("N2 mutant fixture must swap popHistoryIfNeeded for releaseCpHistoryWithoutBack");
 }
 
 if (!oldFailed) {

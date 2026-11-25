@@ -75,8 +75,8 @@ async function runViewport({ phone }) {
   await sleep(200);
   await waitCpHidden(document);
   assertOnOperator(window);
-  if (programmaticBacks > 0) {
-    throw new Error(`wallet correction submit must not history.back (got ${programmaticBacks})`);
+  if (programmaticBacks < 1) {
+    throw new Error(`wallet correction submit must pop cp history (got ${programmaticBacks})`);
   }
 
   void globalThis.walletCorrectTopUp();

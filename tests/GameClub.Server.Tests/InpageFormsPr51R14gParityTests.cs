@@ -381,13 +381,14 @@ public sealed class InpageFormsPr51R14gParityTests(GameClubWebApplicationFactory
             ? (await preview.Content.ReadFromJsonAsync<JsonElement>())!.GetProperty("collectibleToman").GetInt64()
             : (await preview.Content.ReadFromJsonAsync<JsonElement>())!.GetProperty("bill").GetProperty("collectibleToman").GetInt64();
         Assert.Equal(50_000, collectible);
-        await AssertEndpointsParityAsync(
+        await PaymentSettlementParityAssert.AssertEndpointsParityAsync(
             op,
             previewPath,
             confirmPath,
             new { payments },
             new { previewCollectibleToman = collectible, payments },
-            buffetShape: !session);
+            buffetShape: !session,
+            factory);
         using var scope = factory.Services.CreateScope();
         Assert.Equal(1, await scope.ServiceProvider.GetRequiredService<AppDbContext>().Invoices.CountAsync());
     }
@@ -422,13 +423,14 @@ public sealed class InpageFormsPr51R14gParityTests(GameClubWebApplicationFactory
         preview.EnsureSuccessStatusCode();
         var collectible = (await preview.Content.ReadFromJsonAsync<JsonElement>())!.GetProperty("collectibleToman").GetInt64();
         Assert.Equal(50_000, collectible);
-        await AssertEndpointsParityAsync(
+        await PaymentSettlementParityAssert.AssertEndpointsParityAsync(
             op,
             $"/api/operator/sessions/{sessionId}/bill/preview",
             $"/api/operator/sessions/{sessionId}/bill/confirm",
             new { payments },
             new { previewCollectibleToman = collectible, payments },
-            buffetShape: false);
+            buffetShape: false,
+            factory);
     }
 
     [Fact]
@@ -442,7 +444,7 @@ public sealed class InpageFormsPr51R14gParityTests(GameClubWebApplicationFactory
         var customerId = await CreateCustomerAsync(op);
         (await op.PostAsJsonAsync(
             $"/api/operator/members/customers/{customerId}/wallet/top-up",
-            new { method = "Cash", amountToman = 100_000L, commandId = Guid.NewGuid() })).EnsureSuccessStatusCode();
+            new { method = "Cash", amountToman = 49_700L, commandId = Guid.NewGuid() })).EnsureSuccessStatusCode();
         await S3TestHelpers.RegisterConsole(api, op, "PS5-R14G-A05C", 1);
         factory.Clock.SetTehran(2026, 6, 8, 14, 0);
         var sessionId = await S3TestHelpers.StartSession(api, "PS5-R14G-A05C", 1);
@@ -462,13 +464,14 @@ public sealed class InpageFormsPr51R14gParityTests(GameClubWebApplicationFactory
         var previewJson = await ReadJsonAsync(preview);
         Assert.Equal(50_000, previewJson.GetProperty("collectibleToman").GetInt64());
         Assert.Equal(500, previewJson.GetProperty("changeToman").GetInt64());
-        await AssertEndpointsParityAsync(
+        await PaymentSettlementParityAssert.AssertEndpointsParityAsync(
             op,
             $"/api/operator/sessions/{sessionId}/bill/preview",
             $"/api/operator/sessions/{sessionId}/bill/confirm",
             previewBody,
             new { previewCollectibleToman = 50_000L, payments },
-            buffetShape: false);
+            buffetShape: false,
+            factory);
     }
 
     [Fact]
@@ -478,7 +481,7 @@ public sealed class InpageFormsPr51R14gParityTests(GameClubWebApplicationFactory
     }
 
     [Fact]
-    public async Task parity_i8a_buffet_wallet500_card20k_non_cash_over_payable_400()
+    public async Task parity_f1_i8a_buffet_wallet500_card20k_non_cash_over_payable_400()
     {
         await S3TestHelpers.ResetAsync(factory);
         var manager = await factory.CreateOperatorClientAsync("manager", "1234");
@@ -506,7 +509,7 @@ public sealed class InpageFormsPr51R14gParityTests(GameClubWebApplicationFactory
     }
 
     [Fact]
-    public async Task parity_i8f_buffet_wallet60k_card1k_insufficient_mixed_400()
+    public async Task parity_f2_i8f_buffet_wallet60k_card1k_non_cash_over_payable_400()
     {
         await S3TestHelpers.ResetAsync(factory);
         var manager = await factory.CreateOperatorClientAsync("manager", "1234");

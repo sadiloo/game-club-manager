@@ -855,15 +855,19 @@ public sealed class OperatorMemberBillingService(AppDbContext db, OperatorMember
         InvoiceEntity invoice,
         CancellationToken ct)
     {
-        if (!allocation.IsValid)
-        {
-            throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", "تخصیص کیف پول انجام نشد.");
-        }
-
         var walletLines = invoice.PaymentLines.Where(p => p.Method == PaymentMethod.Wallet).ToList();
         if (walletLines.Count == 0)
         {
             return;
+        }
+
+        if (!allocation.IsValid)
+        {
+            var walletSpend = walletLines.Sum(p => p.AmountToman);
+            if (walletSpend <= 0)
+            {
+                throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", "تخصیص کیف پول انجام نشد.");
+            }
         }
 
         var member = await db.CustomerMembers.FirstAsync(m => m.CustomerId == customerId, ct);
