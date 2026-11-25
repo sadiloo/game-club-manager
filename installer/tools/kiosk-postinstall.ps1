@@ -40,7 +40,6 @@ try {
             Add-LocalGroupMember -Group "Users" -Member $KioskUser -ErrorAction SilentlyContinue
             Write-KioskInstallStep "created local user"
         }
-        Set-LocalUser -Name $KioskUser -UserMayNotChangePassword $true -PasswordNeverExpires $true -ErrorAction Stop | Out-Null
     } else {
         & net.exe user $KioskUser $password /add /y | Out-Null
         if ($LASTEXITCODE -eq 2) {
@@ -54,6 +53,12 @@ try {
         & net.exe user $KioskUser /expires:never | Out-Null
         Assert-LastExitCode "net user expires"
         Write-KioskInstallStep "created local user via net.exe"
+    }
+    if (Get-Command Get-LocalUser -ErrorAction SilentlyContinue) {
+        & net.exe user $KioskUser /passwordchg:no | Out-Null
+        Assert-LastExitCode "net user passwordchg:no"
+        & net.exe user $KioskUser /expires:never | Out-Null
+        Assert-LastExitCode "net user expires:never"
     }
     Write-KioskInstallStep "kiosk account password change disabled"
 } catch {
