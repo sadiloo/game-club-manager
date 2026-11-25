@@ -238,6 +238,7 @@ jobs:
           name: checkpoint-installers
           path: |
             installer/server/Output/CheckpointServerSetup-*.exe
+            installer/server/Output/CheckpointServerSetupHooks-*.exe
             installer/kiosk/Output/CheckpointKioskSetup-*.exe
             artifacts/installer/acceptance-logs/**
             artifacts/installer/ci-acceptance-manifest.json

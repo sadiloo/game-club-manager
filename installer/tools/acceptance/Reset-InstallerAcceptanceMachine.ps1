@@ -46,4 +46,9 @@ foreach ($dir in @("pgdata", "backups", "config")) {
     }
 }
 
+$pgData = "C:\ProgramData\Checkpoint\pgdata"
+if (Test-Path -LiteralPath $pgData) {
+    throw "Reset-InstallerAcceptanceMachine: pgdata still present after cleanup"
+}
+
 Write-Host "Reset-InstallerAcceptanceMachine: ok"

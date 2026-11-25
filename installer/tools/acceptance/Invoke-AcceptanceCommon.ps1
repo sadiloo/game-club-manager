@@ -268,6 +268,19 @@ function Start-CheckpointServerSetup {
             $leaderDone = $true
         }
 
+        if ($leaderDone -and $aliveLeg.Count -gt 0) {
+            $null = Write-AcceptanceHarnessTrace "Start-Sleep 4 (descendants alive after leader exit)" { Start-Sleep -Seconds 4 }
+            continue
+        }
+
+        if ($leaderDone) {
+            $leftoverSetup = @(Get-CheckpointServerSetupProcesses)
+            if ($leftoverSetup.Count -gt 0) {
+                $null = Write-AcceptanceHarnessTrace "Start-Sleep 4 (setup exe still running after leader exit)" { Start-Sleep -Seconds 4 }
+                continue
+            }
+        }
+
         if ($leaderDone -and $aliveLeg.Count -eq 0) {
             $exitCode = Write-AcceptanceHarnessTrace "read leader ExitCode pid=$leaderId" {
                     $proc.ExitCode

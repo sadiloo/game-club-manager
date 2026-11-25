@@ -16,7 +16,11 @@
 #endif
 
 #define AppName "چک‌پوینت سرور"
-#define SetupBase "CheckpointServerSetup-" + AppVersion
+#if CheckpointInternalTestHooks == "1"
+  #define SetupBase "CheckpointServerSetupHooks-" + AppVersion
+#else
+  #define SetupBase "CheckpointServerSetup-" + AppVersion
+#endif
 
 [Setup]
 AppId={{8E5E6B2E-6B6D-4F5B-9D9A-4F4E7F8F6B6D}

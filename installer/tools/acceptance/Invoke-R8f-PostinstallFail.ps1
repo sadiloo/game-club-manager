@@ -4,7 +4,8 @@ param(
     [string] $AccountsFile,
     [string] $LowSetup,
     [string] $LowVersion,
-    [string] $HighVersion
+    [string] $HighVersion,
+    [string] $LogsDir = "C:\ProgramData\Checkpoint\logs"
 )
 
 $ErrorActionPreference = "Stop"
@@ -12,13 +13,18 @@ $ErrorActionPreference = "Stop"
 
 Write-Host "R8f-1 fresh: postinstall fail hook (start phase)"
 & (Join-Path $PSScriptRoot "Reset-InstallerAcceptanceMachine.ps1")
+New-Item -ItemType Directory -Force -Path $LogsDir | Out-Null
+$r8fFreshLog = Join-Path $LogsDir "acceptance-setup-r8f-postinstall-fail-fresh.log"
+if (Test-Path -LiteralPath $r8fFreshLog) { Remove-Item -LiteralPath $r8fFreshLog -Force }
 $setupArgs = @(
     "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART",
     "/ACCOUNTS=$AccountsFile",
-    "/TESTFAILPHASE=start"
+    "/SKIPSESSIONCHECK=1",
+    "/TESTFAILPHASE=start",
+    "/LOG=`"$r8fFreshLog`""
 )
 Start-CheckpointServerSetup -LegLabel "r8f-postinstall-fail-fresh" -Exe $ServerSetupHooks -ArgumentList $setupArgs `
-    -TimeoutSeconds 900 -ExpectExitCode $script:CheckpointSetupExitPostinstallFailed | Out-Null
+    -TimeoutSeconds 900 -LogPath $r8fFreshLog -ExpectExitCode $script:CheckpointSetupExitPostinstallFailed | Out-Null
 
 Write-Host "R8f-1 upgrade: postinstall fail hook (upgrade-backup)"
 & (Join-Path $PSScriptRoot "Reset-InstallerAcceptanceMachine.ps1")
