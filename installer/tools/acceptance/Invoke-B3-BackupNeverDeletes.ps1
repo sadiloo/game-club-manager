@@ -38,10 +38,8 @@ if ($xml -notmatch "StartWhenAvailable") { throw "B-3: StartWhenAvailable missin
 if ($xml -notmatch "Iran Standard Time" -and $xml -notmatch "StartBoundary") {
     throw "B-3: task timezone/boundary missing"
 }
-$tehran = [System.TimeZoneInfo]::FindSystemTimeZoneById("Iran Standard Time")
-$localNine = [DateTime]::Today.AddHours(9)
-$utc = [System.TimeZoneInfo]::ConvertTimeToUtc($localNine, $tehran)
-$expected = $utc.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'")
+Import-Module (Join-Path (Split-Path $PSScriptRoot -Parent) "CheckpointInstall.Common.psm1") -Force
+$expected = Get-CheckpointDailyBackupStartBoundaryUtc
 if ($xml -notmatch [regex]::Escape($expected.Substring(0, 13))) {
     Write-Host "B-3: warning boundary check partial expected~$expected"
 }
