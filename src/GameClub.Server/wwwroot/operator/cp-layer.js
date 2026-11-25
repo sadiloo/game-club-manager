@@ -1090,6 +1090,14 @@
     );
   }
 
+  function cpLayerIsSettled() {
+    if (cpLayer.active) return false;
+    if (cpLayer._historyPopWaiters.length) return false;
+    const root = document.getElementById("cpLayer");
+    return !root || root.classList.contains("hidden");
+  }
+
+  window.cpLayerIsSettled = cpLayerIsSettled;
   window.cpLayer = cpLayer;
   window.cpParseNumber = cpParseNumber;
   window.cpParseNumberResult = cpParseNumberResult;

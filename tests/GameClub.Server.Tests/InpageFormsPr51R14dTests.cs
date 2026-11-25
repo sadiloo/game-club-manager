@@ -133,17 +133,16 @@ public sealed class InpageFormsPr51R14dTests(GameClubWebApplicationFactory facto
             $"/api/operator/buffet-only/{openSaleId}/confirm",
             new { previewCollectibleToman = 15_500L, payments });
         confirm.EnsureSuccessStatusCode();
+        var confirmChange = (await confirm.Content.ReadFromJsonAsync<JsonElement>())!.GetProperty("changeToman").GetInt64();
+        Assert.Equal(5_000, confirmChange);
+        Assert.Equal(previewChange, confirmChange);
 
         using var scope = factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         var invoice = await db.Invoices.AsNoTracking().Include(i => i.PaymentLines).SingleAsync();
         Assert.Equal(15_500, invoice.PaymentLines.Sum(p => p.AmountToman));
         Assert.Equal(500, invoice.PaymentLines.Single(p => p.Method == PaymentMethod.Wallet).AmountToman);
-        var cashRecorded = invoice.PaymentLines.Single(p => p.Method == PaymentMethod.Cash).AmountToman;
-        Assert.Equal(15_000, cashRecorded);
-        var confirmChange = 20_000L - cashRecorded;
-        Assert.Equal(5_000, confirmChange);
-        Assert.Equal(previewChange, confirmChange);
+        Assert.Equal(15_000, invoice.PaymentLines.Single(p => p.Method == PaymentMethod.Cash).AmountToman);
     }
 
     [Fact]

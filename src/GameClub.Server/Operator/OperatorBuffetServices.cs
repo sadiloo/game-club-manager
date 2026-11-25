@@ -425,7 +425,9 @@ public sealed class OperatorBuffetSaleService(
         }, ct);
     }
 
-    public async Task<InvoiceEntity> ConfirmBuffetOnlyAsync(
+    public sealed record BuffetOnlyConfirmResult(InvoiceEntity Invoice, long ChangeToman);
+
+    public async Task<BuffetOnlyConfirmResult> ConfirmBuffetOnlyAsync(
         Guid openSaleId,
         IReadOnlyList<OperatorBillService.PaymentInput> payments,
         long? previewCollectibleToman,
@@ -472,7 +474,8 @@ public sealed class OperatorBuffetSaleService(
             await db.Entry(sale).Collection(o => o.Lines).Query().Include(l => l.CatalogItem).LoadAsync(innerCt);
             var invoice = await closer.FinalizeBuffetOnlyAsync(sale, bill, effective, amounts, innerCt);
             await audit.AppendAsync("buffet_only.confirm", new { openSaleId, invoice.Number, invoice.CollectibleToman }, innerCt);
-            return invoice;
+            var changeToman = CounterPaymentRecording.ComputeChangeToman(amounts.CollectibleToman, effective);
+            return new BuffetOnlyConfirmResult(invoice, changeToman);
         }, ct);
     }
 

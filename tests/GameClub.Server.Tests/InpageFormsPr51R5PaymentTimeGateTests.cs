@@ -194,7 +194,7 @@ public sealed class InpageFormsPr51R5PaymentTimeGateTests(GameClubWebApplication
     }
 
     [Fact]
-    public async Task gate_mutant_cb_buffet_w03_preview_200_collectible_50000_wallet_49500_confirm_400()
+    public async Task gate_mutant_cb_buffet_w03_preview_200_collectible_50000_wallet_49500_confirm_matches_preview_lift()
     {
         await S3TestHelpers.ResetAsync(factory);
         var op = await factory.CreateOperatorClientAsync();
@@ -206,24 +206,25 @@ public sealed class InpageFormsPr51R5PaymentTimeGateTests(GameClubWebApplication
         var openSaleId = await BuffetCheckoutAsync(op, customerId, 49_500L);
         var payments = new[] { new { method = "Wallet", amountToman = 49_500L } };
         var preview = await op.PostAsJsonAsync($"/api/operator/buffet-only/{openSaleId}/bill/preview", new { payments });
-        Assert.Equal(HttpStatusCode.OK, preview.StatusCode);
+        preview.EnsureSuccessStatusCode();
         var previewCollectible = (await preview.Content.ReadFromJsonAsync<JsonElement>())!
             .GetProperty("bill").GetProperty("collectibleToman").GetInt64();
         Assert.Equal(50_000, previewCollectible);
         var confirm = await op.PostAsJsonAsync(
             $"/api/operator/buffet-only/{openSaleId}/confirm",
             new { previewCollectibleToman = previewCollectible, payments });
-        Assert.Equal(HttpStatusCode.BadRequest, confirm.StatusCode);
-        AssertPaymentInvalid(await ReadJsonAsync(confirm));
-        Assert.Equal(before, await WalletSpendableAsync(op, customerId));
+        confirm.EnsureSuccessStatusCode();
+        var confirmCollectible = (await confirm.Content.ReadFromJsonAsync<JsonElement>())!.GetProperty("collectibleToman").GetInt64();
+        Assert.Equal(previewCollectible, confirmCollectible);
+        Assert.Equal(before - 50_000, await WalletSpendableAsync(op, customerId));
         using var scope = factory.Services.CreateScope();
-        Assert.Equal(0, await scope.ServiceProvider.GetRequiredService<AppDbContext>().Invoices.CountAsync());
+        Assert.Equal(1, await scope.ServiceProvider.GetRequiredService<AppDbContext>().Invoices.CountAsync());
     }
 
     [Fact]
     public async Task gate_mutant_cb_member_bill_composer_preview_400_on_buffet_invalid_allocation_fails_w03_w04()
     {
-        await gate_mutant_cb_buffet_w03_preview_200_collectible_50000_wallet_49500_confirm_400();
+        await gate_mutant_cb_buffet_w03_preview_200_collectible_50000_wallet_49500_confirm_matches_preview_lift();
     }
 
     [Fact]

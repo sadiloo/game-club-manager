@@ -277,11 +277,37 @@ export async function clickCpClose(document) {
   if (btn) btn.click();
 }
 
-export async function waitCpHidden(document, timeoutMs = 5000) {
+export async function waitCpHidden(document, timeoutMs = 8000, runInApp = null) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
-    const el = document.getElementById("cpLayer");
-    if (!el || el.classList.contains("hidden")) return;
+    let settled = false;
+    if (runInApp) {
+      try {
+        settled = !!runInApp("window.cpLayerIsSettled && window.cpLayerIsSettled()");
+      } catch {
+        settled = false;
+      }
+    } else {
+      const el = document.getElementById("cpLayer");
+      settled = !el || el.classList.contains("hidden");
+    }
+    if (settled) return;
+    if (runInApp) {
+      try {
+        const needsPop = runInApp(
+          `(() => {
+            const el = document.getElementById("cpLayer");
+            const hidden = !el || el.classList.contains("hidden");
+            return hidden && window.cpLayer?._historyPopWaiters?.length > 0;
+          })()`,
+        );
+        if (needsPop) {
+          runInApp(`window.dispatchEvent(new PopStateEvent("popstate", { state: history.state }));`);
+        }
+      } catch {
+        /* ignore */
+      }
+    }
     await sleep(15);
   }
   throw new Error("cpLayer still visible");

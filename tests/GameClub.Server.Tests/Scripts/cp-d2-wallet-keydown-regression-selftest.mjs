@@ -27,6 +27,7 @@ async function openClosePrompt(document, role) {
 }
 
 const { window, document, runInApp, ctx } = loadOperatorApp("http://localhost/operator/", { trackKeydown: true });
+const waitHidden = (ms) => waitCpHidden(document, ms, runInApp);
 const cap = installFetchCapture(window, ctx);
 cap.stub(`/api/operator/members/customers/${CUSTOMER}/wallet`, "GET", { realToman: 0, giftToman: 0, spendableToman: 0 });
 runInApp(`displayedLinkedCustomer = { id: "${CUSTOMER}", name: "T" };`);
@@ -59,7 +60,7 @@ const post = lastPost(cap.log, "/wallet/top-up");
 if (post?.body?.amountToman !== 7777) throw new Error(`wrong top-up amount ${post?.body?.amountToman}`);
 
 cap.releaseHangingPost("/wallet/top-up", {});
-await waitCpHidden(document, 8000);
+await waitHidden(8000);
 if (window.__cpKeydownListenerCount() !== 0) throw new Error("after wallet close expected 0 listeners");
 
 console.log("cp-d2-wallet-keydown-regression-selftest: ok");

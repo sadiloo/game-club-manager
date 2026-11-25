@@ -510,7 +510,8 @@ public sealed class OperatorPanelController(
     [HttpPost("buffet-only/{openSaleId:guid}/confirm")]
     public async Task<IActionResult> ConfirmBuffetOnly(Guid openSaleId, ConfirmRequest body, CancellationToken ct)
     {
-        var invoice = await buffetSales.ConfirmBuffetOnlyAsync(openSaleId, body.Payments, body.PreviewCollectibleToman, ct);
+        var result = await buffetSales.ConfirmBuffetOnlyAsync(openSaleId, body.Payments, body.PreviewCollectibleToman, ct);
+        var invoice = result.Invoice;
         return Ok(new
         {
             invoice.Number,
@@ -520,6 +521,7 @@ public sealed class OperatorPanelController(
             unroundedPayableToman = invoice.UnroundedPayableToman,
             roundingToman = invoice.RoundingToman,
             collectibleToman = invoice.CollectibleToman,
+            changeToman = result.ChangeToman,
             status = invoice.Status,
         });
     }

@@ -1,4 +1,3 @@
-import vm from "node:vm";
 import {
   loadOperatorApp,
   installFetchCapture,
@@ -9,7 +8,6 @@ import {
   clickCpSubmit,
   waitCpHidden,
   waitCpVisible,
-  openCpFromClick,
   lastPost,
   assertNumberFields,
 } from "./operator-jsdom-harness.mjs";
@@ -51,10 +49,9 @@ function cap_stub_grid(runInApp) {
   runInApp("lastGridTiles = lastGridTiles || [];");
 }
 
-async function submitMoneyForm(document) {
+async function submitMoneyForm(document, runInApp) {
   await clickCpSubmit(document);
-  await sleep(80);
-  await waitCpHidden(document, 8000);
+  await waitCpHidden(document, 8000, runInApp);
 }
 
 async function runCase(qaRow, formId, open, fill, endpoint, expectedBody) {
@@ -64,11 +61,11 @@ async function runCase(qaRow, formId, open, fill, endpoint, expectedBody) {
   linkCustomer(runInApp);
   selectSession(runInApp);
 
-  await Promise.resolve(open({ window, document, cap }));
+  await Promise.resolve(open({ window, document, cap, runInApp }));
   await waitCpVisible(document);
   await fill(document);
   cap.reset();
-  await submitMoneyForm(document);
+  await submitMoneyForm(document, runInApp);
   const httpMethod = endpoint.includes("debt-floor") || endpoint.includes("birthday") || endpoint.includes("gift-cap") || endpoint.includes("level-ladder")
     ? "PUT"
     : "POST";
@@ -109,12 +106,8 @@ async function main() {
   await runCase(
     3,
     "F03 card-to-card",
-    async ({ cap }) => {
-      cap.stub(`/api/operator/members/customers/${CUSTOMER}/wallet`, "GET", {
-        realToman: 0,
-        giftToman: 0,
-        spendableToman: 0,
-      });
+    async ({ runInApp }) => {
+      runInApp(`destinationCards = [{ id: "card-1" }];`);
       void globalThis.walletTopUp("CardToCard");
     },
     async (document) => {
@@ -147,7 +140,7 @@ async function main() {
     const desc = document.querySelector('[data-cp-field="description"]');
     if (desc) desc.value = "اصلاح تست";
     cap.reset();
-    await submitMoneyForm(document);
+    await submitMoneyForm(document, runInApp);
     const post = lastPost(cap.log, "/correct");
     assertNumberFields(post.body, { newAmountToman: 45000, newGiftToman: 0 });
     results.push({ qaRow: 4, formId: "F04 correction", endpoint: post.url, body: { newAmountToman: 45000, newGiftToman: 0 } });
@@ -325,7 +318,7 @@ async function main() {
     if (pct) pct.value = "12";
     if (name) name.value = "L1";
     cap.reset();
-    await submitMoneyForm(document);
+    await submitMoneyForm(document, runInApp);
     const post = lastPost(cap.log, "level-ladder", "PUT");
   const row = Array.isArray(post?.body) ? post.body[0] : post?.body?.[0];
     if (!row) throw new Error("F14 ladder body missing");
@@ -344,14 +337,12 @@ async function main() {
       `catalog = [{ name: "Food", items: [{ id: 42, kind: "ServiceCustom", name: "خدمت دلخواه" }] }];`,
     );
     globalThis.renderBuffetCategories();
-    const addLine = await openCpFromClick(document, () =>
-      document.querySelector(".cat-item")?.onclick?.({ stopPropagation: () => {} }),
-    );
+    const addLine = document.querySelector(".cat-item")?.onclick?.({ stopPropagation: () => {} });
+    await waitCpVisible(document);
     await fillCpPromptValue(document, "12345");
     cap.reset();
-    await clickCpSubmit(document);
+    await submitMoneyForm(document, runInApp);
     await addLine;
-    await waitCpHidden(document, 8000);
     const post = lastPost(cap.log, "/sale/lines");
     assertNumberFields(post.body, { customAmountToman: 12345 });
     results.push({ qaRow: 15, formId: "F05 custom service", endpoint: post.url, body: { customAmountToman: 12345 } });
@@ -373,11 +364,11 @@ async function main() {
     document.getElementById("addCashLineBtn")?.click();
     await waitCpVisible(document);
     await fillCpPromptValue(document, "5000");
-    await submitMoneyForm(document);
+    await submitMoneyForm(document, runInApp);
     document.getElementById("addCardLineBtn")?.click();
     await waitCpVisible(document);
     await fillCpPromptValue(document, "15000");
-    await submitMoneyForm(document);
+    await submitMoneyForm(document, runInApp);
     cap.reset();
     document.getElementById("confirmBtn")?.click();
     await sleep(100);
