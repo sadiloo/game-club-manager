@@ -77,8 +77,6 @@ Set-ItemProperty -Path $RegPath -Name "AutoAdminLogon" -Value "1"
 Set-ItemProperty -Path $RegPath -Name "DefaultUserName" -Value $KioskUser
 Set-ItemProperty -Path $RegPath -Name "DefaultDomainName" -Value $env:COMPUTERNAME
 # Password stored via Win32 API LSA secret (simplified: use sysinternal autologon pattern in full R8; CI validates length + fingerprint)
-$secure = ConvertTo-SecureString $password -AsPlainText -Force
-$credential = New-Object System.Management.Automation.PSCredential($KioskUser, $secure)
 
 $programDataKiosk = "C:\ProgramData\Checkpoint\kiosk"
 New-Item -ItemType Directory -Force -Path $programDataKiosk | Out-Null
