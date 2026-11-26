@@ -57,6 +57,17 @@
     return Promise.resolve();
   }
 
+  /** Busy popstate: browser may pop cpDialog before we clear _historyPushed (R14l off-by-one). */
+  function noteBrowserConsumedCpHistoryEntry() {
+    try {
+      if (!(history.state && history.state.cpDialog)) {
+        cpLayer._historyPushed = false;
+        cpLayer._popstateClosing = true;
+        cpLayer._closingViaHistory = true;
+      }
+    } catch (_) {}
+  }
+
   function pushHistory(id) {
     try {
       const url = typeof window !== "undefined" && window.location ? window.location.href : "";
@@ -154,6 +165,7 @@
     }
     const active = cpLayer.active;
     if (active && (active.busy || active._submitInFlight)) {
+      noteBrowserConsumedCpHistoryEntry();
       return;
     }
     if (
@@ -470,6 +482,8 @@
         historyPop = popHistoryIfNeeded().finally(() => {
           cpLayer._submitClosing = false;
         });
+      } else if (reason === "handoff") {
+        historyPop = releaseCpHistoryWithoutBack();
       } else if (reason && reason !== "history") {
         historyPop = releaseCpHistoryWithoutBack();
       } else {
@@ -1134,7 +1148,7 @@
                 sub.textContent = item.subtitle;
                 btn.appendChild(sub);
               }
-              btn.onclick = () => session._finish(item);
+              btn.onclick = () => session._finish(item, "handoff");
               host.appendChild(btn);
             }
           }

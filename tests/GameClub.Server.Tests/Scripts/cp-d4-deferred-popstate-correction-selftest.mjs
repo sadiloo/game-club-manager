@@ -61,6 +61,9 @@ async function runStalePopstateScenario(delayMs, layerSource) {
   await waitCpVisible(document);
   document.querySelector(".cp-pick-row")?.click();
   await waitCpVisible(document);
+  if (!runInApp("history.state && history.state.cpDialog")) {
+    throw new Error("N2: correction form must push cpDialog history entry after pick handoff");
+  }
 
   const correctPath = `/api/operator/members/wallet/top-ups/${TOPUP_GROUP}/correct`;
   cap.stub(correctPath, "POST", {});
@@ -70,13 +73,17 @@ async function runStalePopstateScenario(delayMs, layerSource) {
   document.querySelector('[data-cp-field="description"]').value = "stale popstate";
 
   await clickCpSubmit(document);
-  if (delayMs === 0) {
-    dispatchStalePopstate(window);
-  } else {
-    await waitFor(() => runInApp("window.cpLayer._closingViaHistory === true"), "programmatic history close");
+  await waitFor(
+    () =>
+      runInApp(
+        "window.cpLayer._submitClosing === true || window.cpLayer._closingViaHistory === true || window.cpLayer.active == null",
+      ),
+    "programmatic history close",
+  );
+  if (delayMs > 0) {
     await new Promise((resolve) => setTimeout(resolve, delayMs));
-    dispatchStalePopstate(window);
   }
+  dispatchStalePopstate(window);
   assertOnOperator(window);
 
   await waitCpHidden(document);
@@ -165,7 +172,7 @@ if (!headLayer.includes(hb1BusyPopstateGuardNeedle)) {
 }
 
 const hb1GuardlessLayer = headLayer.replace(
-  /if \(active && \(active\.busy \|\| active\._submitInFlight\)\) \{\s*\n\s*return;\s*\n\s*\}/,
+  /if \(active && \(active\.busy \|\| active\._submitInFlight\)\) \{\s*\n[\s\S]*?return;\s*\n\s*\}/,
   "/* HB1 mutant: busy popstate guard removed */",
 );
 

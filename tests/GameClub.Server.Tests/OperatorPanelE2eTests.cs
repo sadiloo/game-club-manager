@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Net.Http.Json;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
@@ -1998,5 +1999,244 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
         await S3TestHelpers.ResetAsync(factory);
         var page = await LoginAsync();
         AssertNoUnexpectedNativeDialogs(page);
+    }
+
+    private const string R14lBase2148bec = "2148bece888d7aff253ac86f556b423aeb190e25";
+
+    private static readonly string CpLayerSourcePath = Path.GetFullPath(Path.Combine(
+        AppContext.BaseDirectory,
+        "..", "..", "..", "..", "..",
+        "src", "GameClub.Server", "wwwroot", "operator", "cp-layer.js"));
+
+    private static async Task<string> ReadCpLayerFromGitCommitAsync(string commitSha)
+    {
+        var repoRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
+        var psi = new ProcessStartInfo
+        {
+            FileName = "git",
+            Arguments = $"show {commitSha}:src/GameClub.Server/wwwroot/operator/cp-layer.js",
+            WorkingDirectory = repoRoot,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        };
+        using var proc = Process.Start(psi) ?? throw new InvalidOperationException("git show did not start");
+        var body = await proc.StandardOutput.ReadToEndAsync();
+        var err = await proc.StandardError.ReadToEndAsync();
+        await proc.WaitForExitAsync();
+        if (proc.ExitCode != 0)
+        {
+            throw new InvalidOperationException($"git show cp-layer.js@{commitSha}: {err}");
+        }
+
+        return body;
+    }
+
+    private async Task<IPage> LoginWithCpLayerOverrideAsync(string? cpLayerJs)
+    {
+        var op = await LoginOperatorClientAsync();
+        var page = await NewPanelPageAsync(op);
+        if (cpLayerJs is not null)
+        {
+            await page.RouteAsync("**/*cp-layer.js", async route =>
+            {
+                await route.FulfillAsync(new()
+                {
+                    Status = 200,
+                    ContentType = "application/javascript",
+                    Body = cpLayerJs,
+                });
+            });
+        }
+
+        await page.GotoAsync($"{PanelOrigin}/operator/index.html");
+        await page.FillAsync("#username", "operator");
+        await page.FillAsync("#pin", "1111");
+        await page.ClickAsync("#loginBtn");
+        await page.WaitForSelectorAsync("#grid .tile");
+        return page;
+    }
+
+    private static async Task AssertPlaywrightOnOperatorAsync(IPage page)
+    {
+        var href = await page.EvaluateAsync<string>("() => location.href");
+        Assert.Contains("/operator/", href, StringComparison.Ordinal);
+    }
+
+    private static async Task SeedMultiOperatorHistoryAsync(IPage page)
+    {
+        await page.EvaluateAsync(
+            $$"""
+            () => {
+              const op = {{JsonSerializer.Serialize(PanelOrigin + "/operator/index.html")}};
+              history.replaceState({ page: "blank" }, "", "/blank");
+              history.pushState({ page: "operator" }, "", op);
+            }
+            """);
+    }
+
+    private async Task SeedWalletCorrectionStationAsync()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var api = factory.CreateClientWithKey();
+        var op = await LoginOperatorClientAsync();
+        const string station = "PS5-R14L-HIST";
+        await S3TestHelpers.RegisterConsole(api, op, station, 1);
+        factory.Clock.SetTehran(2026, 6, 8, 14, 0);
+        var sessionId = await S3TestHelpers.StartSession(api, station, 1);
+        var tag = Guid.NewGuid().ToString("N")[..7];
+        var created = await op.PostAsJsonAsync("/api/operator/customers", new
+        {
+            name = "r14l-h",
+            mobile = "0915" + tag,
+            linkSessionId = sessionId,
+        });
+        created.EnsureSuccessStatusCode();
+        var customerId = (await created.Content.ReadFromJsonAsync<JsonElement>())!.GetProperty("id").GetGuid();
+        (await op.PostAsJsonAsync(
+            $"/api/operator/members/customers/{customerId}/wallet/top-up",
+            new { method = "Cash", amountToman = 100_000L, commandId = Guid.NewGuid() })).EnsureSuccessStatusCode();
+    }
+
+    private static async Task OpenWalletCorrectionFormAsync(IPage page)
+    {
+        await page.EvaluateAsync("() => refreshGrid()");
+        await page.ClickAsync(".tile[data-station-id='PS5-R14L-HIST']");
+        await page.WaitForSelectorAsync("#walletCorrectBtn:not([disabled])");
+        await page.ClickAsync("#walletCorrectBtn");
+        await page.WaitForSelectorAsync("#cpLayer:not(.hidden)");
+        await page.ClickAsync("#cpLayer .cp-pick-row >> nth=0");
+        await page.WaitForSelectorAsync("#cpLayer [data-cp-field='description']");
+    }
+
+    [Fact]
+    public async Task r14l_chromium_multi_history_busy_back_submit_one_post_stays_on_operator()
+    {
+        await SeedWalletCorrectionStationAsync();
+        var page = await LoginWithCpLayerOverrideAsync(null);
+        await SeedMultiOperatorHistoryAsync(page);
+
+        var posts = 0;
+        await page.RouteAsync(
+            url => url.Contains("/wallet/top-ups/", StringComparison.Ordinal) && url.Contains("/correct", StringComparison.Ordinal),
+            async route =>
+            {
+                if (!string.Equals(route.Request.Method, "POST", StringComparison.OrdinalIgnoreCase))
+                {
+                    await route.FallbackAsync();
+                    return;
+                }
+
+                posts++;
+                await Task.Delay(2000);
+                await route.FulfillAsync(new() { Status = 200, ContentType = "application/json", Body = "{}" });
+            });
+
+        await OpenWalletCorrectionFormAsync(page);
+        await page.FillAsync("#cpLayer [data-cp-field='newAmountToman']", "90000");
+        await page.FillAsync("#cpLayer [data-cp-field='newGiftToman']", "0");
+        await page.FillAsync("#cpLayer [data-cp-field='description']", "r14l busy back");
+        var submit = page.ClickAsync("#cpLayer [data-cp-role='submit']");
+        await page.WaitForFunctionAsync("() => window.cpLayer?.active?.busy === true", null, new() { Timeout = 5000 });
+        await page.GoBackAsync();
+        await AssertPlaywrightOnOperatorAsync(page);
+        await submit;
+        await page.Locator("#cpLayer").WaitForAsync(new() { State = WaitForSelectorState.Hidden, Timeout = 15000 });
+        await AssertPlaywrightOnOperatorAsync(page);
+        Assert.Equal(1, posts);
+    }
+
+    [Fact]
+    public async Task r14l_chromium_single_history_back_closes_correction_form()
+    {
+        await SeedWalletCorrectionStationAsync();
+        var page = await LoginWithCpLayerOverrideAsync(null);
+        var len0 = await page.EvaluateAsync<int>("() => history.length");
+        await OpenWalletCorrectionFormAsync(page);
+        Assert.True(await page.EvaluateAsync<int>("() => history.length") > len0);
+        await page.GoBackAsync();
+        await page.Locator("#cpLayer").WaitForAsync(new() { State = WaitForSelectorState.Hidden, Timeout = 5000 });
+        await AssertPlaywrightOnOperatorAsync(page);
+    }
+
+    [Fact]
+    public async Task r14l_chromium_topup_busy_back_one_post_stays_on_operator()
+    {
+        await SeedWalletCorrectionStationAsync();
+        var page = await LoginWithCpLayerOverrideAsync(null);
+        await SeedMultiOperatorHistoryAsync(page);
+
+        var posts = 0;
+        await page.RouteAsync(
+            url => url.Contains("/wallet/top-up", StringComparison.Ordinal),
+            async route =>
+            {
+                if (!string.Equals(route.Request.Method, "POST", StringComparison.OrdinalIgnoreCase))
+                {
+                    await route.FallbackAsync();
+                    return;
+                }
+
+                posts++;
+                await Task.Delay(2000);
+                await route.FulfillAsync(new() { Status = 200, ContentType = "application/json", Body = "{}" });
+            });
+
+        await page.EvaluateAsync("() => refreshGrid()");
+        await page.ClickAsync(".tile[data-station-id='PS5-R14L-HIST']");
+        await page.WaitForSelectorAsync("#walletTopUpCash:not([disabled])");
+        await page.ClickAsync("#walletTopUpCash");
+        await page.WaitForSelectorAsync("#cpLayer:not(.hidden)");
+        await page.FillAsync("#cpLayer [data-cp-field='amountToman']", "50000");
+        var submit = page.ClickAsync("#cpLayer [data-cp-role='submit']");
+        await page.WaitForFunctionAsync("() => window.cpLayer?.active?.busy === true", null, new() { Timeout = 5000 });
+        await page.GoBackAsync();
+        await AssertPlaywrightOnOperatorAsync(page);
+        await submit;
+        await page.Locator("#cpLayer").WaitForAsync(new() { State = WaitForSelectorState.Hidden, Timeout = 15000 });
+        await AssertPlaywrightOnOperatorAsync(page);
+        Assert.Equal(1, posts);
+    }
+
+    [Fact]
+    public async Task r14l_mutant_2148bec_busy_without_history_sync_fails_pin()
+    {
+        var shipped = await File.ReadAllTextAsync(CpLayerSourcePath);
+        Assert.Contains("noteBrowserConsumedCpHistoryEntry();", shipped);
+        var baseCpLayer = await ReadCpLayerFromGitCommitAsync(R14lBase2148bec);
+        Assert.DoesNotContain("noteBrowserConsumedCpHistoryEntry", baseCpLayer);
+        await SeedWalletCorrectionStationAsync();
+        var page = await LoginWithCpLayerOverrideAsync(baseCpLayer);
+        await SeedMultiOperatorHistoryAsync(page);
+
+        var posts = 0;
+        await page.RouteAsync(
+            url => url.Contains("/wallet/top-ups/", StringComparison.Ordinal) && url.Contains("/correct", StringComparison.Ordinal),
+            async route =>
+            {
+                if (!string.Equals(route.Request.Method, "POST", StringComparison.OrdinalIgnoreCase))
+                {
+                    await route.FallbackAsync();
+                    return;
+                }
+
+                posts++;
+                await Task.Delay(2000);
+                await route.FulfillAsync(new() { Status = 200, ContentType = "application/json", Body = "{}" });
+            });
+
+        await OpenWalletCorrectionFormAsync(page);
+        await page.FillAsync("#cpLayer [data-cp-field='newAmountToman']", "90000");
+        await page.FillAsync("#cpLayer [data-cp-field='newGiftToman']", "0");
+        await page.FillAsync("#cpLayer [data-cp-field='description']", "r14l mutant");
+        var submit = page.ClickAsync("#cpLayer [data-cp-role='submit']");
+        await page.WaitForFunctionAsync("() => window.cpLayer?.active?.busy === true");
+        await page.GoBackAsync();
+        await submit;
+        await page.Locator("#cpLayer").WaitForAsync(new() { State = WaitForSelectorState.Hidden, Timeout = 15000 });
+
+        var href = await page.EvaluateAsync<string>("() => location.href");
+        var onOperator = href.Contains("/operator/", StringComparison.Ordinal);
+        Assert.False(onOperator && posts == 1, "2148bec cp-layer.js must break stay-on-operator + single-POST pin");
     }
 }
