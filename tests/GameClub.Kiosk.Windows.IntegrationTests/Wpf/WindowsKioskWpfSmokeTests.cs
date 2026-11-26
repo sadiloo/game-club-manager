@@ -250,25 +250,37 @@ public sealed class WindowsKioskWpfSmokeTests
             PersianDigitToInt(match.Groups[2].Value[0]) * 10 + PersianDigitToInt(match.Groups[2].Value[1]),
             PersianDigitToInt(match.Groups[3].Value[0]) * 10 + PersianDigitToInt(match.Groups[3].Value[1])).TotalSeconds;
         // The server builds the display at an instant between login and capture. Expected seconds are
-        // taken at the session start (login); a seeded band edge (08:30 / 00:00) can only fall between
-        // login and capture in the rare case below, where the display was built at one of the two.
+        // taken at the session start (login). Only when a seeded band edge (08:30 / 00:00) lies in
+        // (login, capture] may the display have been built at either rate (R10l); each candidate is exact ±1.
         var loginTehran = GameClub.Billing.TehranTime.FromUtc(loginStartedUtc).DateTime;
         var capturedTehran = GameClub.Billing.TehranTime.FromUtc(capturedUtc).DateTime;
         var expectedSeconds = tariff.ExpectedRemainingSeconds(startWalletToman, loginTehran);
         var expectedAtCapture = tariff.ExpectedRemainingSeconds(startWalletToman, capturedTehran);
-        StabStepLog.Write(
-            "within_one_tick_expected",
-            $"{tariff.Describe(startWalletToman, loginTehran)} captured_tehran={capturedTehran:HH:mm:ss} expected_at_capture={expectedAtCapture} displayed_seconds={displayedSeconds}");
-        if (expectedAtCapture != expectedSeconds)
+        var edgeBetween = tariff.EdgeBetween(loginTehran, capturedTehran);
+        var branch = tariff.RemainingTimeAssertBranch(startWalletToman, loginTehran, capturedTehran);
+        var branchInfo =
+            $"branch={branch} edge_tehran={(edgeBetween.HasValue ? edgeBetween.Value.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture) : "none")} "
+            + $"login_tehran={loginTehran.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture)} captured_tehran={capturedTehran.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture)} "
+            + $"expected_at_login={expectedSeconds} expected_at_capture={expectedAtCapture} displayed_seconds={displayedSeconds} "
+            + tariff.Describe(startWalletToman, loginTehran);
+        StabStepLog.Write("within_one_tick_expected", branchInfo);
+        if (branch == SeededPcBandTariff.BranchEdgeWindow)
         {
             Assert.True(
                 (displayedSeconds >= expectedSeconds - 1 && displayedSeconds <= expectedSeconds + 1)
                 || (displayedSeconds >= expectedAtCapture - 1 && displayedSeconds <= expectedAtCapture + 1),
-                $"Band edge between login and capture: displayed {displayedSeconds}s must be within one tick of {expectedSeconds}s (login) or {expectedAtCapture}s (capture). {tariff.Describe(startWalletToman, loginTehran)}");
+                $"Band edge between login and capture: displayed {displayedSeconds}s must be within one tick of {expectedSeconds}s (login) or {expectedAtCapture}s (capture). {branchInfo}");
         }
         else
         {
-            Assert.InRange(displayedSeconds, expectedSeconds - 1, expectedSeconds + 1);
+            try
+            {
+                Assert.InRange(displayedSeconds, expectedSeconds - 1, expectedSeconds + 1);
+            }
+            catch (Xunit.Sdk.InRangeException ex)
+            {
+                throw new Xunit.Sdk.XunitException($"{ex.Message} {branchInfo}");
+            }
         }
 
         StabStepLog.Write("within_one_tick_end", $"displayed_seconds={displayedSeconds}");

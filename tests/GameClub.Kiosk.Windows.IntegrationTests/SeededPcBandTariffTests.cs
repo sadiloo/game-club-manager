@@ -120,6 +120,84 @@ public sealed class SeededPcBandTariffTests
     }
 
     [Fact]
+    public void assert_branch_is_single_when_no_edge_between_even_if_funded_period_crosses_08_30()
+    {
+        var tariff = SeededPcBandTariff.FromPilotSeed();
+        var login = Tehran(27, 8, 10);
+        var capture = Tehran(27, 8, 11, 30);
+        Assert.True(tariff.FundedPeriodCrossesBandEdge(FundedWalletToman, login));
+        Assert.Null(tariff.EdgeBetween(login, capture));
+        Assert.Equal(SeededPcBandTariff.BranchSingle, tariff.RemainingTimeAssertBranch(FundedWalletToman, login, capture));
+    }
+
+    [Fact]
+    public void assert_branch_is_single_when_no_edge_between_even_if_funded_period_crosses_00_00()
+    {
+        var tariff = SeededPcBandTariff.FromPilotSeed();
+        var login = Tehran(26, 23, 50);
+        var capture = Tehran(26, 23, 51, 30);
+        Assert.True(tariff.FundedPeriodCrossesBandEdge(FundedWalletToman, login));
+        Assert.Null(tariff.EdgeBetween(login, capture));
+        Assert.Equal(SeededPcBandTariff.BranchSingle, tariff.RemainingTimeAssertBranch(FundedWalletToman, login, capture));
+    }
+
+    [Fact]
+    public void assert_branch_is_edge_window_when_08_30_lies_between_login_and_capture()
+    {
+        var tariff = SeededPcBandTariff.FromPilotSeed();
+        var login = Tehran(27, 8, 29, 40);
+        var capture = Tehran(27, 8, 30, 20);
+        Assert.Equal(Tehran(27, 8, 30), tariff.EdgeBetween(login, capture));
+        Assert.Equal(SeededPcBandTariff.BranchEdgeWindow, tariff.RemainingTimeAssertBranch(FundedWalletToman, login, capture));
+    }
+
+    [Fact]
+    public void assert_branch_is_edge_window_when_00_00_lies_between_login_and_capture()
+    {
+        var tariff = SeededPcBandTariff.FromPilotSeed();
+        var login = Tehran(26, 23, 59, 30);
+        var capture = Tehran(27, 0, 0, 45);
+        Assert.Equal(Tehran(27, 0, 0), tariff.EdgeBetween(login, capture));
+        Assert.Equal(SeededPcBandTariff.BranchEdgeWindow, tariff.RemainingTimeAssertBranch(FundedWalletToman, login, capture));
+    }
+
+    [Fact]
+    public void assert_branch_edge_interval_is_open_at_login_and_closed_at_capture()
+    {
+        var tariff = SeededPcBandTariff.FromPilotSeed();
+        // capture exactly at the edge: (login, capture] contains it
+        Assert.Equal(Tehran(27, 8, 30), tariff.EdgeBetween(Tehran(27, 8, 29, 59), Tehran(27, 8, 30, 0)));
+        Assert.Equal(SeededPcBandTariff.BranchEdgeWindow, tariff.RemainingTimeAssertBranch(FundedWalletToman, Tehran(27, 8, 29, 59), Tehran(27, 8, 30, 0)));
+        Assert.Equal(Tehran(27, 0, 0), tariff.EdgeBetween(Tehran(26, 23, 59, 59), Tehran(27, 0, 0, 0)));
+        // login exactly at the edge: the edge is not after login, so no edge between
+        Assert.Null(tariff.EdgeBetween(Tehran(27, 8, 30, 0), Tehran(27, 8, 31, 0)));
+        Assert.Equal(SeededPcBandTariff.BranchSingle, tariff.RemainingTimeAssertBranch(FundedWalletToman, Tehran(27, 8, 30, 0), Tehran(27, 8, 31, 0)));
+        // login == capture: empty interval
+        Assert.Null(tariff.EdgeBetween(Tehran(27, 8, 30, 0), Tehran(27, 8, 30, 0)));
+    }
+
+    [Fact]
+    public void assert_branch_follows_the_edge_not_the_rate_difference()
+    {
+        // The branch must come from an edge between login and capture, not from comparing the two expected values.
+        // Equal band and day rates: an edge lies between, the values are equal -> still edge_window.
+        var flat = new SeededPcBandTariff("flat", 80_000, 80_000, TimeSpan.Zero, new TimeSpan(8, 30, 0));
+        Assert.Equal(
+            flat.ExpectedRemainingSeconds(FundedWalletToman, Tehran(27, 8, 29, 40)),
+            flat.ExpectedRemainingSeconds(FundedWalletToman, Tehran(27, 8, 30, 20)));
+        Assert.Equal(SeededPcBandTariff.BranchEdgeWindow, flat.RemainingTimeAssertBranch(FundedWalletToman, Tehran(27, 8, 29, 40), Tehran(27, 8, 30, 20)));
+
+        // Both edges between (same band at both ends, equal values) -> edge_window, edge = the first one.
+        var seeded = SeededPcBandTariff.FromPilotSeed();
+        Assert.Equal(Tehran(27, 0, 0), seeded.EdgeBetween(Tehran(26, 23, 59), Tehran(27, 8, 31)));
+        Assert.Equal(SeededPcBandTariff.BranchEdgeWindow, seeded.RemainingTimeAssertBranch(FundedWalletToman, Tehran(26, 23, 59), Tehran(27, 8, 31)));
+
+        // A band with start == end never has an edge.
+        var none = new SeededPcBandTariff("none", 80_000, 100_000, new TimeSpan(5, 0, 0), new TimeSpan(5, 0, 0));
+        Assert.Null(none.EdgeBetween(Tehran(27, 4, 59), Tehran(27, 5, 1)));
+    }
+
+    [Fact]
     public void live_server_tariff_selection_follows_band_environment()
     {
         Assert.Equal(SeededPcBandTariff.PilotSeedSource, SeededPcBandTariff.ForLiveServer(null, null).Source);

@@ -139,6 +139,34 @@ internal sealed class SeededPcBandTariff
         return best;
     }
 
+    public const string BranchSingle = "single";
+
+    public const string BranchEdgeWindow = "edge_window";
+
+    /// <summary>
+    /// The seeded band edge (start or end) in (<paramref name="loginTehran"/>, <paramref name="capturedTehran"/>],
+    /// or null when no edge lies between login and capture. A funded period that crosses an edge later is
+    /// irrelevant here: only an edge between the two instants makes the server's display instant ambiguous.
+    /// </summary>
+    public DateTime? EdgeBetween(DateTime loginTehran, DateTime capturedTehran)
+    {
+        if (BandStart == BandEnd || capturedTehran <= loginTehran)
+        {
+            return null;
+        }
+
+        var edge = NextBandEdgeAfter(loginTehran);
+        return edge <= capturedTehran ? edge : (DateTime?)null;
+    }
+
+    /// <summary>
+    /// Which remaining-time assertion the live WPF test uses: <see cref="BranchEdgeWindow"/> (within one tick of
+    /// the login or the capture value) only when a band edge lies between login and capture, else
+    /// <see cref="BranchSingle"/> (within one tick of the login value).
+    /// </summary>
+    public string RemainingTimeAssertBranch(long walletToman, DateTime loginTehran, DateTime capturedTehran) =>
+        EdgeBetween(loginTehran, capturedTehran).HasValue ? BranchEdgeWindow : BranchSingle;
+
     public bool FundedPeriodCrossesBandEdge(long walletToman, DateTime tehranLocal) =>
         BandStart != BandEnd && NextBandEdgeAfter(tehranLocal) < FundedEnd(walletToman, tehranLocal);
 
