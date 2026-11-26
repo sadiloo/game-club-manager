@@ -433,10 +433,17 @@ public sealed class ShellPanelNavigationFailureTests
                         ShellFileLog.Write("shell-probe-deadline-window-ready");
                         var baseline = ReadShellLogSnapshot();
 
+                        // The startup panel navigation can arm its 10 s timer before WaitForPanelWebViewAsync returns
+                        // (CI 1133/1134: arm 1-17 ms before window-ready), so the arm line may already be in the
+                        // baseline. Search for it in this test's own private log only: ExecuteWithShellDataRoot gave
+                        // the test a fresh %TEMP%\gcm-shell-<guid> root (CHECKPOINT_SHELL_DATA). Later steps keep
+                        // using the baseline delta.
+                        Assert.StartsWith("gcm-shell-", Path.GetFileName(ShellPaths.ShellRoot), StringComparison.Ordinal);
                         await AwaitShellLogLineAsync(
-                            baseline,
+                            string.Empty,
                             line => line.Contains("branch=panel-nav-timeout-arm", StringComparison.Ordinal),
-                            TimeSpan.FromSeconds(45));
+                            TimeSpan.FromSeconds(45),
+                            $"branch=panel-nav-timeout-arm was never written to this test's private shell log ({ShellPaths.ShellLogsDir}) within 45 s");
                         Assert.True(
                             window.PanelNavigationPendingCountForTests >= 1,
                             "expected in-flight panel navigation before the 10s loopback deadline");
@@ -1112,12 +1119,13 @@ public sealed class ShellPanelNavigationFailureTests
     private static async Task<string> AwaitShellLogLineAsync(
         string baseline,
         Func<string, bool> linePredicate,
-        TimeSpan timeout)
+        TimeSpan timeout,
+        string? timeoutMessage = null)
     {
         var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
         using var timeoutCts = new CancellationTokenSource(timeout);
         timeoutCts.Token.Register(() =>
-            tcs.TrySetException(new System.TimeoutException("expected shell log line was not written")));
+            tcs.TrySetException(new System.TimeoutException(timeoutMessage ?? "expected shell log line was not written")));
 
         void TryMatch(object? _)
         {

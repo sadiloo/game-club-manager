@@ -1,4 +1,4 @@
-﻿# windows-2022 installer job driver — build installers and run B-1..B-13 (B).
+﻿# windows-2022 installer job driver — build installers and run acceptance legs B-1..B-8, B-6+B-12, B-13 and the R8f legs (R8f-1 postinstall-fail fresh/upgrade, R8f-b existing-pgdata refuse).
 param(
     [ValidateSet("All", "Build", "Acceptance")]
     [string] $Phase = "All"
