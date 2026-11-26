@@ -26,6 +26,30 @@ function Read-B7KioskSetup {
     return [pscustomobject]@{ State = "configured"; Raw = $raw; Json = $json }
 }
 
+# R10i OBS-1 (ruling): completedAtUtc is compared as the RAW JSON text, never as a parsed date. PowerShell 7's
+# ConvertFrom-Json turns an ISO string into a DateTime, and [string] of that is culture-formatted to the second (a 0.4 s
+# change slipped through and the ok line printed 01/01/2026 00:00:00). System.Text.Json returns the token exactly as
+# written. Windows PowerShell 5.1 has no System.Text.Json, but its ConvertFrom-Json keeps strings as written.
+function Get-B7RawJsonProperty {
+    param([string] $Raw, [string] $Name)
+    if (-not ("System.Text.Json.JsonDocument" -as [type])) {
+        $j = $Raw | ConvertFrom-Json
+        if ($null -eq $j -or -not ($j.PSObject.Properties.Name -contains $Name)) { return [pscustomobject]@{ Present = $false; Token = $null; Text = $null } }
+        $v = $j.$Name
+        if ($v -isnot [string]) { throw "B-7: $Name must be a JSON string (Windows PowerShell 5.1 path)" }
+        return [pscustomobject]@{ Present = $true; Token = ($v | ConvertTo-Json -Compress); Text = $v }
+    }
+    $doc = [System.Text.Json.JsonDocument]::Parse($Raw)
+    try {
+        $el = [System.Text.Json.JsonElement]::new()
+        if (-not $doc.RootElement.TryGetProperty($Name, [ref]$el)) { return [pscustomobject]@{ Present = $false; Token = $null; Text = $null } }
+        $text = if ($el.ValueKind -eq [System.Text.Json.JsonValueKind]::String) { $el.GetString() } else { $el.GetRawText() }
+        return [pscustomobject]@{ Present = $true; Token = $el.GetRawText(); Text = $text }
+    } finally {
+        $doc.Dispose()
+    }
+}
+
 $setupPath = "C:\ProgramData\Checkpoint\kiosk\setup.json"
 
 $lowLog = Join-Path $LogsDir "b7-kiosk-low-install.log"
@@ -45,7 +69,8 @@ if ($before.State -ne "configured") {
     Write-Host "B-7: setup.json already configured before the upgrade"
 }
 $beforeServerBase = [string]$before.Json.serverBase
-$beforeCompleted = [string]$before.Json.completedAtUtc
+$beforeCompleted = Get-B7RawJsonProperty -Raw $before.Raw -Name "completedAtUtc"
+if (-not $beforeCompleted.Present) { throw "B-7: setup.json has no completedAtUtc before the upgrade" }
 
 $highLog = Join-Path $LogsDir "b7-kiosk-upgrade.log"
 $p = Start-Process -FilePath $HighKioskSetup -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/LOG=$highLog") -Wait -PassThru
@@ -57,7 +82,8 @@ $after = Read-B7KioskSetup -Path $setupPath
 $setup = $after.Json
 if ($null -eq $setup -or [string]::IsNullOrWhiteSpace($setup.serverBase)) { throw "B-7: setup.json serverBase missing (state=$($after.State))" }
 if ([string]$setup.serverBase -ne $beforeServerBase) { throw "B-7: upgrade changed serverBase '$beforeServerBase' -> '$($setup.serverBase)'" }
-if ([string]$setup.completedAtUtc -ne $beforeCompleted) { throw "B-7: upgrade changed completedAtUtc '$beforeCompleted' -> '$($setup.completedAtUtc)'" }
+$afterCompleted = Get-B7RawJsonProperty -Raw $after.Raw -Name "completedAtUtc"
+if (-not $afterCompleted.Present -or -not [string]::Equals($afterCompleted.Token, $beforeCompleted.Token, [StringComparison]::Ordinal)) { throw "B-7: upgrade changed completedAtUtc $($beforeCompleted.Token) -> $($afterCompleted.Token)" }
 $guard = Get-Service CheckpointGuard -ErrorAction SilentlyContinue
 if (-not $guard) { throw "B-7: CheckpointGuard missing after upgrade" }
 if ($guard.Status -ne "Running") {
@@ -65,4 +91,4 @@ if ($guard.Status -ne "Running") {
 }
 $kioskUser = Get-LocalUser -Name "CheckpointKiosk" -ErrorAction SilentlyContinue
 if (-not $kioskUser) { throw "B-7: CheckpointKiosk user missing after upgrade" }
-Write-Host "B-7: ok serverBase=$($setup.serverBase) completedAtUtc=$($setup.completedAtUtc) preserved"
+Write-Host "B-7: ok serverBase=$($setup.serverBase) completedAtUtc=$($afterCompleted.Text) preserved"

@@ -97,7 +97,7 @@ $script:AcceptanceLegTable = @(
     @{ Name = "B4"; Script = "Invoke-B4-UninstallReinstall.ps1"; OkPattern = '^B-4: ok backup='; Params = @{ ServerSetup = $serverHigh; AccountsFile = $accounts } }
     @{ Name = "B5"; Script = "Invoke-B5-KioskInstall.ps1"; OkPattern = '^B-5: ok length='; Params = @{ KioskSetup = $kioskHigh; LogsDir = $logRoot } }
     @{ Name = "B6-B12"; Script = "Invoke-B6-B12-KioskFirstRun.ps1"; OkPattern = '^B-6 \+ B-12: ok$'; Params = @{ RepoRoot = $root; AccountsFile = $accounts } }
-    @{ Name = "B7"; Script = "Invoke-B7-KioskUpgrade.ps1"; OkPattern = '^B-7: ok serverBase='; Params = @{ LowKioskSetup = $kioskLow; HighKioskSetup = $kioskHigh; LogsDir = $logRoot } }
+    @{ Name = "B7"; Script = "Invoke-B7-KioskUpgrade.ps1"; OkPattern = '^B-7: ok serverBase=\S+ completedAtUtc=\S+ preserved$'; Params = @{ LowKioskSetup = $kioskLow; HighKioskSetup = $kioskHigh; LogsDir = $logRoot } }
     @{ Name = "B8"; Script = "Invoke-B8-WindowsBillingRestart.ps1"; OkPattern = '^B-8: ok ps5='; Params = @{ AccountsFile = $accounts } }
     @{ Name = "B13"; Script = "Invoke-B13-DefaultPinUpgrade.ps1"; OkPattern = '^B-13: ok$'; Params = @{ ServerSetup = $serverHigh; AccountsFile = $accounts } }
     @{ Name = "R8f-PostinstallFail"; Script = "Invoke-R8f-PostinstallFail.ps1"; OkPattern = '^R8f-1: ok$'; Params = @{

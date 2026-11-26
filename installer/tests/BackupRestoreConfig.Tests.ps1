@@ -5,6 +5,13 @@ $goldenRestore = Join-Path $root "installer\tools\restore.ps1"
 $goldenBackup = Join-Path $root "installer\tools\backup-daily.ps1"
 $script:StubDirs = [System.Collections.Generic.List[string]]::new()
 
+# R10i: cmd stubs are written with CRLF line endings whatever the checkout's line endings are (cmd's label/goto scan
+# is unreliable on LF-only batch files), as ASCII.
+function Write-StubCmdFile {
+    param([Parameter(Mandatory)][string]$Path, [Parameter(ValueFromPipeline)][string]$Text)
+    process { [System.IO.File]::WriteAllText($Path, (($Text -replace "`r`n", "`n") -replace "`n", "`r`n") + "`r`n", [System.Text.Encoding]::ASCII) }
+}
+
 function New-StubPgBinaries {
     param(
         [int]$PgDumpExit = 0,
@@ -27,12 +34,14 @@ function New-StubPgBinaries {
     # RESTORE / RESTORE_CLEAN (pg_restore into the database, without / with --clean).
     $orderTrace = Join-Path $dir "order-trace.txt"
     $listPass = Join-Path $dir "list.pass"
+    $argsTrace = Join-Path $dir "args-trace.txt"
 
     $writeOnFail = if ($PgDumpWriteOnFailure) { "1" } else { "0" }
     $writeZero = if ($PgDumpWriteZeroBytes) { "1" } else { "0" }
     if ($IsWindows -or ($env:OS -eq 'Windows_NT')) {
         @"
 @echo off
+>> "$argsTrace" echo pg_dump %*
 setlocal EnableDelayedExpansion
 echo DUMP>> "$orderTrace"
 set "outfile="
@@ -57,48 +66,57 @@ if defined outfile (
   if $writeOnFail equ 1 echo.>"!outfile!"
 )
 exit /b $PgDumpExit
-"@ | Set-Content -LiteralPath (Join-Path $dir "pg_dump.cmd") -Encoding ASCII
+"@ | Write-StubCmdFile -Path (Join-Path $dir "pg_dump.cmd")
 
+        # R10i DEF-25: no pipes, no findstr, no delayed expansion and no parenthesised blocks. On real Windows cmd the R10h
+        # stub's `echo %args% | findstr /C:"pre-restore-"` + `if !errorlevel! ...` inside a nested IF block returned 0 for
+        # `--list <pre-restore-*.dump>` (CI run 45874013364, BackupRestoreConfig.Tests.ps1:546), while wine cmd returned 6.
+        # Every decision is now a top-level `%var:find=%` substring test followed by goto, and every exit is a top-level
+        # literal `exit /b N`. Each call also appends its raw arguments to args-trace.txt for CI diagnosis.
         @"
 @echo off
-setlocal EnableDelayedExpansion
 set "args=%*"
-echo %args% | findstr /I /C:"--list" >nul
-if %errorlevel% equ 0 (
-  echo LIST>> "$orderTrace"
-  if $SafetyListExit geq 0 (
-    echo LIST>> "$listTrace"
-    echo %args% | findstr /I /C:"pre-restore-" >nul
-    if !errorlevel! equ 0 exit /b $SafetyListExit
-    exit /b 0
-  )
-  if not exist "$listPass" (
-    echo LIST>> "$listTrace"
-    echo.>"$listPass"
-    exit /b $FirstListExit
-  ) else (
-    echo LIST>> "$listTrace"
-    exit /b $SecondListExit
-  )
-)
-echo CLEAN>> "$cleanTrace"
-echo %args% | findstr /I /C:"--clean" >nul
-if %errorlevel% equ 0 (
-  echo RESTORE_CLEAN>> "$orderTrace"
-) else (
-  echo RESTORE>> "$orderTrace"
-)
+>> "$argsTrace" echo pg_restore %*
+if "%~1"=="" goto restore
+set "args=%args:"=%"
+set "nolist=%args:--list=%"
+if "%nolist%"=="%args%" goto restore
+>> "$orderTrace" echo LIST
+>> "$listTrace" echo LIST
+if $SafetyListExit LSS 0 goto ordered
+set "nosafety=%args:pre-restore-=%"
+if "%nosafety%"=="%args%" goto safety_other
+exit /b $SafetyListExit
+:safety_other
+exit /b 0
+:ordered
+if exist "$listPass" goto second_list
+> "$listPass" echo pass
+exit /b $FirstListExit
+:second_list
+exit /b $SecondListExit
+:restore
+>> "$cleanTrace" echo CLEAN
+if not defined args goto restore_plain
+set "noclean=%args:--clean=%"
+if "%noclean%"=="%args%" goto restore_plain
+>> "$orderTrace" echo RESTORE_CLEAN
 exit /b $RestoreExit
-"@ | Set-Content -LiteralPath (Join-Path $dir "pg_restore.cmd") -Encoding ASCII
+:restore_plain
+>> "$orderTrace" echo RESTORE
+exit /b $RestoreExit
+"@ | Write-StubCmdFile -Path (Join-Path $dir "pg_restore.cmd")
 
         @"
 @echo off
-echo RECREATE>> "$orderTrace"
+>> "$argsTrace" echo psql %*
+>> "$orderTrace" echo RECREATE
 exit /b $PsqlExit
-"@ | Set-Content -LiteralPath (Join-Path $dir "psql.cmd") -Encoding ASCII
+"@ | Write-StubCmdFile -Path (Join-Path $dir "psql.cmd")
     } else {
         @"
 #!/bin/sh
+echo "pg_dump `$*" >> '$argsTrace'
 echo DUMP >> '$orderTrace'
 outfile=
 write_on_fail=$writeOnFail
@@ -126,6 +144,7 @@ exit $PgDumpExit
 
         @"
 #!/bin/sh
+echo "pg_restore `$*" >> '$argsTrace'
 clean=0
 for a in "`$@"; do
   case "`$a" in
@@ -155,6 +174,7 @@ exit $RestoreExit
 
         @"
 #!/bin/sh
+echo "psql `$*" >> '$argsTrace'
 echo RECREATE >> '$orderTrace'
 exit $PsqlExit
 "@ | Set-Content -LiteralPath (Join-Path $dir "psql") -Encoding UTF8 -NoNewline
@@ -169,6 +189,7 @@ exit $PsqlExit
         ListTrace  = $listTrace
         CleanTrace = $cleanTrace
         OrderTrace = $orderTrace
+        ArgsTrace  = $argsTrace
     }
 }
 
@@ -300,6 +321,47 @@ function Invoke-BackupScript {
     }
 }
 
+# R10i DEF-25: the stubs are only as good as the exit codes they really return on THIS platform's shell. On Windows CI
+# the R10h pg_restore.cmd returned 0 for `--list <pre-restore-*.dump>` although -SafetyListExit 6 was configured, so the
+# golden no-safety-readable scenario ran on and the test failed for the wrong reason. Before any scenario uses the stubs,
+# call each one exactly the way the product does (Get-CheckpointPgExecutable + `&` + $LASTEXITCODE, via PATH) and require
+# the configured code. Returns the problems found (empty = ok); a failure names the stub, the args it saw and the code.
+function Get-StubExitCodeProblems {
+    param([string]$WorkDir)
+    $problems = [System.Collections.Generic.List[string]]::new()
+    $script:StubSelfCheckObserved = [System.Collections.Generic.List[string]]::new()
+    $safetyPath = Join-Path $WorkDir "Checkpoint\backups\pre-restore-20990101-000000.dump"
+    $inputPath = Join-Path $WorkDir "input-selfcheck.dump"
+    $probe = {
+        param([pscustomobject]$Stub, [string]$Tool, [string[]]$ToolArgs)
+        return Invoke-WithStubPath -Stub $Stub -Action {
+            $exe = Get-CheckpointPgExecutable -Name $Tool
+            $global:LASTEXITCODE = -999
+            & $exe @ToolArgs 2>&1 | Out-Null
+            return $LASTEXITCODE
+        }
+    }
+    $cases = @(
+        @{ Label = 'SafetyListExit 6: --list <pre-restore-*.dump>'; Stub = { New-StubPgBinaries -SafetyListExit 6 }; Calls = @(@{ Tool = 'pg_restore'; Args = @('--list', $safetyPath); Want = 6 }, @{ Tool = 'pg_restore'; Args = @('--list', $inputPath); Want = 0 }, @{ Tool = 'pg_restore'; Args = @('--list', $safetyPath); Want = 6 }) },
+        @{ Label = 'FirstListExit 11 / SecondListExit 7'; Stub = { New-StubPgBinaries -FirstListExit 11 -SecondListExit 7 }; Calls = @(@{ Tool = 'pg_restore'; Args = @('--list', $safetyPath); Want = 11 }, @{ Tool = 'pg_restore'; Args = @('--list', $inputPath); Want = 7 }) },
+        @{ Label = 'RestoreExit 9 / PsqlExit 5 / PgDumpExit 4'; Stub = { New-StubPgBinaries -PgDumpExit 4 -RestoreExit 9 -PsqlExit 5 }; Calls = @(@{ Tool = 'pg_restore'; Args = @('-h', '127.0.0.1', '-d', 'gameclub', $inputPath); Want = 9 }, @{ Tool = 'psql'; Args = @('-v', 'ON_ERROR_STOP=1', '-c', 'select 1;'); Want = 5 }, @{ Tool = 'pg_dump'; Args = @('-Fc', '-f', (Join-Path $WorkDir "selfcheck-out.dump")); Want = 4 }) },
+        @{ Label = 'defaults'; Stub = { New-StubPgBinaries }; Calls = @(@{ Tool = 'pg_restore'; Args = @('--list', $safetyPath); Want = 0 }, @{ Tool = 'pg_restore'; Args = @('-d', 'gameclub', $inputPath); Want = 0 }, @{ Tool = 'psql'; Args = @('-c', 'select 1;'); Want = 0 }) }
+    )
+    foreach ($case in $cases) {
+        $stub = & $case.Stub
+        if ($script:StubSelfCheckTamper) { & $script:StubSelfCheckTamper $stub }
+        foreach ($call in $case.Calls) {
+            $got = & $probe $stub $call.Tool $call.Args
+            $script:StubSelfCheckObserved.Add("$($call.Tool)$(if ($call.Args[0] -eq '--list') { if ($call.Args[1] -like '*pre-restore-*') { ' --list safety' } else { ' --list other' } })=$got/$($call.Want)")
+            if ($got -ne $call.Want) {
+                $seen = if (Test-Path -LiteralPath $stub.ArgsTrace) { (Get-Content -LiteralPath $stub.ArgsTrace -Raw).Trim() -replace "\r?\n", ' | ' } else { '<no args trace>' }
+                $problems.Add("stub self-check [$($case.Label)]: $($call.Tool) $($call.Args -join ' ') returned $got, want $($call.Want); args seen=[$seen]")
+            }
+        }
+    }
+    return $problems.ToArray()
+}
+
 $workDir = Join-Path ([System.IO.Path]::GetTempPath()) ("gcm-br-" + [Guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Force -Path $workDir | Out-Null
 try {
@@ -314,6 +376,31 @@ try {
     if ($cfg.Database -ne "gameclub" -or $cfg.Port -ne "5433") {
         Write-Error "unexpected parsed config"
     }
+
+    # R10i DEF-25: stub self-check first (each stub returns exactly the configured exit code), plus a negative control:
+    # a stub whose safety --list branch is forced to 0 (the Windows CI failure mode) must be reported.
+    $stubKind = if ($IsWindows -or ($env:OS -eq 'Windows_NT')) { 'cmd' } else { 'sh' }
+    $stubProblems = @(Get-StubExitCodeProblems -WorkDir $workDir)
+    $stubObserved = ($script:StubSelfCheckObserved -join ' ')
+    if ($stubProblems.Count -gt 0) { Write-Error ("BackupRestoreConfig: stub self-check FAILED ($stubKind stubs): " + ($stubProblems -join ' || ')) }
+    Write-Host "BackupRestoreConfig: stub self-check ok ($stubKind stubs, got/want): $stubObserved"
+    $script:StubSelfCheckTamper = {
+        param($Stub)
+        foreach ($name in @('pg_restore.cmd', 'pg_restore')) {
+            $f = Join-Path $Stub.Dir $name
+            if (-not (Test-Path -LiteralPath $f)) { continue }
+            $t = [System.IO.File]::ReadAllText($f)
+            $t2 = $t.Replace('exit /b 6', 'exit /b 0').Replace('*pre-restore-*) exit 6 ;;', '*pre-restore-*) exit 0 ;;')
+            [System.IO.File]::WriteAllText($f, $t2)
+        }
+    }
+    try {
+        $tamperedProblems = @(Get-StubExitCodeProblems -WorkDir $workDir | Where-Object { $_ -like '*SafetyListExit 6*returned 0, want 6*' })
+    } finally {
+        $script:StubSelfCheckTamper = $null
+    }
+    if ($tamperedProblems.Count -lt 2) { Write-Error "stub self-check negative control: a pg_restore stub that returns 0 for the safety --list was not reported (got $($tamperedProblems.Count) problems)" }
+    Write-Host "BackupRestoreConfig: stub self-check negative control ok ($stubKind stubs): a safety --list stub forced to 0 is reported ($($tamperedProblems.Count) problems)"
 
     $emptyDump = Join-Path $workDir "empty.dump"
     [System.IO.File]::WriteAllBytes($emptyDump, [byte[]]@())

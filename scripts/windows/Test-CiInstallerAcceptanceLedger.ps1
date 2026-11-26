@@ -17,7 +17,7 @@ $markers = [ordered]@{
     "Invoke-B4-UninstallReinstall.ps1"         = "B-4: ok backup=x.dump"
     "Invoke-B5-KioskInstall.ps1"               = "B-5: ok length=1"
     "Invoke-B6-B12-KioskFirstRun.ps1"          = "B-6 + B-12: ok"
-    "Invoke-B7-KioskUpgrade.ps1"               = "B-7: ok serverBase=http://x"
+    "Invoke-B7-KioskUpgrade.ps1"               = "B-7: ok serverBase=http://x completedAtUtc=2026-01-01T00:00:00Z preserved"
     "Invoke-B8-WindowsBillingRestart.ps1"      = "B-8: ok ps5=1 pc=1 cap=1"
     "Invoke-B13-DefaultPinUpgrade.ps1"         = "B-13: ok"
     "Invoke-R8f-PostinstallFail.ps1"           = "R8f-1: ok"
@@ -95,7 +95,9 @@ $native3 = $nativeSetup + "& `$nat[0] `$nat[1] 'exit 3'`n"
 $native3Ignored = $nativeSetup + "& `$nat[0] `$nat[1] 'exit 3' # native-exit: ignored self-check leaves the exit behind on purpose`n"
 Invoke-LedgerCase -Label "skipped wording" -ExpectThrow $true -ExpectMessage "ci-acceptance: LEG B1 printed a skip that is not allow-listed*" -Override @{ "Invoke-B1-CleanServerInstall.ps1" = $p + "Write-Host 'B-1: shell ACL pin skipped (no admin)'`nWrite-Host 'B-1: ok'" }
 Invoke-LedgerCase -Label "dash skip wording" -ExpectThrow $true -ExpectMessage "ci-acceptance: LEG B5 printed a skip that is not allow-listed*" -Override @{ "Invoke-B5-KioskInstall.ps1" = $p + "Write-Host '- skip kiosk ACL probe'`nWrite-Host 'B-5: ok length=1'" }
-Invoke-LedgerCase -Label "not run wording" -ExpectThrow $true -ExpectMessage "ci-acceptance: LEG B7 printed a skip that is not allow-listed*" -Override @{ "Invoke-B7-KioskUpgrade.ps1" = $p + "Write-Host 'B-7: guard restart check not run'`nWrite-Host 'B-7: ok serverBase=http://x'" }
+Invoke-LedgerCase -Label "not run wording" -ExpectThrow $true -ExpectMessage "ci-acceptance: LEG B7 printed a skip that is not allow-listed*" -Override @{ "Invoke-B7-KioskUpgrade.ps1" = $p + "Write-Host 'B-7: guard restart check not run'`nWrite-Host 'B-7: ok serverBase=http://x completedAtUtc=2026-01-01T00:00:00Z preserved'" }
+# R10i GO bar: B7 counts only with the full "B-7: ok serverBase=... completedAtUtc=... preserved" marker.
+Invoke-LedgerCase -Label "B7 ok line without preserved" -ExpectThrow $true -ExpectMessage "ci-acceptance: LEG B7 finished without its ok marker*preserved*" -Override @{ "Invoke-B7-KioskUpgrade.ps1" = $p + "Write-Host 'B-7: ok serverBase=http://x'" }
 Invoke-LedgerCase -Label "skipped test in a VSTest summary" -ExpectThrow $true -ExpectMessage "ci-acceptance: LEG B6-B12 printed a skip*" -Override @{ "Invoke-B6-B12-KioskFirstRun.ps1" = $p + "Write-Host 'Passed!  - Failed:     0, Passed:     4, Skipped:     1, Total:     5'`nWrite-Host 'B-6 + B-12: ok'" }
 Invoke-LedgerCase -Label "VSTest summary with Skipped: 0 is not a skip" -ExpectThrow $false -Override @{ "Invoke-B6-B12-KioskFirstRun.ps1" = $p + "Write-Host 'Passed!  - Failed:     0, Passed:     4, Skipped:     0, Total:     4, Duration: 1 s'`nWrite-Host 'B-6 + B-12: ok'" }
 Invoke-LedgerCase -Label "allow-listed skip printed by another leg" -ExpectThrow $true -ExpectMessage "ci-acceptance: LEG R8f-PostinstallFail printed a skip that is not allow-listed for this leg*" -Override @{ "Invoke-R8f-PostinstallFail.ps1" = $p + "Write-Host 'R8f-phase-matrix fresh: skip webview2 (WebView2 runtime already installed on this runner)'`nWrite-Host 'R8f-1: ok'" }
@@ -106,13 +108,13 @@ Invoke-LedgerCase -Label "unchecked native call (no check, no annotation)" -Expe
 Invoke-LedgerCase -Label "expected native failure checked and consumed" -ExpectThrow $false -Override @{ "Reset-InstallerAcceptanceMachine.ps1" = $p + $native3 + "if (`$LASTEXITCODE -ne 3) { throw 'x' }`n`$global:LASTEXITCODE = 0`nWrite-Host 'Reset-InstallerAcceptanceMachine: ok'" }
 # R10g item 4 (rr5 L11b): a native failure followed by a native success. $LASTEXITCODE ends at 0, the leg must still fail.
 Invoke-LedgerCase -Label "native failure followed by a native success" -ExpectThrow $true -ExpectMessage "ci-acceptance: LEG B7 has native calls whose exit code is never checked*Invoke-B7-KioskUpgrade.ps1:3:*" -ExpectFailLine "ci-acceptance: LEG FAIL B7 (exit 0, phase native-audit)" -Override @{
-    "Invoke-B7-KioskUpgrade.ps1" = $p + $nativeSetup + "& `$nat[0] `$nat[1] 'exit 3'`n& `$nat[0] `$nat[1] 'exit 0'`nif (`$LASTEXITCODE -ne 0) { throw 'x' }`nWrite-Host 'B-7: ok serverBase=http://x'"
+    "Invoke-B7-KioskUpgrade.ps1" = $p + $nativeSetup + "& `$nat[0] `$nat[1] 'exit 3'`n& `$nat[0] `$nat[1] 'exit 0'`nif (`$LASTEXITCODE -ne 0) { throw 'x' }`nWrite-Host 'B-7: ok serverBase=http://x completedAtUtc=2026-01-01T00:00:00Z preserved'"
 }
 Invoke-LedgerCase -Label "native failure blindly reset (assignment is not a check), then a native success" -ExpectThrow $true -ExpectMessage "ci-acceptance: LEG B7 has native calls whose exit code is never checked*Invoke-B7-KioskUpgrade.ps1:3:*" -ExpectFailLine "ci-acceptance: LEG FAIL B7 (exit 0, phase native-audit)" -Override @{
-    "Invoke-B7-KioskUpgrade.ps1" = $p + $nativeSetup + "& `$nat[0] `$nat[1] 'exit 3'`n`$global:LASTEXITCODE = 0`n& `$nat[0] `$nat[1] 'exit 0'`nif (`$LASTEXITCODE -ne 0) { throw 'x' }`nWrite-Host 'B-7: ok serverBase=http://x'"
+    "Invoke-B7-KioskUpgrade.ps1" = $p + $nativeSetup + "& `$nat[0] `$nat[1] 'exit 3'`n`$global:LASTEXITCODE = 0`n& `$nat[0] `$nat[1] 'exit 0'`nif (`$LASTEXITCODE -ne 0) { throw 'x' }`nWrite-Host 'B-7: ok serverBase=http://x completedAtUtc=2026-01-01T00:00:00Z preserved'"
 }
 Invoke-LedgerCase -Label "native failure checked, then a native success" -ExpectThrow $false -Override @{
-    "Invoke-B7-KioskUpgrade.ps1" = $p + $nativeSetup + "& `$nat[0] `$nat[1] 'exit 3'`nif (`$LASTEXITCODE -ne 3) { throw 'x' }`n& `$nat[0] `$nat[1] 'exit 0'`nif (`$LASTEXITCODE -ne 0) { throw 'x' }`nWrite-Host 'B-7: ok serverBase=http://x'"
+    "Invoke-B7-KioskUpgrade.ps1" = $p + $nativeSetup + "& `$nat[0] `$nat[1] 'exit 3'`nif (`$LASTEXITCODE -ne 3) { throw 'x' }`n& `$nat[0] `$nat[1] 'exit 0'`nif (`$LASTEXITCODE -ne 0) { throw 'x' }`nWrite-Host 'B-7: ok serverBase=http://x completedAtUtc=2026-01-01T00:00:00Z preserved'"
 }
 # R10g item 4 (rr5 L17): omitted / n/a / not applicable wording.
 Invoke-LedgerCase -Label "omitted (n/a) wording" -ExpectThrow $true -ExpectMessage "ci-acceptance: LEG B8 printed a skip that is not allow-listed*" -ExpectFailLine "ci-acceptance: LEG FAIL B8 (exit 0, phase skip)" -Override @{ "Invoke-B8-WindowsBillingRestart.ps1" = $p + "Write-Host 'B-8: pc billing check omitted'`nWrite-Host 'B-8: ok ps5=1 pc=1 cap=1'" }
@@ -196,5 +198,19 @@ foreach ($pin in @('-FilePath $LowKioskSetup -ArgumentList @("/VERYSILENT", "/SU
 }
 # The seed condition itself (its own line, not the later "seeding failed" check with the same test).
 if ($b7 -notmatch '(?m)^if \(\$before\.State -ne "configured"\) \{\r?$') { throw "ledger self-check: B-7 must seed unless setup.json is already configured" }
+# R10i OBS-1 (ruling): completedAtUtc is compared as raw JSON text (ordinal), never via a parsed DateTime string.
+foreach ($pin in @('[System.Text.Json.JsonDocument]::Parse($Raw)', '$beforeCompleted = Get-B7RawJsonProperty -Raw $before.Raw -Name "completedAtUtc"',
+        '$afterCompleted = Get-B7RawJsonProperty -Raw $after.Raw -Name "completedAtUtc"',
+        '[string]::Equals($afterCompleted.Token, $beforeCompleted.Token, [StringComparison]::Ordinal)')) {
+    if ($b7.IndexOf($pin, [StringComparison]::Ordinal) -lt 0) { throw "ledger self-check: B-7 raw completedAtUtc compare lost: $pin" }
+}
+if ($b7 -match '\[string\]\$\w+(\.Json)?\.completedAtUtc') { throw "ledger self-check: B-7 must not compare completedAtUtc via [string] of the parsed JSON" }
+# The ok line B-7 prints must satisfy the driver's B7 OkPattern (which requires "... preserved").
+$b7Ok = [regex]::Match($b7, '(?m)^Write-Host "(B-7: ok [^"]+)"\s*$')
+if (-not $b7Ok.Success) { throw "ledger self-check: B-7 ok line not found" }
+$b7OkSample = $b7Ok.Groups[1].Value -replace '\$\([^)]*\)', 'v'
+$b7Pattern = [regex]::Match($driverSrc, "Name = `"B7`";[^}]*OkPattern = '([^']+)'").Groups[1].Value
+if (-not $b7Pattern -or $b7Pattern -notmatch 'preserved\$$') { throw "ledger self-check: driver B7 OkPattern must end with preserved`$ (got '$b7Pattern')" }
+if ($b7OkSample -notmatch $b7Pattern) { throw "ledger self-check: B-7 ok line '$b7OkSample' does not match the driver OkPattern /$b7Pattern/" }
 Write-Host "ledger self-check: phase-matrix pins path and B-7 upgrade/seed pins ok"
 Write-Host "ledger self-check: ok"

@@ -7,7 +7,9 @@ on:
 jobs:
   linux:
     name: ubuntu net10
-    runs-on: ubuntu-latest
+    # R10i OPEN-1: pinned. ubuntu-latest moved to ubuntu-26.04 (run 45874013364), whose newer pg client wrote
+    # `SET transaction_timeout = 0;` into dumps that the postgres:16 service then rejected on restore.
+    runs-on: ubuntu-24.04
     services:
       postgres:
         image: postgres:16
@@ -30,6 +32,18 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: pin postgresql client 16 (same major as the postgres:16 service)
+        run: |
+          set -euo pipefail
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends postgresql-client-16
+          echo "/usr/lib/postgresql/16/bin" >> "$GITHUB_PATH"
+          for t in pg_dump pg_restore psql; do /usr/lib/postgresql/16/bin/$t --version; done
+          client_major=$(/usr/lib/postgresql/16/bin/pg_dump --version | awk '{print $3}' | cut -d. -f1)
+          server_num=$(PGPASSWORD=postgres /usr/lib/postgresql/16/bin/psql -h localhost -U postgres -d gameclub_test -tAc "SHOW server_version_num")
+          echo "PG_CLIENT_PIN client_major=${client_major} server_version_num=${server_num}"
+          test "${client_major}" = "16"
+          test "$((server_num / 10000))" = "16"
       - name: powershell parse check
         shell: pwsh
         run: ./scripts/ci/ps-parse-check.ps1

@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using GameClub.Server.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
@@ -49,8 +49,50 @@ public sealed class RestoreOldDumpOntoNewerSchemaTests
 
     private sealed record Prepared(string Dump, string WorkDir, NpgsqlConnectionStringBuilder Conn, Dictionary<string, string> PgEnv);
 
+    /// <summary>
+    /// R10i (rr7 L-6): the temp work dir is created here and removed in a finally around EVERYTHING that uses it
+    /// (PrepareAsync's pg_dump assert included), so a failing assert anywhere never leaves it behind.
+    /// </summary>
+    internal static async Task WithWorkDirAsync(Func<string, Task> body, Action<string>? workDirCreated = null)
+    {
+        var work = Path.Combine(Path.GetTempPath(), "gcm-r10h-restore-" + Guid.NewGuid().ToString("N")[..12]);
+        Directory.CreateDirectory(work);
+        workDirCreated?.Invoke(work);
+        try
+        {
+            await body(work);
+        }
+        finally
+        {
+            if (Directory.Exists(work)) Directory.Delete(work, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// R10i OPEN-1: the round trip (pg_dump -> pg_restore into the same server) needs client tools of the server's major.
+    /// A newer pg_dump writes settings the older server rejects (CI b032075 on ubuntu-26.04: pg_dump wrote
+    /// `SET transaction_timeout = 0;`, which the postgres:16 service rejects); an older one refuses to dump. Fail loudly
+    /// with both versions instead of a confusing restore error; never skip.
+    /// </summary>
+    private static async Task AssertPgClientMatchesServerAsync(string cs, Dictionary<string, string> pgEnv)
+    {
+        var serverNum = Convert.ToInt32(await ScalarAsync(cs, "SELECT current_setting('server_version_num')::int"));
+        var serverMajor = serverNum / 10000;
+        foreach (var tool in new[] { "pg_dump", "pg_restore", "psql" })
+        {
+            var v = Run(tool, new[] { "--version" }, pgEnv);
+            Assert.True(v.Exit == 0, $"{tool} --version failed: {v.Output}");
+            var m = System.Text.RegularExpressions.Regex.Match(v.Output, @"\(PostgreSQL\)\s+(\d+)(\.\d+)?");
+            Assert.True(m.Success, $"{tool} --version output not understood: {v.Output}");
+            var clientMajor = int.Parse(m.Groups[1].Value);
+            Assert.True(clientMajor == serverMajor,
+                $"{tool} major {clientMajor} ({v.Output.Trim()}) != server major {serverMajor} (server_version_num {serverNum}); "
+                + "this test needs client tools of the server's major on PATH (CI pins postgresql-client-16 in .github/workflows/ci.yml).");
+        }
+    }
+
     /// <summary>Old schema + marker row, dump it (the "pre-upgrade" dump), migrate to latest, drop the marker.</summary>
-    private static async Task<Prepared> PrepareAsync(GameClubPrefixedTestDatabase isolated)
+    private static async Task<Prepared> PrepareAsync(GameClubPrefixedTestDatabase isolated, string work)
     {
         isolated.EnsureInitialized();
         var cs = isolated.ConnectionString;
@@ -69,9 +111,8 @@ public sealed class RestoreOldDumpOntoNewerSchemaTests
         }
 
         var b = new NpgsqlConnectionStringBuilder(cs);
-        var work = Path.Combine(Path.GetTempPath(), "gcm-r10h-restore-" + Guid.NewGuid().ToString("N")[..12]);
-        Directory.CreateDirectory(work);
         var pgEnv = new Dictionary<string, string> { ["PGPASSWORD"] = b.Password ?? "" };
+        await AssertPgClientMatchesServerAsync(cs, pgEnv);
         var dump = Path.Combine(work, "pre-upgrade-0.0.9-old.dump");
         var d = Run("pg_dump", new[] { "-Fc", "-h", b.Host!, "-p", b.Port.ToString(), "-U", b.Username!, "-d", b.Database!, "-f", dump }, pgEnv);
         Assert.True(d.Exit == 0, "pg_dump of the old schema failed: " + d.Output);
@@ -98,9 +139,9 @@ public sealed class RestoreOldDumpOntoNewerSchemaTests
     public async Task restore_ps1_of_an_old_version_dump_onto_a_newer_schema_then_upgrade_succeeds_without_42P07()
     {
         using var isolated = new GameClubPrefixedTestDatabase(GameClubPrefixedTestDatabase.NamePrefix + "restoreold_");
-        var prep = await PrepareAsync(isolated);
-        try
+        await WithWorkDirAsync(async work =>
         {
+            var prep = await PrepareAsync(isolated, work);
             var programData = Path.Combine(prep.WorkDir, "ProgramData");
             Directory.CreateDirectory(Path.Combine(programData, "Checkpoint", "backups"));
             var serverJson = Path.Combine(prep.WorkDir, "server.json");
@@ -134,20 +175,16 @@ public sealed class RestoreOldDumpOntoNewerSchemaTests
             Assert.Equal("pg_database_owner", await ScalarAsync(cs, "SELECT nspowner::regrole::text FROM pg_namespace WHERE nspname='public'"));
 
             await AssertMigrateToLatestSucceedsAsync(cs);
-        }
-        finally
-        {
-            Directory.Delete(prep.WorkDir, recursive: true);
-        }
+        });
     }
 
     [Fact]
     public async Task negative_control_pre_R10h_pg_restore_clean_leaves_newer_tables_and_upgrade_fails_42P07()
     {
         using var isolated = new GameClubPrefixedTestDatabase(GameClubPrefixedTestDatabase.NamePrefix + "restoreold_");
-        var prep = await PrepareAsync(isolated);
-        try
+        await WithWorkDirAsync(async work =>
         {
+            var prep = await PrepareAsync(isolated, work);
             var b = prep.Conn;
             var r = Run("pg_restore", new[] { "--clean", "--if-exists", "-h", b.Host!, "-p", b.Port.ToString(), "-U", b.Username!, "-d", b.Database!, prep.Dump }, prep.PgEnv);
             Assert.True(r.Exit == 0, "pg_restore --clean failed: " + r.Output);
@@ -155,10 +192,45 @@ public sealed class RestoreOldDumpOntoNewerSchemaTests
             Assert.Equal(1L, await ScalarAsync(cs, $"SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name='{NewerOnlyTable}'"));
             var ex = await Assert.ThrowsAsync<PostgresException>(() => AssertMigrateToLatestSucceedsAsync(cs));
             Assert.Equal("42P07", ex.SqlState);
-        }
-        finally
+        });
+    }
+
+    [Fact]
+    public void ci_ubuntu_job_pins_the_runner_image_and_a_postgresql_16_client()
+    {
+        // R10i OPEN-1: ubuntu-latest moved to ubuntu-26.04 and its newer pg client broke this round trip against the
+        // postgres:16 service. The job pins the image and installs + puts first on PATH the client of the server's major.
+        var yml = File.ReadAllText(Path.Combine(RepoRoot(), ".github", "workflows", "ci.yml")).Replace("\r\n", "\n");
+        var job = yml[yml.IndexOf("    name: ubuntu net10\n", StringComparison.Ordinal)..];
+        var end = job.IndexOf("\n  windows", StringComparison.Ordinal);
+        if (end > 0) job = job[..end];
+        Assert.Contains("    runs-on: ubuntu-24.04\n", job);
+        Assert.DoesNotContain("runs-on: ubuntu-latest", job);
+        Assert.Contains("        image: postgres:16\n", job);
+        Assert.Contains("sudo apt-get install -y -q --no-install-recommends postgresql-client-16\n", job);
+        Assert.Contains("echo \"/usr/lib/postgresql/16/bin\" >> \"$GITHUB_PATH\"\n", job);
+        Assert.Contains("test \"${client_major}\" = \"16\"\n", job);
+        Assert.Contains("test \"$((server_num / 10000))\" = \"16\"\n", job);
+        // The pin step runs before the tests.
+        Assert.True(job.IndexOf("postgresql-client-16", StringComparison.Ordinal) < job.IndexOf("- name: test net10", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task work_dir_is_removed_even_when_an_assert_inside_fails()
+    {
+        // R10i (rr7 L-6), proved like the scratch database: an assert fails inside the guarded body after files were
+        // written into the work dir; the dir must be gone afterwards.
+        string? seen = null;
+        var ex = await Assert.ThrowsAnyAsync<Xunit.Sdk.XunitException>(() => WithWorkDirAsync(work =>
         {
-            Directory.Delete(prep.WorkDir, recursive: true);
-        }
+            File.WriteAllText(Path.Combine(work, "pre-upgrade-0.0.9-old.dump"), "x");
+            Directory.CreateDirectory(Path.Combine(work, "ProgramData", "Checkpoint", "backups"));
+            Assert.Fail("r10i forced assert failure inside the work dir body");
+            return Task.CompletedTask;
+        }, w => seen = w));
+        Assert.Contains("r10i forced assert failure", ex.Message);
+        Assert.NotNull(seen);
+        Assert.StartsWith(Path.GetTempPath(), seen);
+        Assert.False(Directory.Exists(seen), $"work dir left behind: {seen}");
     }
 }
