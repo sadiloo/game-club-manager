@@ -33,8 +33,15 @@ try {
 
 Write-Host "R8f-1 upgrade: postinstall fail hook (upgrade-backup)"
 & (Join-Path $PSScriptRoot "Reset-InstallerAcceptanceMachine.ps1")
-$setupArgsLow = @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/ACCOUNTS=$AccountsFile")
-Start-CheckpointServerSetup -LegLabel "r8f-postinstall-fail-upgrade-seed" -Exe $LowSetup -ArgumentList $setupArgsLow -TimeoutSeconds 2700 | Out-Null
+$r8fSeedLog = Join-Path $LogsDir "acceptance-setup-r8f-postinstall-fail-upgrade-seed.log"
+if (Test-Path -LiteralPath $r8fSeedLog) { Remove-Item -LiteralPath $r8fSeedLog -Force }
+$setupArgsLow = @(
+    "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART",
+    "/ACCOUNTS=$AccountsFile",
+    "/LOG=`"$r8fSeedLog`""
+)
+Start-CheckpointServerSetup -LegLabel "r8f-postinstall-fail-upgrade-seed" -Exe $LowSetup -ArgumentList $setupArgsLow `
+    -TimeoutSeconds 2700 -LogPath $r8fSeedLog | Out-Null
 
 $r8fUpgradeLog = Join-Path $LogsDir "acceptance-setup-r8f-postinstall-fail-upgrade.log"
 if (Test-Path -LiteralPath $r8fUpgradeLog) { Remove-Item -LiteralPath $r8fUpgradeLog -Force }
