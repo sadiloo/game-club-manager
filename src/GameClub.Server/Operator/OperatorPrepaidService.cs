@@ -17,10 +17,17 @@ public sealed class OperatorPrepaidService(
 {
     public async Task<object> StartDurationAsync(Guid sessionId, int minutes, CancellationToken ct)
     {
+        if (minutes <= 0)
+        {
+            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_minutes", "دقیقهٔ رزرو باید مثبت باشد.");
+        }
+
+        OperatorMoneyValidation.EnsurePositiveBounded(minutes, "invalid_minutes");
+
         var session = await LoadOpenConsoleSessionAsync(sessionId, ct);
         if (session.PrepaidKind != PrepaidSessionKind.None)
         {
-            throw new ApiException(StatusCodes.Status409Conflict, "prepaid_exists", "Session already has prepaid booking.");
+            throw new ApiException(StatusCodes.Status409Conflict, "prepaid_exists", "برای این جلسه رزرو ثبت شده است.");
         }
 
         var snapshot = await rates.LoadSnapshotAsync(session.RateCardSnapshotId, ct);
@@ -48,13 +55,15 @@ public sealed class OperatorPrepaidService(
     {
         if (amountToman <= 0)
         {
-            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_amount", "Prepaid amount must be positive.");
+            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_amount", "مبلغ رزرو باید مثبت باشد.");
         }
+
+        OperatorMoneyValidation.EnsurePositiveBounded(amountToman);
 
         var session = await LoadOpenConsoleSessionAsync(sessionId, ct);
         if (session.PrepaidKind != PrepaidSessionKind.None)
         {
-            throw new ApiException(StatusCodes.Status409Conflict, "prepaid_exists", "Session already has prepaid booking.");
+            throw new ApiException(StatusCodes.Status409Conflict, "prepaid_exists", "برای این جلسه رزرو ثبت شده است.");
         }
 
         var snapshot = await rates.LoadSnapshotAsync(session.RateCardSnapshotId, ct);
@@ -108,7 +117,7 @@ public sealed class OperatorPrepaidService(
         }
         catch (BillingException ex)
         {
-            throw new ApiException(StatusCodes.Status400BadRequest, "billing_error", ex.Message);
+            throw new ApiException(StatusCodes.Status400BadRequest, "billing_error", BillingExceptionUserMessages.ForCode(ex.Code));
         }
 
         var seg0 = openSeg;
@@ -120,12 +129,12 @@ public sealed class OperatorPrepaidService(
         var oneMinute = MoneyMath.ChargeForMinutes(opening.HourlyRateToman, policy.GranularityMinutes, policy.Remainder);
         if (amountToman < oneMinute)
         {
-            throw new ApiException(StatusCodes.Status400BadRequest, "below_minimum", "Amount is below the tariff minimum play time.");
+            throw new ApiException(StatusCodes.Status400BadRequest, "below_minimum", "مبلغ کمتر از حداقل زمان بازی تعرفه است.");
         }
 
         if (plan.GrantedActiveSeconds <= 0)
         {
-            throw new ApiException(StatusCodes.Status400BadRequest, "below_minimum", "Amount is below the tariff minimum play time.");
+            throw new ApiException(StatusCodes.Status400BadRequest, "below_minimum", "مبلغ کمتر از حداقل زمان بازی تعرفه است.");
         }
 
         session.PrepaidKind = PrepaidSessionKind.Amount;
@@ -143,7 +152,7 @@ public sealed class OperatorPrepaidService(
             .Include(s => s.Pauses)
             .Include(s => s.Segments)
             .FirstOrDefaultAsync(s => s.Id == sessionId, ct)
-            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Session not found.");
+            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "جلسه یافت نشد.");
         var active = await ActivePlaySecondsAsync(session, clock.UtcNow.UtcDateTime, ct);
         var booked = session.PrepaidBookedActiveSeconds ?? 0;
         var remaining = Math.Max(0, booked - active);
@@ -161,7 +170,7 @@ public sealed class OperatorPrepaidService(
     public async Task MarkEndAlertSentAsync(Guid sessionId, CancellationToken ct)
     {
         var session = await db.Sessions.FirstOrDefaultAsync(s => s.Id == sessionId, ct)
-            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Session not found.");
+            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "جلسه یافت نشد.");
         session.PrepaidEndAlertSent = true;
         await db.SaveChangesAsync(ct);
     }
@@ -173,15 +182,15 @@ public sealed class OperatorPrepaidService(
             .Include(s => s.Pauses)
             .Include(s => s.Station)!.ThenInclude(st => st!.Group)
             .FirstOrDefaultAsync(s => s.Id == sessionId, ct)
-            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Session not found.");
+            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "جلسه یافت نشد.");
         if (session.Station?.Group?.Kind != StationKind.Console)
         {
-            throw new ApiException(StatusCodes.Status400BadRequest, "not_console", "Prepaid applies to console/table sessions.");
+            throw new ApiException(StatusCodes.Status400BadRequest, "not_console", "رزرو فقط برای کنسول و میز است.");
         }
 
         if (session.Status is not SessionStatus.Open and not SessionStatus.Paused)
         {
-            throw new ApiException(StatusCodes.Status409Conflict, "invalid_state", "Session is not active.");
+            throw new ApiException(StatusCodes.Status409Conflict, "invalid_state", "جلسه فعال نیست.");
         }
 
         return session;

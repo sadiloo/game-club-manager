@@ -16,7 +16,7 @@ public sealed class KioskPcPrepaidService(
     {
         if (session.PrepaidKind != PrepaidSessionKind.None)
         {
-            throw new ApiException(StatusCodes.Status409Conflict, "prepaid_exists", "Session already has prepaid booking.");
+            throw new ApiException(StatusCodes.Status409Conflict, "prepaid_exists", "این جلسه از قبل رزرو پیش‌پرداخت دارد.");
         }
 
         var snapshot = await rates.LoadSnapshotAsync(session.RateCardSnapshotId, ct);
@@ -42,12 +42,12 @@ public sealed class KioskPcPrepaidService(
     {
         if (amountToman <= 0)
         {
-            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_amount", "Prepaid amount must be positive.");
+            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_amount", "مبلغ پیش‌پرداخت باید بیشتر از صفر باشد.");
         }
 
         if (session.PrepaidKind != PrepaidSessionKind.None)
         {
-            throw new ApiException(StatusCodes.Status409Conflict, "prepaid_exists", "Session already has prepaid booking.");
+            throw new ApiException(StatusCodes.Status409Conflict, "prepaid_exists", "این جلسه از قبل رزرو پیش‌پرداخت دارد.");
         }
 
         var snapshot = await rates.LoadSnapshotAsync(session.RateCardSnapshotId, ct);
@@ -68,7 +68,7 @@ public sealed class KioskPcPrepaidService(
         }
         catch (BillingException ex)
         {
-            throw new ApiException(StatusCodes.Status400BadRequest, "billing_error", ex.Message);
+            throw new ApiException(StatusCodes.Status400BadRequest, "billing_error", BillingExceptionUserMessages.ForCode(ex.Code));
         }
 
         var opening = RateResolver.Resolve(snapshot.Card, SpecialDayCalendar.Empty, start, seg.GroupId, seg.Mode, seg.PlayerCount);
@@ -76,12 +76,12 @@ public sealed class KioskPcPrepaidService(
         var oneMinute = MoneyMath.ChargeForMinutes(opening.HourlyRateToman, policy.GranularityMinutes, policy.Remainder);
         if (amountToman < oneMinute)
         {
-            throw new ApiException(StatusCodes.Status400BadRequest, "below_minimum", "Amount is below the tariff minimum play time.");
+            throw new ApiException(StatusCodes.Status400BadRequest, "below_minimum", "مبلغ از حداقل زمان بازی تعرفه کمتر است.");
         }
 
         if (plan.GrantedActiveSeconds <= 0)
         {
-            throw new ApiException(StatusCodes.Status400BadRequest, "below_minimum", "Amount is below the tariff minimum play time.");
+            throw new ApiException(StatusCodes.Status400BadRequest, "below_minimum", "مبلغ از حداقل زمان بازی تعرفه کمتر است.");
         }
 
         session.PrepaidKind = PrepaidSessionKind.Amount;

@@ -8,7 +8,7 @@ public class WalletLoyaltyBillingAcceptanceTests
     private static readonly RoundingPolicy Step5Up = RoundingPolicy.Create(5_000, RoundingDirection.Up);
 
     [Fact]
-    public void wl_scenario_03_full_wallet_91667_no_counter_rounding_lift()
+    public void wl_scenario_03_full_wallet_91667_rounds_like_cash_whole_invoice()
     {
         var request = new InvoiceRequest(
             [new TimeChargeLine("ps5", 91_667, CafeFixture.Ps5, new LocalDate(2026, 6, 3), DayOfWeek.Tuesday)],
@@ -19,20 +19,375 @@ public class WalletLoyaltyBillingAcceptanceTests
             DiscountPolicy.Default,
             Step5Up,
             T.At(2026, 6, 3, 15, 0));
+        var cashOnly = InvoiceCalculator.Calculate(request);
+        Assert.Equal(95_000, cashOnly.PayableToman);
         var wallet = new MemberWallet("m", 200_000, 0);
         var (invoice, alloc) = InvoiceCalculator.Collect(
             request,
             [new Tender(PaymentMethod.Wallet, 91_667, "m")],
             [wallet]);
         Assert.True(alloc.IsValid);
-        Assert.Equal(91_667, alloc.PayableToman);
-        Assert.Equal(0, alloc.RoundingToman);
-        Assert.Equal(91_667, invoice.PayableToman);
+        Assert.Equal(cashOnly.PayableToman, alloc.PayableToman);
+        Assert.Equal(cashOnly.RoundingToman, alloc.RoundingToman);
+        Assert.Equal(95_000, invoice.PayableToman);
+        Assert.Equal(95_000, alloc.Tenders.Single().AmountToman);
     }
 
     [Fact]
-    public void wl_scenario_04_mixed_wallet_50001_counter_rounds_to_150001()
+    public void wl_scenario_session_time_full_wallet_49500_rounds_like_cash_whole_invoice()
     {
+        var request = new InvoiceRequest(
+            [new TimeChargeLine("ps5", 49_500, CafeFixture.Ps5, new LocalDate(2026, 6, 3), DayOfWeek.Tuesday)],
+            [],
+            [],
+            null,
+            null,
+            DiscountPolicy.Default,
+            Step5Up,
+            T.At(2026, 6, 3, 15, 0));
+        var cashOnly = InvoiceCalculator.Calculate(request);
+        Assert.Equal(50_000, cashOnly.PayableToman);
+        var (invoice, alloc) = InvoiceCalculator.Collect(
+            request,
+            [new Tender(PaymentMethod.Wallet, 50_000, "m")],
+            [new MemberWallet("m", 50_000, 0)]);
+        Assert.True(alloc.IsValid);
+        Assert.Equal(cashOnly.PayableToman, alloc.PayableToman);
+        Assert.Equal(50_000, alloc.Tenders.Single().AmountToman);
+        Assert.Equal(50_000, invoice.PayableToman);
+    }
+
+    [Fact]
+    public void wl_scenario_buffet_full_wallet_typed_unrounded_49500_draws_50000_when_balance_covers_rounded()
+    {
+        var request = new InvoiceRequest(
+            [],
+            [new BuffetLine("custom", "خدمت", 1, 49_500)],
+            [],
+            null,
+            null,
+            DiscountPolicy.Default,
+            Step5Up,
+            T.At(2026, 6, 3, 15, 0));
+        var cashOnly = InvoiceCalculator.Calculate(request);
+        Assert.Equal(50_000, cashOnly.PayableToman);
+        var wallet60k = new MemberWallet("m", 60_000, 0);
+        var (invoiceLow, allocLow) = InvoiceCalculator.Collect(
+            request,
+            [new Tender(PaymentMethod.Wallet, 49_500, "m")],
+            [wallet60k]);
+        Assert.True(allocLow.IsValid);
+        Assert.Equal(50_000, allocLow.PayableToman);
+        Assert.Equal(50_000, allocLow.Tenders.Single().AmountToman);
+        var (invoiceHigh, allocHigh) = InvoiceCalculator.Collect(
+            request,
+            [new Tender(PaymentMethod.Wallet, 50_000, "m2")],
+            [new MemberWallet("m2", 60_000, 0)]);
+        Assert.True(allocHigh.IsValid);
+        Assert.Equal(cashOnly.PayableToman, allocHigh.PayableToman);
+        Assert.Equal(50_000, allocHigh.Tenders.Single().AmountToman);
+        Assert.Equal(50_000, invoiceLow.PayableToman);
+        Assert.Equal(50_000, invoiceHigh.PayableToman);
+    }
+
+    [Fact]
+    public void wl_scenario_buffet_wallet_balance_49700_plus_cash_300_meets_cash_collectible()
+    {
+        var request = new InvoiceRequest(
+            [],
+            [new BuffetLine("custom", "خدمت", 1, 49_500)],
+            [],
+            null,
+            null,
+            DiscountPolicy.Default,
+            Step5Up,
+            T.At(2026, 6, 3, 15, 0));
+        var cashOnly = InvoiceCalculator.Calculate(request);
+        Assert.Equal(50_000, cashOnly.PayableToman);
+        var (invoice, alloc) = InvoiceCalculator.Collect(
+            request,
+            [new Tender(PaymentMethod.Wallet, 49_700, "m"), new Tender(PaymentMethod.Cash, 300)],
+            [new MemberWallet("m", 49_700, 0)]);
+        Assert.True(alloc.IsValid);
+        Assert.Equal(50_000, alloc.PayableToman);
+        Assert.Equal(cashOnly.RoundingToman, alloc.RoundingToman);
+        Assert.Equal(49_700, alloc.Tenders.First(t => t.Method == PaymentMethod.Wallet).AmountToman);
+        Assert.Equal(50_000, invoice.PayableToman);
+    }
+
+    [Fact]
+    public void wl_scenario_buffet_wallet_49000_cash_1000_meets_whole_invoice_50000()
+    {
+        var request = new InvoiceRequest(
+            [],
+            [new BuffetLine("custom", "خدمت", 1, 49_500)],
+            [],
+            null,
+            null,
+            DiscountPolicy.Default,
+            Step5Up,
+            T.At(2026, 6, 3, 15, 0));
+        var (invoice, alloc) = InvoiceCalculator.Collect(
+            request,
+            [new Tender(PaymentMethod.Wallet, 49_000, "m"), new Tender(PaymentMethod.Cash, 1_000)],
+            [new MemberWallet("m", 49_700, 0)]);
+        Assert.True(alloc.IsValid);
+        Assert.Equal(50_000, alloc.PayableToman);
+        Assert.Equal(50_000, invoice.PayableToman);
+        Assert.Equal(49_000, alloc.Tenders.First(t => t.Method == PaymentMethod.Wallet).AmountToman);
+        Assert.Equal(1_000, alloc.Tenders.First(t => t.Method == PaymentMethod.Cash).AmountToman);
+    }
+
+    [Fact]
+    public void wl_scenario_buffet_wallet_49000_cash_5000_rejected_whole_invoice_not_counter_round()
+    {
+        var request = new InvoiceRequest(
+            [],
+            [new BuffetLine("custom", "خدمت", 1, 49_500)],
+            [],
+            null,
+            null,
+            DiscountPolicy.Default,
+            Step5Up,
+            T.At(2026, 6, 3, 15, 0));
+        var (_, alloc) = InvoiceCalculator.Collect(
+            request,
+            [new Tender(PaymentMethod.Wallet, 49_000, "m"), new Tender(PaymentMethod.Cash, 5_000)],
+            [new MemberWallet("m", 49_700, 0)]);
+        Assert.False(alloc.IsValid);
+    }
+
+    [Fact]
+    public void wl_scenario_buffet_wallet_balance_49700_debt_floor_covers_rounding_gap()
+    {
+        var request = new InvoiceRequest(
+            [],
+            [new BuffetLine("custom", "خدمت", 1, 49_500)],
+            [],
+            null,
+            null,
+            DiscountPolicy.Default,
+            Step5Up,
+            T.At(2026, 6, 3, 15, 0));
+        var cashOnly = InvoiceCalculator.Calculate(request);
+        var debt = DebtPolicy.Limited(50_000);
+        var (invoice, alloc) = InvoiceCalculator.Collect(
+            request,
+            [new Tender(PaymentMethod.Wallet, 50_000, "m")],
+            [new MemberWallet("m", 49_700, 0)],
+            debt);
+        Assert.True(alloc.IsValid);
+        Assert.Equal(cashOnly.PayableToman, alloc.PayableToman);
+        Assert.Equal(50_000, alloc.Tenders.Single().AmountToman);
+        Assert.Equal(50_000, invoice.PayableToman);
+    }
+
+    [Fact]
+    public void wl_scenario_buffet_wallet_balance_exactly_rounded_50000_full_draw()
+    {
+        var request = new InvoiceRequest(
+            [],
+            [new BuffetLine("custom", "خدمت", 1, 49_500)],
+            [],
+            null,
+            null,
+            DiscountPolicy.Default,
+            Step5Up,
+            T.At(2026, 6, 3, 15, 0));
+        var (invoice, alloc) = InvoiceCalculator.Collect(
+            request,
+            [new Tender(PaymentMethod.Wallet, 50_000, "m")],
+            [new MemberWallet("m", 50_000, 0)]);
+        Assert.True(alloc.IsValid);
+        Assert.Equal(50_000, alloc.PayableToman);
+        Assert.Equal(500, alloc.RoundingToman);
+        Assert.Equal(50_000, invoice.PayableToman);
+    }
+
+    [Fact]
+    public void wl_scenario_wallet_buffet_4999_under_threshold_exact_deduction()
+    {
+        var request = new InvoiceRequest(
+            [],
+            [new BuffetLine("custom", "خدمت", 1, 4_999)],
+            [],
+            null,
+            null,
+            DiscountPolicy.Default,
+            Step5Up,
+            T.At(2026, 6, 3, 15, 0));
+        var cashOnly = InvoiceCalculator.Calculate(request);
+        Assert.Equal(5_000, cashOnly.PayableToman);
+        var (invoice, alloc) = InvoiceCalculator.Collect(
+            request,
+            [new Tender(PaymentMethod.Wallet, 4_999, "m")],
+            [new MemberWallet("m", 10_000, 0)]);
+        Assert.True(alloc.IsValid);
+        Assert.Equal(4_999, alloc.PayableToman);
+        Assert.Equal(0, alloc.RoundingToman);
+        Assert.Equal(4_999, invoice.PayableToman);
+        Assert.Equal(4_999, alloc.Tenders.Single().AmountToman);
+    }
+
+    [Fact]
+    public void gate_pin_d4_empty_tenders_invalid_wallet_4999_valid()
+    {
+        var request = new InvoiceRequest(
+            [],
+            [new BuffetLine("custom", "خدمت", 1, 4_999)],
+            [],
+            null,
+            null,
+            DiscountPolicy.Default,
+            Step5Up,
+            T.At(2026, 6, 3, 15, 0));
+        var (_, noTender) = InvoiceCalculator.Collect(request, [], [new MemberWallet("m", 10_000, 0)]);
+        Assert.False(noTender.IsValid);
+        var (_, alloc) = InvoiceCalculator.Collect(
+            request,
+            [new Tender(PaymentMethod.Wallet, 4_999, "m")],
+            [new MemberWallet("m", 10_000, 0)]);
+        Assert.True(alloc.IsValid);
+        Assert.Equal(4_999, alloc.PayableToman);
+    }
+
+    [Theory]
+    [InlineData(5_000L)]
+    [InlineData(5_001L)]
+    public void wl_scenario_wallet_buffet_at_threshold_rounds_like_cash(long net)
+    {
+        var request = new InvoiceRequest(
+            [],
+            [new BuffetLine("custom", "خدمت", 1, net)],
+            [],
+            null,
+            null,
+            DiscountPolicy.Default,
+            Step5Up,
+            T.At(2026, 6, 3, 15, 0));
+        var cashOnly = InvoiceCalculator.Calculate(request);
+        var (invoice, alloc) = InvoiceCalculator.Collect(
+            request,
+            [new Tender(PaymentMethod.Wallet, net, "m")],
+            [new MemberWallet("m", cashOnly.PayableToman, 0)]);
+        Assert.True(alloc.IsValid);
+        Assert.Equal(cashOnly.PayableToman, alloc.PayableToman);
+        Assert.Equal(cashOnly.RoundingToman, alloc.RoundingToman);
+        Assert.Equal(cashOnly.PayableToman, invoice.PayableToman);
+        Assert.Equal(cashOnly.PayableToman, alloc.Tenders.Single().AmountToman);
+    }
+
+    [Fact]
+    public void wl_scenario_mixed_buffet_5000_wallet_1000_cash_4000_collectible_5000_at_threshold()
+    {
+        var request = new InvoiceRequest(
+            [],
+            [new BuffetLine("custom", "خدمت", 1, 5_000)],
+            [],
+            null,
+            null,
+            DiscountPolicy.Default,
+            Step5Up,
+            T.At(2026, 6, 3, 15, 0));
+        var (invoice, alloc) = InvoiceCalculator.Collect(
+            request,
+            [new Tender(PaymentMethod.Wallet, 1_000, "m"), new Tender(PaymentMethod.Cash, 4_000)],
+            [new MemberWallet("m", 10_000, 0)]);
+        Assert.True(alloc.IsValid);
+        Assert.Equal(5_000, alloc.PayableToman);
+        Assert.Equal(5_000, invoice.PayableToman);
+    }
+
+    [Fact]
+    public void wl_scenario_mixed_buffet_5000_wallet_1000_cash_5000_rejected_single_sum_mismatch()
+    {
+        var request = new InvoiceRequest(
+            [],
+            [new BuffetLine("custom", "خدمت", 1, 5_000)],
+            [],
+            null,
+            null,
+            DiscountPolicy.Default,
+            Step5Up,
+            T.At(2026, 6, 3, 15, 0));
+        var (_, alloc) = InvoiceCalculator.Collect(
+            request,
+            [new Tender(PaymentMethod.Wallet, 1_000, "m"), new Tender(PaymentMethod.Cash, 5_000)],
+            [new MemberWallet("m", 10_000, 0)]);
+        Assert.False(alloc.IsValid);
+        var mismatches = alloc.Errors.Where(e => e.Code == PaymentErrors.SumMismatch).ToList();
+        Assert.Single(mismatches);
+    }
+
+    [Fact]
+    public void wl_scenario_mixed_buffet_12000_wallet_1000_cash_14000_accepted_collectible_15000()
+    {
+        var request = new InvoiceRequest(
+            [],
+            [new BuffetLine("custom", "خدمت", 1, 12_000)],
+            [],
+            null,
+            null,
+            DiscountPolicy.Default,
+            Step5Up,
+            T.At(2026, 6, 3, 15, 0));
+        var cashOnly = InvoiceCalculator.Calculate(request);
+        var (invoice, alloc) = InvoiceCalculator.Collect(
+            request,
+            [new Tender(PaymentMethod.Wallet, 1_000, "m"), new Tender(PaymentMethod.Cash, 14_000)],
+            [new MemberWallet("m", 20_000, 0)]);
+        Assert.True(alloc.IsValid);
+        Assert.Equal(cashOnly.PayableToman, alloc.PayableToman);
+        Assert.Equal(15_000, invoice.PayableToman);
+    }
+
+    [Fact]
+    public void wl_scenario_mixed_buffet_12000_wallet_1000_cash_15000_rejected_single_sum_mismatch()
+    {
+        var request = new InvoiceRequest(
+            [],
+            [new BuffetLine("custom", "خدمت", 1, 12_000)],
+            [],
+            null,
+            null,
+            DiscountPolicy.Default,
+            Step5Up,
+            T.At(2026, 6, 3, 15, 0));
+        var (_, alloc) = InvoiceCalculator.Collect(
+            request,
+            [new Tender(PaymentMethod.Wallet, 1_000, "m"), new Tender(PaymentMethod.Cash, 15_000)],
+            [new MemberWallet("m", 20_000, 0)]);
+        Assert.False(alloc.IsValid);
+        Assert.Single(alloc.Errors, e => e.Code == PaymentErrors.SumMismatch);
+    }
+
+    [Fact]
+    public void wl_scenario_buffet_only_full_wallet_49500_rounds_like_cash()
+    {
+        var request = new InvoiceRequest(
+            [],
+            [new BuffetLine("custom", "خدمت", 1, 49_500)],
+            [],
+            null,
+            null,
+            DiscountPolicy.Default,
+            Step5Up,
+            T.At(2026, 6, 3, 15, 0));
+        var (invoice, alloc) = InvoiceCalculator.Collect(
+            request,
+            [new Tender(PaymentMethod.Wallet, 50_000, "m")],
+            [new MemberWallet("m", 50_000, 0)]);
+        Assert.True(alloc.IsValid);
+        Assert.Equal(50_000, alloc.PayableToman);
+        Assert.Equal(500, alloc.RoundingToman);
+        Assert.Equal(50_000, invoice.PayableToman);
+        Assert.Equal(50_000, alloc.Tenders.Single().AmountToman);
+    }
+
+    [Fact]
+    public void wl_scenario_04_mixed_wallet_50001_whole_invoice_150000_not_counter_round()
+    {
+        // owner ruling 2026-11-24 R4c Q3 (whole bill rounded once)
         var request = new InvoiceRequest(
             [new TimeChargeLine("time", 149_850, CafeFixture.Ps5, new LocalDate(2026, 6, 3), DayOfWeek.Tuesday)],
             [],
@@ -42,13 +397,19 @@ public class WalletLoyaltyBillingAcceptanceTests
             DiscountPolicy.Default,
             Step5Up,
             T.At(2026, 6, 3, 15, 0));
-        var preview = new[] { new Tender(PaymentMethod.Wallet, 50_001, "m"), new Tender(PaymentMethod.Cash, 100_000) };
-        var (previewInvoice, previewAlloc) = InvoiceCalculator.Collect(request, preview, [new MemberWallet("m", 50_001, 0)]);
-        var (confirmInvoice, confirmAlloc) = InvoiceCalculator.Collect(request, preview, [new MemberWallet("m", 50_001, 0)]);
-        Assert.True(previewAlloc.IsValid);
-        Assert.Equal(previewAlloc.PayableToman, confirmAlloc.PayableToman);
-        Assert.Equal(150_001, confirmAlloc.PayableToman);
-        Assert.Equal(151, confirmAlloc.RoundingToman);
+        var cashOnly = InvoiceCalculator.Calculate(request);
+        Assert.Equal(150_000, cashOnly.PayableToman);
+        var exact = new[] { new Tender(PaymentMethod.Wallet, 50_001, "m"), new Tender(PaymentMethod.Cash, 99_999) };
+        var (invoice, alloc) = InvoiceCalculator.Collect(request, exact, [new MemberWallet("m", 50_001, 0)]);
+        Assert.True(alloc.IsValid);
+        Assert.Equal(150_000, alloc.PayableToman);
+        Assert.Equal(150_000, invoice.PayableToman);
+        Assert.Equal(150, alloc.RoundingToman);
+        Assert.Equal(50_001, alloc.Tenders.First(t => t.Method == PaymentMethod.Wallet).AmountToman);
+        Assert.Equal(99_999, alloc.Tenders.First(t => t.Method == PaymentMethod.Cash).AmountToman);
+        var over = new[] { new Tender(PaymentMethod.Wallet, 50_001, "m"), new Tender(PaymentMethod.Cash, 100_000) };
+        var (_, overAlloc) = InvoiceCalculator.Collect(request, over, [new MemberWallet("m", 50_001, 0)]);
+        Assert.False(overAlloc.IsValid);
     }
 
     [Fact]

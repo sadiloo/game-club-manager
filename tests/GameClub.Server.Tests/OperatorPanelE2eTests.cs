@@ -1,4 +1,6 @@
+using System.Collections.Concurrent;
 using System.Net.Http.Json;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using GameClub.Billing;
@@ -40,6 +42,28 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
         "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
+    private sealed class NativeDialogRecorder
+    {
+        public List<string> Calls { get; } = [];
+    }
+
+    private static readonly ConditionalWeakTable<IPage, NativeDialogRecorder> NativeDialogRecorders = new();
+
+    private static void AttachNativeDialogRecorder(IPage page)
+    {
+        var recorder = new NativeDialogRecorder();
+        NativeDialogRecorders.Add(page, recorder);
+        page.Dialog += (_, d) => recorder.Calls.Add($"{d.Type}:{d.Message}");
+    }
+
+    private static void AssertNoUnexpectedNativeDialogs(IPage page)
+    {
+        if (NativeDialogRecorders.TryGetValue(page, out var recorder))
+        {
+            NativeDialogRecorderAssert.AssertNoUnexpectedNativeDialogs(recorder.Calls);
+        }
+    }
+
     private static string? ParseCommandIdFromPost(string? postData)
     {
         if (string.IsNullOrWhiteSpace(postData))
@@ -49,6 +73,58 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
 
         using var doc = JsonDocument.Parse(postData);
         return doc.RootElement.TryGetProperty("commandId", out var id) ? id.GetString() : null;
+    }
+
+    private static async Task FillCpFieldAsync(IPage page, string fieldName, string value)
+    {
+        var sel = $"#cpLayer [data-cp-field='{fieldName}']";
+        await page.WaitForSelectorAsync(sel);
+        await page.FillAsync(sel, value);
+    }
+
+    private static Task ClickCpSubmitAsync(IPage page) =>
+        page.ClickAsync("#cpLayer [data-cp-role='submit']");
+
+    private static Task ClickCpCancelAsync(IPage page) =>
+        page.ClickAsync("#cpLayer [data-cp-role='cancel']");
+
+    private static async Task WaitForCpLayerHiddenAsync(IPage page)
+    {
+        await page.Locator("#cpLayer").WaitForAsync(new() { State = WaitForSelectorState.Hidden });
+    }
+
+    private static async Task SelectCpRadioAsync(IPage page, string value)
+    {
+        await page.ClickAsync($"#cpLayer input[type=radio][value='{value}']");
+    }
+
+    private static async Task ClickCpPickFirstAsync(IPage page)
+    {
+        await page.ClickAsync("#cpLayer .cp-pick-row >> nth=0");
+    }
+
+    private static async Task FillCpCorrectionFormAsync(IPage page)
+    {
+        await page.WaitForSelectorAsync("#cpLayer:not(.hidden)");
+        await FillCpFieldAsync(page, "newAmountToman", "90000");
+        await FillCpFieldAsync(page, "newGiftToman", "0");
+        await FillCpFieldAsync(page, "description", "r4-e2e");
+        await ClickCpSubmitAsync(page);
+    }
+
+    private static async Task FillWalletTopUpCashAsync(IPage page, string amount = "50000")
+    {
+        await page.WaitForSelectorAsync("#cpLayer:not(.hidden)");
+        await FillCpFieldAsync(page, "amountToman", amount);
+        await ClickCpSubmitAsync(page);
+    }
+
+    private static async Task FillC2cPaymentLineAsync(IPage page, string amount = "80000")
+    {
+        await page.WaitForSelectorAsync("#cpLayer:not(.hidden)");
+        await FillCpFieldAsync(page, "amountToman", amount);
+        await ClickCpSubmitAsync(page);
+        await WaitForCpLayerHiddenAsync(page);
     }
 
     private static async Task<string> WaitForBillTextAsync(
@@ -78,6 +154,7 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
         }
 
         var page = await context.NewPageAsync();
+        AttachNativeDialogRecorder(page);
         await page.RouteAsync("**/*", async route =>
         {
             var request = route.Request;
@@ -157,15 +234,13 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
 
         var opClient = await LoginOperatorClientAsync();
         var page = await LoginAsync(opClient);
-        var prompts = new Queue<string>(["80000", "", ""]);
-        page.Dialog += async (_, d) =>
-        {
-            var v = prompts.Count > 0 ? prompts.Dequeue() : "";
-            await d.AcceptAsync(v);
-        };
 
         await page.ClickAsync(".tile[data-station-id='PC-E2E']");
         await page.ClickAsync("#addC2cLineBtn");
+        await page.WaitForSelectorAsync("#cpLayer:not(.hidden)");
+        await FillCpFieldAsync(page, "amountToman", "80000");
+        await ClickCpSubmitAsync(page);
+        await WaitForCpLayerHiddenAsync(page);
         await page.ClickAsync("#confirmBtn");
         await page.WaitForSelectorAsync("#pendingC2cList li");
 
@@ -194,6 +269,8 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
             Assert.Equal(PaymentConfirmationStatus.Confirmed, (await db.PaymentLines.SingleAsync()).ConfirmationStatus);
         }
+
+        AssertNoUnexpectedNativeDialogs(page);
     }
 
     [Fact]
@@ -219,7 +296,6 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
             TimeSpan.FromSeconds(10));
         Assert.Contains("120000", detail);
 
-        page.Dialog += async (_, d) => await d.AcceptAsync(null);
         await page.ClickAsync("#confirmBtn");
         for (var i = 0; i < 20; i++)
         {
@@ -903,8 +979,10 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
             }
         };
         var t0 = DateTimeOffset.UtcNow;
-        page.Dialog += (_, d) => d.AcceptAsync("STALE-C");
         await page.ClickAsync("#transferBtn");
+        await page.WaitForSelectorAsync("#cpLayer:not(.hidden)");
+        await SelectCpRadioAsync(page, "STALE-C");
+        await ClickCpSubmitAsync(page);
         var deadline = t0 + TimeSpan.FromSeconds(3);
         while (DateTimeOffset.UtcNow < deadline && !gridGets.Any(g => g >= t0))
         {
@@ -934,12 +1012,14 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
         factory.Clock.SetTehran(2026, 6, 3, 14, 0);
         await S3TestHelpers.StartSession(_api, "PS5-FROM", 1);
         var page = await LoginAsync(op);
-        page.Dialog += (_, d) => d.AcceptAsync("PS5-TO");
         await page.ClickAsync(".tile[data-station-id='PS5-FROM']");
         await page.WaitForSelectorAsync("#transferBtn:not(.hidden)");
         var transferTask = page.WaitForResponseAsync(r =>
             r.Url.Contains("/transfer", StringComparison.Ordinal) && r.Request.Method == "POST");
         await page.ClickAsync("#transferBtn");
+        await page.WaitForSelectorAsync("#cpLayer:not(.hidden)");
+        await SelectCpRadioAsync(page, "PS5-TO");
+        await ClickCpSubmitAsync(page);
         var transferResponse = await transferTask;
         Assert.True(transferResponse.Ok, await transferResponse.TextAsync());
         await page.EvaluateAsync("() => refreshGrid()");
@@ -977,13 +1057,6 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
         await page.EvaluateAsync("() => refreshGrid()");
         await page.ClickAsync(".tile[data-station-id='PS5-R4TU']");
         await page.WaitForSelectorAsync("#walletTopUpCash:not([disabled])");
-        page.Dialog += (_, d) =>
-        {
-            if (d.Type == DialogType.Prompt)
-            {
-                _ = d.AcceptAsync(d.Message.Contains("هدیه") ? "" : "50000");
-            }
-        };
 
         var topUpPosts = new List<string?>();
         var topUpAttempts = 0;
@@ -1020,6 +1093,9 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
             && !r.Url.Contains("/wallet/top-ups", StringComparison.Ordinal)
             && r.Status == 503);
         await page.ClickAsync("#walletTopUpCash");
+        await page.WaitForSelectorAsync("#cpLayer:not(.hidden)");
+        await FillCpFieldAsync(page, "amountToman", "50000");
+        await ClickCpSubmitAsync(page);
         await firstFail;
 
         Assert.Equal(1, topUpAttempts);
@@ -1033,9 +1109,11 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
             && r.Url.Contains("/wallet/top-up", StringComparison.Ordinal)
             && !r.Url.Contains("/wallet/top-ups", StringComparison.Ordinal)
             && r.Ok);
-        await page.ClickAsync("#walletTopUpCash");
+        await FillCpFieldAsync(page, "amountToman", "50000");
+        await ClickCpSubmitAsync(page);
         var ok = await successResponse;
         Assert.True(ok.Ok);
+        await WaitForCpLayerHiddenAsync(page);
 
         Assert.Equal(2, topUpAttempts);
         Assert.Equal(2, topUpPosts.Count);
@@ -1081,32 +1159,6 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
         await page.ClickAsync(".tile[data-station-id='PS5-R4CR']");
         await page.WaitForSelectorAsync("#walletCorrectBtn:not([disabled])");
 
-        page.Dialog += (_, d) =>
-        {
-            if (d.Type != DialogType.Prompt)
-            {
-                return;
-            }
-
-            var msg = d.Message;
-            if (msg.Contains("شماره شارژ"))
-            {
-                _ = d.AcceptAsync("1");
-            }
-            else if (msg.Contains("مبلغ پرداختی"))
-            {
-                _ = d.AcceptAsync("90000");
-            }
-            else if (msg.Contains("هدیه درست"))
-            {
-                _ = d.AcceptAsync("0");
-            }
-            else if (msg.Contains("توضیح"))
-            {
-                _ = d.AcceptAsync("r4-e2e");
-            }
-        };
-
         var correctPosts = new List<string?>();
         var correctAttempts = 0;
         await page.RouteAsync(
@@ -1141,6 +1193,9 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
             && r.Url.Contains("/correct", StringComparison.Ordinal)
             && r.Status == 503);
         await page.ClickAsync("#walletCorrectBtn");
+        await page.WaitForSelectorAsync("#cpLayer:not(.hidden)");
+        await ClickCpPickFirstAsync(page);
+        await FillCpCorrectionFormAsync(page);
         await firstFail;
 
         Assert.Equal(1, correctAttempts);
@@ -1149,18 +1204,11 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
         Assert.NotNull(firstId);
         Assert.Matches(CommandIdUuidRegex, firstId);
 
-        page.Dialog += (_, d) =>
-        {
-            if (d.Type == DialogType.Alert)
-            {
-                _ = d.AcceptAsync();
-            }
-        };
         var successResponse = page.WaitForResponseAsync(r =>
             r.Request.Method == "POST"
             && r.Url.Contains("/correct", StringComparison.Ordinal)
             && r.Ok);
-        await page.ClickAsync("#walletCorrectBtn");
+        await FillCpCorrectionFormAsync(page);
         var ok = await successResponse;
         Assert.True(ok.Ok);
 
@@ -1290,15 +1338,10 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
 
         var opClient = await LoginOperatorClientAsync();
         var page = await LoginAsync(opClient);
-        var prompts = new Queue<string>(["80000", "", ""]);
-        page.Dialog += async (_, d) =>
-        {
-            var v = prompts.Count > 0 ? prompts.Dequeue() : "";
-            await d.AcceptAsync(v);
-        };
 
         await page.ClickAsync(".tile[data-station-id='PC-R5C2C']");
         await page.ClickAsync("#addC2cLineBtn");
+        await FillC2cPaymentLineAsync(page);
         await page.ClickAsync("#confirmBtn");
         await page.WaitForSelectorAsync("#pendingC2cList li");
 
@@ -1369,6 +1412,7 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
         var context = await _browser!.NewContextAsync();
         await context.AddInitScriptAsync("window.__pendingActionTimeoutMs = 1500;");
         var page = await context.NewPageAsync();
+        AttachNativeDialogRecorder(page);
         await page.RouteAsync("**/*", async route =>
         {
             var request = route.Request;
@@ -1453,15 +1497,10 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
 
         var opClient = await LoginOperatorClientAsync();
         var page = await LoginAsync(opClient);
-        var prompts = new Queue<string>(["80000", "", ""]);
-        page.Dialog += async (_, d) =>
-        {
-            var v = prompts.Count > 0 ? prompts.Dequeue() : "";
-            await d.AcceptAsync(v);
-        };
 
         await page.ClickAsync(".tile[data-station-id='PC-R5B']");
         await page.ClickAsync("#addC2cLineBtn");
+        await FillC2cPaymentLineAsync(page);
         await page.ClickAsync("#confirmBtn");
         await page.WaitForSelectorAsync("#pendingC2cList li");
 
@@ -1504,6 +1543,7 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
         await context.AddInitScriptAsync(
             "window.__operatorPollIntervalMs = 400; window.__prepaidRefreshIntervalMs = 400;");
         var page = await context.NewPageAsync();
+        AttachNativeDialogRecorder(page);
         await page.RouteAsync("**/*", async route =>
         {
             var request = route.Request;
@@ -1646,15 +1686,10 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
 
         var opClient = await LoginOperatorClientAsync();
         var page = await LoginAsync(opClient);
-        var prompts = new Queue<string>(["80000", "", ""]);
-        page.Dialog += async (_, d) =>
-        {
-            var v = prompts.Count > 0 ? prompts.Dequeue() : "";
-            await d.AcceptAsync(v);
-        };
 
         await page.ClickAsync(".tile[data-station-id='PC-R6C2C']");
         await page.ClickAsync("#addC2cLineBtn");
+        await FillC2cPaymentLineAsync(page);
         await page.ClickAsync("#confirmBtn");
         await page.WaitForSelectorAsync("#pendingC2cList li");
 
@@ -1761,15 +1796,10 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
 
         var opClient = await LoginOperatorClientAsync();
         var page = await LoginAsync(opClient);
-        var prompts = new Queue<string>(["80000", "", ""]);
-        page.Dialog += async (_, d) =>
-        {
-            var v = prompts.Count > 0 ? prompts.Dequeue() : "";
-            await d.AcceptAsync(v);
-        };
 
         await page.ClickAsync(".tile[data-station-id='PC-R6OPP']");
         await page.ClickAsync("#addC2cLineBtn");
+        await FillC2cPaymentLineAsync(page);
         await page.ClickAsync("#confirmBtn");
         await page.WaitForSelectorAsync("#pendingC2cList li");
 
@@ -1887,15 +1917,10 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
 
         var opClient = await LoginOperatorClientAsync();
         var page = await LoginAsync(opClient);
-        var prompts = new Queue<string>(["80000", "", "", "80000", "", ""]);
-        page.Dialog += async (_, d) =>
-        {
-            var v = prompts.Count > 0 ? prompts.Dequeue() : "";
-            await d.AcceptAsync(v);
-        };
 
         await page.ClickAsync(".tile[data-station-id='PC-R6AD']");
         await page.ClickAsync("#addC2cLineBtn");
+        await FillC2cPaymentLineAsync(page);
         await page.ClickAsync("#confirmBtn");
         await page.WaitForSelectorAsync("#pendingC2cList li");
 
@@ -1922,6 +1947,7 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
 
         await page.ClickAsync(".tile[data-station-id='PC-R6AD2']");
         await page.ClickAsync("#addC2cLineBtn");
+        await FillC2cPaymentLineAsync(page);
         await page.ClickAsync("#confirmBtn");
         await page.WaitForSelectorAsync("#pendingC2cList li");
 
@@ -1963,5 +1989,14 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
         await page.WaitForSelectorAsync("#ss14GameRatesBody input[data-rate=\"hourly\"]");
         var count = await page.Locator("#ss14GameRatesBody input[data-rate=\"hourly\"]").CountAsync();
         Assert.True(count >= 5);
+        AssertNoUnexpectedNativeDialogs(page);
+    }
+
+    [Fact]
+    public async Task e2e_inpage_forms_native_dialog_guard_records_for_assert()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var page = await LoginAsync();
+        AssertNoUnexpectedNativeDialogs(page);
     }
 }

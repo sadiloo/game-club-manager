@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using GameClub.Server.Data;
 using GameClub.Server.Hosting;
 using GameClub.Server.Hubs;
@@ -8,7 +9,6 @@ using GameClub.Server.Testing;
 using GameClub.Server.Time;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using System.Text.Json;
 
 namespace GameClub.Server;
 
@@ -82,11 +82,13 @@ public static class ServerApplication
                 options.InvalidModelStateResponseFactory = context =>
                 {
                     var path = context.HttpContext.Request.Path;
-                    if (path.StartsWithSegments("/api/operator/game-titles", StringComparison.OrdinalIgnoreCase))
+                    if (path.StartsWithSegments("/api/operator/game-titles", StringComparison.OrdinalIgnoreCase)
+                        || (path.StartsWithSegments("/api/operator", StringComparison.OrdinalIgnoreCase)
+                            && !path.StartsWithSegments("/api/operator/auth", StringComparison.OrdinalIgnoreCase))
+                        || path.StartsWithSegments("/api/kiosk", StringComparison.OrdinalIgnoreCase))
                     {
                         return new JsonResult(new
                         {
-                            error = "invalid_body",
                             code = "invalid_body",
                             message = "درخواست نامعتبر است.",
                         })
@@ -97,7 +99,19 @@ public static class ServerApplication
 
                     return defaultFactory(context);
                 };
+            })
+            .AddJsonOptions(o =>
+            {
+                o.JsonSerializerOptions.Converters.Add(new StrictInt64JsonConverter());
+                o.JsonSerializerOptions.Converters.Add(new StrictNullableInt64JsonConverter());
+                o.JsonSerializerOptions.Converters.Add(new StrictInt32JsonConverter());
             });
+        builder.Services.ConfigureHttpJsonOptions(o =>
+        {
+            o.SerializerOptions.Converters.Add(new StrictInt64JsonConverter());
+            o.SerializerOptions.Converters.Add(new StrictNullableInt64JsonConverter());
+            o.SerializerOptions.Converters.Add(new StrictInt32JsonConverter());
+        });
         builder.Services.AddSignalR();
         builder.Services.AddEndpointsApiExplorer();
         builder.Services.AddSwaggerGen();
@@ -109,6 +123,7 @@ public static class ServerApplication
         builder.Services.Configure<DeadPcSweepOptions>(builder.Configuration.GetSection(DeadPcSweepOptions.SectionName));
         builder.Services.Configure<KioskOptions>(builder.Configuration.GetSection(KioskOptions.SectionName));
         builder.Services.AddScoped<RateConfigService>();
+        builder.Services.AddScoped<RoundingSettingsService>();
         builder.Services.AddScoped<AuditService>();
         builder.Services.AddScoped<StationService>();
         builder.Services.AddScoped<GameTariffService>();

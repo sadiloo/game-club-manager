@@ -1798,25 +1798,155 @@ public sealed class ShellPlanAIntegrationTests
         throw new InvalidOperationException("Panel WebView2 did not become ready");
     }
 
+    private static bool LogLineIsPanelUnavailableOfflineReady(string line)
+    {
+        if (!line.Contains("offlineState=panel-unavailable", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (line.Contains("branch=nav-completed-offline-data", StringComparison.Ordinal)
+            && line.Contains("offlineShown=True", StringComparison.Ordinal)
+            && line.Contains("IsSuccess=True", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        return line.Contains("branch=present-offline-navigated", StringComparison.Ordinal);
+    }
+
+    private static bool LogTextContainsPanelUnavailableOfflineReady(string text) =>
+        text.Split('\n').Any(LogLineIsPanelUnavailableOfflineReady);
+
     private static async Task WaitForPanelUnavailableOfflineAsync(
         Microsoft.Web.WebView2.Wpf.WebView2 wv,
+        TimeSpan timeout,
+        string? logBaseline = null)
+    {
+        try
+        {
+            await AssertPanelUnavailableOfflineDomAsync(wv, TimeSpan.FromSeconds(1));
+            return;
+        }
+        catch (InvalidOperationException)
+        {
+        }
+
+        if (logBaseline is not null)
+        {
+            if (!LogTextContainsPanelUnavailableOfflineReady(LogDelta(logBaseline)))
+            {
+                await AwaitShellLogLineAsync(logBaseline, LogLineIsPanelUnavailableOfflineReady, timeout);
+            }
+        }
+        else
+        {
+            var snapshot = ReadShellLogSnapshot();
+            if (!LogTextContainsPanelUnavailableOfflineReady(snapshot))
+            {
+                await AwaitShellLogLineAsync(snapshot, LogLineIsPanelUnavailableOfflineReady, timeout);
+            }
+        }
+
+        await AssertPanelUnavailableOfflineDomAsync(wv, TimeSpan.FromSeconds(10));
+    }
+
+    private static string ReadShellLogSnapshot()
+    {
+        var paths = Directory.GetFiles(ShellPaths.ShellLogsDir, "shell-*.log");
+        var builder = new System.Text.StringBuilder();
+        foreach (var path in paths)
+        {
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            using var reader = new StreamReader(stream);
+            builder.Append(reader.ReadToEnd());
+        }
+
+        return builder.ToString();
+    }
+
+    private static string LogDelta(string baseline) =>
+        baseline.Length == 0
+            ? ReadShellLogSnapshot()
+            : ReadShellLogSnapshot().Replace(baseline, "");
+
+    private static async Task<string> AwaitShellLogLineAsync(
+        string baseline,
+        Func<string, bool> linePredicate,
         TimeSpan timeout)
     {
-        var deadline = DateTime.UtcNow.Add(timeout);
-        while (DateTime.UtcNow < deadline)
+        var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var timeoutCts = new CancellationTokenSource(timeout);
+        timeoutCts.Token.Register(() =>
+            tcs.TrySetException(new System.TimeoutException("expected shell log line was not written")));
+
+        void TryMatch(object? _)
         {
-            await Task.Delay(300);
-            var sample = UnquoteWebViewScriptString(
-                await wv.CoreWebView2.ExecuteScriptAsync(
-                    "JSON.stringify({protocol: location.protocol, offline: document.documentElement.getAttribute('data-shell-offline-page'), title: (document.getElementById('title') || {}).innerText || ''})"));
-            using var doc = JsonDocument.Parse(sample);
-            if (doc.RootElement.GetProperty("protocol").GetString() == "data:"
-                && doc.RootElement.GetProperty("offline").GetString() == "1"
-                && (doc.RootElement.GetProperty("title").GetString() ?? "")
-                    .Contains("پنل در دسترس نیست", StringComparison.Ordinal))
+            if (tcs.Task.IsCompleted)
             {
                 return;
             }
+
+            try
+            {
+                foreach (var line in LogDelta(baseline).Split('\n'))
+                {
+                    if (linePredicate(line))
+                    {
+                        tcs.TrySetResult(line);
+                        return;
+                    }
+                }
+            }
+            catch (IOException)
+            {
+            }
+        }
+
+        using var pollTimer = new System.Threading.Timer(TryMatch, null, TimeSpan.Zero, TimeSpan.FromMilliseconds(50));
+        TryMatch(null);
+        return await tcs.Task.ConfigureAwait(false);
+    }
+
+    private static async Task AssertPanelUnavailableOfflineDomAsync(
+        Microsoft.Web.WebView2.Wpf.WebView2 wv,
+        TimeSpan confirmTimeout)
+    {
+        var deadline = DateTime.UtcNow.Add(confirmTimeout);
+        while (DateTime.UtcNow < deadline)
+        {
+            var sample = UnquoteWebViewScriptString(
+                await wv.CoreWebView2.ExecuteScriptAsync(
+                    "JSON.stringify({protocol: location.protocol, offline: document.documentElement.getAttribute('data-shell-offline-page'), title: (document.getElementById('title') || {}).innerText || ''})"));
+            if (string.IsNullOrWhiteSpace(sample))
+            {
+                await Task.Delay(50);
+                continue;
+            }
+
+            JsonDocument doc;
+            try
+            {
+                doc = JsonDocument.Parse(sample);
+            }
+            catch (JsonException)
+            {
+                await Task.Delay(50);
+                continue;
+            }
+
+            using (doc)
+            {
+                if (doc.RootElement.GetProperty("protocol").GetString() == "data:"
+                    && doc.RootElement.GetProperty("offline").GetString() == "1"
+                    && (doc.RootElement.GetProperty("title").GetString() ?? "")
+                        .Contains("پنل در دسترس نیست", StringComparison.Ordinal))
+                {
+                    return;
+                }
+            }
+
+            await Task.Delay(50);
         }
 
         throw new InvalidOperationException("panel-unavailable offline page did not appear");

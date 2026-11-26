@@ -382,8 +382,10 @@ public sealed record PayableLine(string? GroupId, bool IsPcTime, bool IsTimeChar
 public sealed record LineShare(int LineIndex, int TenderIndex, PaymentMethod Method, long AmountToman);
 
 /// <summary>
-/// Exact balance shares, then one rounding of the counter remainder.
-/// Wallet and PC amounts are never rounded. A zero counter remainder is not lifted to the step.
+/// Exact balance shares, then collection. Wallet and PC amounts are never rounded.
+/// Mixed wallet+cash uses one bill-level total: under the cash-like threshold the net is exact;
+/// at or above, the whole invoice rounds once and cash is the rounded total minus wallet.
+/// Cash-only and wallet-only keep their existing paths.
 /// </summary>
 public sealed record AllocationResult(
     bool IsValid,
@@ -410,7 +412,13 @@ public static class PaymentAllocator
         RoundingPolicy rounding,
         IReadOnlyList<MemberWallet>? wallets = null,
         DebtPolicy? walletDebt = null,
-        WalletPocket? pcBalance = null)
+        WalletPocket? pcBalance = null,
+        long cashEquivalentPayable = 0,
+        long cashEquivalentRounding = 0,
+        bool allowWalletShortBalanceDebt = true,
+        bool suppressWalletDebtDraw = false,
+        bool billBelowCashLikeThreshold = false,
+        bool allowCounterOverTender = false)
     {
         if (lines is null)
         {
@@ -458,6 +466,7 @@ public static class PaymentAllocator
         var shares = new List<LineShare>();
         var results = new TenderResult[tenders.Count];
         var errors = new List<PaymentError>();
+
         var order = BalanceFirst(tenders);
         foreach (var index in order)
         {
@@ -564,7 +573,11 @@ public static class PaymentAllocator
 
             var debtWant = offer - positiveDraw;
             var debtDraw = debtWant < nonPcLeft ? debtWant : nonPcLeft;
-            if (debtDraw > debtRoom)
+            if (!allowWalletShortBalanceDebt)
+            {
+                debtDraw = 0;
+            }
+            else if (debtDraw > debtRoom)
             {
                 debtDraw = debtRoom;
             }
@@ -608,9 +621,30 @@ public static class PaymentAllocator
         }
 
         var counterExact = MoneyMath.CheckedAdd(counterTime, counterOther);
+
+        long balanceApplied = 0;
+        foreach (var result in results)
+        {
+            if (result is null || !result.Accepted)
+            {
+                continue;
+            }
+
+            if (result.Method is not PaymentMethod.Cash
+                and not PaymentMethod.CardReader
+                and not PaymentMethod.CardToCard)
+            {
+                balanceApplied = MoneyMath.CheckedAdd(balanceApplied, result.AmountToman);
+            }
+        }
+
+        var mixedWalletCashRemainder = balanceApplied > 0 && counterExact > 0;
+        var wholeBillMixed = mixedWalletCashRemainder
+            && (billBelowCashLikeThreshold || cashEquivalentPayable > 0);
+
         long roundingDelta = 0;
         long counterRounded = counterExact;
-        if (rounding.Enabled && counterExact > 0)
+        if (rounding.Enabled && counterExact > 0 && !wholeBillMixed)
         {
             if (rounding.Scope == RoundingScope.TimeChargesOnly)
             {
@@ -624,7 +658,6 @@ public static class PaymentAllocator
             }
         }
 
-        long balanceApplied = 0;
         long counterTendered = 0;
         foreach (var result in results)
         {
@@ -637,20 +670,137 @@ public static class PaymentAllocator
             {
                 counterTendered = MoneyMath.CheckedAdd(counterTendered, result.AmountToman);
             }
-            else
-            {
-                balanceApplied = MoneyMath.CheckedAdd(balanceApplied, result.AmountToman);
-            }
         }
 
-        if (counterTendered != counterRounded)
+        var wholeBillWithBalance = cashEquivalentPayable > 0 && balanceApplied > 0;
+        var deferCounterCheck = cashEquivalentPayable > 0 && counterExact == 0 && balanceApplied > 0;
+        var skipCounterRoundedCheck = wholeBillWithBalance && counterTendered > 0 && !wholeBillMixed;
+        var deferWholeBillWalletOnly = wholeBillWithBalance && counterTendered == 0 && !wholeBillMixed;
+        var counterUnder = counterTendered < counterRounded;
+        var counterOver = counterTendered > counterRounded;
+        var counterMismatch = counterUnder || (counterOver && !(allowCounterOverTender && balanceApplied == 0));
+        if (!wholeBillMixed
+            && counterMismatch
+            && !deferCounterCheck
+            && !skipCounterRoundedCheck
+            && !deferWholeBillWalletOnly)
         {
             errors.Add(new PaymentError(
                 PaymentErrors.SumMismatch,
                 $"Counter tenders {counterTendered} toman against rounded remainder {counterRounded}."));
         }
 
-        var payable = MoneyMath.CheckedAdd(balanceApplied, counterRounded);
+        var mayLiftWalletTowardCash = cashEquivalentRounding > 0
+            && cashEquivalentPayable - cashEquivalentRounding == exact
+            && deferCounterCheck
+            && counterTendered == 0;
+        long roundingGapCounter = 0;
+        var trackingCashCollectible = false;
+        if (cashEquivalentPayable > 0 && balanceApplied > 0)
+        {
+            if (mayLiftWalletTowardCash)
+            {
+                var needTowardCash = cashEquivalentPayable - balanceApplied;
+                if (needTowardCash > 0)
+                {
+                    var liftDebt = suppressWalletDebtDraw || !allowWalletShortBalanceDebt ? DebtPolicy.None : walletDebt;
+                    var drawn = ApplyWalletRoundingLift(tenders, results, pockets, liftDebt, needTowardCash)
+                        ? needTowardCash
+                        : DrawWalletTowardTarget(tenders, results, pockets, liftDebt, needTowardCash);
+                    if (drawn > 0)
+                    {
+                        balanceApplied = MoneyMath.CheckedAdd(balanceApplied, drawn);
+                    }
+                }
+            }
+
+            var shortfall = cashEquivalentPayable - balanceApplied - counterTendered;
+            if (shortfall > 0)
+            {
+                var linesCleared = true;
+                for (var i = 0; i < lines.Count; i++)
+                {
+                    if (remaining[i] > 0)
+                    {
+                        linesCleared = false;
+                        break;
+                    }
+                }
+
+                if (linesCleared)
+                {
+                    roundingGapCounter = shortfall;
+                    if (shortfall > 0)
+                    {
+                        var gapDebt = suppressWalletDebtDraw || !allowWalletShortBalanceDebt ? DebtPolicy.None : walletDebt;
+                        var gapDrawn = DrawWalletTowardTarget(tenders, results, pockets, gapDebt, shortfall);
+                        if (gapDrawn > 0)
+                        {
+                            balanceApplied = MoneyMath.CheckedAdd(balanceApplied, gapDrawn);
+                            roundingGapCounter = cashEquivalentPayable - balanceApplied - counterTendered;
+                        }
+                    }
+                }
+            }
+
+            if (balanceApplied + counterTendered == cashEquivalentPayable)
+            {
+                trackingCashCollectible = true;
+                roundingDelta = cashEquivalentRounding;
+                counterExact = counterTendered;
+                counterRounded = counterTendered;
+                roundingGapCounter = 0;
+            }
+            else if (roundingGapCounter > 0)
+            {
+                counterExact = roundingGapCounter;
+                counterRounded = roundingGapCounter;
+            }
+            else if (!trackingCashCollectible && !wholeBillMixed)
+            {
+                errors.Add(new PaymentError(
+                    PaymentErrors.SumMismatch,
+                    $"Tenders {balanceApplied + counterTendered} toman must equal collectible {cashEquivalentPayable}."));
+            }
+        }
+
+        var mixedCollectiblePayable = billBelowCashLikeThreshold ? exact : cashEquivalentPayable;
+        var mixedCollectibleRounding = billBelowCashLikeThreshold ? 0L : cashEquivalentRounding;
+        if (wholeBillMixed)
+        {
+            var requiredCounter = mixedCollectiblePayable - balanceApplied;
+            roundingDelta = mixedCollectibleRounding;
+            counterRounded = requiredCounter;
+            trackingCashCollectible = true;
+            if (counterTendered != requiredCounter)
+            {
+                errors.Add(new PaymentError(
+                    PaymentErrors.SumMismatch,
+                    $"Counter tenders {counterTendered} toman against rounded remainder {requiredCounter}."));
+            }
+        }
+        else if (roundingGapCounter > 0 && counterTendered != counterRounded)
+        {
+            errors.Add(new PaymentError(
+                PaymentErrors.SumMismatch,
+                $"Counter tenders {counterTendered} toman against rounded remainder {counterRounded}."));
+        }
+        else if (counterUnder && !deferCounterCheck)
+        {
+            errors.Add(new PaymentError(
+                PaymentErrors.SumMismatch,
+                $"Counter tenders {counterTendered} toman against rounded remainder {counterRounded}."));
+        }
+        else if (counterOver && balanceApplied > 0 && !wholeBillMixed && !deferCounterCheck)
+        {
+            errors.Add(new PaymentError(
+                PaymentErrors.SumMismatch,
+                $"Counter tenders {counterTendered} toman against rounded remainder {counterRounded}."));
+        }
+
+        var payable = trackingCashCollectible
+            ? mixedCollectiblePayable
+            : MoneyMath.CheckedAdd(balanceApplied, counterRounded);
         var remainingWallets = new List<MemberWallet>();
         foreach (var pair in pockets)
         {
@@ -679,6 +829,109 @@ public static class PaymentAllocator
             tenderList,
             errors,
             remainingWallets);
+    }
+
+    private static long DrawWalletTowardTarget(
+        IReadOnlyList<Tender> tenders,
+        TenderResult?[] results,
+        Dictionary<string, WalletPocket> pockets,
+        DebtPolicy walletDebt,
+        long targetAmount)
+    {
+        if (targetAmount <= 0)
+        {
+            return 0;
+        }
+
+        long drawn = 0;
+        for (var i = 0; i < tenders.Count; i++)
+        {
+            var result = results[i];
+            if (result is not { Accepted: true, Method: PaymentMethod.Wallet })
+            {
+                continue;
+            }
+
+            var memberId = result.MemberId;
+            if (memberId is null || !pockets.TryGetValue(memberId, out var pocket))
+            {
+                continue;
+            }
+
+            var need = targetAmount - drawn;
+            if (need <= 0)
+            {
+                break;
+            }
+
+            var room = pocket.SpendRoom(walletDebt);
+            var take = need < room ? need : room;
+
+            if (take <= 0)
+            {
+                continue;
+            }
+
+            if (!pocket.TrySpend(take, walletDebt, out var updated, out var gift, out var real))
+            {
+                continue;
+            }
+
+            pockets[memberId] = updated;
+            drawn = MoneyMath.CheckedAdd(drawn, take);
+            results[i] = result with
+            {
+                AmountToman = result.AmountToman + take,
+                GiftDrawnToman = result.GiftDrawnToman + gift,
+                RealDrawnToman = result.RealDrawnToman + real,
+            };
+        }
+
+        return drawn;
+    }
+
+    private static bool ApplyWalletRoundingLift(
+        IReadOnlyList<Tender> tenders,
+        TenderResult?[] results,
+        Dictionary<string, WalletPocket> pockets,
+        DebtPolicy walletDebt,
+        long lift)
+    {
+        if (lift <= 0)
+        {
+            return true;
+        }
+
+        for (var i = 0; i < tenders.Count; i++)
+        {
+            var result = results[i];
+            if (result is not { Accepted: true, Method: PaymentMethod.Wallet })
+            {
+                continue;
+            }
+
+            var memberId = result.MemberId;
+            if (memberId is null || !pockets.TryGetValue(memberId, out var pocket))
+            {
+                continue;
+            }
+
+            if (!pocket.TrySpend(lift, walletDebt, out var updated, out var gift, out var real))
+            {
+                continue;
+            }
+
+            pockets[memberId] = updated;
+            results[i] = result with
+            {
+                AmountToman = result.AmountToman + lift,
+                GiftDrawnToman = result.GiftDrawnToman + gift,
+                RealDrawnToman = result.RealDrawnToman + real,
+            };
+            return true;
+        }
+
+        return false;
     }
 
     private static List<int> BalanceFirst(IReadOnlyList<Tender> tenders)

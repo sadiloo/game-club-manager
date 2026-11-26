@@ -23,7 +23,7 @@ public static class WalletCommandSupport
     {
         if (commandId is not Guid id || id == Guid.Empty)
         {
-            throw new ApiException(StatusCodes.Status400BadRequest, "command_id_required", "commandId is required.");
+            throw new ApiException(StatusCodes.Status400BadRequest, "command_id_required", "شناسهٔ دستور (commandId) الزامی است.");
         }
     }
 
@@ -70,7 +70,7 @@ public static class WalletCommandSupport
             throw new ApiException(
                 StatusCodes.Status409Conflict,
                 "command_id_reused",
-                "commandId was already used with a different request.");
+                "شناسهٔ دستور قبلاً با درخواست دیگری استفاده شده است.");
         }
 
         if (row.ResultJson is not { } json)

@@ -202,7 +202,7 @@ public sealed class OperatorReportingService(AppDbContext db, OperatorContext op
     {
         EnsureReportRole();
         var close = await db.CloseRecords.AsNoTracking().FirstOrDefaultAsync(c => c.Id == closeRecordId, ct)
-            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Close record not found.");
+            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "رکورد بستن یافت نشد.");
         var daily = await BuildIncomeForWorkingDayAsync(close.WorkingDayYear, close.WorkingDayMonth, close.WorkingDayDay, ct);
         var expected = await ComputeExpectedForCloseRecordAsync(close, ct);
         return new
@@ -884,7 +884,7 @@ public sealed class OperatorReportingService(AppDbContext db, OperatorContext op
     {
         if (op.Role == UserRole.Operator)
         {
-            throw new ApiException(StatusCodes.Status403Forbidden, "forbidden", "Operators cannot view aggregate financial reports.");
+            throw new ApiException(StatusCodes.Status403Forbidden, "forbidden", "اپراتور به گزارش مالی تجمیعی دسترسی ندارد.");
         }
     }
 }

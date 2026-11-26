@@ -17,7 +17,7 @@ internal static class OperatorPaymentMethods
     {
         if (string.IsNullOrWhiteSpace(method) || !Allowed.Contains(method))
         {
-            throw new ApiException(StatusCodes.Status400BadRequest, "unknown_method", $"Unknown payment method '{method}'.");
+            throw new ApiException(StatusCodes.Status400BadRequest, "unknown_method", $"روش پرداخت «{method}» ناشناخته است.");
         }
 
         if (method.Equals("Cash", StringComparison.OrdinalIgnoreCase))

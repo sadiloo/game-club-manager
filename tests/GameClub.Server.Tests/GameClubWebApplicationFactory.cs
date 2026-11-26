@@ -9,6 +9,7 @@ using GameClub.Server.Testing;
 using GameClub.Server.Time;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
@@ -16,15 +17,19 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.Extensions.Logging;
+using Npgsql;
 using System.Net;
 
 namespace GameClub.Server.Tests;
 
 public class GameClubWebApplicationFactory : WebApplicationFactory<Program>
 {
+    private bool _dropGeneratedDatabaseOnDispose;
+    private string? _generatedDatabaseName;
     public TestMutableClock Clock { get; } = new(DateTimeOffset.UtcNow);
 
-  /// <summary>When set, registers harness PC special-band times on the test host only.</summary>
+    /// <summary>When set, registers harness PC special-band times on the test host only.</summary>
     public PcSpecialBandHarnessOptions? HarnessPcSpecialBand { get; set; }
 
     /// <summary>When set, all requests appear to come from this remote address (loopback tests).</summary>
@@ -43,6 +48,8 @@ public class GameClubWebApplicationFactory : WebApplicationFactory<Program>
     public bool DeadPcBackgroundSweepEnabled { get; set; }
 
     public string ConnectionString { get; private set; } = "";
+
+    public TestLogCollector LogCollector { get; } = new();
 
     /// <summary>When true, KioskLeaseService emits LEASE_BUILD diagnostic lines (test harness only).</summary>
     public bool KioskLeaseBuildTrace { get; set; }
@@ -71,10 +78,26 @@ public class GameClubWebApplicationFactory : WebApplicationFactory<Program>
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
-        ConnectionString = ConnectionStringOverride
-            ?? Environment.GetEnvironmentVariable("GAMECLUB_TEST_DATABASE")
-            ?? Environment.GetEnvironmentVariable("GAMECLUB_DATABASE")
-            ?? "Host=localhost;Database=gameclub_test;Username=gameclub;Password=gameclub";
+        if (ConnectionStringOverride is not null)
+        {
+            ConnectionString = ConnectionStringOverride;
+        }
+        else
+        {
+            var configured = Environment.GetEnvironmentVariable("GAMECLUB_TEST_DATABASE")
+                ?? Environment.GetEnvironmentVariable("GAMECLUB_DATABASE");
+            if (!string.IsNullOrWhiteSpace(configured))
+            {
+                ConnectionString = configured;
+            }
+            else
+            {
+                _generatedDatabaseName = $"gameclub_test_pr51r3_{Guid.NewGuid():N}";
+                _dropGeneratedDatabaseOnDispose = true;
+                ConnectionString =
+                    $"Host=localhost;Database={_generatedDatabaseName};Username=gameclub;Password=gameclub";
+            }
+        }
 
         Environment.SetEnvironmentVariable("GAMECLUB_DATABASE", ConnectionString);
         Environment.SetEnvironmentVariable("GAMECLUB_API_KEY", "dev-key");
@@ -90,6 +113,7 @@ public class GameClubWebApplicationFactory : WebApplicationFactory<Program>
 
         builder.ConfigureServices(services =>
         {
+            services.AddSingleton<IStartupFilter, UnhandledExceptionTestStartupFilter>();
             if (HarnessPcSpecialBand is { Enabled: true } band)
             {
                 services.Configure<PcSpecialBandHarnessOptions>(options =>
@@ -101,10 +125,11 @@ public class GameClubWebApplicationFactory : WebApplicationFactory<Program>
                     options.PcVipEnd = band.PcVipEnd;
                 });
             }
-
             services.RemoveAll<IClock>();
             services.AddSingleton<IClock>(Clock);
             services.AddSingleton(_ => this);
+            services.AddSingleton(LogCollector);
+            services.AddSingleton<ILoggerProvider, TestLogCollectorProvider>();
             services.AddSingleton<IStartupFilter, KioskLoginStallStartupFilter>();
             services.RemoveAll<IHostedService>();
             services.AddHostedService<TestDeadPcSweepBackgroundService>();
@@ -138,6 +163,28 @@ public class GameClubWebApplicationFactory : WebApplicationFactory<Program>
         var host = base.CreateHost(builder);
         SeedDatabase(host);
         return host;
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing && _dropGeneratedDatabaseOnDispose && !string.IsNullOrWhiteSpace(_generatedDatabaseName))
+        {
+            try
+            {
+                var admin = new NpgsqlConnectionStringBuilder(ConnectionString) { Database = "postgres" }.ConnectionString;
+                using var conn = new NpgsqlConnection(admin);
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = $"DROP DATABASE IF EXISTS \"{_generatedDatabaseName}\" WITH (FORCE)";
+                cmd.ExecuteNonQuery();
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"TEST_DB_DROP_FAILED {_generatedDatabaseName} {ex.Message}");
+            }
+        }
+
+        base.Dispose(disposing);
     }
 
     private static void SeedDatabase(IHost host)
@@ -185,8 +232,21 @@ internal static class S3TestHelpers
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         await db.Database.ExecuteSqlRawAsync(TruncateSql);
         await DatabaseSeed.EnsureAsync(db);
+        await ResetBranchRoundingDefaultsAsync(db);
         await EnsureCatalogCategoryTwoForTestsAsync(db);
         await EnsureOwnerUserForTestsAsync(db);
+    }
+
+    private static async Task ResetBranchRoundingDefaultsAsync(AppDbContext db)
+    {
+        var rounding = await db.BranchRounding.SingleAsync();
+        rounding.RoundingEnabled = true;
+        rounding.StepToman = 5_000;
+        rounding.Direction = "Up";
+        rounding.ApplyToWallet = true;
+        rounding.WalletMinBillToman = 5_000;
+        rounding.AllowWalletShortBalanceDebt = true;
+        await db.SaveChangesAsync();
     }
 
     /// <summary>Test fixture only — Owner role for brief correction_exceeds_balance checks.</summary>

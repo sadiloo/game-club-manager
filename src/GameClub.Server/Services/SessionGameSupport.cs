@@ -156,7 +156,7 @@ public static class SessionGameSupport
             }
             catch (BillingException ex)
             {
-                throw new ApiException(StatusCodes.Status409Conflict, ex.Code, ex.Message);
+                throw new ApiException(StatusCodes.Status409Conflict, ex.Code, BillingExceptionUserMessages.ForCode(ex.Code));
             }
 
             SessionPrepaidRecalculator.RecalcAmountPrepaid(session, openSegment, snapshot, clock.UtcNow.UtcDateTime);

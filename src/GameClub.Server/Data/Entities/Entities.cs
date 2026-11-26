@@ -463,6 +463,14 @@ public sealed class BranchRoundingEntity
     public long StepToman { get; set; }
 
     public string Direction { get; set; } = "Up";
+
+    public bool RoundingEnabled { get; set; } = true;
+
+    public bool ApplyToWallet { get; set; } = true;
+
+    public long WalletMinBillToman { get; set; } = WalletPaymentRounding.CashLikeThresholdToman;
+
+    public bool AllowWalletShortBalanceDebt { get; set; } = true;
 }
 
 public sealed class StationInternetStateEntity

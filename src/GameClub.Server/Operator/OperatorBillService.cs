@@ -23,6 +23,7 @@ public sealed record BillAmounts(
 public sealed class BillCalculator(
     SessionBilling billing,
     RateConfigService rates,
+    RoundingSettingsService roundingSettings,
     OperatorMemberContext memberContext)
 {
     public async Task<BillAmounts> ComputeAsync(
@@ -47,9 +48,10 @@ public sealed class BillCalculator(
         IReadOnlyList<OpenSaleLineEntity> saleLines,
         Guid? customerId,
         IReadOnlyList<Tender>? previewTenders,
-        CancellationToken ct)
+        CancellationToken ct,
+        IReadOnlyList<OperatorBillService.PaymentInput>? paymentInputs = null)
     {
-        var snapshot = await rates.LoadAsync(ct);
+        var snapshot = await SnapshotForPaymentAsync(ct);
         var settings = await memberContext.LoadSettingsAsync(ct);
         CustomerMemberEntity? member = null;
         if (customerId is Guid id)
@@ -57,7 +59,9 @@ public sealed class BillCalculator(
             member = await memberContext.EnsureMemberAsync(id, ct);
         }
 
-        return ToBillAmounts(MemberBillComposer.ComputeBuffetOnly(saleLines, snapshot, customerId, member, settings, previewTenders));
+        var (_, paymentRounding) = await roundingSettings.LoadForPaymentAsync(ct);
+        paymentRounding = WalletShortRemainderSupport.ApplyExplicitCashRemainderFlags(paymentRounding, paymentInputs);
+        return ToBillAmounts(MemberBillComposer.ComputeBuffetOnly(saleLines, snapshot, customerId, member, settings, previewTenders, paymentRounding));
     }
 
     public async Task<BillAmounts> ComputeWithTendersAsync(
@@ -66,8 +70,9 @@ public sealed class BillCalculator(
         long surchargeToman,
         IReadOnlyList<OpenSaleLineEntity> saleLines,
         IReadOnlyList<Tender> tenders,
-        CancellationToken ct)
-        => ToBillAmounts(await ComputeMemberAsync(session, endUtc, surchargeToman, saleLines, tenders, ct));
+        CancellationToken ct,
+        IReadOnlyList<OperatorBillService.PaymentInput>? paymentInputs = null)
+        => ToBillAmounts(await ComputeMemberAsync(session, endUtc, surchargeToman, saleLines, tenders, ct, paymentInputs));
 
     private Task<BillAmounts> ComputeCoreAsync(
         PlaySessionEntity session,
@@ -83,11 +88,15 @@ public sealed class BillCalculator(
         long surchargeToman,
         IReadOnlyList<OpenSaleLineEntity> saleLines,
         IReadOnlyList<Tender> previewTenders,
-        CancellationToken ct)
+        CancellationToken ct,
+        IReadOnlyList<OperatorBillService.PaymentInput>? paymentInputs = null)
     {
-        var snapshot = session.RateCardSnapshotId != 0
+        var rawSnapshot = session.RateCardSnapshotId != 0
             ? await rates.LoadSnapshotAsync(session.RateCardSnapshotId, ct)
             : await rates.LoadAsync(ct);
+        var snapshot = await roundingSettings.ResolveRatesForPaymentAsync(rawSnapshot, ct);
+        var (_, paymentRounding) = await roundingSettings.LoadForPaymentAsync(ct);
+        paymentRounding = WalletShortRemainderSupport.ApplyExplicitCashRemainderFlags(paymentRounding, paymentInputs);
         var charge = billing.BuildCharge(session, endUtc, snapshot);
         var settings = await memberContext.LoadSettingsAsync(ct);
         CustomerMemberEntity? member = null;
@@ -109,7 +118,14 @@ public sealed class BillCalculator(
             settings,
             stationKind,
             previewTenders.Count > 0 ? previewTenders : null,
-            applyPricing);
+            applyPricing,
+            paymentRounding);
+    }
+
+    private async Task<BranchRatesSnapshot> SnapshotForPaymentAsync(CancellationToken ct)
+    {
+        var snapshot = await rates.LoadAsync(ct);
+        return await roundingSettings.ResolveRatesForPaymentAsync(snapshot, ct);
     }
 
     private static BillAmounts ToBillAmounts(MemberBillResult result)
@@ -292,14 +308,116 @@ public sealed class OperatorBillService(
             return new Tender(method, p.AmountToman, memberId);
         }).ToList();
 
+    public static bool TenderAmountsMatch(IReadOnlyList<PaymentInput> left, IReadOnlyList<PaymentInput> right)
+    {
+        if (left.Count != right.Count)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < left.Count; i++)
+        {
+            var leftMethod = OperatorPaymentMethods.Parse(left[i].Method);
+            var rightMethod = OperatorPaymentMethods.Parse(right[i].Method);
+            if (leftMethod != rightMethod || left[i].AmountToman != right[i].AmountToman)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    public static object ToWalletShortRemainderDto(WalletShortRemainderSnapshot snapshot)
+        => new
+        {
+            applies = snapshot.Applies,
+            remainderToman = snapshot.RemainderToman,
+            walletAutoDrawToman = snapshot.WalletAutoDrawToman,
+            debtRemainderAllowed = snapshot.DebtRemainderAllowed,
+        };
+
+    public async Task<WalletShortRemainderSnapshot> GetWalletShortRemainderSnapshotAsync(
+        Guid? customerId,
+        long collectibleToman,
+        StationKind? stationKind,
+        CancellationToken ct)
+    {
+        var settings = await memberContext.LoadSettingsAsync(ct);
+        var rounding = await db.BranchRounding.AsNoTracking().SingleAsync(ct);
+        CustomerMemberEntity? member = null;
+        if (customerId is Guid id)
+        {
+            member = await db.CustomerMembers.AsNoTracking().FirstOrDefaultAsync(m => m.CustomerId == id, ct);
+        }
+
+        return WalletShortRemainderSupport.Compute(collectibleToman, member, settings, rounding, stationKind);
+    }
+
+    public async Task<IReadOnlyList<PaymentInput>> PreparePaymentsForAllocationAsync(
+        Guid? customerId,
+        long collectibleToman,
+        long unroundedPayableToman,
+        StationKind? stationKind,
+        IReadOnlyList<PaymentInput> payments,
+        CancellationToken ct)
+    {
+        var rounding = await db.BranchRounding.AsNoTracking().SingleAsync(ct);
+        var snapshot = await GetWalletShortRemainderSnapshotAsync(customerId, collectibleToman, stationKind, ct);
+        var wallet = payments.FirstOrDefault(p => p.Method.Equals("Wallet", StringComparison.OrdinalIgnoreCase));
+        WalletShortRemainderSupport.ValidateShortRemainderChoice(snapshot, wallet?.ShortRemainderMethod);
+        if (!rounding.AllowWalletShortBalanceDebt
+            && wallet is not null
+            && string.Equals(wallet.ShortRemainderMethod, "Debt", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ApiException(
+                StatusCodes.Status400BadRequest,
+                "payment_invalid",
+                "جمع پرداختی با مبلغ قابل دریافت برابر نیست.");
+        }
+
+        var normalized = WalletShortRemainderSupport.NormalizeWalletShortPayments(payments, snapshot, collectibleToman);
+        WalletShortRemainderSupport.ValidateNoMethodShortWalletCashSplit(
+            snapshot,
+            collectibleToman,
+            unroundedPayableToman,
+            normalized);
+        WalletShortRemainderSupport.ValidateExplicitCashShortRemainder(snapshot, normalized);
+        return normalized;
+    }
+
+    public Task<IReadOnlyList<PaymentInput>> PreparePaymentsForAllocationAsync(
+        Guid? customerId,
+        long collectibleToman,
+        StationKind? stationKind,
+        IReadOnlyList<PaymentInput> payments,
+        CancellationToken ct)
+        => PreparePaymentsForAllocationAsync(
+            customerId,
+            collectibleToman,
+            collectibleToman,
+            stationKind,
+            payments,
+            ct);
+
     public void ValidatePayments(
         long collectibleToman,
         IReadOnlyList<PaymentInput> payments,
         MemberBillResult? detail = null,
         Guid? customerId = null)
     {
+        foreach (var payment in payments)
+        {
+            OperatorMoneyValidation.EnsureNonNegativeBounded(payment.AmountToman, "payment_invalid");
+        }
+
         if (collectibleToman == 0)
         {
+            if (payments.Count > 0 && payments.All(p => p.AmountToman <= 0))
+            {
+                throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", "دست‌کم یک خط پرداخت مثبت لازم است.");
+            }
+
             if (payments.Count > 0 && payments.Any(p => p.AmountToman > 0))
             {
                 var positiveTenders = payments
@@ -308,10 +426,10 @@ public sealed class OperatorBillService(
                 var positiveSplit = PaymentSplitter.Split(0, positiveTenders);
                 if (!positiveSplit.IsValid)
                 {
-                    throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", positiveSplit.Errors.FirstOrDefault()?.Message ?? "Invalid payment.");
+                    throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", OperatorPaymentErrors.Localize(positiveSplit.Errors.FirstOrDefault(), collectibleToman));
                 }
 
-                throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", "At least one positive payment line is required.");
+                throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", "دست‌کم یک خط پرداخت مثبت لازم است.");
             }
 
             return;
@@ -319,28 +437,95 @@ public sealed class OperatorBillService(
 
         if (payments.Count == 0 || payments.All(p => p.AmountToman <= 0))
         {
-            throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", "At least one positive payment line is required.");
+            throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", "دست‌کم یک خط پرداخت مثبت لازم است.");
         }
 
         var tenders = ToTenders(payments, customerId);
         if (detail?.Allocation is { IsValid: false } allocation)
         {
-            throw new ApiException(
-                StatusCodes.Status400BadRequest,
-                "payment_invalid",
-                allocation.Errors.FirstOrDefault()?.Message ?? "Invalid payment.");
+            var tenderedEarly = payments.Sum(p => p.AmountToman);
+            var hasCashEarly = payments.Any(p => OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Cash);
+            var hasCardEarly = payments.Any(p =>
+            {
+                var method = OperatorPaymentMethods.Parse(p.Method);
+                return method is PaymentMethod.CardReader or PaymentMethod.CardToCard;
+            });
+            var walletOnlyEarly = payments.All(p => OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet);
+            var counterOverTender = (hasCashEarly || hasCardEarly) && !walletOnlyEarly && tenderedEarly > collectibleToman;
+            if (!counterOverTender)
+            {
+                throw new ApiException(
+                    StatusCodes.Status400BadRequest,
+                    "payment_invalid",
+                    OperatorPaymentErrors.Localize(allocation.Errors.FirstOrDefault(), collectibleToman));
+            }
         }
 
         if (payments.Any(p => OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet))
         {
             if (customerId is null)
             {
-                throw new ApiException(StatusCodes.Status400BadRequest, "wallet_requires_member", "Wallet payment requires a linked member.");
+                throw new ApiException(StatusCodes.Status400BadRequest, "wallet_requires_member", "پرداخت کیف پول به عضو پیوسته نیاز دارد.");
             }
 
-            if (detail?.Allocation is not { IsValid: true } alloc)
+            var tenderedForCounter = payments.Sum(p => p.AmountToman);
+            var walletOnlyPay = payments.All(p => OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet);
+            var hasCashForCounter = payments.Any(p => OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Cash);
+            var hasCardForCounter = payments.Any(p =>
             {
-                throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", "Wallet allocation failed.");
+                var method = OperatorPaymentMethods.Parse(p.Method);
+                return method is PaymentMethod.CardReader or PaymentMethod.CardToCard;
+            });
+            var mixedCounterOverTenderSettles = (hasCashForCounter || hasCardForCounter)
+                && !walletOnlyPay
+                && tenderedForCounter > collectibleToman;
+            if (mixedCounterOverTenderSettles)
+            {
+                CounterPaymentRecording.EnsureRecordable(collectibleToman, payments, detail?.Allocation);
+                return;
+            }
+
+            if (detail is null || detail.Allocation is not { IsValid: true } alloc)
+            {
+                var tenderedMid = payments.Sum(p => p.AmountToman);
+                var walletOnlyMid = payments.All(p => OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet);
+                var hasCashMid = payments.Any(p => OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Cash);
+                var hasCardMid = payments.Any(p =>
+                {
+                    var method = OperatorPaymentMethods.Parse(p.Method);
+                    return method is PaymentMethod.CardReader or PaymentMethod.CardToCard;
+                });
+                var mixedCounterOverTender = (hasCashMid || hasCardMid) && !walletOnlyMid && tenderedMid > collectibleToman;
+                if (!mixedCounterOverTender || detail?.Allocation is not { } fallbackAlloc)
+                {
+                    throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", "تخصیص کیف پول انجام نشد.");
+                }
+
+                alloc = fallbackAlloc;
+            }
+
+            if (walletOnlyPay)
+            {
+                var walletLine = alloc.Tenders.FirstOrDefault(t => t.Method == PaymentMethod.Wallet);
+                var walletTyped = payments
+                    .Where(p => OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet)
+                    .Sum(p => p.AmountToman);
+                if (walletLine is not { Accepted: true })
+                {
+                    throw new ApiException(
+                        StatusCodes.Status400BadRequest,
+                        "payment_invalid",
+                        OperatorPaymentErrors.Localize(new PaymentError(PaymentErrors.InsufficientWallet, ""), collectibleToman));
+                }
+
+                var walletDrawn = MoneyMath.CheckedAdd(walletLine.RealDrawnToman, walletLine.GiftDrawnToman);
+                if (walletDrawn < walletTyped)
+                {
+                    throw new ApiException(
+                        StatusCodes.Status400BadRequest,
+                        "payment_invalid",
+                        OperatorPaymentErrors.Localize(new PaymentError(PaymentErrors.InsufficientWallet, ""), collectibleToman));
+                }
             }
 
             var surchargeAlreadyInCollect = detail is { SurchargeToman: > 0 }
@@ -351,15 +536,38 @@ public sealed class OperatorBillService(
                 surchargeAlreadyInCollect ? 0 : detail?.SurchargeToman ?? 0);
             if (allocPayable != collectibleToman)
             {
-                throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", "Payable total does not match allocation.");
+                throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", "جمع قابل پرداخت با تخصیص هم‌خوان نیست.");
             }
 
             var tendered = payments.Sum(p => p.AmountToman);
             if (tendered != allocPayable)
             {
-                throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", "Tender total does not match payable.");
+                var unrounded = detail!.UnroundedPayableToman;
+                var walletOnly = payments.All(p => OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet);
+                var singleWallet = walletOnly && payments.Count == 1;
+                var typedUnroundedFullPay = singleWallet
+                    && tendered == unrounded
+                    && allocPayable == collectibleToman
+                    && allocPayable > unrounded;
+                var hasCash = payments.Any(p => OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Cash);
+                var hasCard = payments.Any(p =>
+                {
+                    var method = OperatorPaymentMethods.Parse(p.Method);
+                    return method is PaymentMethod.CardReader or PaymentMethod.CardToCard;
+                });
+                var walletCounterOverTender = (hasCash || hasCard) && !walletOnly && tendered > collectibleToman;
+                var mixedRoundedShortfall = !walletOnly
+                    && tendered < collectibleToman
+                    && tendered >= unrounded
+                    && collectibleToman > unrounded;
+                if (mixedRoundedShortfall
+                    || (!typedUnroundedFullPay && !walletCounterOverTender && tendered != allocPayable))
+                {
+                    throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", OperatorPaymentErrors.Localize(new PaymentError(PaymentErrors.SumMismatch, ""), collectibleToman));
+                }
             }
 
+            CounterPaymentRecording.EnsureRecordable(collectibleToman, payments, alloc);
             return;
         }
 
@@ -368,15 +576,380 @@ public sealed class OperatorBillService(
             var method = OperatorPaymentMethods.Parse(payment.Method);
             if (method is PaymentMethod.Wallet or PaymentMethod.PcBalance)
             {
-                throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", $"Unsupported method '{payment.Method}'.");
+                throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", "روش پرداخت پشتیبانی نمی‌شود.");
             }
+        }
+
+        if (detail?.Allocation is { IsValid: true })
+        {
+            CounterPaymentRecording.EnsureRecordable(collectibleToman, payments, detail.Allocation);
+
+            var tendered = payments.Sum(p => p.AmountToman);
+            if (tendered == collectibleToman)
+            {
+                var splitWhenExact = PaymentSplitter.Split(collectibleToman, tenders);
+                if (!splitWhenExact.IsValid)
+                {
+                    throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", OperatorPaymentErrors.Localize(splitWhenExact.Errors.FirstOrDefault(), collectibleToman));
+                }
+            }
+
+            return;
         }
 
         var split = PaymentSplitter.Split(collectibleToman, tenders);
         if (!split.IsValid)
         {
-            throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", split.Errors.FirstOrDefault()?.Message ?? "Invalid payment.");
+            throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", OperatorPaymentErrors.Localize(split.Errors.FirstOrDefault(), collectibleToman));
         }
+    }
+
+    public sealed record PaymentPreviewResult(
+        BillAmounts Amounts,
+        IReadOnlyList<PaymentInput> Effective,
+        long CollectibleToman);
+
+    public sealed record PaymentPreviewHttpResult(int StatusCode, object Body);
+
+    public static object BuildPaymentPreviewRejectionBody(
+        ApiException ex,
+        PaymentPreviewResult settlement)
+    {
+        var collectible = settlement.CollectibleToman;
+        var tendered = settlement.Effective.Sum(p => p.AmountToman);
+        return new
+        {
+            code = ex.Code,
+            message = ex.Message,
+            collectibleToman = collectible,
+            unroundedPayableToman = settlement.Amounts.UnroundedPayableToman,
+            roundingToman = settlement.Amounts.RoundingToman,
+            tenderedToman = tendered,
+            remainingToman = Math.Max(0, collectible - tendered),
+        };
+    }
+
+    public static long ResolvePreviewCollectibleToman(
+        long _,
+        BillAmounts amounts,
+        IReadOnlyList<PaymentInput> _effective)
+        => amounts.CollectibleToman;
+
+    public static void EnsureClientPreviewCollectibleCurrent(
+        long? previewCollectibleToman,
+        long livePaymentTimeCollectibleToman,
+        BillAmounts amounts,
+        IReadOnlyList<PaymentInput> effective)
+    {
+        if (previewCollectibleToman is not long client)
+        {
+            return;
+        }
+
+        var expected = ResolvePreviewCollectibleToman(livePaymentTimeCollectibleToman, amounts, effective);
+        if (client != expected)
+        {
+            throw new ApiException(
+                StatusCodes.Status409Conflict,
+                "stale_rounding_preview",
+                "تنظیمات گرد کردن عوض شده؛ پیش‌نمایش را دوباره بگیرید.");
+        }
+    }
+
+  public static void RejectMixedUnderRoundedCollectible(BillAmounts amounts, IReadOnlyList<PaymentInput> payments)
+    {
+        var tendered = payments.Sum(p => p.AmountToman);
+        var hasWallet = payments.Any(p => OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet);
+        var hasCash = payments.Any(p => OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Cash);
+        if (!hasWallet || !hasCash || payments.Any(p =>
+        {
+            var method = OperatorPaymentMethods.Parse(p.Method);
+            return method is PaymentMethod.CardReader or PaymentMethod.CardToCard;
+        }))
+        {
+            return;
+        }
+
+        var unrounded = amounts.UnroundedPayableToman;
+        if (tendered >= amounts.CollectibleToman || tendered < unrounded || amounts.CollectibleToman <= unrounded)
+        {
+            return;
+        }
+
+        throw new ApiException(
+            StatusCodes.Status400BadRequest,
+            "payment_invalid",
+            OperatorPaymentErrors.Localize(new PaymentError(PaymentErrors.SumMismatch, ""), amounts.CollectibleToman));
+    }
+
+    /// <summary>R14g: single settlement validation path for preview and confirm.</summary>
+    public async Task ApplyPaymentSettlementValidationAsync(
+        BillAmounts amounts,
+        IReadOnlyList<PaymentInput> effective,
+        Guid? customerId,
+        StationKind? stationKind,
+        CancellationToken ct)
+    {
+        foreach (var payment in effective)
+        {
+            OperatorMoneyValidation.EnsureNonNegativeBounded(payment.AmountToman, "payment_invalid");
+        }
+
+        if (amounts.CollectibleToman == 0)
+        {
+            if (effective.Count > 0
+                && effective.All(p => OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet)
+                && effective.Sum(p => p.AmountToman) > 0)
+            {
+                return;
+            }
+
+            ValidatePayments(amounts.CollectibleToman, effective, amounts.Detail, customerId);
+            return;
+        }
+
+        RejectWalletOnlyBelowUnroundedGap(amounts, effective);
+        await RejectWalletTypedAboveAutoDrawAsync(customerId, amounts.CollectibleToman, stationKind, effective, ct);
+        await RejectWalletTypedAboveSpendableInMixedAsync(customerId, amounts.CollectibleToman, stationKind, effective, ct);
+        RejectMixedUnderRoundedCollectible(amounts, effective);
+        ValidatePayments(amounts.CollectibleToman, effective, amounts.Detail, customerId);
+    }
+
+    /// <summary>R14e-2: wallet-only typed amount cannot exceed spendable auto-draw when short remainder applies and debt is off.</summary>
+    public async Task RejectWalletTypedAboveAutoDrawAsync(
+        Guid? customerId,
+        long collectibleToman,
+        StationKind? stationKind,
+        IReadOnlyList<PaymentInput> payments,
+        CancellationToken ct)
+    {
+        if (customerId is null || payments.Count == 0)
+        {
+            return;
+        }
+
+        var walletOnly = payments.All(p => OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet);
+        if (!walletOnly)
+        {
+            return;
+        }
+
+        var snapshot = await GetWalletShortRemainderSnapshotAsync(customerId, collectibleToman, stationKind, ct);
+        if (!snapshot.Applies || snapshot.DebtRemainderAllowed)
+        {
+            return;
+        }
+
+        var walletTyped = payments
+            .Where(p => OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet)
+            .Sum(p => p.AmountToman);
+        if (snapshot.WalletAutoDrawToman == 0 && walletTyped > 0)
+        {
+            throw new ApiException(
+                StatusCodes.Status400BadRequest,
+                "payment_invalid",
+                OperatorPaymentErrors.Localize(new PaymentError(PaymentErrors.InsufficientWallet, ""), collectibleToman));
+        }
+    }
+
+    /// <summary>R14f-F2: mixed payments with wallet typed above spendable reject on preview and confirm (insufficient), unless branch debt allows the remainder.</summary>
+    public async Task RejectWalletTypedAboveSpendableInMixedAsync(
+        Guid? customerId,
+        long collectibleToman,
+        StationKind? stationKind,
+        IReadOnlyList<PaymentInput> payments,
+        CancellationToken ct)
+    {
+        if (customerId is null || payments.Count == 0)
+        {
+            return;
+        }
+
+        var hasWallet = payments.Any(p => OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet);
+        if (!hasWallet || payments.All(p => OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet))
+        {
+            return;
+        }
+
+        var hasCard = payments.Any(p =>
+        {
+            var method = OperatorPaymentMethods.Parse(p.Method);
+            return method is PaymentMethod.CardReader or PaymentMethod.CardToCard;
+        });
+        if (hasCard)
+        {
+            return;
+        }
+
+        var walletTyped = payments
+            .Where(p => OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet)
+            .Sum(p => p.AmountToman);
+        if (walletTyped <= 0)
+        {
+            return;
+        }
+
+        var snapshot = await GetWalletShortRemainderSnapshotAsync(customerId, collectibleToman, stationKind, ct);
+        if (snapshot.DebtRemainderAllowed)
+        {
+            return;
+        }
+
+        var member = await db.CustomerMembers.AsNoTracking().FirstOrDefaultAsync(m => m.CustomerId == customerId, ct);
+        if (member is null)
+        {
+            return;
+        }
+
+        var pocket = MemberWalletMapper.ToPocket(member);
+        var settings = await db.BranchMemberSettings.AsNoTracking().FirstAsync(ct);
+        var debt = MemberSettingsMapper.LoadDebtPolicy(settings);
+        var spendableCap = pocket.SpendRoom(debt);
+        var spendable = spendableCap == long.MaxValue
+            ? long.MaxValue
+            : Math.Max(0, spendableCap);
+        if (walletTyped > spendable)
+        {
+            throw new ApiException(
+                StatusCodes.Status400BadRequest,
+                "payment_invalid",
+                OperatorPaymentErrors.Localize(new PaymentError(PaymentErrors.InsufficientWallet, ""), collectibleToman));
+        }
+    }
+
+    /// <summary>R14d-D / PO-3: wallet-only tender below unrounded bill (any lines) rejected on preview and confirm; at-unrounded silent lift is wallet-only only.</summary>
+    public static void RejectWalletOnlyBelowUnroundedGap(BillAmounts amounts, IReadOnlyList<PaymentInput> payments)
+    {
+        if (payments.Count == 0 || payments.Any(p => p.AmountToman <= 0))
+        {
+            return;
+        }
+
+        var walletOnly = payments.All(p => OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet);
+        if (!walletOnly)
+        {
+            return;
+        }
+
+        var tendered = payments.Sum(p => p.AmountToman);
+        var unrounded = amounts.UnroundedPayableToman;
+        if (tendered >= unrounded || unrounded >= amounts.CollectibleToman)
+        {
+            return;
+        }
+
+        throw new ApiException(
+            StatusCodes.Status400BadRequest,
+            "payment_invalid",
+            OperatorPaymentErrors.Localize(new PaymentError(PaymentErrors.SumMismatch, ""), amounts.CollectibleToman));
+    }
+
+    public async Task<PaymentPreviewResult> ComputeBuffetPaymentSettlementAsync(
+        OpenSaleEntity sale,
+        IReadOnlyList<PaymentInput> payments,
+        CancellationToken ct)
+    {
+        var live = await calculator.ComputeBuffetOnlyAsync(sale.Lines, sale.CustomerId, null, ct);
+        var effective = await PreparePaymentsForAllocationAsync(
+            sale.CustomerId,
+            live.CollectibleToman,
+            live.UnroundedPayableToman,
+            null,
+            payments,
+            ct);
+        var tenders = ToTenders(effective, sale.CustomerId);
+        var amounts = await calculator.ComputeBuffetOnlyAsync(sale.Lines, sale.CustomerId, tenders, ct, effective);
+        var allocationPayments = CounterPaymentRecording.PaymentsForCollectAllocation(
+            amounts.CollectibleToman,
+            amounts.UnroundedPayableToman,
+            effective);
+        if (!TenderAmountsMatch(allocationPayments, effective))
+        {
+            tenders = ToTenders(allocationPayments, sale.CustomerId);
+            amounts = await calculator.ComputeBuffetOnlyAsync(sale.Lines, sale.CustomerId, tenders, ct, effective);
+        }
+
+        return new PaymentPreviewResult(amounts, effective, amounts.CollectibleToman);
+    }
+
+    public async Task<PaymentPreviewResult> BuildBuffetPaymentPreviewAsync(
+        OpenSaleEntity sale,
+        PendingBillEntity bill,
+        IReadOnlyList<PaymentInput> payments,
+        CancellationToken ct)
+    {
+        var settlement = await ComputeBuffetPaymentSettlementAsync(sale, payments, ct);
+        await ApplyPaymentSettlementValidationAsync(settlement.Amounts, settlement.Effective, sale.CustomerId, null, ct);
+        return settlement;
+    }
+
+    public async Task<PaymentPreviewResult> ComputeSessionPaymentSettlementAsync(
+        PlaySessionEntity session,
+        PendingBillEntity bill,
+        IReadOnlyList<OpenSaleLineEntity> saleLines,
+        IReadOnlyList<PaymentInput> payments,
+        CancellationToken ct)
+    {
+        var stationKind = session.Station?.Group?.Kind;
+        var live = await calculator.ComputeWithTendersAsync(
+            session,
+            bill.FrozenAtUtc,
+            bill.SurchargeToman,
+            saleLines,
+            [],
+            ct);
+        var effective = await PreparePaymentsForAllocationAsync(
+            session.CustomerId,
+            live.CollectibleToman,
+            live.UnroundedPayableToman,
+            stationKind,
+            payments,
+            ct);
+        var tenders = ToTenders(effective, session.CustomerId);
+        var amounts = await calculator.ComputeWithTendersAsync(
+            session,
+            bill.FrozenAtUtc,
+            bill.SurchargeToman,
+            saleLines,
+            tenders,
+            ct,
+            effective);
+        var allocationPayments = CounterPaymentRecording.PaymentsForCollectAllocation(
+            amounts.CollectibleToman,
+            amounts.UnroundedPayableToman,
+            effective);
+        if (!TenderAmountsMatch(allocationPayments, effective))
+        {
+            tenders = ToTenders(allocationPayments, session.CustomerId);
+            amounts = await calculator.ComputeWithTendersAsync(
+                session,
+                bill.FrozenAtUtc,
+                bill.SurchargeToman,
+                saleLines,
+                tenders,
+                ct,
+                effective);
+        }
+
+        return new PaymentPreviewResult(amounts, effective, amounts.CollectibleToman);
+    }
+
+    public async Task<PaymentPreviewResult> BuildSessionPaymentPreviewAsync(
+        PlaySessionEntity session,
+        PendingBillEntity bill,
+        IReadOnlyList<OpenSaleLineEntity> saleLines,
+        IReadOnlyList<PaymentInput> payments,
+        CancellationToken ct)
+    {
+        var settlement = await ComputeSessionPaymentSettlementAsync(session, bill, saleLines, payments, ct);
+        var stationKind = session.Station?.Group?.Kind;
+        await ApplyPaymentSettlementValidationAsync(
+            settlement.Amounts,
+            settlement.Effective,
+            session.CustomerId,
+            stationKind,
+            ct);
+        return settlement;
     }
 
     private async Task<IReadOnlyList<OpenSaleLineEntity>> LoadSaleLinesAsync(Guid sessionId, CancellationToken ct)
@@ -399,7 +972,12 @@ public sealed class OperatorBillService(
         bill.ServicesGrossToman = amounts.ServicesGrossToman;
     }
 
-    public sealed record PaymentInput(string Method, long AmountToman, string? DestinationCardId, string? Reference);
+    public sealed record PaymentInput(
+        string Method,
+        long AmountToman,
+        string? DestinationCardId = null,
+        string? Reference = null,
+        string? ShortRemainderMethod = null);
 
     public async Task<PendingBillEntity> OpenConsoleBillAsync(Guid sessionId, CancellationToken ct)
     {
@@ -407,17 +985,17 @@ public sealed class OperatorBillService(
         {
             if (session.Station!.Group!.Kind != StationKind.Console)
             {
-                throw new ApiException(StatusCodes.Status400BadRequest, "not_console", "Bill open applies to consoles.");
+                throw new ApiException(StatusCodes.Status400BadRequest, "not_console", "صدور صورتحساب فقط برای کنسول است.");
             }
 
             if (session.Status is not SessionStatus.Open and not SessionStatus.Paused)
             {
-                throw new ApiException(StatusCodes.Status409Conflict, "invalid_state", "Session cannot open a bill.");
+                throw new ApiException(StatusCodes.Status409Conflict, "invalid_state", "این جلسه نمی‌تواند صورتحساب باز کند.");
             }
 
             if (session.PendingBill is not null)
             {
-                throw new ApiException(StatusCodes.Status409Conflict, "bill_open", "Bill is already open.");
+                throw new ApiException(StatusCodes.Status409Conflict, "bill_open", "صورتحساب از قبل باز است.");
             }
 
             var frozenAt = clock.UtcNow.UtcDateTime;
@@ -462,7 +1040,7 @@ public sealed class OperatorBillService(
 
             if (session.Status != SessionStatus.BillOpen || session.PendingBill is null)
             {
-                throw new ApiException(StatusCodes.Status409Conflict, "no_bill", "No open bill to cancel.");
+                throw new ApiException(StatusCodes.Status409Conflict, "no_bill", "صورتحساب بازی برای لغو نیست.");
             }
 
             var bill = session.PendingBill;
@@ -478,7 +1056,7 @@ public sealed class OperatorBillService(
         await WithSessionBillLockAsync(sessionId, async (session, innerCt) =>
         {
             var bill = session.PendingBill
-                ?? throw new ApiException(StatusCodes.Status409Conflict, "no_bill", "No open bill.");
+                ?? throw new ApiException(StatusCodes.Status409Conflict, "no_bill", "صورتحساب بازی برای لغو نیست.");
             bill.SurchargeToman = MoneyMath.CheckedAdd(bill.SurchargeToman, 5_000);
             await ApplyAmountsToBillAsync(session, bill, innerCt);
             await audit.AppendAsync("bill.surcharge", new { sessionId, reason, bill.SurchargeToman }, innerCt);
@@ -496,17 +1074,17 @@ public sealed class OperatorBillService(
             .Include(s => s.Pauses)
             .Include(s => s.PendingBill)
             .FirstOrDefaultAsync(s => s.Id == sessionId, ct)
-            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Session not found.");
+            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "جلسه یافت نشد.");
         if (session.Status is SessionStatus.Open or SessionStatus.Paused)
         {
             await OpenBillForCloseSettleAsync(session, ct);
         }
 
         var bill = session.PendingBill
-            ?? throw new ApiException(StatusCodes.Status409Conflict, "no_bill", "No bill for this session.");
+            ?? throw new ApiException(StatusCodes.Status409Conflict, "no_bill", "برای این جلسه صورتحسابی نیست.");
         if (session.Status is not SessionStatus.BillOpen and not SessionStatus.AwaitingPayment)
         {
-            throw new ApiException(StatusCodes.Status409Conflict, "invalid_state", "Session is not awaiting settlement.");
+            throw new ApiException(StatusCodes.Status409Conflict, "invalid_state", "جلسه در انتظار تسویه نیست.");
         }
 
         var saleLines = await LoadSaleLinesAsync(session.Id, ct);
@@ -525,10 +1103,10 @@ public sealed class OperatorBillService(
             .Include(s => s.Pauses)
             .Include(s => s.PendingBill)
             .FirstOrDefaultAsync(s => s.Id == sessionId, ct)
-            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Session not found.");
+            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "جلسه یافت نشد.");
         if (session.Status == SessionStatus.Closed)
         {
-            throw new ApiException(StatusCodes.Status409Conflict, "invalid_state", "Session is already closed.");
+            throw new ApiException(StatusCodes.Status409Conflict, "invalid_state", "جلسه قبلاً بسته شده است.");
         }
 
         if (session.PendingBill is PendingBillEntity existing)
@@ -538,7 +1116,7 @@ public sealed class OperatorBillService(
 
         if (session.Status is not SessionStatus.Open and not SessionStatus.Paused)
         {
-            throw new ApiException(StatusCodes.Status409Conflict, "no_bill", "No bill for this session.");
+            throw new ApiException(StatusCodes.Status409Conflict, "no_bill", "برای این جلسه صورتحسابی نیست.");
         }
 
         var endUtc = session.EndedAtUtc ?? clock.UtcNow.UtcDateTime;
@@ -614,30 +1192,53 @@ public sealed class OperatorBillService(
         return await closer.FinalizeFromPendingAsync(session, bill, payments, amounts, ct);
     }
 
-    public async Task<InvoiceEntity> ConfirmBillAsync(Guid sessionId, IReadOnlyList<PaymentInput> payments, CancellationToken ct)
+    public async Task<InvoiceEntity> ConfirmBillAsync(
+        Guid sessionId,
+        IReadOnlyList<PaymentInput> payments,
+        long? previewCollectibleToman,
+        CancellationToken ct)
     {
         return await WithSessionBillLockAsync(sessionId, async (session, innerCt) =>
         {
             var bill = session.PendingBill
-                ?? throw new ApiException(StatusCodes.Status409Conflict, "no_bill", "No bill awaiting confirmation.");
+                ?? throw new ApiException(StatusCodes.Status409Conflict, "no_bill", "صورتحسابی در انتظار تأیید نیست.");
             if (session.Status is not SessionStatus.BillOpen and not SessionStatus.AwaitingPayment)
             {
-                throw new ApiException(StatusCodes.Status409Conflict, "invalid_state", "Session is not awaiting payment.");
+                throw new ApiException(StatusCodes.Status409Conflict, "invalid_state", "جلسه در انتظار پرداخت نیست.");
             }
 
             var saleLines = await LoadSaleLinesAsync(session.Id, innerCt);
-            await LockMemberWalletRowIfNeededAsync(session.CustomerId, payments, innerCt);
-            var tenders = ToTenders(payments, session.CustomerId);
-            var amounts = await calculator.ComputeWithTendersAsync(
+            var stationKind = session.Station?.Group?.Kind;
+            var live = await calculator.ComputeWithTendersAsync(
                 session,
                 bill.FrozenAtUtc,
                 bill.SurchargeToman,
                 saleLines,
-                tenders,
+                [],
                 innerCt);
-            ValidatePayments(amounts.CollectibleToman, payments, amounts.Detail, session.CustomerId);
+            var effectiveForLock = await PreparePaymentsForAllocationAsync(
+                session.CustomerId,
+                live.CollectibleToman,
+                live.UnroundedPayableToman,
+                stationKind,
+                payments,
+                innerCt);
+            await LockMemberWalletRowIfNeededAsync(session.CustomerId, effectiveForLock, innerCt);
+            var settlement = await ComputeSessionPaymentSettlementAsync(session, bill, saleLines, payments, innerCt);
+            EnsureClientPreviewCollectibleCurrent(previewCollectibleToman, live.CollectibleToman, settlement.Amounts, settlement.Effective);
+            await ApplyPaymentSettlementValidationAsync(
+                settlement.Amounts,
+                settlement.Effective,
+                session.CustomerId,
+                stationKind,
+                innerCt);
 
-            var invoice = await closer.FinalizeFromPendingAsync(session, bill, payments, amounts, innerCt);
+            var invoice = await closer.FinalizeFromPendingAsync(
+                session,
+                bill,
+                settlement.Effective,
+                settlement.Amounts,
+                innerCt);
             await audit.AppendAsync("bill.confirm", new { sessionId, invoiceNumber = invoice.Number, collectible = invoice.CollectibleToman }, innerCt);
             return invoice;
         }, ct);
@@ -730,7 +1331,7 @@ public sealed class OperatorBillService(
         return bill;
     }
 
-    public async Task<object> PreviewBillAsync(
+    public async Task<PaymentPreviewHttpResult> PreviewBillAsync(
         Guid sessionId,
         IReadOnlyList<PaymentInput> payments,
         CancellationToken ct)
@@ -738,24 +1339,39 @@ public sealed class OperatorBillService(
         var session = await db.Sessions.AsNoTracking()
             .Include(s => s.Customer)
             .Include(s => s.Segments).ThenInclude(seg => seg.GameTitle)
+            .Include(s => s.Pauses)
             .Include(s => s.PendingBill)
             .Include(s => s.Station)!.ThenInclude(st => st!.Group)
             .FirstOrDefaultAsync(s => s.Id == sessionId, ct)
-            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Session not found.");
+            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "جلسه یافت نشد.");
         var bill = session.PendingBill
-            ?? throw new ApiException(StatusCodes.Status409Conflict, "no_bill", "No bill for this session.");
+            ?? throw new ApiException(StatusCodes.Status409Conflict, "no_bill", "برای این جلسه صورتحسابی نیست.");
         var saleLines = await db.OpenSales.AsNoTracking()
             .Include(o => o.Lines).ThenInclude(l => l.CatalogItem)
             .Where(o => o.SessionId == sessionId)
             .SelectMany(o => o.Lines)
             .ToListAsync(ct);
-        var tenders = ToTenders(payments, session.CustomerId);
-        var amounts = await calculator.ComputeWithTendersAsync(
-            session,
-            bill.FrozenAtUtc,
-            bill.SurchargeToman,
-            saleLines,
-            tenders,
+        var stationKind = session.Station?.Group?.Kind;
+        var settlement = await ComputeSessionPaymentSettlementAsync(session, bill, saleLines, payments, ct);
+        try
+        {
+            await ApplyPaymentSettlementValidationAsync(
+                settlement.Amounts,
+                settlement.Effective,
+                session.CustomerId,
+                stationKind,
+                ct);
+        }
+        catch (ApiException ex) when (ex.Status is StatusCodes.Status400BadRequest)
+        {
+            return new PaymentPreviewHttpResult(400, BuildPaymentPreviewRejectionBody(ex, settlement));
+        }
+
+        var amounts = settlement.Amounts;
+        var walletShort = await GetWalletShortRemainderSnapshotAsync(
+            session.CustomerId,
+            settlement.CollectibleToman,
+            stationKind,
             ct);
         var charge = await billing.BuildChargeAsync(session, bill.FrozenAtUtc, ct);
         var snapshot = session.RateCardSnapshotId != 0
@@ -765,6 +1381,63 @@ public sealed class OperatorBillService(
         var sale = await db.OpenSales.AsNoTracking()
             .Include(o => o.Lines).ThenInclude(l => l.CatalogItem)
             .FirstOrDefaultAsync(o => o.SessionId == sessionId, ct);
+        var (levelDiscountToman, birthdayDiscountToman) = SplitMemberDiscounts(amounts.Detail);
+        var writeOffToman = amounts.Detail?.InvoicePreview.Lines
+            .Where(l => l.Kind == InvoiceLineKind.WriteOff)
+            .Sum(l => -l.AmountToman) ?? 0L;
+        var overshootAlert = amounts.Detail?.OvershootAlert is { } alert
+            ? new { alert.Code, alert.AmountToman, alert.Message }
+            : null;
+        var body = new
+        {
+            bill.SessionId,
+            playerCount = session.PlayerCount,
+            groupId = session.Station!.GroupId,
+            unroundedPayableToman = amounts.UnroundedPayableToman,
+            roundingToman = amounts.RoundingToman,
+            collectibleToman = settlement.CollectibleToman,
+            changeToman = CounterPaymentRecording.ComputeChangeToman(settlement.CollectibleToman, settlement.Effective),
+            surchargeToman = bill.SurchargeToman,
+            timeGrossToman = amounts.TimeGrossToman,
+            buffetGrossToman = amounts.BuffetGrossToman,
+            servicesGrossToman = amounts.ServicesGrossToman,
+            levelDiscountToman,
+            birthdayDiscountToman,
+            writeOffToman,
+            overshootAlert,
+            saleLines = sale is null ? Array.Empty<SaleLineDto>() : OpenSaleMapper.ToDtos(sale.Lines),
+            frozenAtUtc = bill.FrozenAtUtc,
+            source = bill.Source,
+            stopReason = bill.StopReason,
+            segments,
+            linkedCustomer = CustomerMapper.ToLinkedChip(session.Customer),
+            walletShortRemainder = ToWalletShortRemainderDto(walletShort),
+        };
+        return new PaymentPreviewHttpResult(StatusCodes.Status200OK, body);
+    }
+
+    public async Task<object> GetBillDetailAsync(Guid sessionId, CancellationToken ct)
+    {
+        var session = await db.Sessions.AsNoTracking()
+            .Include(s => s.Customer)
+            .Include(s => s.Segments).ThenInclude(seg => seg.GameTitle)
+            .Include(s => s.Pauses)
+            .Include(s => s.PendingBill)
+            .Include(s => s.Station)!.ThenInclude(st => st!.Group)
+            .FirstOrDefaultAsync(s => s.Id == sessionId, ct)
+            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "جلسه یافت نشد.");
+        var bill = session.PendingBill
+            ?? throw new ApiException(StatusCodes.Status409Conflict, "no_bill", "برای این جلسه صورتحسابی نیست.");
+        var charge = await billing.BuildChargeAsync(session, bill.FrozenAtUtc, ct);
+        var snapshot = session.RateCardSnapshotId != 0
+            ? await rates.LoadSnapshotAsync(session.RateCardSnapshotId, ct)
+            : await rates.LoadAsync(ct);
+        var segments = BuildBillSegments(session, charge, snapshot);
+        var sale = await db.OpenSales.AsNoTracking()
+            .Include(o => o.Lines).ThenInclude(l => l.CatalogItem)
+            .FirstOrDefaultAsync(o => o.SessionId == sessionId, ct);
+        var saleLines = sale?.Lines.ToList() ?? [];
+        var amounts = await calculator.ComputeAsync(session, bill.FrozenAtUtc, bill.SurchargeToman, saleLines, ct);
         var (levelDiscountToman, birthdayDiscountToman) = SplitMemberDiscounts(amounts.Detail);
         var writeOffToman = amounts.Detail?.InvoicePreview.Lines
             .Where(l => l.Kind == InvoiceLineKind.WriteOff)
@@ -794,59 +1467,11 @@ public sealed class OperatorBillService(
             stopReason = bill.StopReason,
             segments,
             linkedCustomer = CustomerMapper.ToLinkedChip(session.Customer),
-        };
-    }
-
-    public async Task<object> GetBillDetailAsync(Guid sessionId, CancellationToken ct)
-    {
-        var session = await db.Sessions.AsNoTracking()
-            .Include(s => s.Customer)
-            .Include(s => s.Segments).ThenInclude(seg => seg.GameTitle)
-            .Include(s => s.PendingBill)
-            .Include(s => s.Station)!.ThenInclude(st => st!.Group)
-            .FirstOrDefaultAsync(s => s.Id == sessionId, ct)
-            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Session not found.");
-        var bill = session.PendingBill
-            ?? throw new ApiException(StatusCodes.Status409Conflict, "no_bill", "No bill for this session.");
-        var charge = await billing.BuildChargeAsync(session, bill.FrozenAtUtc, ct);
-        var snapshot = session.RateCardSnapshotId != 0
-            ? await rates.LoadSnapshotAsync(session.RateCardSnapshotId, ct)
-            : await rates.LoadAsync(ct);
-        var segments = BuildBillSegments(session, charge, snapshot);
-        var sale = await db.OpenSales.AsNoTracking()
-            .Include(o => o.Lines).ThenInclude(l => l.CatalogItem)
-            .FirstOrDefaultAsync(o => o.SessionId == sessionId, ct);
-        var saleLines = sale?.Lines.ToList() ?? [];
-        var amounts = await calculator.ComputeAsync(session, bill.FrozenAtUtc, bill.SurchargeToman, saleLines, ct);
-        var (levelDiscountToman, birthdayDiscountToman) = SplitMemberDiscounts(amounts.Detail);
-        var writeOffToman = amounts.Detail?.InvoicePreview.Lines
-            .Where(l => l.Kind == InvoiceLineKind.WriteOff)
-            .Sum(l => -l.AmountToman) ?? 0L;
-        var overshootAlert = amounts.Detail?.OvershootAlert is { } alert
-            ? new { alert.Code, alert.AmountToman, alert.Message }
-            : null;
-        return new
-        {
-            bill.SessionId,
-            playerCount = session.PlayerCount,
-            groupId = session.Station!.GroupId,
-            unroundedPayableToman = bill.UnroundedPayableToman,
-            roundingToman = bill.RoundingToman,
-            collectibleToman = bill.CollectibleToman,
-            surchargeToman = bill.SurchargeToman,
-            timeGrossToman = bill.TimeGrossToman,
-            buffetGrossToman = bill.BuffetGrossToman,
-            servicesGrossToman = bill.ServicesGrossToman,
-            levelDiscountToman,
-            birthdayDiscountToman,
-            writeOffToman,
-            overshootAlert,
-            saleLines = sale is null ? Array.Empty<SaleLineDto>() : OpenSaleMapper.ToDtos(sale.Lines),
-            frozenAtUtc = bill.FrozenAtUtc,
-            source = bill.Source,
-            stopReason = bill.StopReason,
-            segments,
-            linkedCustomer = CustomerMapper.ToLinkedChip(session.Customer),
+            walletShortRemainder = ToWalletShortRemainderDto(await GetWalletShortRemainderSnapshotAsync(
+                session.CustomerId,
+                amounts.CollectibleToman,
+                session.Station?.Group?.Kind,
+                ct)),
         };
     }
 
@@ -890,7 +1515,7 @@ public sealed class OperatorBillService(
         }
 
         var revert = JsonSerializer.Deserialize<RevertSnapshot>(bill.RevertStateJson)
-            ?? throw new ApiException(StatusCodes.Status500InternalServerError, "revert_missing", "Bill revert state is missing.");
+            ?? throw new ApiException(StatusCodes.Status500InternalServerError, "revert_missing", "وضعیت بازگشت صورتحساب موجود نیست.");
         session.Status = Enum.Parse<SessionStatus>(revert.Status);
         session.EndedAtUtc = null;
         foreach (var seg in revert.Segments)
@@ -922,7 +1547,7 @@ public sealed class OperatorBillService(
             }
             catch (Exception ex) when (PostgresErrors.IsLockNotAvailable(ex) || PostgresErrors.IsDeadlock(ex))
             {
-                throw new ApiException(StatusCodes.Status409Conflict, "session_busy", "Session is being updated.");
+                throw new ApiException(StatusCodes.Status409Conflict, "session_busy", "جلسه در حال به‌روزرسانی است.");
             }
 
             var session = await db.Sessions
@@ -931,7 +1556,7 @@ public sealed class OperatorBillService(
                 .Include(s => s.Pauses)
                 .Include(s => s.PendingBill)
                 .FirstOrDefaultAsync(s => s.Id == sessionId, ct)
-                ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Session not found.");
+                ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "جلسه یافت نشد.");
             try
             {
                 var result = await action(session, ct);
@@ -941,11 +1566,11 @@ public sealed class OperatorBillService(
             }
             catch (DbUpdateConcurrencyException) when (policies.ConcurrentBillActionReturns409)
             {
-                throw new ApiException(StatusCodes.Status409Conflict, "stale_bill", "Bill was updated elsewhere; refresh and retry.");
+                throw new ApiException(StatusCodes.Status409Conflict, "stale_bill", "صورتحساب جای دیگر به‌روز شده؛ تازه‌سازی کنید و دوباره بزنید.");
             }
             catch (Exception ex) when (PostgresErrors.IsDeadlock(ex))
             {
-                throw new ApiException(StatusCodes.Status409Conflict, "session_busy", "Session is being updated.");
+                throw new ApiException(StatusCodes.Status409Conflict, "session_busy", "جلسه در حال به‌روزرسانی است.");
             }
         });
     }
@@ -1306,7 +1931,7 @@ public sealed class OperatorInvoiceService(
             .Include(i => i.Customer)
             .Include(i => i.Session)!.ThenInclude(s => s!.Station)
             .FirstOrDefaultAsync(i => i.Number == number, ct)
-            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Invoice not found.");
+            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "فاکتور یافت نشد.");
         return invoice;
     }
 
@@ -1315,30 +1940,30 @@ public sealed class OperatorInvoiceService(
         if (context.Role == UserRole.Operator || context.Role is UserRole.Manager or UserRole.Owner)
         {
             var invoice = await db.Invoices.FirstOrDefaultAsync(i => i.Number == number, ct)
-                ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Invoice not found.");
+                ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "فاکتور یافت نشد.");
             invoice.OperatorNote = string.IsNullOrWhiteSpace(note) ? null : note.Trim();
             await audit.AppendAsync("invoice.operator_note", new { number, note = invoice.OperatorNote }, ct);
             await db.SaveChangesAsync(ct);
             return;
         }
 
-        throw new ApiException(StatusCodes.Status403Forbidden, "forbidden", "Not allowed.");
+        throw new ApiException(StatusCodes.Status403Forbidden, "forbidden", "مجاز نیست.");
     }
 
     public async Task VoidAsync(long number, string? reason, CancellationToken ct)
     {
         if (context.Role is not UserRole.Manager and not UserRole.Owner)
         {
-            throw new ApiException(StatusCodes.Status403Forbidden, "forbidden", "Only a manager may void an invoice.");
+            throw new ApiException(StatusCodes.Status403Forbidden, "forbidden", "ابطال فاکتور فقط برای مدیر است.");
         }
 
         if (string.IsNullOrWhiteSpace(reason))
         {
-            throw new ApiException(StatusCodes.Status400BadRequest, "reason_required", "Void reason is required.");
+            throw new ApiException(StatusCodes.Status400BadRequest, "reason_required", "دلیل ابطال الزامی است.");
         }
 
         var invoice = await db.Invoices.FirstOrDefaultAsync(i => i.Number == number, ct)
-            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Invoice not found.");
+            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "فاکتور یافت نشد.");
         if (invoice.Status == "void")
         {
             return;
@@ -1381,7 +2006,7 @@ public sealed class OperatorInvoiceService(
     {
         if (!policies.OperatorMayConfirmCardToCard)
         {
-            throw new ApiException(StatusCodes.Status403Forbidden, "forbidden", "Card-to-card confirmation is disabled.");
+            throw new ApiException(StatusCodes.Status403Forbidden, "forbidden", "تأیید کارت‌به‌کارت غیرفعال است.");
         }
 
         await using var tx = await db.Database.BeginTransactionAsync(ct);
@@ -1395,10 +2020,10 @@ public sealed class OperatorInvoiceService(
             var exists = await db.PaymentLines.AsNoTracking().AnyAsync(p => p.Id == paymentLineId, ct);
             if (!exists)
             {
-                throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Payment line not found.");
+                throw new ApiException(StatusCodes.Status404NotFound, "not_found", "خط پرداخت یافت نشد.");
             }
 
-            throw new ApiException(StatusCodes.Status409Conflict, "not_pending", "Payment is not pending.");
+            throw new ApiException(StatusCodes.Status409Conflict, "not_pending", "این پرداخت در انتظار نیست.");
         }
 
         await audit.AppendAsync("payment.card_to_card_confirmed", new { paymentLineId }, ct);
@@ -1409,7 +2034,7 @@ public sealed class OperatorInvoiceService(
     {
         if (!policies.OperatorMayConfirmCardToCard)
         {
-            throw new ApiException(StatusCodes.Status403Forbidden, "forbidden", "Card-to-card confirmation is disabled.");
+            throw new ApiException(StatusCodes.Status403Forbidden, "forbidden", "تأیید کارت‌به‌کارت غیرفعال است.");
         }
 
         await using var tx = await db.Database.BeginTransactionAsync(ct);
@@ -1423,10 +2048,10 @@ public sealed class OperatorInvoiceService(
             var exists = await db.PaymentLines.AsNoTracking().AnyAsync(p => p.Id == paymentLineId, ct);
             if (!exists)
             {
-                throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Payment line not found.");
+                throw new ApiException(StatusCodes.Status404NotFound, "not_found", "خط پرداخت یافت نشد.");
             }
 
-            throw new ApiException(StatusCodes.Status409Conflict, "not_pending", "Payment is not pending.");
+            throw new ApiException(StatusCodes.Status409Conflict, "not_pending", "این پرداخت در انتظار نیست.");
         }
 
         var line = await db.PaymentLines.AsNoTracking().FirstAsync(p => p.Id == paymentLineId, ct);
@@ -1470,7 +2095,7 @@ public sealed class ManualSettleQueueService(AppDbContext db, OperatorPolicies p
     {
         if (!policies.OperatorMayResolveManualSettle && context.Role == UserRole.Operator)
         {
-            throw new ApiException(StatusCodes.Status403Forbidden, "forbidden", "Manual settle resolution is manager-only.");
+            throw new ApiException(StatusCodes.Status403Forbidden, "forbidden", "تسویهٔ دستی فقط برای مدیر است.");
         }
     }
 }

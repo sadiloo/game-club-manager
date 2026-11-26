@@ -392,6 +392,12 @@ public sealed record Invoice(
     public long GrossToman => TimeGrossToman + BuffetGrossToman + ServicesGrossToman;
 }
 
+/// <summary>At or above <see cref="CashLikeThresholdToman"/>, wallet payment rounds like cash using the same rounding path as counter payment.</summary>
+public static class WalletPaymentRounding
+{
+    public const long CashLikeThresholdToman = 5_000;
+}
+
 public static class InvoiceCalculator
 {
     public static Invoice Calculate(InvoiceRequest request, IReadOnlyList<Tender> tenders, IReadOnlyList<MemberWallet>? wallets = null)
@@ -791,20 +797,61 @@ public static class InvoiceCalculator
     }
 
     /// <summary>
-    /// One rounding path. Per-line nets are taken after grace and discounts, balance tenders
-    /// pay those nets exactly, and only the counter remainder is rounded. The invoice payable
-    /// is the allocator payable, so a wallet plus cash cannot disagree with the invoice preview.
+    /// One rounding path. Mixed wallet+cash at or above the cash-like threshold rounds the
+    /// whole invoice once and sets cash to rounded total minus wallet; below the threshold the
+    /// mixed net is exact with no cash-remainder rounding. Cash-only paths are unchanged.
     /// </summary>
     public static (Invoice Invoice, AllocationResult Allocation) Collect(
         InvoiceRequest request,
         IReadOnlyList<Tender> tenders,
         IReadOnlyList<MemberWallet>? wallets = null,
         DebtPolicy? walletDebt = null,
-        WalletPocket? pcBalance = null)
+        WalletPocket? pcBalance = null,
+        bool walletRoundsLikeCash = true,
+        PaymentRoundingSettings? roundingSettings = null)
     {
+        roundingSettings ??= PaymentRoundingSettings.Default;
         var priced = Calculate(request with { Rounding = RoundingPolicy.Off });
+        var unroundedPayable = priced.NetBeforeRoundingToman;
+        var resolved = PaymentRounding.Resolve(unroundedPayable, request.Rounding, roundingSettings, walletRoundsLikeCash);
+        var effectiveRounding = resolved.EffectiveRounding;
+        var walletLikeCash = resolved.WalletRoundsLikeCash;
+        var billBelowCashLikeThreshold = unroundedPayable < roundingSettings.WalletMinBillToman;
+        var branchRounded = Calculate(request with { Rounding = resolved.BranchRounding });
+        var hasBalanceTender = tenders.Any(t => t.Method is PaymentMethod.Wallet or PaymentMethod.PcBalance);
+        var hasCounterTender = tenders.Any(t => t.Method is PaymentMethod.Cash or PaymentMethod.CardReader or PaymentMethod.CardToCard);
+        var mixedBalanceCounter = hasBalanceTender && hasCounterTender;
+        var balanceTendered = tenders
+            .Where(t => t.Method is PaymentMethod.Wallet or PaymentMethod.PcBalance)
+            .Sum(t => t.AmountToman);
+        var walletOnlyPartial = hasBalanceTender && !hasCounterTender && balanceTendered < unroundedPayable;
+        var mixedWholeBillWhenWalletCashOff = !billBelowCashLikeThreshold
+            && mixedBalanceCounter
+            && !roundingSettings.ApplyToWallet
+            && walletRoundsLikeCash;
+        var walletPartialUsesBranchRounded = walletRoundsLikeCash || roundingSettings.ApplyToWallet;
+        var useCashEquivalentForAllocate = walletLikeCash
+            || mixedWholeBillWhenWalletCashOff
+            || (!billBelowCashLikeThreshold && walletOnlyPartial && walletPartialUsesBranchRounded);
+        var cashEquivalent = useCashEquivalentForAllocate ? branchRounded : priced;
         var nets = PayableNets(request, priced.NetBeforeRoundingToman);
-        var allocation = PaymentAllocator.Allocate(nets, tenders, request.Rounding, wallets, walletDebt, pcBalance);
+        var f1WriteOffUnroundedPayable = !walletRoundsLikeCash && !roundingSettings.ApplyToWallet;
+        var allocateRounding = f1WriteOffUnroundedPayable ? RoundingPolicy.Off : request.Rounding;
+        var tenderedTotal = tenders.Sum(t => t.AmountToman);
+        var mixedCounterOverTender = mixedBalanceCounter && tenderedTotal > branchRounded.PayableToman;
+        var allocation = PaymentAllocator.Allocate(
+            nets,
+            tenders,
+            allocateRounding,
+            wallets,
+            walletDebt,
+            pcBalance,
+            useCashEquivalentForAllocate ? cashEquivalent.PayableToman : 0,
+            useCashEquivalentForAllocate ? cashEquivalent.RoundingToman : 0,
+            roundingSettings.AllowWalletShortBalanceDebt,
+            roundingSettings.SuppressWalletDebtDraw,
+            billBelowCashLikeThreshold,
+            allowCounterOverTender: f1WriteOffUnroundedPayable || !hasBalanceTender || mixedCounterOverTender);
         var date = TehranTime.Date(request.IssuedAt);
         var lines = new List<InvoiceLine>();
         foreach (var line in priced.Lines)

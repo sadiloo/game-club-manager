@@ -21,7 +21,7 @@ public sealed class KioskPairingService(AppDbContext db, IClock clock, IKioskLea
     {
         var id = StationIdNormalizer.Normalize(stationId);
         _ = await db.Stations.FirstOrDefaultAsync(s => s.Id == id, ct)
-            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Station not found.");
+            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "ایستگاه یافت نشد.");
         var code = Random.Shared.Next(100_000, 999_999).ToString();
         var row = new KioskPairingCodeEntity
         {
@@ -41,10 +41,10 @@ public sealed class KioskPairingService(AppDbContext db, IClock clock, IKioskLea
             .Where(p => p.Code == code && p.ConsumedAtUtc == null)
             .OrderByDescending(p => p.Id)
             .FirstOrDefaultAsync(ct)
-            ?? throw new ApiException(StatusCodes.Status400BadRequest, "invalid_code", "Pairing code is invalid.");
+            ?? throw new ApiException(StatusCodes.Status400BadRequest, "invalid_code", "کد جفت‌سازی نامعتبر است.");
         if (row.ExpiresAtUtc < clock.UtcNow.UtcDateTime)
         {
-            throw new ApiException(StatusCodes.Status400BadRequest, "expired_code", "Pairing code expired.");
+            throw new ApiException(StatusCodes.Status400BadRequest, "expired_code", "کد جفت‌سازی منقضی شده است.");
         }
 
         var deviceKey = KioskCrypto.NewDeviceKey();
@@ -139,7 +139,7 @@ public sealed class KioskCustomerAuthService(AppDbContext db, AuditService audit
                     ct);
             if (otherOpen)
             {
-                throw new ApiException(StatusCodes.Status409Conflict, "session_elsewhere", "Customer already has an open PC session.");
+                throw new ApiException(StatusCodes.Status409Conflict, "session_elsewhere", "مشتری از قبل جلسهٔ کامپیوتر باز دارد.");
             }
 
             return cred.CustomerId;
@@ -149,7 +149,7 @@ public sealed class KioskCustomerAuthService(AppDbContext db, AuditService audit
     public async Task SetCredentialAsync(Guid customerId, string loginName, string newPassword, CancellationToken ct)
     {
         _ = await db.Customers.FirstOrDefaultAsync(c => c.Id == customerId, ct)
-            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Customer not found.");
+            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "مشتری یافت نشد.");
         var normalized = KioskCrypto.NormalizeLoginName(loginName);
         var hash = KioskCrypto.HashPassword(newPassword);
         var existing = await db.CustomerCredentials.FirstOrDefaultAsync(c => c.CustomerId == customerId, ct);
@@ -757,21 +757,21 @@ public sealed class KioskSessionService(
         var station = await db.Stations.Include(s => s.Group).FirstAsync(s => s.Id == StationIdNormalizer.Normalize(stationId), ct);
         if (station.Group?.Kind != StationKind.Pc)
         {
-            throw new ApiException(StatusCodes.Status400BadRequest, "not_pc", "Guest start is for PC stations only.");
+            throw new ApiException(StatusCodes.Status400BadRequest, "not_pc", "شروع مهمان فقط برای ایستگاه کامپیوتر است.");
         }
 
         if (prepaidKind == PrepaidSessionKind.Duration && minutes is int m)
         {
             if (m <= 0)
             {
-                throw new ApiException(StatusCodes.Status400BadRequest, "invalid_minutes", "Prepaid minutes must be positive.");
+                throw new ApiException(StatusCodes.Status400BadRequest, "invalid_minutes", "دقیقهٔ پیش‌پرداخت باید بیشتر از صفر باشد.");
             }
         }
         else if (prepaidKind == PrepaidSessionKind.Amount && amountToman is long a)
         {
             if (a <= 0)
             {
-                throw new ApiException(StatusCodes.Status400BadRequest, "invalid_amount", "Prepaid amount must be positive.");
+                throw new ApiException(StatusCodes.Status400BadRequest, "invalid_amount", "مبلغ پیش‌پرداخت باید بیشتر از صفر باشد.");
             }
 
             var snapshot = await rates.LoadAsync(ct);
@@ -780,7 +780,7 @@ public sealed class KioskSessionService(
             var oneMinute = MoneyMath.ChargeForMinutes(quote.HourlyRateToman, BillingPolicy.Default.GranularityMinutes, BillingPolicy.Default.Remainder);
             if (a < oneMinute)
             {
-                throw new ApiException(StatusCodes.Status400BadRequest, "below_minimum", "Amount is below the tariff minimum play time.");
+                throw new ApiException(StatusCodes.Status400BadRequest, "below_minimum", "مبلغ از حداقل زمان بازی تعرفه کمتر است.");
             }
         }
 
@@ -848,7 +848,7 @@ public sealed class KioskSessionService(
                         ct);
                 if (busyElsewhere)
                 {
-                    throw new ApiException(StatusCodes.Status409Conflict, "session_elsewhere", "Customer already has an open PC session.");
+                    throw new ApiException(StatusCodes.Status409Conflict, "session_elsewhere", "مشتری از قبل جلسهٔ کامپیوتر باز دارد.");
                 }
 
                 var open = await db.Sessions
@@ -866,7 +866,7 @@ public sealed class KioskSessionService(
                             ct);
                     if (alreadyOpen)
                     {
-                        throw new ApiException(StatusCodes.Status409Conflict, "session_elsewhere", "Customer already has an open PC session.");
+                        throw new ApiException(StatusCodes.Status409Conflict, "session_elsewhere", "مشتری از قبل جلسهٔ کامپیوتر باز دارد.");
                     }
 
                     PlaySessionEntity session;
@@ -891,7 +891,7 @@ public sealed class KioskSessionService(
 
                 if (open.CustomerId is Guid existing && existing != customerId)
                 {
-                    throw new ApiException(StatusCodes.Status409Conflict, "station_busy", "Station has another customer's session.");
+                    throw new ApiException(StatusCodes.Status409Conflict, "station_busy", "ایستگاه جلسهٔ مشتری دیگری دارد.");
                 }
 
                 if (open.CustomerId is null)
@@ -924,12 +924,12 @@ public sealed class KioskSessionService(
             .FirstOrDefaultAsync(ct);
         if (open is null)
         {
-            throw new ApiException(StatusCodes.Status409Conflict, "station_busy", "Station already has an open session.");
+            throw new ApiException(StatusCodes.Status409Conflict, "station_busy", "ایستگاه از قبل جلسهٔ باز دارد.");
         }
 
         if (open.CustomerId is Guid existing && existing != customerId)
         {
-            throw new ApiException(StatusCodes.Status409Conflict, "station_busy", "Station has another customer's session.");
+            throw new ApiException(StatusCodes.Status409Conflict, "station_busy", "ایستگاه جلسهٔ مشتری دیگری دارد.");
         }
 
         if (open.CustomerId is null)
@@ -959,7 +959,7 @@ public sealed class KioskSessionService(
     public async Task LogoutAsync(Guid sessionId, string deviceStationId, CancellationToken ct)
     {
         var session = await db.Sessions.FirstOrDefaultAsync(s => s.Id == sessionId, ct)
-            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Session not found.");
+            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "جلسه یافت نشد.");
         KioskDeviceAuthorization.EnsureSessionOnDeviceStation(session, deviceStationId);
         await sessions.StopAsync(sessionId, ct);
     }
@@ -1134,7 +1134,7 @@ public sealed class GameCatalogService(AppDbContext db, AuditService audit)
         CancellationToken ct)
     {
         var row = await db.GameCatalogEntries.FirstOrDefaultAsync(e => e.Id == id, ct)
-            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Game not found.");
+            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "بازی یافت نشد.");
         row.Name = name;
         if (categoryId is int cat)
         {
@@ -1143,7 +1143,7 @@ public sealed class GameCatalogService(AppDbContext db, AuditService audit)
                 throw new ApiException(
                     StatusCodes.Status400BadRequest,
                     "invalid_category",
-                    $"Game catalog category {cat} does not exist.");
+                    $"دستهٔ فهرست بازی {cat} وجود ندارد.");
             }
 
             row.CategoryId = cat;

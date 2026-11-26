@@ -423,6 +423,7 @@ public sealed class ShellPanelNavigationFailureTests
                     MainWindow? window = null;
                     try
                     {
+                        var baseline = ReadShellLogSnapshot();
                         window = await StartWindowOnStubAsync(stub);
                         if (ShellSeams.HttpProbe is StubAlignedHttpProbeSeam alignedProbeSeam)
                         {
@@ -431,7 +432,6 @@ public sealed class ShellPanelNavigationFailureTests
 
                         var wv = await WaitForPanelWebViewAsync(window, TimeSpan.FromSeconds(45));
                         ShellFileLog.Write("shell-probe-deadline-window-ready");
-                        var baseline = ReadShellLogSnapshot();
 
                         await AwaitShellLogLineAsync(
                             baseline,
@@ -454,7 +454,7 @@ public sealed class ShellPanelNavigationFailureTests
                             stub.ProbeRequestCount > probeRequestsBefore,
                             "/shell-probe request did not start while held across deadline");
 
-                        await WaitForPanelUnavailableOfflineAsync(wv, TimeSpan.FromSeconds(45));
+                        await WaitForPanelUnavailableOfflineAsync(wv, TimeSpan.FromSeconds(45), baseline);
                         var deltaAfterTimeout = LogDelta(baseline);
                         var timeoutConfirm = deltaAfterTimeout.Split('\n').FirstOrDefault(line =>
                             line.Contains("branch=panel-nav-timeout", StringComparison.Ordinal)
@@ -1217,25 +1217,98 @@ public sealed class ShellPanelNavigationFailureTests
         throw new InvalidOperationException("Panel WebView2 did not become ready");
     }
 
+    private static bool LogLineIsPanelUnavailableOfflineReady(string line)
+    {
+        if (!line.Contains("offlineState=panel-unavailable", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (line.Contains("branch=nav-completed-offline-data", StringComparison.Ordinal)
+            && line.Contains("offlineShown=True", StringComparison.Ordinal)
+            && line.Contains("IsSuccess=True", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        return line.Contains("branch=present-offline-navigated", StringComparison.Ordinal);
+    }
+
+    private static bool LogTextContainsPanelUnavailableOfflineReady(string text) =>
+        text.Split('\n').Any(LogLineIsPanelUnavailableOfflineReady);
+
     private static async Task WaitForPanelUnavailableOfflineAsync(
         Microsoft.Web.WebView2.Wpf.WebView2 wv,
-        TimeSpan timeout)
+        TimeSpan timeout,
+        string? logBaseline = null)
     {
-        var deadline = DateTime.UtcNow.Add(timeout);
+        try
+        {
+            await AssertPanelUnavailableOfflineDomAsync(wv, TimeSpan.FromSeconds(1));
+            return;
+        }
+        catch (InvalidOperationException)
+        {
+        }
+
+        if (logBaseline is not null)
+        {
+            if (!LogTextContainsPanelUnavailableOfflineReady(LogDelta(logBaseline)))
+            {
+                await AwaitShellLogLineAsync(logBaseline, LogLineIsPanelUnavailableOfflineReady, timeout);
+            }
+        }
+        else
+        {
+            var snapshot = ReadShellLogSnapshot();
+            if (!LogTextContainsPanelUnavailableOfflineReady(snapshot))
+            {
+                await AwaitShellLogLineAsync(snapshot, LogLineIsPanelUnavailableOfflineReady, timeout);
+            }
+        }
+
+        await AssertPanelUnavailableOfflineDomAsync(wv, TimeSpan.FromSeconds(10));
+    }
+
+    private static async Task AssertPanelUnavailableOfflineDomAsync(
+        Microsoft.Web.WebView2.Wpf.WebView2 wv,
+        TimeSpan confirmTimeout)
+    {
+        var deadline = DateTime.UtcNow.Add(confirmTimeout);
         while (DateTime.UtcNow < deadline)
         {
-            await Task.Delay(300);
             var sample = UnquoteWebViewScriptString(
                 await wv.CoreWebView2.ExecuteScriptAsync(
                     "JSON.stringify({protocol: location.protocol, offline: document.documentElement.getAttribute('data-shell-offline-page'), title: (document.getElementById('title') || {}).innerText || ''})"));
-            using var doc = JsonDocument.Parse(sample);
-            if (doc.RootElement.GetProperty("protocol").GetString() == "data:"
-                && doc.RootElement.GetProperty("offline").GetString() == "1"
-                && (doc.RootElement.GetProperty("title").GetString() ?? "")
-                    .Contains("پنل در دسترس نیست", StringComparison.Ordinal))
+            if (string.IsNullOrWhiteSpace(sample))
             {
-                return;
+                await Task.Delay(50);
+                continue;
             }
+
+            JsonDocument doc;
+            try
+            {
+                doc = JsonDocument.Parse(sample);
+            }
+            catch (JsonException)
+            {
+                await Task.Delay(50);
+                continue;
+            }
+
+            using (doc)
+            {
+                if (doc.RootElement.GetProperty("protocol").GetString() == "data:"
+                    && doc.RootElement.GetProperty("offline").GetString() == "1"
+                    && (doc.RootElement.GetProperty("title").GetString() ?? "")
+                        .Contains("پنل در دسترس نیست", StringComparison.Ordinal))
+                {
+                    return;
+                }
+            }
+
+            await Task.Delay(50);
         }
 
         throw new InvalidOperationException("panel-unavailable offline page did not appear");

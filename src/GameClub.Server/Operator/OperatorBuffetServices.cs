@@ -148,7 +148,7 @@ public sealed class OperatorCatalogService(AppDbContext db, AuditService audit, 
     {
         if (context.Role is not UserRole.Manager and not UserRole.Owner)
         {
-            throw new ApiException(StatusCodes.Status403Forbidden, "forbidden", "Catalog edit is manager-only.");
+            throw new ApiException(StatusCodes.Status403Forbidden, "forbidden", "ویرایش فهرست فقط برای مدیر است.");
         }
     }
 
@@ -166,22 +166,22 @@ public sealed class OperatorCatalogService(AppDbContext db, AuditService audit, 
         EnsureMayEditCatalog();
         if (string.IsNullOrWhiteSpace(input.Id) || string.IsNullOrWhiteSpace(input.Name))
         {
-            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_catalog", "Item id and name are required.");
+            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_catalog", "شناسه و نام کالا الزامی است.");
         }
 
         if (!Enum.TryParse<CatalogProductKind>(input.Kind, true, out var kind))
         {
-            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_catalog", "Unknown product kind.");
+            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_catalog", "نوع کالا ناشناخته است.");
         }
 
         ValidateKind(kind, input.StockQuantity, input.LowStockWarningThreshold);
         if (input.UnitPriceToman < 0)
         {
-            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_money", "Unit price cannot be negative.");
+            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_money", "قیمت واحد نمی‌تواند منفی باشد.");
         }
 
         var category = await db.CatalogCategories.AsNoTracking().FirstOrDefaultAsync(c => c.Id == input.CategoryId, ct)
-            ?? throw new ApiException(StatusCodes.Status400BadRequest, "unknown_category", "Category not found.");
+            ?? throw new ApiException(StatusCodes.Status400BadRequest, "unknown_category", "دسته یافت نشد.");
         var existing = await db.CatalogItems.FirstOrDefaultAsync(i => i.Id == input.Id, ct);
         var before = existing is null
             ? null
@@ -217,21 +217,21 @@ public sealed class OperatorCatalogService(AppDbContext db, AuditService audit, 
         }
         catch (Exception ex) when (PostgresErrors.IsLockNotAvailable(ex))
         {
-            throw new ApiException(StatusCodes.Status409Conflict, "catalog_busy", "Catalog item is locked.");
+            throw new ApiException(StatusCodes.Status409Conflict, "catalog_busy", "قلم فهرست قفل است.");
         }
 
         var item = await db.CatalogItems.FirstOrDefaultAsync(i => i.Id == itemId, ct)
-            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Catalog item not found.");
+            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "قلم فهرست یافت نشد.");
         if (item.Kind != CatalogProductKind.Stocked)
         {
-            throw new ApiException(StatusCodes.Status400BadRequest, "not_stocked", "Only stocked items have inventory.");
+            throw new ApiException(StatusCodes.Status400BadRequest, "not_stocked", "فقط اقلام انباری موجودی دارند.");
         }
 
         var before = item.StockQuantity;
         var after = (before ?? 0) + delta;
         if (after < 0)
         {
-            throw new ApiException(StatusCodes.Status409Conflict, "insufficient_stock", "Stock cannot go negative.");
+            throw new ApiException(StatusCodes.Status409Conflict, "insufficient_stock", "موجودی نمی‌تواند منفی شود.");
         }
 
         item.StockQuantity = after;
@@ -246,12 +246,12 @@ public sealed class OperatorCatalogService(AppDbContext db, AuditService audit, 
         {
             if (stock is null or < 0 || warning is null or < 0)
             {
-                throw new ApiException(StatusCodes.Status400BadRequest, "invalid_catalog", "Stocked items need stock and warning threshold.");
+                throw new ApiException(StatusCodes.Status400BadRequest, "invalid_catalog", "اقلام انباری به موجودی و آستانهٔ هشدار نیاز دارند.");
             }
         }
         else if (kind == CatalogProductKind.Unstocked && stock is not null)
         {
-            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_catalog", "Unstocked items do not store stock quantity.");
+            throw new ApiException(StatusCodes.Status400BadRequest, "invalid_catalog", "اقلام بدون انبار موجودی ذخیره نمی‌کنند.");
         }
     }
 }
@@ -315,7 +315,7 @@ public sealed class OperatorBuffetSaleService(
         {
             if (session.Status is SessionStatus.Closed)
             {
-                throw new ApiException(StatusCodes.Status409Conflict, "closed", "Session is closed.");
+                throw new ApiException(StatusCodes.Status409Conflict, "closed", "جلسه بسته شده است.");
             }
 
             var sale = await GetOrCreateForSessionAsync(session, innerCt);
@@ -331,9 +331,9 @@ public sealed class OperatorBuffetSaleService(
         return await WithSessionSaleLockAsync(sessionId, async (session, innerCt) =>
         {
             var sale = await db.OpenSales.Include(o => o.Lines).FirstOrDefaultAsync(o => o.SessionId == session.Id, innerCt)
-                ?? throw new ApiException(StatusCodes.Status404NotFound, "no_sale", "No open sale for session.");
+                ?? throw new ApiException(StatusCodes.Status404NotFound, "no_sale", "فروش بازی برای جلسه نیست.");
             var line = sale.Lines.FirstOrDefault(l => l.Id == lineId)
-                ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Sale line not found.");
+                ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "قلم فروش یافت نشد.");
             await RemoveLineCoreAsync(line, innerCt);
             await db.Entry(sale).Collection(o => o.Lines).Query().Include(l => l.CatalogItem).LoadAsync(innerCt);
             await RefreshSessionPendingBillIfAnyAsync(session, sale, innerCt);
@@ -373,7 +373,7 @@ public sealed class OperatorBuffetSaleService(
         return await WithOpenSaleLockAsync(openSaleId, async (sale, innerCt) =>
         {
             var line = sale.Lines.FirstOrDefault(l => l.Id == lineId)
-                ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Sale line not found.");
+                ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "قلم فروش یافت نشد.");
             await RemoveLineCoreAsync(line, innerCt);
             await db.Entry(sale).Collection(o => o.Lines).Query().Include(l => l.CatalogItem).LoadAsync(innerCt);
             await RefreshOpenSalePendingBillIfAnyAsync(sale, innerCt);
@@ -388,18 +388,18 @@ public sealed class OperatorBuffetSaleService(
         {
             if (!sale.IsBuffetOnly)
             {
-                throw new ApiException(StatusCodes.Status400BadRequest, "not_buffet_only", "Not a buffet-only sale.");
+                throw new ApiException(StatusCodes.Status400BadRequest, "not_buffet_only", "این فروش بوفهٔ مستقل نیست.");
             }
 
             if (sale.PendingBill is not null || await db.PendingBills.AnyAsync(b => b.OpenSaleId == sale.Id, innerCt))
             {
-                throw new ApiException(StatusCodes.Status409Conflict, "bill_open", "Checkout already started.");
+                throw new ApiException(StatusCodes.Status409Conflict, "bill_open", "فرایند تسویه شروع شده است.");
             }
 
             await db.Entry(sale).Collection(o => o.Lines).Query().Include(l => l.CatalogItem).LoadAsync(innerCt);
             if (sale.Lines.Count == 0)
             {
-                throw new ApiException(StatusCodes.Status400BadRequest, "empty_sale", "Add at least one line.");
+                throw new ApiException(StatusCodes.Status400BadRequest, "empty_sale", "دست‌کم یک قلم اضافه کنید.");
             }
 
             var frozenAt = clock.UtcNow.UtcDateTime;
@@ -425,34 +425,49 @@ public sealed class OperatorBuffetSaleService(
         }, ct);
     }
 
-    public async Task<InvoiceEntity> ConfirmBuffetOnlyAsync(
+    public sealed record BuffetOnlyConfirmResult(InvoiceEntity Invoice, long ChangeToman);
+
+    public async Task<BuffetOnlyConfirmResult> ConfirmBuffetOnlyAsync(
         Guid openSaleId,
         IReadOnlyList<OperatorBillService.PaymentInput> payments,
+        long? previewCollectibleToman,
         CancellationToken ct)
     {
         return await WithOpenSaleLockAsync(openSaleId, async (sale, innerCt) =>
         {
             var bill = sale.PendingBill
                 ?? await db.PendingBills.FirstOrDefaultAsync(b => b.OpenSaleId == sale.Id, innerCt)
-                ?? throw new ApiException(StatusCodes.Status409Conflict, "no_bill", "No bill awaiting confirmation.");
-            await bills.LockMemberWalletRowIfNeededAsync(sale.CustomerId, payments, innerCt);
-            var tenders = payments.Select(p => new Tender(
-                OperatorPaymentMethods.Parse(p.Method),
-                p.AmountToman,
-                OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet ? sale.CustomerId?.ToString() : null)).ToList();
-            var amounts = await calculator.ComputeBuffetOnlyAsync(sale.Lines, sale.CustomerId, tenders, innerCt);
-            bill.UnroundedPayableToman = amounts.UnroundedPayableToman;
-            bill.RoundingToman = amounts.RoundingToman;
-            bill.CollectibleToman = amounts.CollectibleToman;
-            bills.ValidatePayments(amounts.CollectibleToman, payments, amounts.Detail, sale.CustomerId);
+                ?? throw new ApiException(StatusCodes.Status409Conflict, "no_bill", "صورتحسابی در انتظار تأیید نیست.");
             await db.Entry(sale).Collection(o => o.Lines).Query().Include(l => l.CatalogItem).LoadAsync(innerCt);
-            var invoice = await closer.FinalizeBuffetOnlyAsync(sale, bill, payments, amounts, innerCt);
+            var live = await calculator.ComputeBuffetOnlyAsync(sale.Lines, sale.CustomerId, null, innerCt);
+            var effectiveForLock = await bills.PreparePaymentsForAllocationAsync(
+                sale.CustomerId,
+                live.CollectibleToman,
+                live.UnroundedPayableToman,
+                null,
+                payments,
+                innerCt);
+            await bills.LockMemberWalletRowIfNeededAsync(sale.CustomerId, effectiveForLock, innerCt);
+            var settlement = await bills.ComputeBuffetPaymentSettlementAsync(sale, payments, innerCt);
+            OperatorBillService.EnsureClientPreviewCollectibleCurrent(
+                previewCollectibleToman,
+                live.CollectibleToman,
+                settlement.Amounts,
+                settlement.Effective);
+            await bills.ApplyPaymentSettlementValidationAsync(
+                settlement.Amounts,
+                settlement.Effective,
+                sale.CustomerId,
+                null,
+                innerCt);
+            var invoice = await closer.FinalizeBuffetOnlyAsync(sale, bill, settlement.Effective, settlement.Amounts, innerCt);
             await audit.AppendAsync("buffet_only.confirm", new { openSaleId, invoice.Number, invoice.CollectibleToman }, innerCt);
-            return invoice;
+            var changeToman = CounterPaymentRecording.ComputeChangeToman(settlement.Amounts.CollectibleToman, settlement.Effective);
+            return new BuffetOnlyConfirmResult(invoice, changeToman);
         }, ct);
     }
 
-    public async Task<object> PreviewBuffetOnlyBillAsync(
+    public async Task<OperatorBillService.PaymentPreviewHttpResult> PreviewBuffetOnlyBillAsync(
         Guid openSaleId,
         IReadOnlyList<OperatorBillService.PaymentInput> payments,
         CancellationToken ct)
@@ -462,14 +477,73 @@ public sealed class OperatorBuffetSaleService(
             .Include(o => o.PendingBill)
             .Include(o => o.Customer)
             .FirstOrDefaultAsync(o => o.Id == openSaleId && o.IsBuffetOnly, ct)
-            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Buffet-only sale not found.");
+            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "فروش بوفهٔ مستقل یافت نشد.");
         var bill = sale.PendingBill
-            ?? throw new ApiException(StatusCodes.Status409Conflict, "no_bill", "No bill for this sale.");
-        var tenders = payments.Select(p => new Tender(
-            OperatorPaymentMethods.Parse(p.Method),
-            p.AmountToman,
-            OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet ? sale.CustomerId?.ToString() : null)).ToList();
-        var amounts = await calculator.ComputeBuffetOnlyAsync(sale.Lines, sale.CustomerId, tenders, ct);
+            ?? throw new ApiException(StatusCodes.Status409Conflict, "no_bill", "برای این فروش صورتحسابی نیست.");
+        var settlement = await bills.ComputeBuffetPaymentSettlementAsync(sale, payments, ct);
+        try
+        {
+            await bills.ApplyPaymentSettlementValidationAsync(
+                settlement.Amounts,
+                settlement.Effective,
+                sale.CustomerId,
+                null,
+                ct);
+        }
+        catch (ApiException ex) when (ex.Status is StatusCodes.Status400BadRequest)
+        {
+            return new OperatorBillService.PaymentPreviewHttpResult(
+                400,
+                OperatorBillService.BuildPaymentPreviewRejectionBody(ex, settlement));
+        }
+
+        var walletShort = await bills.GetWalletShortRemainderSnapshotAsync(sale.CustomerId, settlement.CollectibleToman, null, ct);
+        var body = new
+        {
+            openSaleId = sale.Id,
+            lines = OpenSaleMapper.ToDtos(sale.Lines),
+            linkedCustomer = CustomerMapper.ToLinkedChip(sale.Customer),
+            bill = new
+            {
+                unroundedPayableToman = settlement.Amounts.UnroundedPayableToman,
+                roundingToman = settlement.Amounts.RoundingToman,
+                collectibleToman = settlement.CollectibleToman,
+                changeToman = CounterPaymentRecording.ComputeChangeToman(settlement.CollectibleToman, settlement.Effective),
+                timeGrossToman = settlement.Amounts.TimeGrossToman,
+                buffetGrossToman = settlement.Amounts.BuffetGrossToman,
+                servicesGrossToman = settlement.Amounts.ServicesGrossToman,
+                walletShortRemainder = OperatorBillService.ToWalletShortRemainderDto(walletShort),
+            },
+        };
+        return new OperatorBillService.PaymentPreviewHttpResult(StatusCodes.Status200OK, body);
+    }
+
+    public async Task<object> GetBuffetOnlyBillAsync(Guid openSaleId, CancellationToken ct)
+    {
+        var sale = await db.OpenSales.AsNoTracking()
+            .Include(o => o.Lines).ThenInclude(l => l.CatalogItem)
+            .Include(o => o.PendingBill)
+            .Include(o => o.Customer)
+            .FirstOrDefaultAsync(o => o.Id == openSaleId && o.IsBuffetOnly, ct)
+            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "فروش بوفهٔ مستقل یافت نشد.");
+        var bill = sale.PendingBill;
+        if (bill is null)
+        {
+            return new
+            {
+                openSaleId = sale.Id,
+                lines = OpenSaleMapper.ToDtos(sale.Lines),
+                linkedCustomer = CustomerMapper.ToLinkedChip(sale.Customer),
+                bill = (object?)null,
+            };
+        }
+
+        var amounts = await calculator.ComputeBuffetOnlyAsync(sale.Lines.ToList(), sale.CustomerId, null, ct);
+        var walletShort = await bills.GetWalletShortRemainderSnapshotAsync(
+            sale.CustomerId,
+            amounts.CollectibleToman,
+            null,
+            ct);
         return new
         {
             openSaleId = sale.Id,
@@ -483,32 +557,7 @@ public sealed class OperatorBuffetSaleService(
                 timeGrossToman = amounts.TimeGrossToman,
                 buffetGrossToman = amounts.BuffetGrossToman,
                 servicesGrossToman = amounts.ServicesGrossToman,
-            },
-        };
-    }
-
-    public async Task<object> GetBuffetOnlyBillAsync(Guid openSaleId, CancellationToken ct)
-    {
-        var sale = await db.OpenSales.AsNoTracking()
-            .Include(o => o.Lines).ThenInclude(l => l.CatalogItem)
-            .Include(o => o.PendingBill)
-            .Include(o => o.Customer)
-            .FirstOrDefaultAsync(o => o.Id == openSaleId && o.IsBuffetOnly, ct)
-            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Buffet-only sale not found.");
-        var bill = sale.PendingBill;
-        return new
-        {
-            openSaleId = sale.Id,
-            lines = OpenSaleMapper.ToDtos(sale.Lines),
-            linkedCustomer = CustomerMapper.ToLinkedChip(sale.Customer),
-            bill = bill is null ? null : new
-            {
-                bill.UnroundedPayableToman,
-                bill.RoundingToman,
-                bill.CollectibleToman,
-                bill.TimeGrossToman,
-                bill.BuffetGrossToman,
-                bill.ServicesGrossToman,
+                walletShortRemainder = OperatorBillService.ToWalletShortRemainderDto(walletShort),
             },
         };
     }
@@ -559,11 +608,11 @@ public sealed class OperatorBuffetSaleService(
         }
         catch (Exception ex) when (PostgresErrors.IsLockNotAvailable(ex))
         {
-            throw new ApiException(StatusCodes.Status409Conflict, "catalog_busy", "Catalog item is locked.");
+            throw new ApiException(StatusCodes.Status409Conflict, "catalog_busy", "قلم فهرست قفل است.");
         }
 
         var item = await db.CatalogItems.AsNoTracking().FirstOrDefaultAsync(i => i.Id == catalogItemId && i.IsActive, ct)
-            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Catalog item not found.");
+            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "قلم فهرست یافت نشد.");
         await db.Entry(sale).Collection(o => o.Lines).Query().Include(l => l.CatalogItem).LoadAsync(ct);
 
         long unitPrice;
@@ -579,7 +628,7 @@ public sealed class OperatorBuffetSaleService(
                     var tracked = await db.CatalogItems.FirstAsync(i => i.Id == catalogItemId, ct);
                     if (tracked.StockQuantity is null or < 1)
                     {
-                        throw new ApiException(StatusCodes.Status409Conflict, "insufficient_stock", "Insufficient stock.");
+                        throw new ApiException(StatusCodes.Status409Conflict, "insufficient_stock", "موجودی کافی نیست.");
                     }
 
                     tracked.StockQuantity--;
@@ -594,13 +643,14 @@ public sealed class OperatorBuffetSaleService(
                 kind = SaleLineKind.Service;
                 if (customAmountToman is not long amount || amount <= 0)
                 {
-                    throw new ApiException(StatusCodes.Status400BadRequest, "invalid_money", "Custom service needs a positive integer toman amount.");
+                    throw new ApiException(StatusCodes.Status400BadRequest, "invalid_money", "خدمت دلخواه به مبلغ صحیح مثبت (تومان) نیاز دارد.");
                 }
 
+                OperatorMoneyValidation.EnsurePositiveBounded(amount, "invalid_money");
                 unitPrice = amount;
                 break;
             default:
-                throw new ApiException(StatusCodes.Status400BadRequest, "invalid_catalog", "Unknown item kind.");
+                throw new ApiException(StatusCodes.Status400BadRequest, "invalid_catalog", "نوع قلم ناشناخته است.");
         }
 
         var merge = kind == SaleLineKind.Buffet
@@ -696,7 +746,7 @@ public sealed class OperatorBuffetSaleService(
             }
             catch (Exception ex) when (PostgresErrors.IsLockNotAvailable(ex))
             {
-                throw new ApiException(StatusCodes.Status409Conflict, "session_busy", "Session is being updated.");
+                throw new ApiException(StatusCodes.Status409Conflict, "session_busy", "جلسه در حال به‌روزرسانی است.");
             }
 
             var session = await db.Sessions
@@ -705,7 +755,7 @@ public sealed class OperatorBuffetSaleService(
                 .Include(s => s.Pauses)
                 .Include(s => s.PendingBill)
                 .FirstOrDefaultAsync(s => s.Id == sessionId, ct)
-                ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Session not found.");
+                ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "جلسه یافت نشد.");
             try
             {
                 var result = await action(session, ct);
@@ -715,7 +765,7 @@ public sealed class OperatorBuffetSaleService(
             }
             catch (DbUpdateConcurrencyException) when (policies.ConcurrentBillActionReturns409)
             {
-                throw new ApiException(StatusCodes.Status409Conflict, "stale_bill", "Sale was updated elsewhere; refresh and retry.");
+                throw new ApiException(StatusCodes.Status409Conflict, "stale_bill", "فروش جای دیگر به‌روز شده؛ تازه‌سازی کنید و دوباره بزنید.");
             }
         });
     }
@@ -732,14 +782,14 @@ public sealed class OperatorBuffetSaleService(
             }
             catch (Exception ex) when (PostgresErrors.IsLockNotAvailable(ex))
             {
-                throw new ApiException(StatusCodes.Status409Conflict, "sale_busy", "Sale is being updated.");
+                throw new ApiException(StatusCodes.Status409Conflict, "sale_busy", "فروش در حال به‌روزرسانی است.");
             }
 
             var sale = await db.OpenSales
                 .Include(o => o.PendingBill)
                 .Include(o => o.Lines).ThenInclude(l => l.CatalogItem)
                 .FirstOrDefaultAsync(o => o.Id == openSaleId, ct)
-                ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Open sale not found.");
+                ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "فروش باز یافت نشد.");
             var result = await action(sale, ct);
             await db.SaveChangesAsync(ct);
             await tx.CommitAsync(ct);

@@ -165,7 +165,7 @@ public sealed class OperatorPanelController(
         var db = HttpContext.RequestServices.GetRequiredService<AppDbContext>();
         var id = StationIdNormalizer.Normalize(stationId);
         var station = await db.Stations.FirstOrDefaultAsync(s => s.Id == id, ct)
-            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "Station not found.");
+            ?? throw new ApiException(StatusCodes.Status404NotFound, "not_found", "ایستگاه یافت نشد.");
         if (body.PlayerCount is int pc && pc is >= 1 and <= 4)
         {
             station.DefaultPlayerCount = pc;
@@ -199,7 +199,10 @@ public sealed class OperatorPanelController(
 
     [HttpPost("sessions/{sessionId:guid}/bill/preview")]
     public async Task<IActionResult> PreviewBill(Guid sessionId, ConfirmRequest body, CancellationToken ct)
-        => Ok(await bills.PreviewBillAsync(sessionId, body.Payments, ct));
+    {
+        var result = await bills.PreviewBillAsync(sessionId, body.Payments, ct);
+        return result.StatusCode == StatusCodes.Status200OK ? Ok(result.Body) : BadRequest(result.Body);
+    }
 
     [HttpPost("sessions/{sessionId:guid}/pause")]
     public async Task<IActionResult> PauseSession(Guid sessionId, CancellationToken ct)
@@ -231,12 +234,12 @@ public sealed class OperatorPanelController(
     {
         if (string.IsNullOrWhiteSpace(body.TargetStationId))
         {
-            throw new ApiException(StatusCodes.Status400BadRequest, "target_required", "Target station is required.");
+            throw new ApiException(StatusCodes.Status400BadRequest, "target_required", "ایستگاه مقصد الزامی است.");
         }
 
         if (body.CommandId == Guid.Empty)
         {
-            throw new ApiException(StatusCodes.Status400BadRequest, "command_required", "Command id is required.");
+            throw new ApiException(StatusCodes.Status400BadRequest, "command_required", "شناسهٔ دستور الزامی است.");
         }
 
         var result = await sessions.TransferAsync(
@@ -271,7 +274,9 @@ public sealed class OperatorPanelController(
         return Ok(await bills.GetBillDetailAsync(sessionId, ct));
     }
 
-    public sealed record ConfirmRequest(IReadOnlyList<OperatorBillService.PaymentInput> Payments);
+    public sealed record ConfirmRequest(
+        IReadOnlyList<OperatorBillService.PaymentInput> Payments,
+        long? PreviewCollectibleToman = null);
 
     public sealed record PrepaidDurationBody(int Minutes);
 
@@ -299,7 +304,10 @@ public sealed class OperatorPanelController(
     [HttpPost("sessions/{sessionId:guid}/bill/confirm")]
     public async Task<IActionResult> ConfirmBill(Guid sessionId, ConfirmRequest body, CancellationToken ct)
     {
-        var invoice = await bills.ConfirmBillAsync(sessionId, body.Payments, ct);
+        var invoice = await bills.ConfirmBillAsync(sessionId, body.Payments, body.PreviewCollectibleToman, ct);
+        var changeToman = CounterPaymentRecording.ComputeChangeToman(
+            invoice.CollectibleToman,
+            body.Payments ?? Array.Empty<OperatorBillService.PaymentInput>());
         return Ok(new
         {
             invoice.Number,
@@ -309,6 +317,7 @@ public sealed class OperatorPanelController(
             surchargeToman = invoice.SurchargeToman,
             billedToUtc = invoice.BilledToUtc,
             status = invoice.Status,
+            changeToman,
         });
     }
 
@@ -487,7 +496,10 @@ public sealed class OperatorPanelController(
 
     [HttpPost("buffet-only/{openSaleId:guid}/bill/preview")]
     public async Task<IActionResult> PreviewBuffetOnlyBill(Guid openSaleId, ConfirmRequest body, CancellationToken ct)
-        => Ok(await buffetSales.PreviewBuffetOnlyBillAsync(openSaleId, body.Payments, ct));
+    {
+        var result = await buffetSales.PreviewBuffetOnlyBillAsync(openSaleId, body.Payments, ct);
+        return result.StatusCode == StatusCodes.Status200OK ? Ok(result.Body) : BadRequest(result.Body);
+    }
 
     [HttpPost("buffet-only/{openSaleId:guid}/checkout")]
     public async Task<IActionResult> CheckoutBuffetOnly(Guid openSaleId, CancellationToken ct)
@@ -508,7 +520,8 @@ public sealed class OperatorPanelController(
     [HttpPost("buffet-only/{openSaleId:guid}/confirm")]
     public async Task<IActionResult> ConfirmBuffetOnly(Guid openSaleId, ConfirmRequest body, CancellationToken ct)
     {
-        var invoice = await buffetSales.ConfirmBuffetOnlyAsync(openSaleId, body.Payments, ct);
+        var result = await buffetSales.ConfirmBuffetOnlyAsync(openSaleId, body.Payments, body.PreviewCollectibleToman, ct);
+        var invoice = result.Invoice;
         return Ok(new
         {
             invoice.Number,
@@ -518,6 +531,7 @@ public sealed class OperatorPanelController(
             unroundedPayableToman = invoice.UnroundedPayableToman,
             roundingToman = invoice.RoundingToman,
             collectibleToman = invoice.CollectibleToman,
+            changeToman = result.ChangeToman,
             status = invoice.Status,
         });
     }
