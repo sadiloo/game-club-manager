@@ -664,6 +664,28 @@ function Invoke-WithInstallerKioskWpfLiveEnvironment {
     }
 }
 
+# R10m DEF-28: Start-Process -ArgumentList joins its items with spaces and adds no quotes (Windows PowerShell 5.1 and
+# PowerShell 7 alike), so an unquoted "C:\Program Files\Checkpoint\Server\tools\Get-InstallerOpenSessionCount.ps1" reached
+# powershell.exe as "-File C:\Program" + "Files\..." and the probe exited -196608 (0xFFFD0000, CI run 45906290138).
+# The -File path is passed as ONE quoted argument. Returns the probe's exit code; stdout goes to $OutFile.
+function Invoke-InstallerOpenSessionProbe {
+    param(
+        [Parameter(Mandatory = $true)] [string] $ScriptPath,
+        [Parameter(Mandatory = $true)] [string] $OutFile,
+        [string] $PowerShellExe = "powershell.exe"
+    )
+    $startArgs = @{
+        FilePath               = $PowerShellExe
+        ArgumentList           = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ('"{0}"' -f $ScriptPath))
+        RedirectStandardOutput = $OutFile
+        Wait                   = $true
+        PassThru               = $true
+    }
+    if ($PSVersionTable.PSEdition -eq "Desktop" -or $IsWindows) { $startArgs.WindowStyle = "Hidden" }
+    $proc = Start-Process @startArgs
+    return $proc.ExitCode
+}
+
 function Get-InstallerApiHeaders {
     $json = Get-InstallerServerJson
     $key = [string]$json.GAMECLUB_API_KEY

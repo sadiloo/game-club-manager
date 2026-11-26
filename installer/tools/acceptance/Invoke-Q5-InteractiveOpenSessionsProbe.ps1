@@ -18,11 +18,11 @@ $expectedCount = 2
 
 $outFile = Join-Path $env:TEMP "q5-open-sessions-probe.txt"
 if (Test-Path $outFile) { Remove-Item $outFile -Force }
-$proc = Start-Process -FilePath "powershell.exe" -ArgumentList @(
-    "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $scriptPath
-) -RedirectStandardOutput $outFile -Wait -PassThru -WindowStyle Hidden
-if ($proc.ExitCode -ne 0) {
-    throw "Q5-interactive: open-session probe exit $($proc.ExitCode)"
+# R10m DEF-28: the path has a space ("Program Files"); Invoke-InstallerOpenSessionProbe passes it as one quoted -File argument.
+$probeExit = Invoke-InstallerOpenSessionProbe -ScriptPath $scriptPath -OutFile $outFile
+if ($probeExit -ne 0) {
+    $probeOut = if (Test-Path -LiteralPath $outFile) { (Get-Content -LiteralPath $outFile -Raw) } else { "<no output>" }
+    throw "Q5-interactive: open-session probe exit $probeExit output=$probeOut"
 }
 $line = (Get-Content -LiteralPath $outFile -ErrorAction Stop | Select-Object -First 1).Trim()
 if ($line -notmatch '^COUNT=(\d+)$') {

@@ -198,6 +198,45 @@ public sealed class SeededPcBandTariffTests
     }
 
     [Fact]
+    public void one_tick_tolerance_is_exactly_one_second()
+    {
+        // QA M7: a ±500 s (or any wider) tolerance must fail here.
+        Assert.Equal(1, RemainingTimeOneTick.ToleranceSeconds);
+        Assert.Equal(1_739, RemainingTimeOneTick.Low(1_740));
+        Assert.Equal(1_741, RemainingTimeOneTick.High(1_740));
+        Assert.True(RemainingTimeOneTick.Within(2_160, 2_159));
+        Assert.True(RemainingTimeOneTick.Within(2_160, 2_160));
+        Assert.True(RemainingTimeOneTick.Within(2_160, 2_161));
+        Assert.False(RemainingTimeOneTick.Within(2_160, 2_158));
+        Assert.False(RemainingTimeOneTick.Within(2_160, 2_162));
+        // the R10k installer failure: displayed 1740 against a day-rate 2160 must never pass
+        Assert.False(RemainingTimeOneTick.Within(2_160, 1_740));
+        Assert.False(RemainingTimeOneTick.Within(2_160, 2_660));
+    }
+
+    [Fact]
+    public void wpf_remaining_time_tests_take_their_tolerance_from_the_one_tick_helper()
+    {
+        // QA M7 source pin: the WPF tests (net48, not runnable here) must not carry their own tolerance literal.
+        var dir = new System.IO.DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null && !System.IO.File.Exists(System.IO.Path.Combine(dir.FullName, "GameClub.linux.slnf")))
+        {
+            dir = dir.Parent;
+        }
+
+        Assert.NotNull(dir);
+        var source = System.IO.File.ReadAllText(System.IO.Path.Combine(
+            dir!.FullName, "tests", "GameClub.Kiosk.Windows.IntegrationTests", "Wpf", "WindowsKioskWpfSmokeTests.cs"));
+        Assert.Equal(2, System.Text.RegularExpressions.Regex.Matches(
+            source,
+            System.Text.RegularExpressions.Regex.Escape("Assert.InRange(displayedSeconds, RemainingTimeOneTick.Low(expectedSeconds), RemainingTimeOneTick.High(expectedSeconds));")).Count);
+        Assert.Contains("RemainingTimeOneTick.Within(expectedSeconds, displayedSeconds)", source, StringComparison.Ordinal);
+        Assert.Contains("RemainingTimeOneTick.Within(expectedAtCapture, displayedSeconds)", source, StringComparison.Ordinal);
+        Assert.Equal(2, System.Text.RegularExpressions.Regex.Matches(source, @"Assert\.InRange\(displayedSeconds").Count);
+        Assert.DoesNotMatch(@"(expectedSeconds|expectedAtCapture)\s*[-+]\s*\d", source);
+    }
+
+    [Fact]
     public void live_server_tariff_selection_follows_band_environment()
     {
         Assert.Equal(SeededPcBandTariff.PilotSeedSource, SeededPcBandTariff.ForLiveServer(null, null).Source);

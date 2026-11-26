@@ -92,6 +92,34 @@ Describe "installer acceptance harness" {
         } finally { Remove-Item -LiteralPath $log -Force -ErrorAction SilentlyContinue }
     }
 
+    It "DEF-28: the open-session probe runs a -File script whose path contains a space (R10m)" {
+        $tokens = $null; $parseErrors = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile($script:CommonPath, [ref]$tokens, [ref]$parseErrors)
+        $fn = @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq "Invoke-InstallerOpenSessionProbe" }, $true))
+        $fn.Count | Should -Be 1
+        . ([scriptblock]::Create($fn[0].Extent.Text))
+        # Windows: the same powershell.exe the leg uses. Elsewhere (box): this host's own executable, or
+        # CHECKPOINT_TEST_POWERSHELL_EXE when the host runs as a dotnet tool (ProcessPath is then the dotnet muxer).
+        $exe = if ($PSVersionTable.PSEdition -eq "Desktop" -or $IsWindows) { "powershell.exe" }
+            elseif ($env:CHECKPOINT_TEST_POWERSHELL_EXE) { $env:CHECKPOINT_TEST_POWERSHELL_EXE }
+            else { [Environment]::ProcessPath }
+        if ((Split-Path -Leaf $exe) -match '^dotnet') { throw "DEF-28 test: set CHECKPOINT_TEST_POWERSHELL_EXE (host is $exe)" }
+        $dir = Join-Path ([IO.Path]::GetTempPath()) ("cp def28 probe " + [guid]::NewGuid().ToString("N"))
+        New-Item -ItemType Directory -Force -Path $dir | Out-Null
+        try {
+            $probe = Join-Path $dir "Get-InstallerOpenSessionCount.ps1"
+            @('Write-Output ("COUNT=" + 2)', 'exit 0') | Set-Content -LiteralPath $probe -Encoding UTF8
+            $out = Join-Path $dir "probe out.txt"
+            $rc = Invoke-InstallerOpenSessionProbe -ScriptPath $probe -OutFile $out -PowerShellExe $exe
+            $rc | Should -Be 0
+            ((Get-Content -LiteralPath $out | Select-Object -First 1).Trim()) | Should -Be "COUNT=2"
+        } finally { Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue }
+
+        $q5 = Get-Content -LiteralPath (Join-Path (Split-Path $script:CommonPath) "Invoke-Q5-InteractiveOpenSessionsProbe.ps1") -Raw
+        $q5 | Should -Match ([regex]::Escape('$probeExit = Invoke-InstallerOpenSessionProbe -ScriptPath $scriptPath -OutFile $outFile'))
+        $q5 | Should -Not -Match 'Start-Process'
+    }
+
     It "Start-CheckpointServerSetup must not rewrite setup exit codes (DEF-8)" {
         $script:Common | Should -Not -Match "treating as exit"
     }

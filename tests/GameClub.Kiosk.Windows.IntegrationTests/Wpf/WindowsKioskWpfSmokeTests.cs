@@ -267,15 +267,15 @@ public sealed class WindowsKioskWpfSmokeTests
         if (branch == SeededPcBandTariff.BranchEdgeWindow)
         {
             Assert.True(
-                (displayedSeconds >= expectedSeconds - 1 && displayedSeconds <= expectedSeconds + 1)
-                || (displayedSeconds >= expectedAtCapture - 1 && displayedSeconds <= expectedAtCapture + 1),
+                RemainingTimeOneTick.Within(expectedSeconds, displayedSeconds)
+                || RemainingTimeOneTick.Within(expectedAtCapture, displayedSeconds),
                 $"Band edge between login and capture: displayed {displayedSeconds}s must be within one tick of {expectedSeconds}s (login) or {expectedAtCapture}s (capture). {branchInfo}");
         }
         else
         {
             try
             {
-                Assert.InRange(displayedSeconds, expectedSeconds - 1, expectedSeconds + 1);
+                Assert.InRange(displayedSeconds, RemainingTimeOneTick.Low(expectedSeconds), RemainingTimeOneTick.High(expectedSeconds));
             }
             catch (Xunit.Sdk.InRangeException ex)
             {
@@ -404,7 +404,7 @@ public sealed class WindowsKioskWpfSmokeTests
             PersianDigitToInt(match.Groups[1].Value[0]) * 10 + PersianDigitToInt(match.Groups[1].Value[1]),
             PersianDigitToInt(match.Groups[2].Value[0]) * 10 + PersianDigitToInt(match.Groups[2].Value[1]),
             PersianDigitToInt(match.Groups[3].Value[0]) * 10 + PersianDigitToInt(match.Groups[3].Value[1])).TotalSeconds;
-        Assert.InRange(displayedSeconds, expectedSeconds - 1, expectedSeconds + 1);
+        Assert.InRange(displayedSeconds, RemainingTimeOneTick.Low(expectedSeconds), RemainingTimeOneTick.High(expectedSeconds));
     }
 
     private static RateCard SeededTariffRateCard(SeededPcBandTariff tariff) => new RateCardBuilder()
