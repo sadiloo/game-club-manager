@@ -31,6 +31,11 @@ if ($customerResp) {
 
 Invoke-InstallerApiJson -Method Post -Uri "http://127.0.0.1:5000/api/operator/members/customers/$customerId/wallet/top-up" `
     -Body @{ amountToman = 500000; method = "Cash"; commandId = [guid]::NewGuid() } -Session $opSession | Out-Null
+# R10h (rr6): a gift wallet entry too, so B-2's wallet_ledger gift-sum compare is not 0 == 0.
+$giftResp = Invoke-InstallerApiJson -Method Post -Uri "http://127.0.0.1:5000/api/operator/members/customers/$customerId/wallet/gift" `
+    -Body @{ giftToman = 70000 } -Session $opSession
+$giftWallet = $giftResp.Content | ConvertFrom-Json
+Write-Host "Seed-InstallerAcceptanceData: gift 70000 issued (wallet gift=$($giftWallet.giftToman))"
 
 if ($WithOpenSessions) {
     Invoke-InstallerApiJsonAllowCodes -Method Post -Uri "http://127.0.0.1:5000/api/sessions" `

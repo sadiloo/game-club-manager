@@ -74,44 +74,49 @@ public sealed class AcceptanceHarnessSqlSchemaTests
         => sql.Split(';').Select(s => s.Trim()).Where(s => s.Length > 0);
 
     /// <summary>Returns the error messages (empty = all statements valid against the migrated schema).</summary>
-    internal static async Task<List<string>> CheckAsync(IEnumerable<HarnessSql> items, string connectionString)
+    internal static async Task<List<string>> CheckAsync(IEnumerable<HarnessSql> items, string connectionString, Action<string>? scratchDbName = null)
     {
         var errors = new List<string>();
         var admin = new NpgsqlConnectionStringBuilder(connectionString) { Database = "postgres" }.ConnectionString;
         var scratchDb = GameClubPrefixedTestDatabase.NamePrefix + "sqlchk_" + Guid.NewGuid().ToString("N")[..12];
-        await using var conn = new NpgsqlConnection(connectionString);
-        await conn.OpenAsync();
-        foreach (var item in items)
+        scratchDbName?.Invoke(scratchDb);
+        // R10h (rr6 L-rr6-4): the scratch database is dropped in a finally, also when an assert inside the loop throws.
+        try
         {
-            foreach (var stmt in Statements(Bind(item.Sql, scratchDb)))
+            await using var conn = new NpgsqlConnection(connectionString);
+            await conn.OpenAsync();
+            foreach (var item in items)
             {
-                try
+                foreach (var stmt in Statements(Bind(item.Sql, scratchDb)))
                 {
-                    if (stmt.StartsWith("CREATE DATABASE", StringComparison.Ordinal) || stmt.StartsWith("DROP DATABASE", StringComparison.Ordinal))
+                    try
                     {
-                        Assert.Contains(scratchDb, stmt);
-                        await using var a = new NpgsqlConnection(admin);
-                        await a.OpenAsync();
-                        await using var c = new NpgsqlCommand(stmt, a);
-                        await c.ExecuteNonQueryAsync();
+                        if (stmt.StartsWith("CREATE DATABASE", StringComparison.Ordinal) || stmt.StartsWith("DROP DATABASE", StringComparison.Ordinal))
+                        {
+                            Assert.Contains(scratchDb, stmt);
+                            await using var a = new NpgsqlConnection(admin);
+                            await a.OpenAsync();
+                            await using var c = new NpgsqlCommand(stmt, a);
+                            await c.ExecuteNonQueryAsync();
+                        }
+                        else
+                        {
+                            await using var tx = await conn.BeginTransactionAsync();
+                            await using var c = new NpgsqlCommand("EXPLAIN " + stmt, conn, tx);
+                            await c.ExecuteNonQueryAsync();
+                            await tx.RollbackAsync();
+                        }
                     }
-                    else
+                    catch (PostgresException ex)
                     {
-                        await using var tx = await conn.BeginTransactionAsync();
-                        await using var c = new NpgsqlCommand("EXPLAIN " + stmt, conn, tx);
-                        await c.ExecuteNonQueryAsync();
-                        await tx.RollbackAsync();
+                        errors.Add($"{item.File}:{item.Line}: {ex.MessageText} :: {stmt}");
                     }
-                }
-                catch (PostgresException ex)
-                {
-                    errors.Add($"{item.File}:{item.Line}: {ex.MessageText} :: {stmt}");
                 }
             }
         }
-
-        await using (var a = new NpgsqlConnection(admin))
+        finally
         {
+            await using var a = new NpgsqlConnection(admin);
             await a.OpenAsync();
             await using var c = new NpgsqlCommand($"DROP DATABASE IF EXISTS \"{scratchDb}\" WITH (FORCE)", a);
             await c.ExecuteNonQueryAsync();
@@ -169,6 +174,32 @@ public sealed class AcceptanceHarnessSqlSchemaTests
     }
 
     [Fact]
+    public async Task scratch_database_is_dropped_even_when_an_assert_inside_the_check_fails()
+    {
+        // R10h: CREATE DATABASE runs for real, then a DROP DATABASE naming another database fails the
+        // Assert.Contains(scratchDb, stmt) guard. The scratch database must be gone afterwards.
+        var items = new List<HarnessSql> { new("r10h-failing-assert.ps1", 1, "CREATE DATABASE \"$dbName\"; DROP DATABASE \"not_the_scratch_db\";") };
+        using var isolated = new GameClubPrefixedTestDatabase(GameClubPrefixedTestDatabase.NamePrefix + "harnesssql_");
+        var cs = await MigratedDatabaseAsync(isolated);
+        string? scratch = null;
+        await Assert.ThrowsAnyAsync<Xunit.Sdk.XunitException>(() => CheckAsync(items, cs, n => scratch = n));
+        Assert.NotNull(scratch);
+        var admin = new NpgsqlConnectionStringBuilder(cs) { Database = "postgres" }.ConnectionString;
+        await using var a = new NpgsqlConnection(admin);
+        await a.OpenAsync();
+        await using var q = new NpgsqlCommand("SELECT count(*) FROM pg_database WHERE datname = @n", a);
+        q.Parameters.AddWithValue("n", scratch!);
+        var left = (long)(await q.ExecuteScalarAsync())!;
+        if (left != 0)
+        {
+            // Never leave it behind, even when this test fails (e.g. under the no-finally mutant).
+            await using var d = new NpgsqlCommand($"DROP DATABASE IF EXISTS \"{scratch}\" WITH (FORCE)", a);
+            await d.ExecuteNonQueryAsync();
+        }
+        Assert.True(left == 0, $"scratch database {scratch} was left behind after a failing assert");
+    }
+
+    [Fact]
     public void b2_upgrade_compares_real_and_gift_wallet_ledger_sums_separately()
     {
         // BL-rr5-1: the fingerprint sums the two real money columns, and B-2 compares each one before/after upgrade.
@@ -180,6 +211,12 @@ public sealed class AcceptanceHarnessSqlSchemaTests
         Assert.Contains("WalletLedgerRealSumToman = [int64]$parts[0]", common);
         Assert.Contains("WalletLedgerGiftSumToman = [int64]$parts[1]", common);
         Assert.Contains("if ($billingBefore.WalletLedgerRealSumToman -ne $billingAfter.WalletLedgerRealSumToman) {", b2);
+        // R10h: the seed issues a gift and B-2 refuses a 0 gift sum before comparing it.
+        var seed = File.ReadAllText(Path.Combine(dir, "Seed-InstallerAcceptanceData.ps1"));
+        Assert.Matches(@"/wallet/gift"" `\r?\n\s*-Body @\{ giftToman = 70000 \}", seed);
+        var zeroCheck = b2.IndexOf("if ([int64]$billingBefore.WalletLedgerGiftSumToman -eq 0) {", StringComparison.Ordinal);
+        var giftCompare = b2.IndexOf("if ($billingBefore.WalletLedgerGiftSumToman -ne $billingAfter.WalletLedgerGiftSumToman) {", StringComparison.Ordinal);
+        Assert.True(zeroCheck >= 0 && giftCompare > zeroCheck, "B-2 must refuse a 0 gift sum before the gift compare");
         Assert.Contains("if ($billingBefore.WalletLedgerGiftSumToman -ne $billingAfter.WalletLedgerGiftSumToman) {", b2);
         Assert.DoesNotContain("sum(\"AmountToman\")", common + b2);
     }

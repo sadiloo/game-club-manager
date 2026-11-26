@@ -115,6 +115,17 @@ try {
     if ((Get-Content -LiteralPath $setupPath -Raw).Trim() -ne '{"ok":true}') {
         Write-Error "admin write to trust file failed"
     }
+    # R10h BL-rr6-1: the first run writes an EMPTY placeholder (the kiosk reads it as "not configured"); a later run
+    # (kiosk upgrade / reinstall postinstall) must keep an existing setup.json byte-identical. B7 relies on both.
+    $fresh = Join-Path $env:TEMP ("gcm-trust-fresh-" + [Guid]::NewGuid().ToString("N"))
+    try {
+        Set-KioskTrustFileAcl -KioskAccount $account.Name -Root $fresh
+        if ((Get-Item -LiteralPath (Join-Path $fresh "setup.json")).Length -ne 0) { Write-Error "first Set-KioskTrustFileAcl must create an empty setup.json placeholder" }
+    } finally { Remove-Item -LiteralPath $fresh -Recurse -Force -ErrorAction SilentlyContinue }
+    Set-KioskTrustFileAcl -KioskAccount $account.Name -Root $trustRoot
+    if ((Get-Content -LiteralPath $setupPath -Raw).Trim() -ne '{"ok":true}') {
+        Write-Error "Set-KioskTrustFileAcl on an existing setup.json (upgrade) must keep its content"
+    }
 
     $badSidErr = $null
     try {

@@ -144,10 +144,15 @@ function Invoke-UpgradePhaseFailCase {
     Assert-PostinstallTraceHasNoLaterPhase -TracePath $trace -LaterPhases $later
 }
 
-$defaultPins = Join-Path (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent) "installer/ci/default-pins-silent-many.json"
+# R10h static re-walk: this used to resolve to installer\installer\ci\... (one parent too few), Test-Path was false,
+# /DEFAULTPINS was silently dropped, and Setup runs the upgrade-pins phase ONLY with a pins file
+# (ServerPostinstallRun.iss: if UpgradeHasDefaultPinsFile), so the upgrade-pins case could never begin. Fixed path; a
+# missing file is now an error instead of a silent skip.
+$defaultPins = Join-Path $PSScriptRoot "..\..\ci\default-pins-silent-many.json"
+if (-not (Test-Path -LiteralPath $defaultPins)) { throw "R8f-phase-matrix: default pins file missing: $defaultPins (upgrade-pins needs /DEFAULTPINS)" }
 foreach ($phase in $script:UpgradePhaseOrder) {
     $extra = @()
-    if ($phase -eq "upgrade-pins" -and (Test-Path -LiteralPath $defaultPins)) {
+    if ($phase -eq "upgrade-pins") {
         $extra = @("/DEFAULTPINS=$defaultPins")
     }
     Invoke-UpgradePhaseFailCase -Phase $phase -ExtraSetupArgs $extra

@@ -1,7 +1,8 @@
 # Self-check for the leg ledger in ci-installer-acceptance.ps1 (R10e, hardened in R10f item 7). Runs the real driver
 # against fake leg scripts in a temp dir: all legs ok => passes; a leg without its ok marker, any skip wording that is not
 # allow-listed for THAT leg, a non-zero exit (exit N, also after the ok marker, or an unchecked native exit code), a
-# throwing leg, or a leg table that no longer has the pinned 22 legs => throws.
+# throwing leg, or a leg table whose names no longer match the pinned names sha256 => throws. The leg count is derived
+# from the table (R10h); a self-check below fails if a literal count pin comes back.
 # R10g: also a native failure hidden by a later native success, omitted / n/a wording, a 21/21 edit (leg dropped AND
 # count line changed), and every failure must print "ci-acceptance: LEG FAIL <name> (exit N, phase X)".
 $ErrorActionPreference = "Stop"
@@ -121,20 +122,20 @@ Invoke-LedgerCase -Label "not applicable wording" -ExpectThrow $true -ExpectMess
 Invoke-LedgerCase -Label "LEG FAIL line for a throwing leg" -ExpectThrow $true -ExpectMessage "Q5 boom" -ExpectFailLine "ci-acceptance: LEG FAIL Q5-SilentOpenSessions (exit 0, phase run)" -Override @{ "Invoke-Q5-SilentOpenSessions.ps1" = $p + "throw 'Q5 boom'" }
 Invoke-LedgerCase -Label "LEG FAIL line for a missing ok marker" -ExpectThrow $true -ExpectMessage "ci-acceptance: LEG B1 finished without its ok marker*" -ExpectFailLine "ci-acceptance: LEG FAIL B1 (exit 0, phase ok-marker)" -Override @{ "Invoke-B1-CleanServerInstall.ps1" = $p + "Write-Host 'B-1: nothing'" }
 Invoke-LedgerCase -Label "LEG FAIL line for exit 4 thrown after a failed native" -ExpectThrow $true -ExpectMessage "boom4" -ExpectFailLine "ci-acceptance: LEG FAIL B4 (exit 4, phase run)" -Override @{ "Invoke-B4-UninstallReinstall.ps1" = $p + $nativeSetup + "& `$nat[0] `$nat[1] 'exit 4'`nif (`$LASTEXITCODE -ne 0) { throw 'boom4' }" }
-Invoke-LedgerCase -Label "leg removed from the one leg table (21 legs)" -ExpectThrow $true -ExpectMessage "ci-acceptance: leg table has 21 legs*pinned count is 22" -DriverTransform {
+Invoke-LedgerCase -Label "leg removed from the one leg table (21 legs)" -ExpectThrow $true -ExpectMessage "ci-acceptance: leg names sha256 * does not match the pinned * (leg table has 21 legs:*" -DriverTransform {
     param($src) $src -replace '(?m)^\s*@\{ Name = "B13";[^\r\n]*\r?\n', ''
 }
-Invoke-LedgerCase -Label "leg duplicated in the leg table (23 legs)" -ExpectThrow $true -ExpectMessage "ci-acceptance: leg table has 23 legs (duplicates=``[B13``])*" -DriverTransform {
+Invoke-LedgerCase -Label "leg duplicated in the leg table (23 legs)" -ExpectThrow $true -ExpectMessage "ci-acceptance: leg table has 23 legs with duplicates=``[B13``]*" -DriverTransform {
     param($src) $src -replace '(?m)^(\s*@\{ Name = "B13";[^\r\n]*\r?\n)', '$1$1'
 }
-# R10g item 4 (rr5 S4): dropping a leg AND editing the count line to 21 must still fail (names sha256 pin).
-Invoke-LedgerCase -Label "21/21 edit: leg dropped and count line changed" -ExpectThrow $true -ExpectMessage "ci-acceptance: leg names sha256 * does not match the pinned *" -DriverTransform {
-    param($src) ($src -replace '(?m)^\s*@\{ Name = "R8f-InvalidAccounts";[^\r\n]*\r?\n', '') -replace 'AcceptanceExpectedLegCount = 22', 'AcceptanceExpectedLegCount = 21'
+# R10h: dropping a different leg fails the same single pin (there is no count line left to edit).
+Invoke-LedgerCase -Label "leg dropped (R8f-InvalidAccounts)" -ExpectThrow $true -ExpectMessage "ci-acceptance: leg names sha256 * does not match the pinned *" -DriverTransform {
+    param($src) $src -replace '(?m)^\s*@\{ Name = "R8f-InvalidAccounts";[^\r\n]*\r?\n', ''
 }
 # ... and with the sha pin edited too, the unused leg script still fails it.
-Invoke-LedgerCase -Label "21/21 edit with the sha pin recomputed: leg script unused" -ExpectThrow $true -ExpectMessage "ci-acceptance: acceptance scripts not used by any leg: Invoke-R8f-InvalidAccounts.ps1" -DriverTransform {
+Invoke-LedgerCase -Label "leg dropped with the sha pin recomputed: leg script unused" -ExpectThrow $true -ExpectMessage "ci-acceptance: acceptance scripts not used by any leg: Invoke-R8f-InvalidAccounts.ps1" -DriverTransform {
     param($src)
-    $m = ($src -replace '(?m)^\s*@\{ Name = "R8f-InvalidAccounts";[^\r\n]*\r?\n', '') -replace 'AcceptanceExpectedLegCount = 22', 'AcceptanceExpectedLegCount = 21'
+    $m = $src -replace '(?m)^\s*@\{ Name = "R8f-InvalidAccounts";[^\r\n]*\r?\n', ''
     $names = [regex]::Matches($m, '(?m)^\s*@\{ Name = "([^"]+)"') | ForEach-Object { $_.Groups[1].Value }
     $sha = [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($names -join "`n"))).ToLowerInvariant()
     $m -replace 'AcceptanceLegNamesSha256 = "[0-9a-f]{64}"', ('AcceptanceLegNamesSha256 = "' + $sha + '"')
@@ -155,4 +156,45 @@ try {
     if ($neg.Count -ne 1 -or $neg[0] -notmatch 'icacls') { throw "ledger self-check: audit missed the unchecked icacls: [$($neg -join ' | ')]" }
 } finally { Remove-Item -LiteralPath $tmpB1 -Force -ErrorAction SilentlyContinue }
 Write-Host "ledger self-check: real acceptance scripts native-exit audit ok (negative control icacls found)"
+# R10h (rr6 report honesty): the leg count is derived, never pinned. The driver must not contain a literal count pin,
+# it must derive the count from the table, and every count it prints must be that derived value. Negative control: a
+# literal pin put back is found.
+function Get-LegCountPinProblems {
+    param([string] $Src)
+    $p = [System.Collections.Generic.List[string]]::new()
+    if ($Src -match '(?m)^\s*\$script:AcceptanceExpectedLegCount\s*=\s*\d') { $p.Add("literal leg-count pin present") }
+    if (([regex]::Matches($Src, '(?m)^\s*\$script:AcceptanceExpectedLegCount\s*=')).Count -ne 1 -or $Src -notmatch '(?m)^\$script:AcceptanceExpectedLegCount = \$expectedLegs\.Count\r?$') { $p.Add("count must be assigned once, from `$expectedLegs.Count") }
+    if ($Src -match '(?i)pinned count') { $p.Add("'pinned count' wording left") }
+    return $p.ToArray()
+}
+$driverSrc = Get-Content -LiteralPath $driver -Raw
+$pinProblems = @(Get-LegCountPinProblems $driverSrc)
+if ($pinProblems.Count -ne 0) { throw "ledger self-check: leg count: $($pinProblems -join ' | ')" }
+$tableRows = ([regex]::Matches($driverSrc, '(?m)^\s*@\{ Name = "')).Count
+if ($tableRows -lt 1) { throw "ledger self-check: leg table rows not found" }
+# Every printed count (table line, ledger mismatch, LEDGER n/m) is the derived variable, not a number.
+foreach ($line in @([regex]::Matches($driverSrc, '(?m)^.*(ci-acceptance: leg table|ledger mismatch ran=|ci-acceptance: LEDGER ).*$') | ForEach-Object { $_.Value })) {
+    if ($line -match '/\d|\b\d+ legs') { throw "ledger self-check: a printed leg count is a literal: $line" }
+}
+$pinnedBack = $driverSrc -replace '(?m)^\$script:AcceptanceExpectedLegCount = \$expectedLegs\.Count', ('$script:AcceptanceExpectedLegCount = ' + $tableRows)
+if ($pinnedBack -eq $driverSrc -or @(Get-LegCountPinProblems $pinnedBack).Count -eq 0) { throw "ledger self-check: negative control (literal count put back) not found" }
+Write-Host "ledger self-check: leg count derived from the table ($tableRows rows), no literal pin (negative control found)"
+# R10h static re-walk pins (legs B7..Q5 have not run on CI yet): the phase matrix must pass a pins file that exists, or
+# Setup never runs upgrade-pins; B-7 must do a real low -> high upgrade with logs and keep the seeded config.
+$pm = Get-Content -LiteralPath (Join-Path $realAcceptance "Invoke-R8f-PostinstallPhaseMatrix.ps1") -Raw
+$pmLine = [regex]::Match($pm, '(?m)^\$defaultPins = Join-Path \$PSScriptRoot "([^"]+)"\r?$')
+if (-not $pmLine.Success) { throw "ledger self-check: phase matrix default pins path line not found" }
+$pmPath = Join-Path $realAcceptance $pmLine.Groups[1].Value
+if (-not (Test-Path -LiteralPath $pmPath)) { throw "ledger self-check: phase matrix default pins file does not exist: $pmPath" }
+if ($pm -notmatch '(?m)^if \(-not \(Test-Path -LiteralPath \$defaultPins\)\) \{ throw ') { throw "ledger self-check: phase matrix must throw when the pins file is missing" }
+$b7 = Get-Content -LiteralPath (Join-Path $realAcceptance "Invoke-B7-KioskUpgrade.ps1") -Raw
+foreach ($pin in @('-FilePath $LowKioskSetup -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/LOG=$lowLog")',
+        '-FilePath $HighKioskSetup -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/LOG=$highLog")',
+        'Assert-KioskPostinstallCompleted -InnoLogPath $highLog',
+        'throw "B-7: setup.json serverBase missing', 'throw "B-7: upgrade changed serverBase', 'throw "B-7: upgrade changed completedAtUtc')) {
+    if ($b7.IndexOf($pin, [StringComparison]::Ordinal) -lt 0) { throw "ledger self-check: B-7 lost: $pin" }
+}
+# The seed condition itself (its own line, not the later "seeding failed" check with the same test).
+if ($b7 -notmatch '(?m)^if \(\$before\.State -ne "configured"\) \{\r?$') { throw "ledger self-check: B-7 must seed unless setup.json is already configured" }
+Write-Host "ledger self-check: phase-matrix pins path and B-7 upgrade/seed pins ok"
 Write-Host "ledger self-check: ok"

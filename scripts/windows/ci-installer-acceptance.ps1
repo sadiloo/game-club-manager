@@ -1,9 +1,10 @@
 # Dot-sourced from ci-installer.ps1 - requires $acceptance, $accounts, $logRoot, setup paths, versions.
 # R10e/R10f/R10g leg ledger. ONE table below ($script:AcceptanceLegTable) is the only list of legs. The total is
-# derived from that table and must match two independent pins before any leg runs (R10g, rr5 S4): the pinned count
-# ($script:AcceptanceExpectedLegCount) AND the SHA-256 of the ordered leg names ($script:AcceptanceLegNamesSha256);
-# in addition every Invoke-*/Reset-* script in the acceptance folder must be used by a leg. Dropping a leg and editing
-# the count line to 21 therefore still fails. Every leg runs through Invoke-AcceptanceLeg, which fails the job unless:
+# derived from that table ($script:AcceptanceExpectedLegCount = the number of rows; R10h: there is NO hand-written
+# count any more) and the ordered leg names must match ONE pin before any leg runs: their SHA-256
+# ($script:AcceptanceLegNamesSha256), which also fixes the count. In addition every Invoke-*/Reset-* script in the
+# acceptance folder must be used by a leg, and no leg name may repeat. Dropping a leg therefore fails (sha), and
+# dropping it with the sha recomputed still fails (unused script). Every leg runs through Invoke-AcceptanceLeg, which fails the job unless:
 #   - every native call in the leg (and the acceptance scripts it dot-sources) dispositions its exit code before the
 #     next native call (AcceptanceNativeExitAudit.ps1): a native failure followed by a native success is not lost;
 #   - the leg printed its own ok marker;
@@ -78,9 +79,9 @@ function Invoke-AcceptanceLeg {
     Write-Host ("ci-acceptance: LEG OK {0} marker='{1}' seconds={2}" -f $Name, $ok[-1].Trim(), [int]$sw.Elapsed.TotalSeconds)
 }
 
-# ---- THE leg list (single source of truth) and its two independent pins ----------------------------------------
-$script:AcceptanceExpectedLegCount = 22
+# ---- THE leg list (single source of truth) and its one pin ------------------------------------------------------
 # SHA-256 (lower-case hex) of the leg names in table order joined with "\n". Changing the leg list needs this pin too.
+# The leg count is NOT written anywhere: it is derived from the table below (R10h, rr6 report honesty).
 $script:AcceptanceLegNamesSha256 = "15ff5b7a49b449ef9845da60d3f587f6123de038784b93e62ba8ced4c6264442"
 $script:AcceptanceLegTable = @(
     @{ Name = "Reset-1"; Script = "Reset-InstallerAcceptanceMachine.ps1"; OkPattern = '^Reset-InstallerAcceptanceMachine: ok$' }
@@ -96,7 +97,7 @@ $script:AcceptanceLegTable = @(
     @{ Name = "B4"; Script = "Invoke-B4-UninstallReinstall.ps1"; OkPattern = '^B-4: ok backup='; Params = @{ ServerSetup = $serverHigh; AccountsFile = $accounts } }
     @{ Name = "B5"; Script = "Invoke-B5-KioskInstall.ps1"; OkPattern = '^B-5: ok length='; Params = @{ KioskSetup = $kioskHigh; LogsDir = $logRoot } }
     @{ Name = "B6-B12"; Script = "Invoke-B6-B12-KioskFirstRun.ps1"; OkPattern = '^B-6 \+ B-12: ok$'; Params = @{ RepoRoot = $root; AccountsFile = $accounts } }
-    @{ Name = "B7"; Script = "Invoke-B7-KioskUpgrade.ps1"; OkPattern = '^B-7: ok serverBase='; Params = @{ LowKioskSetup = $kioskLow; HighKioskSetup = $kioskHigh } }
+    @{ Name = "B7"; Script = "Invoke-B7-KioskUpgrade.ps1"; OkPattern = '^B-7: ok serverBase='; Params = @{ LowKioskSetup = $kioskLow; HighKioskSetup = $kioskHigh; LogsDir = $logRoot } }
     @{ Name = "B8"; Script = "Invoke-B8-WindowsBillingRestart.ps1"; OkPattern = '^B-8: ok ps5='; Params = @{ AccountsFile = $accounts } }
     @{ Name = "B13"; Script = "Invoke-B13-DefaultPinUpgrade.ps1"; OkPattern = '^B-13: ok$'; Params = @{ ServerSetup = $serverHigh; AccountsFile = $accounts } }
     @{ Name = "R8f-PostinstallFail"; Script = "Invoke-R8f-PostinstallFail.ps1"; OkPattern = '^R8f-1: ok$'; Params = @{
@@ -118,9 +119,10 @@ $script:AcceptanceLegTable = @(
     @{ Name = "Q5-InteractiveOpenSessionsProbe"; Script = "Invoke-Q5-InteractiveOpenSessionsProbe.ps1"; OkPattern = '^Q5-interactive: ok count=[1-9]'; Params = @{ LogsDir = $logRoot; AccountsFile = $accounts } }
 )
 $expectedLegs = @($script:AcceptanceLegTable | ForEach-Object { $_.Name })
+$script:AcceptanceExpectedLegCount = $expectedLegs.Count
 $dupLegs = @($expectedLegs | Group-Object | Where-Object { $_.Count -gt 1 } | ForEach-Object { $_.Name })
-if ($expectedLegs.Count -ne $script:AcceptanceExpectedLegCount -or $dupLegs.Count -gt 0) {
-    throw "ci-acceptance: leg table has $($expectedLegs.Count) legs (duplicates=[$($dupLegs -join ',')]); the pinned count is $($script:AcceptanceExpectedLegCount)"
+if ($dupLegs.Count -gt 0) {
+    throw "ci-acceptance: leg table has $($expectedLegs.Count) legs with duplicates=[$($dupLegs -join ',')]"
 }
 $legNamesSha = [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($expectedLegs -join "`n"))).ToLowerInvariant()
 if ($legNamesSha -ne $script:AcceptanceLegNamesSha256) {
@@ -133,7 +135,7 @@ $unusedScripts = @(Get-ChildItem -LiteralPath $acceptance -File -Filter "*.ps1" 
 if ($unusedScripts.Count -gt 0) {
     throw "ci-acceptance: acceptance scripts not used by any leg: $($unusedScripts -join ',')"
 }
-Write-Host "ci-acceptance: leg table $($expectedLegs.Count) legs = pinned count $($script:AcceptanceExpectedLegCount), names sha256 $legNamesSha"
+Write-Host "ci-acceptance: leg table $($script:AcceptanceExpectedLegCount) legs (derived from the table), names sha256 $legNamesSha = pinned"
 
 foreach ($leg in $script:AcceptanceLegTable) {
     $legParams = if ($leg.ContainsKey("Params")) { $leg.Params } else { @{} }

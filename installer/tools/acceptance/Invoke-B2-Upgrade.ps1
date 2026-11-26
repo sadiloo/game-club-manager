@@ -72,6 +72,11 @@ if ($before.Invoices -ne $after.Invoices -or $before.WalletLedger -ne $after.Wal
 if ($billingBefore.WalletLedgerRealSumToman -ne $billingAfter.WalletLedgerRealSumToman) {
     throw "B-2: wallet ledger real money sum changed ($($billingBefore.WalletLedgerRealSumToman) -> $($billingAfter.WalletLedgerRealSumToman))"
 }
+# R10h (rr6): the seed issues a gift, so a 0 gift sum means the seed did not reach wallet_ledger and the compare below
+# would be vacuous.
+if ([int64]$billingBefore.WalletLedgerGiftSumToman -eq 0) {
+    throw "B-2: wallet ledger gift sum is 0 before the upgrade; the seeded gift is missing, so the gift compare would be vacuous"
+}
 if ($billingBefore.WalletLedgerGiftSumToman -ne $billingAfter.WalletLedgerGiftSumToman) {
     throw "B-2: wallet ledger gift money sum changed ($($billingBefore.WalletLedgerGiftSumToman) -> $($billingAfter.WalletLedgerGiftSumToman))"
 }

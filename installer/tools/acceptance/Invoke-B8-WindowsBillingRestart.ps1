@@ -27,6 +27,8 @@ Stop-Service CheckpointServer -Force
 Start-Sleep -Seconds 2
 Start-Service CheckpointServer -ErrorAction Stop
 Start-Sleep -Seconds 5
+# R10h static re-walk: wait for the API port instead of assuming 5 s is enough after the restart.
+Wait-InstallerServerApiPort
 
 $ps5Bill = Invoke-InstallerApiJson -Method Post -Uri "http://127.0.0.1:5000/api/sessions/$ps5Id/stop" -Body @{}
 $pcBill = Invoke-InstallerApiJson -Method Post -Uri "http://127.0.0.1:5000/api/sessions/$pcId/stop" -Body @{}

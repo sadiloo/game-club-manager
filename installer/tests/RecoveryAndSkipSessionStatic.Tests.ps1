@@ -98,6 +98,15 @@ foreach ($pair in @(@("installer/README.md", $readme), @("docs/install/server-in
         if ($iDisable -lt 0 -or $iStop -lt 0 -or $iRestore -lt 0 -or $iReinstall -lt 0 -or -not ($iDisable -lt $iStop -and $iStop -lt $iRestore -and $iRestore -lt $iReinstall)) {
             $errors += "$($pair[0]): recovery path 2 must stop+disable CheckpointServer, then restore.ps1, then install the previous version (disable=$iDisable stop=$iStop restore=$iRestore reinstall=$iReinstall)"
         }
+        # R10h BL-rr6-2: path 2 describes the schema recreate after the verified safety dump, and the clean later upgrade.
+        $iRecreate = $t.IndexOf("CHECKPOINT_RESTORE_SCHEMA_RECREATE")
+        if ($iRecreate -lt 0 -or -not ($iRestore -lt $iRecreate -and $iRecreate -lt $iReinstall)) {
+            $errors += "$($pair[0]): recovery path 2 must describe CHECKPOINT_RESTORE_SCHEMA_RECREATE inside the restore.ps1 step (recreate=$iRecreate)"
+        }
+        foreach ($s in @("pre-restore-*.dump", "pg_restore --list", "42P07 relation already exists", "CHECKPOINT_RESTORE_FAILED", "RestoreOldDumpOntoNewerSchemaTests")) {
+            if ($t.IndexOf($s) -lt 0) { $errors += "$($pair[0]): recovery path 2 must mention $s" }
+        }
+        if ($t -match '--clean') { $errors += "$($pair[0]): recovery path 2 must not describe pg_restore --clean any more" }
     }
 }
 

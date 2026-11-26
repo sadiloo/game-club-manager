@@ -10,7 +10,11 @@ function New-StubPgBinaries {
         [int]$PgDumpExit = 0,
         [int]$FirstListExit = 0,
         [int]$SecondListExit = 0,
-        [int]$CleanExit = 0,
+        [int]$RestoreExit = 0,
+        [int]$PsqlExit = 0,
+        # R10h: >= 0 makes `pg_restore --list` of a pre-restore-* (safety) dump exit with this code and every other
+        # --list exit 0, independent of call order (needed for mutants that drop or reorder a readability check).
+        [int]$SafetyListExit = -1,
         [switch]$PgDumpWriteOnFailure,
         [switch]$PgDumpWriteZeroBytes
     )
@@ -19,6 +23,9 @@ function New-StubPgBinaries {
     $script:StubDirs.Add($dir) | Out-Null
     $listTrace = Join-Path $dir "list-trace.txt"
     $cleanTrace = Join-Path $dir "clean-trace.txt"
+    # R10h: one ordered trace across the stubs: DUMP (pg_dump), LIST (pg_restore --list), RECREATE (psql),
+    # RESTORE / RESTORE_CLEAN (pg_restore into the database, without / with --clean).
+    $orderTrace = Join-Path $dir "order-trace.txt"
     $listPass = Join-Path $dir "list.pass"
 
     $writeOnFail = if ($PgDumpWriteOnFailure) { "1" } else { "0" }
@@ -27,6 +34,7 @@ function New-StubPgBinaries {
         @"
 @echo off
 setlocal EnableDelayedExpansion
+echo DUMP>> "$orderTrace"
 set "outfile="
 :parse
 if "%~1"=="" goto done
@@ -53,9 +61,17 @@ exit /b $PgDumpExit
 
         @"
 @echo off
+setlocal EnableDelayedExpansion
 set "args=%*"
 echo %args% | findstr /I /C:"--list" >nul
 if %errorlevel% equ 0 (
+  echo LIST>> "$orderTrace"
+  if $SafetyListExit geq 0 (
+    echo LIST>> "$listTrace"
+    echo %args% | findstr /I /C:"pre-restore-" >nul
+    if !errorlevel! equ 0 exit /b $SafetyListExit
+    exit /b 0
+  )
   if not exist "$listPass" (
     echo LIST>> "$listTrace"
     echo.>"$listPass"
@@ -65,16 +81,25 @@ if %errorlevel% equ 0 (
     exit /b $SecondListExit
   )
 )
+echo CLEAN>> "$cleanTrace"
 echo %args% | findstr /I /C:"--clean" >nul
 if %errorlevel% equ 0 (
-  echo CLEAN>> "$cleanTrace"
-  exit /b $CleanExit
+  echo RESTORE_CLEAN>> "$orderTrace"
+) else (
+  echo RESTORE>> "$orderTrace"
 )
-exit /b 0
+exit /b $RestoreExit
 "@ | Set-Content -LiteralPath (Join-Path $dir "pg_restore.cmd") -Encoding ASCII
+
+        @"
+@echo off
+echo RECREATE>> "$orderTrace"
+exit /b $PsqlExit
+"@ | Set-Content -LiteralPath (Join-Path $dir "psql.cmd") -Encoding ASCII
     } else {
         @"
 #!/bin/sh
+echo DUMP >> '$orderTrace'
 outfile=
 write_on_fail=$writeOnFail
 write_zero=$writeZero
@@ -101,9 +126,16 @@ exit $PgDumpExit
 
         @"
 #!/bin/sh
+clean=0
 for a in "`$@"; do
   case "`$a" in
     --list)
+      echo LIST >> '$orderTrace'
+      if [ $SafetyListExit -ge 0 ]; then
+        echo LIST >> '$listTrace'
+        case "`$*" in *pre-restore-*) exit $SafetyListExit ;; esac
+        exit 0
+      fi
       if [ ! -f '$listPass' ]; then
         echo LIST >> '$listTrace'
         touch '$listPass'
@@ -112,16 +144,22 @@ for a in "`$@"; do
       echo LIST >> '$listTrace'
       exit $SecondListExit
       ;;
-    --clean)
-      echo CLEAN >> '$cleanTrace'
-      exit $CleanExit
-      ;;
+    --clean) clean=1 ;;
   esac
 done
-exit 0
+echo CLEAN >> '$cleanTrace'
+if [ "`$clean" = "1" ]; then echo RESTORE_CLEAN >> '$orderTrace'; else echo RESTORE >> '$orderTrace'; fi
+exit $RestoreExit
 "@ | Set-Content -LiteralPath (Join-Path $dir "pg_restore") -Encoding UTF8 -NoNewline
         [System.IO.File]::AppendAllText((Join-Path $dir "pg_restore"), "`n")
-        foreach ($name in @('pg_dump', 'pg_restore')) {
+
+        @"
+#!/bin/sh
+echo RECREATE >> '$orderTrace'
+exit $PsqlExit
+"@ | Set-Content -LiteralPath (Join-Path $dir "psql") -Encoding UTF8 -NoNewline
+        [System.IO.File]::AppendAllText((Join-Path $dir "psql"), "`n")
+        foreach ($name in @('pg_dump', 'pg_restore', 'psql')) {
             & chmod +x (Join-Path $dir $name)
         }
     }
@@ -130,6 +168,7 @@ exit 0
         Dir        = $dir
         ListTrace  = $listTrace
         CleanTrace = $cleanTrace
+        OrderTrace = $orderTrace
     }
 }
 
@@ -168,14 +207,17 @@ function Invoke-RestoreScript {
             } catch {
                 $recorded = $_
             }
-            $clean = ''
             $list = ''
-            if (Test-Path -LiteralPath $Stub.CleanTrace) { $clean = Get-Content -LiteralPath $Stub.CleanTrace -Raw }
+            $order = ''
             if (Test-Path -LiteralPath $Stub.ListTrace) { $list = Get-Content -LiteralPath $Stub.ListTrace -Raw }
+            if (Test-Path -LiteralPath $Stub.OrderTrace) { $order = Get-Content -LiteralPath $Stub.OrderTrace -Raw }
+            $steps = @($order -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' })
             return [pscustomobject]@{
                 Error     = $recorded
-                CleanRan  = $clean -match 'CLEAN'
+                # R10h: "the database was touched" = the schema recreate (psql) or a restore into the DB ran.
+                CleanRan  = [bool](@($steps | Where-Object { $_ -in @('RECREATE', 'RESTORE', 'RESTORE_CLEAN') }).Count)
                 ListCalls = @($list -split "`n" | Where-Object { $_ -match '\S' }).Count
+                Order     = ($steps -join ',')
             }
         }
     } finally {
@@ -190,7 +232,13 @@ function New-ScriptMutant {
         [scriptblock]$Transform,
         [string]$WorkDir
     )
-    $dest = Join-Path $WorkDir "mutant-$Tag.ps1"
+    # R10h: each mutant lives in its own folder WITH the CheckpointDbConfig.ps1 it dot-sources. Before R10h the mutant
+    # was written straight into $WorkDir (no CheckpointDbConfig.ps1), crashed on its first line, and every in-file
+    # mutant below counted as "killed" without running.
+    $mutDir = Join-Path $WorkDir "mutant-$Tag"
+    New-Item -ItemType Directory -Force -Path $mutDir | Out-Null
+    Copy-Item -LiteralPath (Join-Path (Split-Path $SourcePath -Parent) "CheckpointDbConfig.ps1") -Destination $mutDir
+    $dest = Join-Path $mutDir ([System.IO.Path]::GetFileName($SourcePath))
     $original = Get-Content -LiteralPath $SourcePath -Raw
     $text = & $Transform $original
     if ($text -eq $original) {
@@ -218,15 +266,19 @@ function Assert-MutantKilled {
         Write-Error "golden scenario failed for ${Name}"
     }
     $mutant = New-ScriptMutant -SourcePath $SourcePath -Tag $Name -Transform $Transform -WorkDir $WorkDir
-    $mutantSurvives = $false
-    try {
-        $mutantSurvives = & $MutantUnsafe $mutant
-    } catch {
-        $mutantSurvives = $false
-    }
-    if ($mutantSurvives) {
+    # R10h: killed = the same check that passes on the golden script FAILS on the mutant, AND the mutant really showed
+    # the unsafe behaviour (-MutantUnsafe returns $true), so a mutant that merely crashes no longer counts as killed.
+    $mutantPassesCheck = $false
+    try { $mutantPassesCheck = [bool](& $GoldenSafe $mutant) } catch { $mutantPassesCheck = $false }
+    if ($mutantPassesCheck) {
         Write-Error "mutant not killed: $Name"
     }
+    $mutantShowedUnsafe = $false
+    try { $mutantShowedUnsafe = [bool](& $MutantUnsafe $mutant) } catch { $mutantShowedUnsafe = $false }
+    if (-not $mutantShowedUnsafe) {
+        Write-Error "mutant ${Name}: did not show the unsafe behaviour (crashed or transform ineffective), so the kill proves nothing"
+    }
+    Write-Host "mutant killed: $Name"
 }
 
 function Invoke-BackupScript {
@@ -352,12 +404,14 @@ try {
         $t -replace '(?ms)\r?\n\s*Test-PostgresDumpReadable -DumpPath \$dump\r?\n', "`n"
     } -GoldenSafe {
         param([string]$ScriptPath)
-        $stub = New-StubPgBinaries -PgDumpExit 0 -PgDumpWriteZeroBytes
+        # R10h: the empty-output case is caught earlier (DEF-20 "Dump file is empty"), so the line this mutant removes
+        # guards a non-empty dump that fails `pg_restore --list`.
+        $stub = New-StubPgBinaries -PgDumpExit 0 -FirstListExit 11
         $err = Invoke-BackupScript -ScriptPath $ScriptPath -BackupDir (Join-Path $workDir "bk-g-old") -ServerJsonPath $jsonPath -LogsDir (Join-Path $workDir "lg-g-old") -Stub $stub
-        return ($null -ne $err -and $err.Exception.Message -match '^Dump file is empty:')
+        return ($null -ne $err -and $err.Exception.Message -match '^pg_restore --list failed for ')
     } -MutantUnsafe {
         param([string]$ScriptPath)
-        $stub = New-StubPgBinaries -PgDumpExit 0 -PgDumpWriteZeroBytes
+        $stub = New-StubPgBinaries -PgDumpExit 0 -FirstListExit 11
         $err = Invoke-BackupScript -ScriptPath $ScriptPath -BackupDir (Join-Path $workDir "bk-m-old") -ServerJsonPath $jsonPath -LogsDir (Join-Path $workDir "lg-m-old") -Stub $stub
         return $null -eq $err
     }
@@ -372,7 +426,7 @@ try {
     if ($r.Error.Exception.Message -notmatch 'Safety pg_dump failed with exit code 4') {
         Write-Error "unexpected safety pg_dump message: $($r.Error.Exception.Message)"
     }
-    if ($r.CleanRan) { Write-Error "restore must not reach --clean when safety pg_dump fails" }
+    if ($r.CleanRan) { Write-Error "restore must not touch the database when safety pg_dump fails" }
 
     # DEF-20: a failed / empty SAFETY dump removes only its own new file; earlier backups stay byte-identical.
     $bkDir = Join-Path $workDir "Checkpoint\backups"
@@ -387,7 +441,7 @@ try {
         Remove-Item -LiteralPath $restoreLogPath -Force -ErrorAction SilentlyContinue
         $r = Invoke-RestoreScript -ScriptPath $goldenRestore -DumpPath $inputDump -ServerJsonPath $jsonPath -WorkProgramData $workDir -Stub $case.Stub
         if (-not $r.Error -or $r.Error.Exception.Message -notmatch [regex]::Escape($case.Msg)) { Write-Error "DEF-20 $($case.Name): expected '$($case.Msg)'; got $($r.Error)" }
-        if ($r.CleanRan) { Write-Error "DEF-20 $($case.Name): restore must not reach --clean" }
+        if ($r.CleanRan) { Write-Error "DEF-20 $($case.Name): restore must not touch the database" }
         $left = @(Get-ChildItem -LiteralPath $bkDir -File | ForEach-Object { $_.Name } | Sort-Object)
         $expect = @("checkpoint-20250101-000000.000.dump", "pre-restore-20250101-000000.dump")
         if (($left -join ",") -ne ($expect -join ",")) { Write-Error "DEF-20 $($case.Name): only the failed safety dump may be removed; left=[$($left -join ',')]" }
@@ -398,7 +452,7 @@ try {
     Remove-Item -LiteralPath $goodOld, $goodCp -Force
 
     # DEF-23 (ruling: an unreadable dump is a failed dump under PO-3/PO-G): pg_dump exits 0 but the same-run safety dump
-    # fails `pg_restore --list`. Restore aborts before --clean, removes THAT dump with a log line, and leaves every older
+    # fails `pg_restore --list`. Restore aborts before touching the database, removes THAT dump with a log line, and leaves every older
     # dump byte-identical.
     $def23 = {
         param([string]$RestorePath, [string]$Tag)
@@ -410,7 +464,7 @@ try {
         $stub = New-StubPgBinaries -PgDumpExit 0 -FirstListExit 6
         $rr = Invoke-RestoreScript -ScriptPath $RestorePath -DumpPath $inputDump -ServerJsonPath $jsonPath -WorkProgramData $workDir -Stub $stub
         if (-not $rr.Error -or $rr.Error.Exception.Message -notmatch 'Safety dump is unreadable') { $problems.Add("expected 'Safety dump is unreadable'; got $($rr.Error)") }
-        if ($rr.CleanRan) { $problems.Add("restore reached --clean") }
+        if ($rr.CleanRan) { $problems.Add("restore touched the database") }
         $left = @(Get-ChildItem -LiteralPath $bkDir -File | ForEach-Object { $_.Name } | Sort-Object)
         if (($left -join ",") -ne "checkpoint-20250101-000000.000.dump,pre-restore-20250101-000000.dump") { $problems.Add("the same-run unreadable safety dump must be removed and nothing else; left=[$($left -join ',')]") }
         if ((([System.IO.File]::ReadAllBytes($goodOld)) -join ",") -ne "7,7,7" -or (([System.IO.File]::ReadAllBytes($goodCp)) -join ",") -ne "8,8,8,8") { $problems.Add("older dumps changed") }
@@ -427,7 +481,7 @@ try {
     Copy-Item -LiteralPath (Join-Path (Split-Path $goldenRestore -Parent) "CheckpointDbConfig.ps1") -Destination $def23MutDir
     $def23MutPath = Join-Path $def23MutDir "restore.ps1"
     $restoreSrc = [System.IO.File]::ReadAllText($goldenRestore)
-    $restoreMut = $restoreSrc.Replace(' -VerifyReadable -Log {', ' -Log {')
+    $restoreMut = $restoreSrc.Replace(' -VerifyReadable -Log $restoreLogLine', ' -Log $restoreLogLine')
     if ($restoreMut -eq $restoreSrc) { Write-Error "DEF-23 mutant: -VerifyReadable not found in restore.ps1" }
     $restoreMut = $restoreMut.Replace("try {`r`n    Test-PostgresDumpReadable -DumpPath `$DumpPath", "try { Test-PostgresDumpReadable -DumpPath `$pre } catch { Write-Error ""Safety dump is unreadable (`$(`$_.Exception.Message)); restore aborted before --clean.""; exit 1 }`r`ntry {`r`n    Test-PostgresDumpReadable -DumpPath `$DumpPath").Replace("try {`n    Test-PostgresDumpReadable -DumpPath `$DumpPath", "try { Test-PostgresDumpReadable -DumpPath `$pre } catch { Write-Error ""Safety dump is unreadable (`$(`$_.Exception.Message)); restore aborted before --clean.""; exit 1 }`ntry {`n    Test-PostgresDumpReadable -DumpPath `$DumpPath")
     [System.IO.File]::WriteAllText($def23MutPath, $restoreMut, [System.Text.UTF8Encoding]::new($true))
@@ -446,28 +500,61 @@ try {
         Write-Error "unexpected input readability message: $($r.Error.Exception.Message)"
     }
     if ($r.ListCalls -lt 2) { Write-Error "expected input validation to run pg_restore --list after safety list" }
-    if ($r.CleanRan) { Write-Error "restore must not reach --clean when input dump is unreadable" }
+    if ($r.CleanRan) { Write-Error "restore must not touch the database when input dump is unreadable" }
 
-    $cleanFailStub = New-StubPgBinaries -PgDumpExit 0 -FirstListExit 0 -SecondListExit 0 -CleanExit 9
-    $r = Invoke-RestoreScript -ScriptPath $goldenRestore -DumpPath $inputDump -ServerJsonPath $jsonPath -WorkProgramData $workDir -Stub $cleanFailStub
-    if (-not $r.Error) { Write-Error "expected pg_restore --clean failure" }
-    if ($r.Error.Exception.Message -notmatch 'pg_restore failed with exit code 9') {
-        Write-Error "unexpected pg_restore --clean message: $($r.Error.Exception.Message)"
+    # R10h BL-rr6-2 (ruling): the schema is recreated only AFTER the safety dump was written and verified readable
+    # (and the input dump verified), then the dump is restored WITHOUT --clean, and both steps are logged.
+    $goodStub = New-StubPgBinaries -PgDumpExit 0 -FirstListExit 0 -SecondListExit 0
+    Remove-Item -LiteralPath $restoreLogPath -Force -ErrorAction SilentlyContinue
+    $r = Invoke-RestoreScript -ScriptPath $goldenRestore -DumpPath $inputDump -ServerJsonPath $jsonPath -WorkProgramData $workDir -Stub $goodStub
+    if ($r.Error) { Write-Error "R10h: golden restore failed: $($r.Error)" }
+    if ($r.Order -ne 'DUMP,LIST,LIST,RECREATE,RESTORE') { Write-Error "R10h: expected order DUMP,LIST,LIST,RECREATE,RESTORE (safety dump, verify safety, verify input, recreate, restore without --clean); got [$($r.Order)]" }
+    $logText = Get-Content -LiteralPath $restoreLogPath -Raw
+    $recreateRe = 'CHECKPOINT_RESTORE_SCHEMA_RECREATE database=gameclub safety_dump=\S+pre-restore-\d{8}-\d{6}(-\d+)?\.dump input_dump=\S+input\.dump action=drop_and_create_public_schema'
+    if ($logText -notmatch $recreateRe) { Write-Error "R10h: restore.log lacks /$recreateRe/; got [$logText]" }
+    if ($logText -notmatch 'CHECKPOINT_RESTORE_DONE database=gameclub ') { Write-Error "R10h: restore.log lacks CHECKPOINT_RESTORE_DONE; got [$logText]" }
+    $restoreSrcText = [System.IO.File]::ReadAllText($goldenRestore)
+    if ($restoreSrcText -match '(?m)^\s*& \$pgRestore[^\r\n]*--clean') { Write-Error "R10h: restore.ps1 must not call pg_restore --clean any more" }
+    if ($restoreSrcText -notmatch [regex]::Escape('-v ON_ERROR_STOP=1 -c "DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public AUTHORIZATION pg_database_owner; GRANT USAGE ON SCHEMA public TO PUBLIC;"')) { Write-Error "R10h: restore.ps1 recreate statement changed" }
+
+    $psqlFailStub = New-StubPgBinaries -PgDumpExit 0 -FirstListExit 0 -SecondListExit 0 -PsqlExit 5
+    Remove-Item -LiteralPath $restoreLogPath -Force -ErrorAction SilentlyContinue
+    $r = Invoke-RestoreScript -ScriptPath $goldenRestore -DumpPath $inputDump -ServerJsonPath $jsonPath -WorkProgramData $workDir -Stub $psqlFailStub
+    if (-not $r.Error -or $r.Error.Exception.Message -notmatch 'Recreating the database schema failed with exit code 5; restore aborted\. Safety dump: \S+pre-restore-') { Write-Error "R10h: expected schema-recreate failure; got $($r.Error)" }
+    if ($r.Order -ne 'DUMP,LIST,LIST,RECREATE') { Write-Error "R10h: a failed recreate must not restore; got [$($r.Order)]" }
+    if ((Get-Content -LiteralPath $restoreLogPath -Raw) -notmatch 'CHECKPOINT_RESTORE_SCHEMA_RECREATE_FAILED exit=5 ') { Write-Error "R10h: restore.log lacks the recreate failure line" }
+
+    $restoreFailStub = New-StubPgBinaries -PgDumpExit 0 -FirstListExit 0 -SecondListExit 0 -RestoreExit 9
+    Remove-Item -LiteralPath $restoreLogPath -Force -ErrorAction SilentlyContinue
+    $r = Invoke-RestoreScript -ScriptPath $goldenRestore -DumpPath $inputDump -ServerJsonPath $jsonPath -WorkProgramData $workDir -Stub $restoreFailStub
+    if (-not $r.Error) { Write-Error "expected pg_restore failure" }
+    if ($r.Error.Exception.Message -notmatch 'pg_restore failed with exit code 9\. The schema was recreated; to go back, run restore\.ps1 -DumpPath "\S+pre-restore-') {
+        Write-Error "unexpected pg_restore failure message: $($r.Error.Exception.Message)"
     }
-    if (-not $r.CleanRan) { Write-Error "expected stub to record --clean invocation" }
+    if ($r.Order -ne 'DUMP,LIST,LIST,RECREATE,RESTORE') { Write-Error "R10h: restore-failure order; got [$($r.Order)]" }
+    if ((Get-Content -LiteralPath $restoreLogPath -Raw) -notmatch 'CHECKPOINT_RESTORE_FAILED exit=9 database=gameclub safety_dump=\S+ recovery=restore\.ps1 -DumpPath ') { Write-Error "R10h: restore.log lacks the restore failure line" }
+    # Safety / input failures never reach RECREATE (pinned by the order, not just by "no restore").
+    foreach ($case in @(
+            @{ Name = 'safety-exit'; Stub = (New-StubPgBinaries -PgDumpExit 4) ; Want = 'DUMP' },
+            @{ Name = 'safety-unreadable'; Stub = (New-StubPgBinaries -PgDumpExit 0 -FirstListExit 6); Want = 'DUMP,LIST' },
+            @{ Name = 'input-unreadable'; Stub = (New-StubPgBinaries -PgDumpExit 0 -FirstListExit 0 -SecondListExit 7); Want = 'DUMP,LIST,LIST' })) {
+        $r = Invoke-RestoreScript -ScriptPath $goldenRestore -DumpPath $inputDump -ServerJsonPath $jsonPath -WorkProgramData $workDir -Stub $case.Stub
+        if (-not $r.Error -or $r.Order -ne $case.Want) { Write-Error "R10h $($case.Name): expected abort with order [$($case.Want)] (database untouched); got [$($r.Order)] error=$($r.Error)" }
+    }
+    Get-ChildItem -LiteralPath $bkDir -File -ErrorAction SilentlyContinue | Remove-Item -Force
 
     Assert-MutantKilled -Name 'no-safety-readable' -SourcePath $goldenRestore -WorkDir $workDir -Transform {
         param($t)
         # R10g DEF-23: the safety dump's readability check lives in the helper (-VerifyReadable).
-        $t.Replace(' -VerifyReadable -Log {', ' -Log {')
+        $t.Replace(' -VerifyReadable -Log $restoreLogLine', ' -Log $restoreLogLine')
     } -GoldenSafe {
         param([string]$ScriptPath)
-        $stub = New-StubPgBinaries -PgDumpExit 0 -FirstListExit 6
+        $stub = New-StubPgBinaries -PgDumpExit 0 -SafetyListExit 6
         $r = Invoke-RestoreScript -ScriptPath $ScriptPath -DumpPath $inputDump -ServerJsonPath $jsonPath -WorkProgramData $workDir -Stub $stub
         return ($r.Error -and $r.Error.Exception.Message -match 'Safety dump is unreadable' -and -not $r.CleanRan)
     } -MutantUnsafe {
         param([string]$ScriptPath)
-        $stub = New-StubPgBinaries -PgDumpExit 0 -FirstListExit 6
+        $stub = New-StubPgBinaries -PgDumpExit 0 -SafetyListExit 6
         $r = Invoke-RestoreScript -ScriptPath $ScriptPath -DumpPath $inputDump -ServerJsonPath $jsonPath -WorkProgramData $workDir -Stub $stub
         return $r.CleanRan
     }
@@ -502,19 +589,56 @@ try {
         return $r.CleanRan
     }
 
-    Assert-MutantKilled -Name 'no-clean-exit' -SourcePath $goldenRestore -WorkDir $workDir -Transform {
+    Assert-MutantKilled -Name 'no-restore-exit' -SourcePath $goldenRestore -WorkDir $workDir -Transform {
         param($t)
-        $t -replace '(?ms)\$pgRestore = Get-CheckpointPgExecutable -Name "pg_restore"\r?\n& \$pgRestore[^\r\n]+\r?\nif \(\$LASTEXITCODE -ne 0\) \{\r?\n\s*Write-Error "pg_restore failed[^"]*"\r?\n\s*exit 1\r?\n\}\r?\n\r?\n', "`$pgRestore = Get-CheckpointPgExecutable -Name `"pg_restore`"`n& `$pgRestore --clean --if-exists -h `$cfg.Host -p `$cfg.Port -U `$cfg.Username -d `$cfg.Database `$DumpPath`n"
+        $t.Replace('if ($restoreExit -ne 0) {', 'if ($false) {')
     } -GoldenSafe {
         param([string]$ScriptPath)
-        $stub = New-StubPgBinaries -PgDumpExit 0 -FirstListExit 0 -SecondListExit 0 -CleanExit 9
+        $stub = New-StubPgBinaries -PgDumpExit 0 -FirstListExit 0 -SecondListExit 0 -RestoreExit 9
         $r = Invoke-RestoreScript -ScriptPath $ScriptPath -DumpPath $inputDump -ServerJsonPath $jsonPath -WorkProgramData $workDir -Stub $stub
         return ($r.Error -and $r.Error.Exception.Message -match 'pg_restore failed with exit code 9')
     } -MutantUnsafe {
         param([string]$ScriptPath)
-        $stub = New-StubPgBinaries -PgDumpExit 0 -FirstListExit 0 -SecondListExit 0 -CleanExit 9
+        $stub = New-StubPgBinaries -PgDumpExit 0 -FirstListExit 0 -SecondListExit 0 -RestoreExit 9
         $r = Invoke-RestoreScript -ScriptPath $ScriptPath -DumpPath $inputDump -ServerJsonPath $jsonPath -WorkProgramData $workDir -Stub $stub
         return -not $r.Error
+    }
+
+    # R10h mutants (brief): (a) recreate BEFORE the safety dump is verified, (b) no recreate (old --clean restore).
+    $recreateBlockRe = '(?ms)^\$psql = Get-CheckpointPgExecutable -Name "psql"\r?\n.*?^\}\r?\n(?=\$pgRestore = )'
+    Assert-MutantKilled -Name 'recreate-before-safety-verified' -SourcePath $goldenRestore -WorkDir $workDir -Transform {
+        param($t)
+        $m = [regex]::Match($t, $recreateBlockRe)
+        if (-not $m.Success) { return $t }
+        $without = $t.Remove($m.Index, $m.Length)
+        $anchor = '$safety = Invoke-CheckpointPgDumpNewFile'
+        $i = $without.IndexOf($anchor)
+        if ($i -lt 0) { return $t }
+        $without.Insert($i, $m.Value)
+    } -GoldenSafe {
+        param([string]$ScriptPath)
+        $stub = New-StubPgBinaries -PgDumpExit 0 -SafetyListExit 6
+        $r = Invoke-RestoreScript -ScriptPath $ScriptPath -DumpPath $inputDump -ServerJsonPath $jsonPath -WorkProgramData $workDir -Stub $stub
+        return ($r.Error -and $r.Order -eq 'DUMP,LIST' -and -not $r.CleanRan)
+    } -MutantUnsafe {
+        param([string]$ScriptPath)
+        $stub = New-StubPgBinaries -PgDumpExit 0 -SafetyListExit 6
+        $r = Invoke-RestoreScript -ScriptPath $ScriptPath -DumpPath $inputDump -ServerJsonPath $jsonPath -WorkProgramData $workDir -Stub $stub
+        return ($r.Order -match '^RECREATE,DUMP')
+    }
+    Assert-MutantKilled -Name 'no-recreate' -SourcePath $goldenRestore -WorkDir $workDir -Transform {
+        param($t)
+        ([regex]::Replace($t, $recreateBlockRe, '')).Replace('& $pgRestore -h $cfg.Host', '& $pgRestore --clean --if-exists -h $cfg.Host')
+    } -GoldenSafe {
+        param([string]$ScriptPath)
+        $stub = New-StubPgBinaries -PgDumpExit 0 -FirstListExit 0 -SecondListExit 0
+        $r = Invoke-RestoreScript -ScriptPath $ScriptPath -DumpPath $inputDump -ServerJsonPath $jsonPath -WorkProgramData $workDir -Stub $stub
+        return (-not $r.Error -and $r.Order -eq 'DUMP,LIST,LIST,RECREATE,RESTORE')
+    } -MutantUnsafe {
+        param([string]$ScriptPath)
+        $stub = New-StubPgBinaries -PgDumpExit 0 -FirstListExit 0 -SecondListExit 0
+        $r = Invoke-RestoreScript -ScriptPath $ScriptPath -DumpPath $inputDump -ServerJsonPath $jsonPath -WorkProgramData $workDir -Stub $stub
+        return (-not $r.Error -and $r.Order -eq 'DUMP,LIST,LIST,RESTORE_CLEAN')
     }
 
     $daily = Get-Content -LiteralPath (Join-Path $PSScriptRoot "..\tools\backup-daily.ps1") -Raw
