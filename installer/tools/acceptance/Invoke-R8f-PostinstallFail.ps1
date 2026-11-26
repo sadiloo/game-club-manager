@@ -25,7 +25,8 @@ $setupArgs = @(
 Set-AcceptancePostinstallFailPhase -Phase "start"
 try {
     Start-CheckpointServerSetup -LegLabel "r8f-postinstall-fail-fresh" -Exe $ServerSetup -ArgumentList $setupArgs `
-        -TimeoutSeconds 900 -LogPath $r8fFreshLog -ExpectExitCode $script:CheckpointSetupExitPostinstallFailed | Out-Null
+        -TimeoutSeconds 900 -LogPath $r8fFreshLog -ExpectExitCode $script:CheckpointSetupExitPostinstallFailed `
+        -IntendedPostinstallFailPhase "start" | Out-Null
 } finally {
     Clear-AcceptancePostinstallFailPhase
 }
@@ -45,7 +46,8 @@ $upgradeArgs = @(
 Set-AcceptancePostinstallFailPhase -Phase "upgrade-backup"
 try {
     Start-CheckpointServerSetup -LegLabel "r8f-postinstall-fail-upgrade" -Exe $ServerSetup -ArgumentList $upgradeArgs `
-        -TimeoutSeconds 900 -LogPath $r8fUpgradeLog -ExpectExitCode $script:CheckpointSetupExitPostinstallFailed | Out-Null
+        -TimeoutSeconds 900 -LogPath $r8fUpgradeLog -ExpectExitCode $script:CheckpointSetupExitPostinstallFailed `
+        -IntendedPostinstallFailPhase "upgrade-backup" | Out-Null
 } finally {
     Clear-AcceptancePostinstallFailPhase
 }

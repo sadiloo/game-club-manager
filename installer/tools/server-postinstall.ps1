@@ -32,13 +32,13 @@ if (Test-Path -LiteralPath $failPhasePath) {
     $failPhase = (Get-Content -LiteralPath $failPhasePath -Raw).Trim()
     if ($failPhase -eq $InstallPhase) {
         Write-Host "CHECKPOINT_POSTINSTALL_FAILED phase=$InstallPhase (acceptance file hook)"
-        exit 17
+        exit 1
     }
 }
 
 if ($env:CHECKPOINT_INTERNAL_TEST_HOOKS -eq "1" -and $env:CHECKPOINT_TEST_FAIL_PHASE -eq $InstallPhase) {
     Write-Host "CHECKPOINT_POSTINSTALL_FAILED phase=$InstallPhase (internal test hook)"
-    exit 17
+    exit 1
 }
 
 $isUpgrade = Test-Path -LiteralPath $configPath

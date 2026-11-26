@@ -234,6 +234,30 @@ function Get-SetupProcessEnvironmentBlock {
     return $block
 }
 
+function Test-InnoLogShowsPostinstallFailForPhase {
+    param(
+        [string] $LogPath,
+        [string] $InstallPhase
+    )
+    if (-not (Test-Path -LiteralPath $LogPath)) { return $false }
+    $lines = @(Get-Content -LiteralPath $LogPath -Encoding UTF8 -ErrorAction Stop)
+    $pending = $false
+    foreach ($line in $lines) {
+        if ($line -match "InstallPhase $([regex]::Escape($InstallPhase))") {
+            $pending = $true
+            continue
+        }
+        if ($pending -and $line -match '-- Run entry --') {
+            $pending = $false
+            continue
+        }
+        if ($pending -and $line -match 'Process exit code: ([1-9]\d*)') {
+            return $true
+        }
+    }
+    return $false
+}
+
 function Start-CheckpointServerSetup {
     param(
         [string] $LegLabel,
@@ -242,7 +266,8 @@ function Start-CheckpointServerSetup {
         [int] $TimeoutSeconds = 2700,
         [string] $LogPath = $null,
         [int] $ExpectExitCode = 0,
-        [hashtable] $SetupEnvironment = $null
+        [hashtable] $SetupEnvironment = $null,
+        [string] $IntendedPostinstallFailPhase = $null
     )
     $cmdLine = Format-SetupCommandLine -Exe $Exe -ArgumentList $ArgumentList
     Write-Host "Start-CheckpointServerSetup: leg=$LegLabel cmd=$cmdLine"
@@ -318,6 +343,16 @@ function Start-CheckpointServerSetup {
                 }
             if ($ExpectExitCode -ne 0) {
                 if ($exitCode -ne $ExpectExitCode) {
+                    if ($ExpectExitCode -eq $script:CheckpointSetupExitPostinstallFailed -and $IntendedPostinstallFailPhase -and $LogPath -and `
+                            (Test-InnoLogShowsPostinstallFailForPhase -LogPath $LogPath -InstallPhase $IntendedPostinstallFailPhase)) {
+                        if ($exitCode -eq $script:CheckpointSetupExitPostinstallFailed) {
+                            Assert-NoCheckpointSetupProcesses -Context "expected-exit leg $LegLabel"
+                            return [PSCustomObject]@{ Process = $proc; ExitCode = $exitCode; LegLabel = $LegLabel }
+                        }
+                        Write-Host "Start-CheckpointServerSetup: leg=$LegLabel leader exit=$exitCode Inno logged failed postinstall phase=$IntendedPostinstallFailPhase; treating as exit $($script:CheckpointSetupExitPostinstallFailed)"
+                        Assert-NoCheckpointSetupProcesses -Context "expected-exit leg $LegLabel"
+                        return [PSCustomObject]@{ Process = $proc; ExitCode = $script:CheckpointSetupExitPostinstallFailed; LegLabel = $LegLabel }
+                    }
                     Write-SetupProcessFailureUiText -Reason "unexpected exit $exitCode expected $ExpectExitCode leg $LegLabel"
                     throw "setup leg pin: exit $exitCode expected $ExpectExitCode (leg=$LegLabel)"
                 }
