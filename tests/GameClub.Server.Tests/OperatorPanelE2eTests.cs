@@ -2036,7 +2036,10 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
         return body;
     }
 
-    private async Task<IPage> LoginWithCpLayerOverrideAsync(string? cpLayerJs)
+    private Task<IPage> LoginWithCpLayerOverrideAsync(string? cpLayerJs)
+        => LoginWithOperatorScriptOverridesAsync(cpLayerJs, null);
+
+    private async Task<IPage> LoginWithOperatorScriptOverridesAsync(string? cpLayerJs, string? appJs)
     {
         var op = await LoginOperatorClientAsync();
         var page = await NewPanelPageAsync(op);
@@ -2049,6 +2052,25 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
                     Status = 200,
                     ContentType = "application/javascript",
                     Body = cpLayerJs,
+                });
+            });
+        }
+
+        if (appJs is not null)
+        {
+            await page.RouteAsync("**/*app.js", async route =>
+            {
+                if (!route.Request.Url.EndsWith("/operator/app.js", StringComparison.OrdinalIgnoreCase))
+                {
+                    await route.FallbackAsync();
+                    return;
+                }
+
+                await route.FulfillAsync(new()
+                {
+                    Status = 200,
+                    ContentType = "application/javascript",
+                    Body = appJs,
                 });
             });
         }
@@ -2445,14 +2467,17 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
     private static readonly string R14n004f4b1CpLayerPath = Path.GetFullPath(Path.Combine(
         AppContext.BaseDirectory, "..", "..", "..", "Scripts", "fixtures", "r14n-004f4b1-cp-layer.js"));
 
-    private async Task<IPage> NewConsoleGamePickerPageAsync(string? cpLayerOverride)
+    private static readonly string R14n004f4b1AppPath = Path.GetFullPath(Path.Combine(
+        AppContext.BaseDirectory, "..", "..", "..", "Scripts", "fixtures", "r14n-004f4b1-app.js"));
+
+    private async Task<IPage> NewConsoleGamePickerPageAsync(string? cpLayerOverride, string? appJsOverride = null)
     {
         await S3TestHelpers.ResetAsync(factory);
         var api = factory.CreateClientWithKey();
         var op = await LoginOperatorClientAsync();
         await S3TestHelpers.RegisterConsole(api, op, "PS5-R14N-PICK", 1);
         factory.Clock.SetTehran(2026, 6, 10, 11, 0);
-        var page = await LoginWithCpLayerOverrideAsync(cpLayerOverride);
+        var page = await LoginWithOperatorScriptOverridesAsync(cpLayerOverride, appJsOverride);
         await page.RouteAsync("**/api/operator/game-titles/selectable**", route =>
             route.FulfillAsync(new() { Status = 200, ContentType = "application/json", Body = "[]" }));
         await page.RouteAsync("**/api/operator/stations/**/start", route =>
@@ -2520,8 +2545,9 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
     public async Task r14n_mutant_004f4b1_wallet_missing_row_back_fails_pin()
     {
         var layer = await File.ReadAllTextAsync(R14n004f4b1CpLayerPath);
+        var app = await File.ReadAllTextAsync(R14n004f4b1AppPath);
         await SeedWalletCorrectionStationAsync();
-        var page = await LoginWithCpLayerOverrideAsync(layer);
+        var page = await LoginWithOperatorScriptOverridesAsync(layer, app);
         await SeedMultiOperatorHistoryAsync(page);
         await page.EvaluateAsync(
             """
@@ -2551,7 +2577,8 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
     public async Task r14n_mutant_004f4b1_game_picker_handoff_back_fails_pin()
     {
         var layer = await File.ReadAllTextAsync(R14n004f4b1CpLayerPath);
-        var page = await NewConsoleGamePickerPageAsync(layer);
+        var app = await File.ReadAllTextAsync(R14n004f4b1AppPath);
+        var page = await NewConsoleGamePickerPageAsync(layer, app);
         var len0 = await ReadHistoryLengthAsync(page);
         await page.ClickAsync(".tile[data-station-id='PS5-R14N-PICK']");
         await page.WaitForSelectorAsync("#cpLayer:not(.hidden)");

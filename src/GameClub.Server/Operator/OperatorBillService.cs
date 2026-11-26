@@ -420,16 +420,18 @@ public sealed class OperatorBillService(
 
             if (payments.Count > 0 && payments.Any(p => p.AmountToman > 0))
             {
-                var positiveTenders = payments
-                    .Select(p => new Tender(OperatorPaymentMethods.Parse(p.Method), p.AmountToman))
-                    .ToList();
-                var positiveSplit = PaymentSplitter.Split(0, positiveTenders);
-                if (!positiveSplit.IsValid)
+                if (payments.Any(p =>
+                        OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet
+                        && p.AmountToman > 0)
+                    && customerId is null)
                 {
-                    throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", OperatorPaymentErrors.Localize(positiveSplit.Errors.FirstOrDefault(), collectibleToman));
+                    throw new ApiException(StatusCodes.Status400BadRequest, "wallet_requires_member", "پرداخت کیف پول به عضو پیوسته نیاز دارد.");
                 }
 
-                throw new ApiException(StatusCodes.Status400BadRequest, "payment_invalid", "دست‌کم یک خط پرداخت مثبت لازم است.");
+                throw new ApiException(
+                    StatusCodes.Status400BadRequest,
+                    "payment_invalid",
+                    OperatorPaymentErrors.Localize(new PaymentError(PaymentErrors.SumMismatch, ""), collectibleToman));
             }
 
             return;
@@ -743,13 +745,6 @@ public sealed class OperatorBillService(
 
         if (amounts.CollectibleToman == 0)
         {
-            if (effective.Count > 0
-                && effective.All(p => OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet)
-                && effective.Sum(p => p.AmountToman) > 0)
-            {
-                return;
-            }
-
             ValidatePayments(amounts.CollectibleToman, effective, amounts.Detail, customerId);
             return;
         }

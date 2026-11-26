@@ -1,15 +1,18 @@
+using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using GameClub.Billing;
 using GameClub.Server.Data;
-using GameClub.Server.Data.Entities;
 using GameClub.Server.Operator;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace GameClub.Server.Tests;
 
-/// <summary>R14m K8: zero-total session bill at the counter — pins current behaviour only.</summary>
+/// <summary>
+/// R14m K8: zero-total session bill at the counter — pins current behaviour only.
+/// NOTES: Box product mutant for K8 is <c>k8_mutant_cash_on_zero_bill_rejected_no_invoice_payments</c> (confirm path), not DB injection.
+/// </summary>
 [Collection("server")]
 public sealed class InpageFormsPr51R14mK8ZeroTotalCounterPinTests(GameClubWebApplicationFactory factory)
 {
@@ -50,7 +53,7 @@ public sealed class InpageFormsPr51R14mK8ZeroTotalCounterPinTests(GameClubWebApp
     }
 
     [Fact]
-    public async Task k8_mutant_one_cash_line_fails_zero_payment_line_pin()
+    public async Task k8_mutant_cash_on_zero_bill_rejected_no_invoice_payments()
     {
         await S3TestHelpers.ResetAsync(factory);
         var op = await factory.CreateOperatorClientAsync();
@@ -60,22 +63,13 @@ public sealed class InpageFormsPr51R14mK8ZeroTotalCounterPinTests(GameClubWebApp
         var sessionId = await S3TestHelpers.StartSession(api, "PC-R14M-K8-MUT");
         factory.Clock.SetTehran(2026, 6, 9, 14, 0, 40);
         (await api.PostAsync($"/api/sessions/{sessionId}/stop", null)).EnsureSuccessStatusCode();
-        (await op.PostAsJsonAsync(
+        var confirm = await op.PostAsJsonAsync(
             $"/api/operator/sessions/{sessionId}/bill/confirm",
-            new { previewCollectibleToman = 0L, payments = Array.Empty<object>() })).EnsureSuccessStatusCode();
-
+            new { previewCollectibleToman = 0L, payments = new[] { new { method = "Cash", amountToman = 1L } } });
+        Assert.Equal(HttpStatusCode.BadRequest, confirm.StatusCode);
         using var scope = factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        var invoice = await db.Invoices.SingleAsync(i => i.SessionId == sessionId);
-        db.PaymentLines.Add(new PaymentLineEntity
-        {
-            InvoiceId = invoice.Id,
-            Method = PaymentMethod.Cash,
-            AmountToman = 1,
-        });
-        await db.SaveChangesAsync();
-
-        var lineCount = await db.PaymentLines.CountAsync(p => p.InvoiceId == invoice.Id);
-        Assert.False(lineCount == 0, "K8 pin must fail when session invoice has a cash payment line");
+        Assert.False(await db.Invoices.AnyAsync(i => i.SessionId == sessionId));
+        Assert.Equal(0, await db.PaymentLines.CountAsync());
     }
 }

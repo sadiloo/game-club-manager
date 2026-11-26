@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using GameClub.Billing;
@@ -26,9 +27,10 @@ public sealed class KioskFixR6AcceptanceTests(GameClubWebApplicationFactory fact
         {
             payments = new[] { new { method = "Wallet", amountToman = 500L } },
         });
-        preview.EnsureSuccessStatusCode();
-        var body = await preview.Content.ReadFromJsonAsync<JsonElement>();
-        Assert.Equal(0, body.GetProperty("collectibleToman").GetInt64());
+        Assert.Equal(HttpStatusCode.BadRequest, preview.StatusCode);
+        var message = (await preview.Content.ReadFromJsonAsync<JsonElement>())!.GetProperty("message").GetString();
+        Assert.Contains("۰", message, StringComparison.Ordinal);
+        Assert.Contains("تومان", message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -40,9 +42,10 @@ public sealed class KioskFixR6AcceptanceTests(GameClubWebApplicationFactory fact
         {
             payments = new[] { new { method = "Wallet", amountToman = 500L } },
         });
-        preview.EnsureSuccessStatusCode();
-        var body = await preview.Content.ReadFromJsonAsync<JsonElement>();
-        Assert.Equal(0, body.GetProperty("collectibleToman").GetInt64());
+        Assert.Equal(HttpStatusCode.BadRequest, preview.StatusCode);
+        var message = (await preview.Content.ReadFromJsonAsync<JsonElement>())!.GetProperty("message").GetString();
+        Assert.Contains("۰", message, StringComparison.Ordinal);
+        Assert.Contains("تومان", message, StringComparison.Ordinal);
     }
 
     [Fact]
