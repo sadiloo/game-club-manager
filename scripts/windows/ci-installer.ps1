@@ -130,6 +130,7 @@ Write-Host "ci-installer: static installer rules"
 & (Join-Path $root "installer/tests/BackupDailyTehran.Tests.ps1")
 & (Join-Path $root "installer/tests/PowerShell51InstallerStatic.Tests.ps1")
 & (Join-Path $root "installer/tests/PostinstallPhaseExitCodes.Tests.ps1")
+& (Join-Path $root "installer/tests/UpgradeRestoreNoDumpStatic.Tests.ps1")
 & (Join-Path $root "installer/tests/ServerWizardStatic.Tests.ps1")
 & (Join-Path $root "installer/tests/ServerPayloadStatic.Tests.ps1")
 & (Join-Path $root "installer/tests/ServerFinishLanStatic.Tests.ps1")

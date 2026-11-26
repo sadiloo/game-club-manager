@@ -23,7 +23,7 @@ const
 procedure ExitProcess(uExitCode: UINT);
   external 'ExitProcess@kernel32 stdcall';
 
-function SetEnvironmentVariable(lpName, lpValue: String; dwFlags: DWORD): BOOL;
+function SetEnvironmentVariable(lpName, lpValue: String): BOOL;
   external 'SetEnvironmentVariableW@kernel32 stdcall';
 
 var
@@ -48,6 +48,8 @@ var
   GFirstInstall: Boolean;
   GFirstInstallCaptured: Boolean;
   GUpgradeStoppedServer: Boolean;
+  GPostinstallStarted: Boolean;
+  GUpgradeRestoreHandled: Boolean;
   GInstallReachedDone: Boolean;
   GReinstallWithKeptPgData: Boolean;
   GPostinstallFailureShown: Boolean;
@@ -202,8 +204,8 @@ var
 begin
   Phase := ExpandConstant('{param:TESTFAILPHASE|}');
   if Phase = '' then Exit;
-  SetEnvironmentVariable('CHECKPOINT_INTERNAL_TEST_HOOKS', '1', 0);
-  SetEnvironmentVariable('CHECKPOINT_TEST_FAIL_PHASE', Phase, 0);
+  SetEnvironmentVariable('CHECKPOINT_INTERNAL_TEST_HOOKS', '1');
+  SetEnvironmentVariable('CHECKPOINT_TEST_FAIL_PHASE', Phase);
   Log('CHECKPOINT_INTERNAL_TEST_HOOK phase=' + Phase);
 end;
 #endif
@@ -336,14 +338,45 @@ begin
   end;
 end;
 
-procedure RestoreCheckpointUpgradeAfterPostinstallFailure;
-var Rc: Integer;
+function PreUpgradeDumpMarkerPath: String;
 begin
-  if GUpgradeStoppedServer and (not GInstallReachedDone) then
+  Result := ExpandConstant('{commonappdata}\Checkpoint\logs\preupgrade-dump.current');
+end;
+
+{ server-postinstall.ps1 upgrade-backup writes the marker (dump path) only after pg_dump succeeded. }
+function PreUpgradeDumpExists(var DumpPath: String): Boolean;
+var Raw: AnsiString;
+begin
+  Result := False;
+  DumpPath := '';
+  if not FileExists(PreUpgradeDumpMarkerPath) then Exit;
+  if not LoadStringFromFile(PreUpgradeDumpMarkerPath, Raw) then Exit;
+  DumpPath := Trim(String(Raw));
+  Result := (DumpPath <> '') and FileExists(DumpPath);
+end;
+
+procedure ClearPreUpgradeDumpMarker;
+begin
+  if FileExists(PreUpgradeDumpMarkerPath) then
+    DeleteFile(PreUpgradeDumpMarkerPath);
+end;
+
+{ F6: after the post-install phases started on an upgrade, the upgraded binaries are on disk and
+  CheckpointServer migrates the database on start. Without this run's pre-upgrade dump, leave it stopped. }
+procedure RestoreCheckpointUpgradeAfterPostinstallFailure;
+var Rc: Integer; Dump: String;
+begin
+  if (not GUpgradeStoppedServer) or GInstallReachedDone or GUpgradeRestoreHandled then Exit;
+  GUpgradeRestoreHandled := True;
+  if GPostinstallStarted and (not IsFirstInstall) and (not PreUpgradeDumpExists(Dump)) then
   begin
-    Log('CHECKPOINT_POSTINSTALL_UPGRADE_RESTORE start CheckpointServer');
-    Exec('sc.exe', 'start CheckpointServer', '', SW_HIDE, ewWaitUntilTerminated, Rc);
+    Log('CHECKPOINT_POSTINSTALL_UPGRADE_LEFT_STOPPED reason=no_preupgrade_backup service=CheckpointServer ' +
+      'action=fix the cause shown in this log, then run the same Setup again; do not start CheckpointServer by hand ' +
+      '(it would migrate the database without a backup)');
+    Exit;
   end;
+  Log('CHECKPOINT_POSTINSTALL_UPGRADE_RESTORE start CheckpointServer dump=' + Dump);
+  Exec('sc.exe', 'start CheckpointServer', '', SW_HIDE, ewWaitUntilTerminated, Rc);
 end;
 
 procedure LogSetupFailureIniMessage;
@@ -370,15 +403,6 @@ begin
     DeleteFile(SetupFailureIniPath);
 end;
 
-procedure AbortPostinstallPhaseFailed(const Phase: String; const ExitCode: Integer);
-begin
-  GSetupFailureExitCode := ExitCode;
-  RestoreCheckpointUpgradeAfterPostinstallFailure;
-  LogSetupFailureIniMessage;
-  Log('CHECKPOINT_POSTINSTALL_ABORT phase=' + Phase + ' exit=' + IntToStr(ExitCode));
-  CurRunFailed(0);
-  ExitProcess(ExitCode);
-end;
 
 procedure CurRunFailed(CurRunRecId: Integer);
 var
@@ -400,6 +424,16 @@ begin
     MsgBox(
       Format('مرحلهٔ پس‌نصب (%s) ناموفق بود. جزئیات در فایل گزارش:%n%s', [PhaseHint, LogPath]),
       mbError, MB_OK);
+end;
+
+procedure AbortPostinstallPhaseFailed(const Phase: String; const ExitCode: Integer);
+begin
+  GSetupFailureExitCode := ExitCode;
+  RestoreCheckpointUpgradeAfterPostinstallFailure;
+  LogSetupFailureIniMessage;
+  Log('CHECKPOINT_POSTINSTALL_ABORT phase=' + Phase + ' exit=' + IntToStr(ExitCode));
+  CurRunFailed(0);
+  ExitProcess(ExitCode);
 end;
 
 function GetCustomSetupExitCode: Integer;
@@ -1213,6 +1247,16 @@ begin
     Log('CHECKPOINT_PGDATA_PROBE exec_failed rc=' + IntToStr(Rc));
 end;
 
+function GetAccountsFile(Param: String): String;
+begin
+  if ExpandConstant('{param:ACCOUNTS|}') <> '' then
+    Result := ExpandConstant('{param:ACCOUNTS|}')
+  else
+    Result := AccountsJsonPath;
+end;
+
+#include "ServerPostinstallRun.iss"
+
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssPostInstall then
@@ -1221,9 +1265,10 @@ begin
     begin
       if not ValidateReinstallKeptCluster then
         AbortExistingDataKept('cluster_probe_invalid');
-      SetEnvironmentVariable('CHECKPOINT_REINSTALL_KEPT_DATA', '1', 0);
-      SetEnvironmentVariable('CHECKPOINT_UPGRADE_FROM', 'reinstall-kept', 0);
+      SetEnvironmentVariable('CHECKPOINT_REINSTALL_KEPT_DATA', '1');
+      SetEnvironmentVariable('CHECKPOINT_UPGRADE_FROM', 'reinstall-kept');
     end;
+    GPostinstallStarted := True;
     RunCheckpointServerPostinstallPhases;
   end;
   if CurStep = ssDone then
@@ -1231,10 +1276,8 @@ begin
 end;
 
 procedure DeinitializeSetup();
-var Rc: Integer;
 begin
-  if GUpgradeStoppedServer and (not GInstallReachedDone) then
-    Exec('sc.exe', 'start CheckpointServer', '', SW_HIDE, ewWaitUntilTerminated, Rc);
+  RestoreCheckpointUpgradeAfterPostinstallFailure;
 end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;
@@ -1248,5 +1291,3 @@ begin
   GUpgradeStoppedServer := True;
   StopCheckpointServerForUpgrade;
 end;
-
-#include "ServerPostinstallRun.iss"

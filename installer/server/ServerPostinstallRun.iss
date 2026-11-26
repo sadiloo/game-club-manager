@@ -31,7 +31,7 @@ begin
     Params := Params + ' -InstallMode ' + Mode;
   Params := Params + ' -InstallPhase ' + Phase + ExtraArgs;
   Log('CHECKPOINT_POSTINSTALL_EXEC phase=' + Phase);
-  if not Exec(Ps, Params, '', SW_HIDE, ewWaitUntilTerminated, Rc) then
+  if not ExecAndLogOutput(Ps, Params, '', SW_HIDE, ewWaitUntilTerminated, Rc, nil) then
   begin
     AbortPostinstallPhaseFailed(Phase, FailExit);
     Result := False;

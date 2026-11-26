@@ -39,6 +39,8 @@ $setupArgsLow = @(
 Start-CheckpointServerSetup -LegLabel "r8f-postinstall-fail-upgrade-seed" -Exe $LowSetup -ArgumentList $setupArgsLow `
     -TimeoutSeconds 2700 -LogPath $r8fSeedLog | Out-Null
 
+$r8fMigrationsBefore = Get-InstallerMigrationHistoryFingerprint
+$r8fUpgradeStart = Get-Date
 $r8fUpgradeLog = Join-Path $LogsDir "acceptance-setup-r8f-postinstall-fail-upgrade.log"
 if (Test-Path -LiteralPath $r8fUpgradeLog) { Remove-Item -LiteralPath $r8fUpgradeLog -Force }
 $upgradeArgs = @(
@@ -51,7 +53,6 @@ Start-CheckpointServerSetup -LegLabel "r8f-postinstall-fail-upgrade" -Exe $Serve
     -TimeoutSeconds 900 -LogPath $r8fUpgradeLog -ExpectExitCode $script:CheckpointSetupExitFailUpgradeBackup `
         -IntendedPostinstallFailPhase "upgrade-backup" | Out-Null
 
-if (-not (Get-Service CheckpointServer -ErrorAction SilentlyContinue)) {
-    throw "R8f-1 upgrade: CheckpointServer service missing after failed upgrade (DeinitializeSetup restore expected)"
-}
+Assert-InstallerUpgradeLeftStoppedNoDump -LegLabel "R8f-1 upgrade (upgrade-backup failed)" -InnoLogPath $r8fUpgradeLog `
+    -MigrationsBefore $r8fMigrationsBefore -LegStart $r8fUpgradeStart
 Write-Host "R8f-1: ok"

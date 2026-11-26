@@ -38,6 +38,26 @@ foreach ($phase in $allPhases) {
     }
 }
 
+# .iss side of the table: constant values and the FailExit passed per phase must match the PS table,
+# and every phase call must be gated "if not RunServerPostinstallExec(...) then Exit;".
+$issConst = @{}
+foreach ($m in [regex]::Matches($wizard, '(?m)^\s*(CHECKPOINT_EXIT_[A-Z0-9_]+)\s*=\s*(\d+)\s*;')) {
+    $issConst[$m.Groups[1].Value] = [int]$m.Groups[2].Value
+}
+foreach ($phase in $allPhases) {
+    $m = [regex]::Match($runIss, "(?m)^(.*)RunServerPostinstallExec\('$([regex]::Escape($phase))',[^;]*?,\s*(CHECKPOINT_EXIT_[A-Z0-9_]+)\)(.*)$")
+    if (-not $m.Success) { throw "PostinstallPhaseExitCodes: cannot parse RunServerPostinstallExec call for $phase" }
+    $const = $m.Groups[2].Value
+    if (-not $issConst.ContainsKey($const)) { throw "PostinstallPhaseExitCodes: $const (phase $phase) not defined in ServerWizard.inc.iss" }
+    $expected = Get-CheckpointPostinstallPhaseExitCode -InstallPhase $phase
+    if ($issConst[$const] -ne $expected) {
+        throw "PostinstallPhaseExitCodes: phase $phase passes $const=$($issConst[$const]) but table says $expected"
+    }
+    if ($m.Groups[1].Value -notmatch 'if not\s*$' -or $m.Groups[3].Value -notmatch '^\s*then Exit;') {
+        throw "PostinstallPhaseExitCodes: phase $phase call is not gated with 'if not ... then Exit;'"
+    }
+}
+
 if ($script:CheckpointSetupExitFailKioskPostinstall -ne 150) {
     throw "PostinstallPhaseExitCodes: kiosk postinstall code must be 150"
 }

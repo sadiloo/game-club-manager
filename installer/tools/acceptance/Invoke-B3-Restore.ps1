@@ -21,12 +21,19 @@ $beforeRaw = & $psql -h $cfg.Host -p $cfg.Port -U $cfg.Username -d $cfg.Database
 SELECT "HourlyToman" FROM rate_lines WHERE "GroupId"='ps5' AND "PlayMode"='Offline' AND "PlayerCount"=1 AND "IsSpecialBand"=false LIMIT 1;
 "@ 2>&1
 if ($LASTEXITCODE -ne 0) { throw "B-3-restore: read ps5 rate failed: $beforeRaw" }
-$dumpedValue = [int]$beforeRaw.Trim()
+$beforeText = ([string]($beforeRaw | Out-String)).Trim()
+if ($beforeText -notmatch '^\d+$') {
+    throw "B-3-restore: ps5 Offline 1-player rate row missing or not numeric before tamper (got '$beforeText')"
+}
+$dumpedValue = [long]$beforeText
 $tampered = $dumpedValue + 37
 $upd = & $psql -h $cfg.Host -p $cfg.Port -U $cfg.Username -d $cfg.Database -v ON_ERROR_STOP=1 -c @"
 UPDATE rate_lines SET "HourlyToman"=$tampered WHERE "GroupId"='ps5' AND "PlayMode"='Offline' AND "PlayerCount"=1 AND "IsSpecialBand"=false;
 "@ 2>&1
 if ($LASTEXITCODE -ne 0) { throw "B-3-restore: tamper rate failed: $upd" }
+if ((([string]($upd | Out-String)).Trim()) -ne "UPDATE 1") {
+    throw "B-3-restore: tamper must update exactly one ps5 rate row; psql said '$upd'"
+}
 
 $restoreLog = Join-Path $LogsDir "b3-restore.log"
 $restoreScript = "C:\Program Files\Checkpoint\Server\tools\restore.ps1"
@@ -42,7 +49,11 @@ $afterRaw = & $psql -h $cfg.Host -p $cfg.Port -U $cfg.Username -d $cfg.Database 
 SELECT "HourlyToman" FROM rate_lines WHERE "GroupId"='ps5' AND "PlayMode"='Offline' AND "PlayerCount"=1 AND "IsSpecialBand"=false LIMIT 1;
 "@ 2>&1
 if ($LASTEXITCODE -ne 0) { throw "B-3-restore: read rate after restore failed: $afterRaw" }
-$restored = [int]$afterRaw.Trim()
+$afterText = ([string]($afterRaw | Out-String)).Trim()
+if ($afterText -notmatch '^\d+$') {
+    throw "B-3-restore: ps5 rate row missing or not numeric after restore (got '$afterText')"
+}
+$restored = [long]$afterText
 if ($restored -ne $dumpedValue) {
     throw "B-3-restore: rate not restored to dump value; expected $dumpedValue got $restored (tampered was $tampered)"
 }

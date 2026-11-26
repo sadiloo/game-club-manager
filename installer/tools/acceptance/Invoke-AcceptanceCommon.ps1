@@ -941,6 +941,53 @@ SELECT
     }
 }
 
+function Get-InstallerMigrationHistoryFingerprint {
+    $json = Get-InstallerServerJson
+    $cs = [string]$json.ConnectionStrings.Default
+    $m = [regex]::Match($cs, 'Password=([^;]+)')
+    $env:PGPASSWORD = $m.Groups[1].Value
+    $q = 'SELECT count(*) || '':'' || coalesce(string_agg("MigrationId", '','' ORDER BY "MigrationId"), '''') FROM "__EFMigrationsHistory";'
+    $psql = Get-InstallerPsqlExecutable
+    $oldEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $out = & $psql -h 127.0.0.1 -p 5433 -U postgres -d checkpoint -At -c $q 2>&1
+    } finally {
+        $ErrorActionPreference = $oldEap
+    }
+    if ($LASTEXITCODE -ne 0) { throw "psql migration history failed: $out" }
+    return ([string]($out | Out-String)).Trim()
+}
+
+# F6: after an upgrade fails before this run's pre-upgrade dump exists, CheckpointServer must stay Stopped
+# (the upgraded binary would migrate the database without a backup) and Setup must say so.
+function Assert-InstallerUpgradeLeftStoppedNoDump {
+    param(
+        [Parameter(Mandatory)][string] $LegLabel,
+        [Parameter(Mandatory)][string] $InnoLogPath,
+        [Parameter(Mandatory)][string] $MigrationsBefore,
+        [Parameter(Mandatory)][datetime] $LegStart
+    )
+    $svc = Get-Service CheckpointServer -ErrorAction SilentlyContinue
+    if (-not $svc) { throw "${LegLabel}: CheckpointServer service missing after failed upgrade" }
+    if ($svc.Status -ne "Stopped") {
+        throw "${LegLabel}: CheckpointServer must stay Stopped when no pre-upgrade backup exists; status=$($svc.Status)"
+    }
+    if (-not (Select-String -LiteralPath $InnoLogPath -Pattern "CHECKPOINT_POSTINSTALL_UPGRADE_LEFT_STOPPED reason=no_preupgrade_backup" -SimpleMatch)) {
+        throw "${LegLabel}: Inno log missing CHECKPOINT_POSTINSTALL_UPGRADE_LEFT_STOPPED reason=no_preupgrade_backup"
+    }
+    if (Select-String -LiteralPath $InnoLogPath -Pattern "CHECKPOINT_POSTINSTALL_UPGRADE_RESTORE start" -SimpleMatch) {
+        throw "${LegLabel}: Inno log shows an upgrade restore start without a pre-upgrade backup"
+    }
+    $newDumps = @(Get-ChildItem -LiteralPath "C:\ProgramData\Checkpoint\backups" -Filter "pre-upgrade-*.dump" -ErrorAction SilentlyContinue |
+        Where-Object { $_.LastWriteTime -ge $LegStart })
+    if ($newDumps.Count -ne 0) { throw "${LegLabel}: unexpected pre-upgrade dump written: $($newDumps[0].FullName)" }
+    $after = Get-InstallerMigrationHistoryFingerprint
+    if ($after -ne $MigrationsBefore) {
+        throw "${LegLabel}: database migration history changed without a backup (before=$MigrationsBefore after=$after)"
+    }
+}
+
 function Get-InstallerDbCounts {
     $json = Get-InstallerServerJson
     $cs = [string]$json.ConnectionStrings.Default

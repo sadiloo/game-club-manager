@@ -49,12 +49,31 @@ function Test-PhaseRanInTrace {
     return $raw -match "(?m)^phase=$([regex]::Escape($Phase)) status=begin"
 }
 
+$script:Trace = "C:\ProgramData\Checkpoint\logs\postinstall-phase-trace.log"
+
+function Test-AcceptanceWebView2Installed {
+    # Same key/value as ServerWizard.inc.iss IsWebView2Installed.
+    $k = "HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
+    $pv = (Get-ItemProperty -LiteralPath $k -Name pv -ErrorAction SilentlyContinue).pv
+    return -not [string]::IsNullOrWhiteSpace([string]$pv)
+}
+
 function Invoke-FreshPhaseFailCase {
     param([string] $Phase)
     $exitCode = Get-CheckpointPostinstallPhaseExitCode -InstallPhase $Phase
     $later = Get-LaterPhases -Order $script:FreshPhaseOrder -Phase $Phase
+    # Decide applicability BEFORE running (a phase Setup does not run exits 0 and fails the leg pin).
+    if ($Phase -eq "reinstall-kept-pg") {
+        Write-Host "R8f-phase-matrix fresh: skip reinstall-kept-pg (needs kept pgdata; not reachable from a reset machine)"
+        return
+    }
+    if ($Phase -eq "webview2" -and (Test-AcceptanceWebView2Installed)) {
+        Write-Host "R8f-phase-matrix fresh: skip webview2 (WebView2 runtime already installed on this runner)"
+        return
+    }
     Write-Host "R8f-phase-matrix fresh: $Phase (exit $exitCode)"
     & (Join-Path $PSScriptRoot "Reset-InstallerAcceptanceMachine.ps1")
+    Remove-Item -LiteralPath $script:Trace -Force -ErrorAction SilentlyContinue
     $logPath = Join-Path $LogsDir "acceptance-setup-r8f-phase-fresh-$Phase.log"
     $args = @(
         "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART",
@@ -63,10 +82,9 @@ function Invoke-FreshPhaseFailCase {
     )
     $result = Start-CheckpointServerSetup -LegLabel "r8f-phase-fresh-$Phase" -Exe $ServerSetupHooks -ArgumentList $args `
         -LogPath $logPath -ExpectExitCode $exitCode -IntendedPostinstallFailPhase $Phase
-    $trace = "C:\ProgramData\Checkpoint\logs\postinstall-phase-trace.log"
+    $trace = $script:Trace
     if (-not (Test-PhaseRanInTrace -TracePath $trace -Phase $Phase)) {
-        Write-Host "R8f-phase-matrix fresh: skip $Phase (phase not run on this host)"
-        return
+        throw "R8f-phase-matrix fresh ${Phase}: phase never began (trace has no begin line)"
     }
     if ($result.ExitCode -ne $exitCode) {
         throw "R8f-phase-matrix fresh ${Phase}: expected exit $exitCode; got $($result.ExitCode)"
@@ -91,6 +109,9 @@ function Invoke-UpgradePhaseFailCase {
     Start-CheckpointServerSetup -LegLabel "r8f-phase-upgrade-seed-$Phase" -Exe $LowSetup -ArgumentList @(
         "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/ACCOUNTS=$AccountsFile", "/LOG=`"$seedLog`""
     ) -LogPath $seedLog | Out-Null
+    Remove-Item -LiteralPath $script:Trace -Force -ErrorAction SilentlyContinue
+    $migrationsBefore = Get-InstallerMigrationHistoryFingerprint
+    $upStart = Get-Date
 
     $upLog = Join-Path $LogsDir "acceptance-setup-r8f-phase-upgrade-$Phase.log"
     $env:CHECKPOINT_UPGRADE_FROM = $LowVersion
@@ -100,10 +121,22 @@ function Invoke-UpgradePhaseFailCase {
     ) + $ExtraSetupArgs
     $resultUp = Start-CheckpointServerSetup -LegLabel "r8f-phase-upgrade-$Phase" -Exe $ServerSetupHooks -ArgumentList $upArgs `
         -LogPath $upLog -ExpectExitCode $exitCode -IntendedPostinstallFailPhase $Phase
-    $trace = "C:\ProgramData\Checkpoint\logs\postinstall-phase-trace.log"
+    $trace = $script:Trace
     if (-not (Test-PhaseRanInTrace -TracePath $trace -Phase $Phase)) {
-        Write-Host "R8f-phase-matrix upgrade: skip $Phase (phase not run on this host)"
-        return
+        throw "R8f-phase-matrix upgrade ${Phase}: phase never began (trace has no begin line)"
+    }
+    if ($Phase -eq "upgrade-start") {
+        # upgrade-backup succeeded in this run, so the restore must start the server (F6: dump exists).
+        if (-not (Select-String -LiteralPath $upLog -Pattern "CHECKPOINT_POSTINSTALL_UPGRADE_RESTORE start CheckpointServer dump=" -SimpleMatch)) {
+            throw "R8f-phase-matrix upgrade ${Phase}: restore with pre-upgrade dump not logged"
+        }
+        $svc = Get-Service CheckpointServer -ErrorAction SilentlyContinue
+        if (-not $svc -or $svc.Status -ne "Running") {
+            throw "R8f-phase-matrix upgrade ${Phase}: CheckpointServer must be Running after restore with dump; status=$($svc.Status)"
+        }
+    } else {
+        Assert-InstallerUpgradeLeftStoppedNoDump -LegLabel "R8f-phase-matrix upgrade $Phase" -InnoLogPath $upLog `
+            -MigrationsBefore $migrationsBefore -LegStart $upStart
     }
     if ($resultUp.ExitCode -ne $exitCode) {
         throw "R8f-phase-matrix upgrade ${Phase}: expected $exitCode; got $($resultUp.ExitCode)"

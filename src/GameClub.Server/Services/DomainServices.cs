@@ -1335,7 +1335,7 @@ public sealed class DatabaseSeed
                                 "InitialUsers seeding refused: blank pin hash.");
                         }
 
-                        if (!Enum.TryParse<UserRole>(entry.Role, true, out var role))
+                        if (!Enum.TryParse<UserRole>(entry.Role, true, out var role) || !Enum.IsDefined(role))
                         {
                             throw new InvalidOperationException(
                                 $"InitialUsers seeding refused: unknown role '{entry.Role}'.");

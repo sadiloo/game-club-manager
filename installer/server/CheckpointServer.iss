@@ -107,13 +107,6 @@ begin
   Result := FileExists(Path);
 end;
 
-function GetAccountsFile(Param: String): String;
-begin
-  if ExpandConstant('{param:ACCOUNTS|}') <> '' then
-    Result := ExpandConstant('{param:ACCOUNTS|}')
-  else
-    Result := AccountsJsonPath;
-end;
 
 procedure AbortDowngradeBlocked(const Installed, Attempted: String);
 begin
@@ -128,6 +121,7 @@ var Installed, NewVer: String; Cmp: Integer;
 begin
   CaptureFirstInstallState;
   ClearSetupFailureIni;
+  ClearPreUpgradeDumpMarker;
 #if CheckpointInternalTestHooks == "1"
   ApplyInternalTestHooks;
 #endif

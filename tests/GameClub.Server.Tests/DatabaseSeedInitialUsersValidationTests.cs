@@ -2,57 +2,48 @@ using GameClub.Server.Data;
 using GameClub.Server.Services;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace GameClub.Server.Tests;
 
-[Collection("server")]
-public sealed class DatabaseSeedInitialUsersValidationTests(GameClubWebApplicationFactory factory)
+/// <summary>
+/// InitialUsers seeding refusal (Q2). Each test seeds into its own uniquely named, freshly migrated
+/// database (gameclub_test_seedval_*) so the shared "server" collection database is never truncated.
+/// </summary>
+public sealed class DatabaseSeedInitialUsersValidationTests
 {
-    private async Task ClearOperatorUsersAsync()
+    private static async Task AssertSeedingRefusedAsync(string username, string? role, string pinHash, string expectedMessage)
     {
-        using var scope = factory.Services.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        await db.Database.ExecuteSqlRawAsync("TRUNCATE operator_users RESTART IDENTITY CASCADE;");
-    }
+        using var isolated = new GameClubPrefixedTestDatabase(GameClubPrefixedTestDatabase.NamePrefix + "seedval_");
+        isolated.EnsureInitialized();
+        var options = new DbContextOptionsBuilder<AppDbContext>().UseNpgsql(isolated.ConnectionString).Options;
+        await using var db = new AppDbContext(options);
+        await db.Database.MigrateAsync();
+        Assert.False(await db.OperatorUsers.AnyAsync());
 
-    [Fact]
-    public async Task initial_users_blank_username_is_refused()
-    {
-        await ClearOperatorUsersAsync();
-        using var scope = factory.Services.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         var config = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
-                ["InitialUsers:0:Username"] = "  ",
-                ["InitialUsers:0:Role"] = "Manager",
-                ["InitialUsers:0:PinHash"] = "deadbeef",
+                ["InitialUsers:0:Username"] = username,
+                ["InitialUsers:0:Role"] = role,
+                ["InitialUsers:0:PinHash"] = pinHash,
             })
             .Build();
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => DatabaseSeed.EnsureAsync(db, config));
-        Assert.Contains("blank username", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(expectedMessage, ex.Message, StringComparison.OrdinalIgnoreCase);
+        db.ChangeTracker.Clear();
         Assert.False(await db.OperatorUsers.AnyAsync());
     }
 
     [Fact]
-    public async Task initial_users_unknown_role_is_refused()
-    {
-        await ClearOperatorUsersAsync();
-        using var scope = factory.Services.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        var config = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["InitialUsers:0:Username"] = "badrole",
-                ["InitialUsers:0:Role"] = "NotARealRole",
-                ["InitialUsers:0:PinHash"] = "deadbeef",
-            })
-            .Build();
+    public Task initial_users_blank_username_is_refused() =>
+        AssertSeedingRefusedAsync("  ", "Manager", "deadbeef", "blank username");
 
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => DatabaseSeed.EnsureAsync(db, config));
-        Assert.Contains("unknown role", ex.Message, StringComparison.OrdinalIgnoreCase);
-        Assert.False(await db.OperatorUsers.AnyAsync());
-    }
+    [Fact]
+    public Task initial_users_unknown_role_is_refused() =>
+        AssertSeedingRefusedAsync("badrole", "NotARealRole", "deadbeef", "unknown role");
+
+    [Fact]
+    public Task initial_users_numeric_undefined_role_is_refused() =>
+        AssertSeedingRefusedAsync("numrole", "99", "deadbeef", "unknown role '99'");
 }

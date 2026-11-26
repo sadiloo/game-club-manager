@@ -22,14 +22,35 @@ $logsDir = Join-Path $programData "logs"
 $backupsDir = Join-Path $programData "backups"
 $stagingSecretsPath = Join-Path $configDir ".install-secrets.json"
 $phaseTrace = Join-Path $logsDir "postinstall-phase-trace.log"
+# Written by upgrade-backup only after pg_dump succeeded; cleared by Setup (InitializeSetup) on every run.
+$preUpgradeDumpMarker = Join-Path $logsDir "preupgrade-dump.current"
 
 function Test-Phase([string[]] $Names) {
     return ($InstallPhase -eq "install-all") -or ($Names -contains $InstallPhase)
 }
 
+function Get-CheckpointPreUpgradeDumpForThisRun {
+    if (-not (Test-Path -LiteralPath $preUpgradeDumpMarker)) { return $null }
+    $dump = ([string](Get-Content -LiteralPath $preUpgradeDumpMarker -Raw)).Trim()
+    if (-not $dump) { return $null }
+    if (-not (Test-Path -LiteralPath $dump)) { return $null }
+    if ((Get-Item -LiteralPath $dump).Length -le 0) { return $null }
+    return $dump
+}
+
 function Invoke-CheckpointPostinstallAbortCleanup {
     if ($InstallMode -eq "upgrade") {
-        Write-Host "CHECKPOINT_POSTINSTALL_UPGRADE_RESTORE start CheckpointServer"
+        $dump = Get-CheckpointPreUpgradeDumpForThisRun
+        if (-not $dump) {
+            # The upgraded binaries are already on disk; starting CheckpointServer now would migrate the
+            # database with no pre-upgrade backup. Leave it stopped (F6 ruling).
+            Write-Host "CHECKPOINT_POSTINSTALL_UPGRADE_LEFT_STOPPED reason=no_preupgrade_backup service=CheckpointServer action=fix the cause shown in the Setup log, then run the same Setup again; do not start CheckpointServer by hand (it would migrate the database without a backup)"
+            Stop-Service CheckpointServer -ErrorAction SilentlyContinue
+            Add-CheckpointUtf8NoBomLine -Path $phaseTrace -Line "upgrade_restore=left_stopped reason=no_preupgrade_backup"
+            return
+        }
+        Write-Host "CHECKPOINT_POSTINSTALL_UPGRADE_RESTORE start CheckpointServer dump=$dump"
+        Add-CheckpointUtf8NoBomLine -Path $phaseTrace -Line "upgrade_restore=start dump=$dump"
         try {
             Start-Service CheckpointServer -ErrorAction Stop
         } catch {
@@ -86,20 +107,14 @@ if ($env:CHECKPOINT_INTERNAL_TEST_HOOKS -eq "1") {
         $failPhase = (Get-Content -LiteralPath $failPhasePath -Raw).Trim()
         if ($failPhase -eq $InstallPhase) {
             Write-Host "CHECKPOINT_POSTINSTALL_FAILED phase=$InstallPhase (acceptance file hook)"
-            $exitCode = Get-CheckpointPostinstallPhaseExitCode -InstallPhase $InstallPhase
-            Write-CheckpointSetupFailureRecord -Phase $InstallPhase -InstallerExitCode $exitCode -Message "internal test file hook"
-            Invoke-CheckpointPostinstallAbortCleanup
-            exit $exitCode
+            Exit-CheckpointPostinstallFailure -Phase $InstallPhase -Message "internal test file hook"
         }
     }
 }
 
 if ($env:CHECKPOINT_INTERNAL_TEST_HOOKS -eq "1" -and $env:CHECKPOINT_TEST_FAIL_PHASE -eq $InstallPhase) {
     Write-Host "CHECKPOINT_POSTINSTALL_FAILED phase=$InstallPhase (internal test hook)"
-    $exitCode = Get-CheckpointPostinstallPhaseExitCode -InstallPhase $InstallPhase
-    Write-CheckpointSetupFailureRecord -Phase $InstallPhase -InstallerExitCode $exitCode -Message "TESTFAILPHASE hook"
-    Invoke-CheckpointPostinstallAbortCleanup
-    exit $exitCode
+    Exit-CheckpointPostinstallFailure -Phase $InstallPhase -Message "TESTFAILPHASE hook"
 }
 #endregion CHECKPOINT_INTERNAL_TEST_HOOKS_END
 
@@ -156,6 +171,10 @@ if ($InstallMode -eq "upgrade") {
         $pgDump = Join-Path $pgRoot "bin\pg_dump.exe"
         & $pgDump -Fc -h 127.0.0.1 -p 5433 -U postgres -d checkpoint -f $preDump
         if ($LASTEXITCODE -ne 0) { throw "pre-upgrade pg_dump failed" }
+        if (-not (Test-Path -LiteralPath $preDump) -or (Get-Item -LiteralPath $preDump).Length -le 0) {
+            throw "pre-upgrade pg_dump produced no dump at $preDump"
+        }
+        Set-CheckpointUtf8NoBomFile -Path $preUpgradeDumpMarker -Content $preDump
         $env:CHECKPOINT_PREUPGRADE_DUMP = $preDump
         if ($InstallPhase -eq "upgrade-backup") { Complete-CheckpointPostinstallPhase }
     }

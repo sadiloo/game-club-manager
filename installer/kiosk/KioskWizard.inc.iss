@@ -1,6 +1,11 @@
 const
   CHECKPOINT_EXIT_FAIL_KIOSK_POSTINSTALL = 150;
 
+procedure ExitProcess(uExitCode: UINT);
+  external 'ExitProcess@kernel32.dll stdcall';
+function SetEnvironmentVariable(lpName, lpValue: String): BOOL;
+  external 'SetEnvironmentVariableW@kernel32 stdcall';
+
 procedure RunKioskPostinstallPhase;
 var
   Rc: Integer;
@@ -10,7 +15,7 @@ begin
   Script := ExpandConstant('{pf}\Checkpoint\Guard\tools\kiosk-postinstall.ps1');
   Params := '-NoProfile -ExecutionPolicy Bypass -File "' + Script + '"';
   Log('CHECKPOINT_KIOSK_POSTINSTALL_EXEC');
-  if not Exec(Ps, Params, '', SW_HIDE, ewWaitUntilTerminated, Rc) then
+  if not ExecAndLogOutput(Ps, Params, '', SW_HIDE, ewWaitUntilTerminated, Rc, nil) then
   begin
     Log('CHECKPOINT_KIOSK_POSTINSTALL_ABORT exec_failed');
     if not WizardSilent then
@@ -34,8 +39,8 @@ procedure ApplyKioskInternalTestHooks;
 begin
   if ExpandConstant('{param:KIOSKPOSTINSTALLFAIL|}') <> '' then
   begin
-    SetEnvironmentVariable('CHECKPOINT_INTERNAL_TEST_HOOKS', '1', 0);
-    SetEnvironmentVariable('CHECKPOINT_KIOSK_POSTINSTALL_FAIL', '1', 0);
+    SetEnvironmentVariable('CHECKPOINT_INTERNAL_TEST_HOOKS', '1');
+    SetEnvironmentVariable('CHECKPOINT_KIOSK_POSTINSTALL_FAIL', '1');
     Log('CHECKPOINT_KIOSK_INTERNAL_TEST_HOOK fail=1');
   end;
 end;

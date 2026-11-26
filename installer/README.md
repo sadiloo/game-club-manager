@@ -31,6 +31,8 @@ Persian operator guides: [server install](../docs/install/server-install.fa.md),
 
 On the first failed post-install phase, later phases do not run. Details: `C:\ProgramData\Checkpoint\logs\checkpoint-setup-failure.ini`, `postinstall-phase-trace.log`, Inno `/LOG=`.
 
+Failed upgrade: the upgraded files are already installed and CheckpointServer migrates the database when it starts. If this run's pre-upgrade backup exists (`upgrade-backup` succeeded; marker `logs\preupgrade-dump.current`), Setup starts CheckpointServer again (`CHECKPOINT_POSTINSTALL_UPGRADE_RESTORE start CheckpointServer dump=…`). If it does not exist (failure in `upgrade-pins`, `upgrade-stop` or `upgrade-backup`), CheckpointServer is left **stopped** and the database is not migrated (`CHECKPOINT_POSTINSTALL_UPGRADE_LEFT_STOPPED reason=no_preupgrade_backup`). Operator: fix the cause shown in the Setup log and run the same Setup again; do not start CheckpointServer by hand.
+
 ### Kiosk
 
 | Code | Meaning |
