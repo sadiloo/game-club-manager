@@ -68,7 +68,7 @@ const APP_FNS = [
   "escapeHtmlText",
 ];
 
-export function loadOperatorApp(url = "http://localhost/operator/", { trackKeydown = false, layerSource } = {}) {
+export function loadOperatorApp(url = "http://localhost/operator/", { trackKeydown = false, layerSource, appSource } = {}) {
   const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
   const dom = new JSDOM(html, { url, pretendToBeVisual: true });
   const { window } = dom;
@@ -126,7 +126,7 @@ export function loadOperatorApp(url = "http://localhost/operator/", { trackKeydo
   vm.runInContext(layerSource ?? layerJs, ctx);
   const bridge = LAYER_GLOBALS.map((g) => `var ${g} = window.${g};`).join("\n");
   vm.runInContext(bridge, ctx);
-  vm.runInContext(appJs, ctx);
+  vm.runInContext(appSource ?? appJs, ctx);
 
   for (const id of intervalIds) window.clearInterval(id);
 

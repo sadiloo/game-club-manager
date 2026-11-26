@@ -443,6 +443,11 @@ public sealed class OperatorBillService(
         var tenders = ToTenders(payments, customerId);
         if (detail?.Allocation is { IsValid: false } allocation)
         {
+            if (TrySettleCounterOverTender(collectibleToman, payments, allocation))
+            {
+                return;
+            }
+
             var tenderedEarly = payments.Sum(p => p.AmountToman);
             var hasCashEarly = payments.Any(p => OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Cash);
             var hasCardEarly = payments.Any(p =>
@@ -451,8 +456,8 @@ public sealed class OperatorBillService(
                 return method is PaymentMethod.CardReader or PaymentMethod.CardToCard;
             });
             var walletOnlyEarly = payments.All(p => OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet);
-            var counterOverTender = (hasCashEarly || hasCardEarly) && !walletOnlyEarly && tenderedEarly > collectibleToman;
-            if (!counterOverTender)
+            var mixedCounterOverTender = (hasCashEarly || hasCardEarly) && !walletOnlyEarly && tenderedEarly > collectibleToman;
+            if (!mixedCounterOverTender)
             {
                 throw new ApiException(
                     StatusCodes.Status400BadRequest,
@@ -597,6 +602,11 @@ public sealed class OperatorBillService(
             return;
         }
 
+        if (TrySettleCounterOverTender(collectibleToman, payments, detail?.Allocation))
+        {
+            return;
+        }
+
         var split = PaymentSplitter.Split(collectibleToman, tenders);
         if (!split.IsValid)
         {
@@ -627,6 +637,42 @@ public sealed class OperatorBillService(
             tenderedToman = tendered,
             remainingToman = Math.Max(0, collectible - tendered),
         };
+    }
+
+    /// <summary>R14k ruling A: counter-only over-tender settles with change when non-cash does not exceed collectible.</summary>
+    private static bool TrySettleCounterOverTender(
+        long collectibleToman,
+        IReadOnlyList<PaymentInput> payments,
+        AllocationResult? allocation)
+    {
+        if (collectibleToman <= 0 || payments.Count == 0)
+        {
+            return false;
+        }
+
+        if (payments.Any(p => OperatorPaymentMethods.Parse(p.Method) == PaymentMethod.Wallet))
+        {
+            return false;
+        }
+
+        var tendered = payments.Sum(p => p.AmountToman);
+        if (tendered <= collectibleToman)
+        {
+            return false;
+        }
+
+        var hasCounter = payments.Any(p =>
+        {
+            var method = OperatorPaymentMethods.Parse(p.Method);
+            return method is PaymentMethod.Cash or PaymentMethod.CardReader or PaymentMethod.CardToCard;
+        });
+        if (!hasCounter)
+        {
+            return false;
+        }
+
+        CounterPaymentRecording.EnsureRecordable(collectibleToman, payments, allocation);
+        return true;
     }
 
     public static long ResolvePreviewCollectibleToman(
