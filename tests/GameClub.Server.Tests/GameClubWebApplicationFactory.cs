@@ -14,6 +14,7 @@ using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using System.Net;
@@ -22,6 +23,9 @@ namespace GameClub.Server.Tests;
 
 public class GameClubWebApplicationFactory : WebApplicationFactory<Program>
 {
+    private readonly GameClubPrefixedTestDatabase _ownedDatabase = new();
+    private bool _hostStorageInitialized;
+
     public TestMutableClock Clock { get; } = new(DateTimeOffset.UtcNow);
 
   /// <summary>When set, registers harness PC special-band times on the test host only.</summary>
@@ -42,7 +46,16 @@ public class GameClubWebApplicationFactory : WebApplicationFactory<Program>
     /// </summary>
     public bool DeadPcBackgroundSweepEnabled { get; set; }
 
+    /// <summary>When true, bootstrap does not drop the database (B-8 restart parity).</summary>
+    public bool PreserveDatabaseOnBootstrap { get; set; }
+
     public string ConnectionString { get; private set; } = "";
+
+    /// <summary>
+    /// When overridden by a prefixed-database fixture, supplies the connection string without mutating
+    /// <c>GAMECLUB_TEST_DATABASE</c>.
+    /// </summary>
+    protected virtual string? DedicatedConnectionString => null;
 
     /// <summary>When true, KioskLeaseService emits LEASE_BUILD diagnostic lines (test harness only).</summary>
     public bool KioskLeaseBuildTrace { get; set; }
@@ -71,12 +84,19 @@ public class GameClubWebApplicationFactory : WebApplicationFactory<Program>
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
-        ConnectionString = ConnectionStringOverride
-            ?? Environment.GetEnvironmentVariable("GAMECLUB_TEST_DATABASE")
-            ?? Environment.GetEnvironmentVariable("GAMECLUB_DATABASE")
-            ?? "Host=localhost;Database=gameclub_test;Username=gameclub;Password=gameclub";
-
-        Environment.SetEnvironmentVariable("GAMECLUB_DATABASE", ConnectionString);
+        var dedicated = DedicatedConnectionString;
+        if (!string.IsNullOrWhiteSpace(ConnectionStringOverride))
+        {
+            ConnectionString = ConnectionStringOverride;
+        }
+        else if (!string.IsNullOrWhiteSpace(dedicated))
+        {
+            ConnectionString = dedicated;
+        }
+        else
+        {
+            ConnectionString = GameClubPrefixedTestDatabase.ResolveDedicatedConnectionStringOrCreate(_ownedDatabase);
+        }
         Environment.SetEnvironmentVariable("GAMECLUB_API_KEY", "dev-key");
         Environment.SetEnvironmentVariable("DeadPc__SweepIntervalSeconds", "1");
 
@@ -129,15 +149,38 @@ public class GameClubWebApplicationFactory : WebApplicationFactory<Program>
 
     protected override IHost CreateHost(IHostBuilder builder)
     {
-        var options = new DbContextOptionsBuilder<AppDbContext>().UseNpgsql(ConnectionString).Options;
-        using (var bootstrap = new AppDbContext(options))
+        if (!_hostStorageInitialized)
         {
-            bootstrap.Database.EnsureDeleted();
+            var options = new DbContextOptionsBuilder<AppDbContext>().UseNpgsql(ConnectionString).Options;
+            if (!PreserveDatabaseOnBootstrap)
+            {
+                var dbName = new Npgsql.NpgsqlConnectionStringBuilder(ConnectionString).Database;
+                TestDatabaseGuard.EnsureDeletableDatabaseName(dbName);
+                using (var bootstrap = new AppDbContext(options))
+                {
+                    bootstrap.Database.EnsureDeleted();
+                }
+            }
         }
 
         var host = base.CreateHost(builder);
-        SeedDatabase(host);
+        if (!_hostStorageInitialized)
+        {
+            SeedDatabase(host);
+            _hostStorageInitialized = true;
+        }
+
         return host;
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            _ownedDatabase.Dispose();
+        }
+
+        base.Dispose(disposing);
     }
 
     private static void SeedDatabase(IHost host)
@@ -145,7 +188,7 @@ public class GameClubWebApplicationFactory : WebApplicationFactory<Program>
         using var scope = host.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         db.Database.Migrate();
-        DatabaseSeed.EnsureAsync(db).GetAwaiter().GetResult();
+        DatabaseSeed.EnsureAsync(db, scope.ServiceProvider.GetService<IConfiguration>()).GetAwaiter().GetResult();
         Program.ApplyAuditImmutabilityAsync(db).GetAwaiter().GetResult();
     }
 }

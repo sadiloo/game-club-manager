@@ -8,19 +8,30 @@ public sealed class KioskLoginErrorDisplayStateTests
     public void login_error_message_persists_until_user_input_clears_it()
     {
         var state = new KioskLoginErrorDisplayState();
-        const string baseLine = "Locked — PC-1 · connected";
+        var lockState = KioskStationStatus.FormatLocalLockScreenState(
+            "PC-1",
+            leaseExpired: false,
+            KioskTransportPhase.Connected,
+            hubTransportConnected: true,
+            signalRAutoReconnecting: false,
+            pairingJustFailed: false,
+            consecutiveHeartbeatFailures: 0,
+            lastHeartbeatAckUtc: DateTime.UtcNow,
+            utcNow: DateTime.UtcNow,
+            lastErrorDetail: null);
         var error = KioskLoginUserMessages.DisplayText(KioskLoginUserMessages.Keys.InvalidLogin);
 
         state.SetLoginError(error);
-        var tick1 = state.ApplyToLockLine(baseLine);
-        var tick2 = state.ApplyToLockLine(baseLine);
+        var tick1 = KioskStatusPresentationBuilder.Build(lockState, error, null).ToCombinedText();
+        var tick2 = KioskStatusPresentationBuilder.Build(lockState, error, null).ToCombinedText();
 
         Assert.Equal(tick1, tick2);
         Assert.Contains(error, tick1, StringComparison.Ordinal);
 
         state.OnLoginUserInput();
         Assert.Null(state.ActiveLoginError);
-        Assert.Equal(baseLine, state.ApplyToLockLine(baseLine));
+        var baseOnly = KioskStatusPresentationBuilder.Build(lockState, null, null).ToCombinedText();
+        Assert.Equal(baseOnly, state.ApplyToLockLine(baseOnly));
     }
 
     [Fact]
@@ -30,5 +41,7 @@ public sealed class KioskLoginErrorDisplayStateTests
         var error = KioskLoginUserMessages.DisplayText(KioskLoginUserMessages.Keys.PairBefore);
         state.SetLoginError(error);
         Assert.Equal(error, state.ApplyUnpairedDirect());
+        var presentation = KioskStatusPresentationBuilder.Build(KioskStatusLineState.Unpaired(), error, null);
+        Assert.Equal(error, presentation.ToCombinedText());
     }
 }

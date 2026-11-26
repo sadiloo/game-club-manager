@@ -4,6 +4,7 @@ using GameClub.Server.Hubs;
 using GameClub.Server.Kiosk;
 using GameClub.Server.Operator;
 using GameClub.Server.Services;
+using GameClub.Server.Setup;
 using GameClub.Server.Testing;
 using GameClub.Server.Time;
 using Microsoft.AspNetCore.Mvc;
@@ -26,6 +27,20 @@ public static class ServerApplication
         var connectionString = builder.Configuration.GetConnectionString("Default")
             ?? Environment.GetEnvironmentVariable("GAMECLUB_DATABASE")
             ?? "Host=localhost;Database=gameclub;Username=postgres;Password=postgres";
+
+        var isolatedTestCs = Environment.GetEnvironmentVariable("GAMECLUB_TEST_DATABASE");
+        if (!string.IsNullOrWhiteSpace(isolatedTestCs))
+        {
+            var isolated = new Npgsql.NpgsqlConnectionStringBuilder(isolatedTestCs);
+            var isolatedDb = isolated.Database;
+            if (string.Equals(isolatedDb, "checkpoint", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    "Refusing to use the live checkpoint database as GAMECLUB_TEST_DATABASE.");
+            }
+
+            connectionString = isolated.ConnectionString;
+        }
 
         if (!builder.Environment.IsDevelopment())
         {
@@ -64,7 +79,7 @@ public static class ServerApplication
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
             await db.Database.MigrateAsync();
-            await DatabaseSeed.EnsureAsync(db);
+            await DatabaseSeed.EnsureAsync(db, builder.Configuration);
             await Program.ApplyAuditImmutabilityAsync(db);
         }
 
@@ -148,5 +163,10 @@ public static class ServerApplication
         builder.Services.AddScoped<GameCatalogService>();
         builder.Services.AddScoped<KioskPcPrepaidService>();
         builder.Services.AddScoped<KioskFundingGuard>();
+        builder.Services.AddSingleton<KioskSetupLockTracker>();
+        builder.Services.AddScoped<KioskCredentialService>();
+        builder.Services.AddScoped<KioskOperatorLockService>();
+        builder.Services.AddScoped<KioskFreeUseReportService>();
+        builder.Services.Configure<InstallServerOptions>(builder.Configuration.GetSection(InstallServerOptions.SectionName));
     }
 }

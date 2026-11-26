@@ -9,21 +9,15 @@ namespace GameClub.Server.Tests;
 
 public sealed class RemovePackagesMigrationTests
 {
-    const string TestDbPrefix = "gameclub_mig_test_";
-
-    static string ResolveConnectionString() =>
-        Environment.GetEnvironmentVariable("GAMECLUB_TEST_DATABASE")
-        ?? Environment.GetEnvironmentVariable("GAMECLUB_DATABASE")
-        ?? "Host=localhost;Database=gameclub_test;Username=gameclub;Password=gameclub";
-
     static async Task<string> FreshDbAsync()
     {
-        var template = new NpgsqlConnectionStringBuilder(ResolveConnectionString());
-        var dbName = TestDbPrefix + Guid.NewGuid().ToString("N");
+        var template = GameClubPrefixedTestDatabase.ResolveServerTemplate();
+        var dbName = GameClubPrefixedTestDatabase.NamePrefix + "mig_" + Guid.NewGuid().ToString("N")[..12];
+        TestDatabaseGuard.EnsureDeletableDatabaseName(dbName);
         var admin = new NpgsqlConnectionStringBuilder(template.ConnectionString) { Database = "postgres" };
         await using var adminConn = new NpgsqlConnection(admin.ConnectionString);
         await adminConn.OpenAsync();
-        await using (var cmd = new NpgsqlCommand($"CREATE DATABASE \"{dbName}\"", adminConn))
+        await using (var cmd = new NpgsqlCommand($"""CREATE DATABASE "{dbName}" """, adminConn))
         {
             await cmd.ExecuteNonQueryAsync();
         }
@@ -32,28 +26,19 @@ public sealed class RemovePackagesMigrationTests
         return template.ConnectionString;
     }
 
-    static async Task DropMigTestDbAsync(string connectionString)
+    static async Task DropDatabaseAsync(string connectionString)
     {
         var builder = new NpgsqlConnectionStringBuilder(connectionString);
         var dbName = builder.Database;
-        if (string.IsNullOrEmpty(dbName) || !dbName.StartsWith(TestDbPrefix, StringComparison.Ordinal))
+        if (string.IsNullOrWhiteSpace(dbName))
         {
             return;
         }
 
         builder.Database = "postgres";
-        await using var adminConn = new NpgsqlConnection(builder.ConnectionString);
-        await adminConn.OpenAsync();
-        await using var term = new NpgsqlCommand(
-            """
-            SELECT pg_terminate_backend(pid)
-            FROM pg_stat_activity
-            WHERE datname = @name AND pid <> pg_backend_pid()
-            """,
-            adminConn);
-        term.Parameters.AddWithValue("name", dbName);
-        await term.ExecuteNonQueryAsync();
-        await using var drop = new NpgsqlCommand($"DROP DATABASE IF EXISTS \"{dbName}\"", adminConn);
+        await using var conn = new NpgsqlConnection(builder.ConnectionString);
+        await conn.OpenAsync();
+        await using var drop = new NpgsqlCommand($"""DROP DATABASE IF EXISTS "{dbName}" WITH (FORCE)""", conn);
         await drop.ExecuteNonQueryAsync();
     }
 
@@ -77,7 +62,7 @@ public sealed class RemovePackagesMigrationTests
         }
         finally
         {
-            await DropMigTestDbAsync(cs);
+            await DropDatabaseAsync(cs);
         }
     }
 
@@ -105,10 +90,9 @@ public sealed class RemovePackagesMigrationTests
         }
         finally
         {
-            await DropMigTestDbAsync(cs);
+            await DropDatabaseAsync(cs);
         }
     }
-
 }
 
 [Collection("server")]

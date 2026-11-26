@@ -133,7 +133,7 @@ internal sealed class KioskHubLifecycle : IAsyncDisposable
                 }
                 catch (Exception ex) when (!ct.IsCancellationRequested)
                 {
-                    Publish(KioskTransportPhase.LastError, ex.Message);
+                    Publish(KioskTransportPhase.LastError, KioskServerTransportErrors.FormatDetail(ex));
                 }
                 finally
                 {

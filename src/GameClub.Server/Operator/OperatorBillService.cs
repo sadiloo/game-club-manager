@@ -2,6 +2,7 @@ using System.Text.Json;
 using GameClub.Billing;
 using GameClub.Server.Data;
 using GameClub.Server.Data.Entities;
+using GameClub.Server.Kiosk;
 using GameClub.Server.Services;
 using GameClub.Server.Time;
 using Microsoft.EntityFrameworkCore;
@@ -1003,6 +1004,22 @@ public sealed class OperatorGridService(
             .Where(s => s.IsActive)
             .OrderBy(s => s.Id)
             .ToListAsync(ct);
+        var openFreeRows = await db.KioskFreeUses.AsNoTracking()
+            .Where(r => r.EndedAtUtc == null)
+            .ToListAsync(ct);
+        var deviceIds = openFreeRows.Select(r => r.KioskDeviceId).Distinct().ToList();
+        var lastSeenByDevice = deviceIds.Count == 0
+            ? new Dictionary<Guid, DateTime?>()
+            : await db.KioskDevices.AsNoTracking()
+                .Where(d => deviceIds.Contains(d.Id))
+                .ToDictionaryAsync(d => d.Id, d => d.LastSeenUtc, ct);
+        var openFreeUses = openFreeRows.ToDictionary(
+            r => r.StationId,
+            r => KioskFreeUseReadModel.ForOpenRow(
+                r,
+                lastSeenByDevice.GetValueOrDefault(r.KioskDeviceId),
+                now));
+
         var openSessions = await db.Sessions.AsNoTracking()
             .Include(s => s.PendingBill)
             .Include(s => s.Customer)
@@ -1018,12 +1035,14 @@ public sealed class OperatorGridService(
         {
             if (!byStation.TryGetValue(station.Id, out var session))
             {
-                var idleStatus = station.OperationalState switch
-                {
-                    StationOperationalState.Broken => "Broken",
-                    StationOperationalState.Reserved => "Reserved",
-                    _ => "Free",
-                };
+                var idleStatus = openFreeUses.ContainsKey(station.Id)
+                    ? "FreeUse"
+                    : station.OperationalState switch
+                    {
+                        StationOperationalState.Broken => "Broken",
+                        StationOperationalState.Reserved => "Reserved",
+                        _ => "Free",
+                    };
                 var idleInet = BuildInternetFields(station, null, null, internetStates, kioskDevices, rateLines, now);
                 tiles.Add(new
                 {
@@ -1040,6 +1059,14 @@ public sealed class OperatorGridService(
                     sessionId = (Guid?)null,
                     currentGameTitleId = (int?)null,
                     currentGameTitleName = (string?)null,
+                    freeUse = openFreeUses.TryGetValue(station.Id, out var fu)
+                        ? (object)new
+                        {
+                            startedAtUtc = fu.StartedAtUtc,
+                            lastContactUtc = fu.LastContactUtc,
+                            noContact = fu.NoContact,
+                        }
+                        : null,
                     internetOn = idleInet.InternetOn,
                     internetDesiredOn = idleInet.InternetDesiredOn,
                     internetPending = idleInet.InternetPending,

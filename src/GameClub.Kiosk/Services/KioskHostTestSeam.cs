@@ -21,4 +21,25 @@ public sealed class KioskHostTestSeam
 
     /// <summary>When true, login throws <see cref="TaskCanceledException"/> before HTTP.</summary>
     public bool LoginHttpSimulateTimeout { get; init; }
+
+    public int LoginPostCount { get; private set; }
+
+    public IReadOnlyList<string> LoginPostBodies => _loginPostBodies;
+
+    private readonly List<string> _loginPostBodies = [];
+
+    public void RecordLoginPostBody(string body)
+    {
+        LoginPostCount++;
+        if (!string.IsNullOrEmpty(body))
+        {
+            _loginPostBodies.Add(body);
+        }
+    }
+
+    public void ResetLoginMetrics()
+    {
+        LoginPostCount = 0;
+        _loginPostBodies.Clear();
+    }
 }

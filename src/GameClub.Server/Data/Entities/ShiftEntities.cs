@@ -14,6 +14,8 @@ public sealed class BranchCafeSettingsEntity
     public bool ShiftsEnabled { get; set; }
 
     public bool MultiOperatorEnabled { get; set; }
+
+    public int KioskFreeUseIdleMinutes { get; set; } = 5;
 }
 
 public sealed class ShiftEntity

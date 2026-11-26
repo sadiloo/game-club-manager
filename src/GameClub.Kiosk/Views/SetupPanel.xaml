@@ -1,0 +1,104 @@
+<UserControl x:Class="GameClub.Kiosk.Views.SetupPanel"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             FlowDirection="RightToLeft">
+  <Grid Background="{DynamicResource Kiosk.BgBrush}">
+    <views:ThemeToggleButton HorizontalAlignment="Left" VerticalAlignment="Top" Margin="24,24,0,0"
+                             xmlns:views="clr-namespace:GameClub.Kiosk.Views"/>
+    <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Width="560">
+      <TextBlock Text="کیوسک PC چک‌پوینت"
+                 FontSize="28"
+                 FontWeight="Bold"
+                 Foreground="{DynamicResource Kiosk.TextBrush}"
+                 HorizontalAlignment="Center"
+                 Margin="0,0,0,24"/>
+      <Border Background="{DynamicResource Kiosk.SurfaceBrush}"
+              BorderBrush="{DynamicResource Kiosk.BorderBrush}"
+              BorderThickness="1"
+              CornerRadius="16"
+              Padding="32">
+        <StackPanel>
+          <Grid Margin="0,0,0,16">
+            <TextBlock Text="راه‌اندازی کیوسک"
+                       FontSize="20"
+                       FontWeight="Bold"
+                       Foreground="{DynamicResource Kiosk.TextBrush}"
+                       HorizontalAlignment="Right"/>
+            <TextBlock x:Name="StepCaption"
+                       Text="مرحلهٔ ۱ از ۲"
+                       FontSize="12"
+                       Foreground="{DynamicResource Kiosk.MutedBrush}"
+                       HorizontalAlignment="Left"
+                       VerticalAlignment="Center"/>
+          </Grid>
+          <StackPanel x:Name="Step1Panel">
+            <TextBlock Text="آدرس رایانهٔ پیشخوان را که سرور چک‌پوینت روی آن است وارد کنید."
+                       TextWrapping="Wrap"
+                       FontSize="14"
+                       Foreground="{DynamicResource Kiosk.MutedBrush}"
+                       Margin="0,0,0,12"/>
+            <TextBlock Text="آدرس سرور" FontSize="14" Foreground="{DynamicResource Kiosk.TextBrush}" Margin="0,0,0,8"/>
+            <TextBox x:Name="ServerUrlInput"
+                     Height="48"
+                     FontSize="16"
+                     FlowDirection="LeftToRight"
+                     Background="{DynamicResource Kiosk.SurfaceRaisedBrush}"
+                     Foreground="{DynamicResource Kiosk.TextBrush}"
+                     BorderBrush="{DynamicResource Kiosk.BorderStrongBrush}"
+                     VerticalContentAlignment="Center"
+                     Padding="12,0"/>
+            <TextBlock x:Name="Step1Error"
+                       Visibility="Collapsed"
+                       TextWrapping="Wrap"
+                       Margin="0,8,0,0"
+                       FontSize="14"
+                       Foreground="{DynamicResource Kiosk.DangerBrush}"/>
+            <Button x:Name="ConnectButton"
+                    Content="اتصال"
+                    Height="48"
+                    Margin="0,16,0,0"
+                    Background="{DynamicResource Kiosk.PrimaryBrush}"
+                    Foreground="{DynamicResource Kiosk.OnPrimaryBrush}"
+                    FontSize="16"
+                    FontWeight="SemiBold"
+                    Click="OnConnectClick"/>
+          </StackPanel>
+          <StackPanel x:Name="Step2Panel" Visibility="Collapsed">
+            <TextBlock x:Name="ServerUrlCaption"
+                       FontSize="12"
+                       Foreground="{DynamicResource Kiosk.MutedBrush}"
+                       Margin="0,0,0,12"/>
+            <TextBlock Text="رمز مدیر کیوسک را وارد کنید؛ همان رمزی که مدیر در برنامهٔ سرور ساخته است."
+                       TextWrapping="Wrap"
+                       FontSize="14"
+                       Foreground="{DynamicResource Kiosk.MutedBrush}"
+                       Margin="0,0,0,12"/>
+            <TextBlock Text="رمز مدیر کیوسک" FontSize="14" Foreground="{DynamicResource Kiosk.TextBrush}" Margin="0,0,0,8"/>
+            <PasswordBox x:Name="ManagerPasswordInput"
+                         Height="48"
+                         FlowDirection="LeftToRight"
+                         Background="{DynamicResource Kiosk.SurfaceRaisedBrush}"
+                         Foreground="{DynamicResource Kiosk.TextBrush}"
+                         VerticalContentAlignment="Center"
+                         Padding="12,0"/>
+            <TextBlock x:Name="Step2Notice"
+                       Visibility="Collapsed"
+                       TextWrapping="Wrap"
+                       Margin="0,8,0,0"
+                       FontSize="14"
+                       Foreground="{DynamicResource Kiosk.WarningBrush}"/>
+            <Button x:Name="ContinueButton"
+                    Content="ادامه"
+                    Height="48"
+                    Margin="0,16,0,0"
+                    Background="{DynamicResource Kiosk.PrimaryBrush}"
+                    Foreground="{DynamicResource Kiosk.OnPrimaryBrush}"
+                    FontSize="16"
+                    FontWeight="SemiBold"
+                    Click="OnContinueClick"/>
+          </StackPanel>
+        </StackPanel>
+      </Border>
+    </StackPanel>
+  </Grid>
+</UserControl>

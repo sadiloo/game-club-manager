@@ -1,0 +1,9 @@
+{
+  "manager1User": "mgrone",
+  "manager1Pin": "5678",
+  "manager2User": "mgrtwo",
+  "manager2Pin": "8765",
+  "operatorUser": "oper1",
+  "operatorPin": "4321",
+  "secondaryBackupDir": "C:\\ProgramData\\Checkpoint\\backups\\secondary-ci"
+}

@@ -543,6 +543,8 @@ public sealed class KioskCheckpointCoordinator(
     SessionService sessions,
     KioskLeaseService leases,
     KioskDisplayService display,
+    KioskCredentialService kioskCredentials,
+    KioskOperatorLockService operatorLock,
     StationInternetStateService internetStates,
     IKioskLeaseSigner leaseSigner,
     AuditService audit)
@@ -560,6 +562,7 @@ public sealed class KioskCheckpointCoordinator(
         KioskInternetAppliedReport? internetApplied,
         CancellationToken ct)
     {
+        var idleMinutes = await operatorLock.GetIdleMinutesAsync(ct);
         var device = await db.KioskDevices.FirstAsync(d => d.Id == deviceId, ct);
         device.LastSeenUtc = clock.UtcNow.UtcDateTime;
         db.KioskHeartbeats.Add(new KioskHeartbeatEntity
@@ -687,6 +690,7 @@ public sealed class KioskCheckpointCoordinator(
         var displayDto = session is not null ? await display.BuildAsync(session, ct) : null;
         var manualSettle = session?.Status == SessionStatus.ManualSettle;
         DateTime? deadLine = session?.LastCheckpointUtc?.Add(DeadPcMonitor.Timeout);
+        var credentialsVersion = await kioskCredentials.GetCredentialsVersionAsync(ct);
         SignedInternetCommand? internet = null;
         var state = await db.StationInternetStates.AsNoTracking()
             .FirstOrDefaultAsync(s => s.StationId == device.StationId, ct);
@@ -712,6 +716,8 @@ public sealed class KioskCheckpointCoordinator(
             Display = displayDto,
             ManualSettle = manualSettle,
             DeadPcDeadlineUtc = deadLine,
+            CredentialsVersion = credentialsVersion,
+            KioskFreeUseIdleMinutes = idleMinutes,
             Internet = internet,
         };
     }
@@ -969,7 +975,8 @@ public sealed class KioskReconcileService(
     AppDbContext db,
     AuditService audit,
     IClock clock,
-    SessionService sessions)
+    SessionService sessions,
+    KioskOperatorLockService operatorLock)
 {
     public async Task<IReadOnlyList<Guid>> ApplyEventsAsync(Guid deviceId, IReadOnlyList<KioskOutboundEvent> events, CancellationToken ct)
     {
@@ -986,6 +993,10 @@ public sealed class KioskReconcileService(
             if (ev.Type == "offline_play_segment")
             {
                 await HandleOfflineSegmentAsync(device, ev, ct);
+            }
+            else if (ev.Type == "kiosk_free_use_end")
+            {
+                await HandleOfflineFreeUseEndAsync(device, ev, ct);
             }
             else if (ev.Type == "process_violation" || ev.Type == "client_lock_grace_exhausted")
             {
@@ -1053,6 +1064,22 @@ public sealed class KioskReconcileService(
         }
 
         await audit.AppendAsync("kiosk.offline_segment", new { ev.EventId, ev.PayloadJson, reconciled = true }, ct);
+    }
+
+    private async Task HandleOfflineFreeUseEndAsync(KioskDeviceEntity device, KioskOutboundEvent ev, CancellationToken ct)
+    {
+        using var doc = JsonDocument.Parse(ev.PayloadJson);
+        var root = doc.RootElement;
+        var freeUseId = root.GetProperty("freeUseId").GetGuid();
+        var reason = root.TryGetProperty("reason", out var r) ? r.GetString() ?? "manual" : "manual";
+        DateTime? endedAt = null;
+        if (root.TryGetProperty("endedAtUtc", out var endEl))
+        {
+            endedAt = DateTime.Parse(endEl.GetString()!, null, System.Globalization.DateTimeStyles.RoundtripKind);
+        }
+
+        await operatorLock.EndFreeUseAsync(device.StationId, freeUseId, reason, endedAt, ct);
+        await audit.AppendAsync("kiosk.offline_free_use_end", new { ev.EventId, freeUseId, reason }, ct);
     }
 }
 

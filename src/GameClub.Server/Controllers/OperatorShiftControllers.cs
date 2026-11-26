@@ -1,4 +1,5 @@
 using GameClub.Billing;
+using GameClub.Server.Kiosk;
 using GameClub.Server.Operator;
 using Microsoft.AspNetCore.Mvc;
 
@@ -13,9 +14,15 @@ public sealed class OperatorShiftController(OperatorShiftCloseService shifts) : 
 
     public sealed record SettingsRequest(bool? ShiftsEnabled, bool? MultiOperatorEnabled);
 
+    public sealed record KioskFreeIdleMinutesRequest(int KioskFreeUseIdleMinutes);
+
     [HttpPut("settings")]
     public Task<IActionResult> Settings(SettingsRequest body, CancellationToken ct)
         => OkTask(shifts.UpdateSettingsAsync(body.ShiftsEnabled, body.MultiOperatorEnabled, ct));
+
+    [HttpPut("settings/kiosk-free-idle")]
+    public Task<IActionResult> KioskFreeIdle(KioskFreeIdleMinutesRequest body, CancellationToken ct)
+        => OkTask(shifts.UpdateKioskFreeUseIdleMinutesAsync(body.KioskFreeUseIdleMinutes, ct));
 
     public sealed record OpenShiftRequest(long OpeningFloatToman);
 
@@ -113,6 +120,14 @@ public sealed class OperatorReportsController(OperatorReportingService reports) 
     [HttpGet("usage")]
     public Task<IActionResult> Usage([FromQuery] DateTime fromUtc, [FromQuery] DateTime toUtc, CancellationToken ct)
         => OkTask(reports.UsageAsync(fromUtc, toUtc, ct));
+
+    [HttpGet("free-use")]
+    public Task<IActionResult> FreeUse(
+        [FromQuery] DateTime fromUtc,
+        [FromQuery] DateTime toUtc,
+        KioskFreeUseReportService freeUse,
+        CancellationToken ct)
+        => OkTask(freeUse.ReportAsync(fromUtc, toUtc, ct));
 
     [HttpGet("wallet/cu8")]
     public Task<IActionResult> Cu8(CancellationToken ct) => OkTask(reports.Cu8WalletReportsAsync(ct));

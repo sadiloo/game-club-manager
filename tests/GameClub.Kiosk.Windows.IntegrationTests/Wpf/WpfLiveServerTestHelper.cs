@@ -86,7 +86,9 @@ internal static class WpfLiveServerTestHelper
         register.EnsureSuccessStatusCode();
 
         var op = new HttpClient { BaseAddress = api.BaseAddress };
-        var opLogin = await op.PostAsJsonAsync("/api/operator/auth/login", new { username = "manager", pin = "1234" });
+        var operatorUser = Environment.GetEnvironmentVariable("CHECKPOINT_OPERATOR_USERNAME") ?? "manager";
+        var operatorPin = Environment.GetEnvironmentVariable("CHECKPOINT_OPERATOR_PIN") ?? "1234";
+        var opLogin = await op.PostAsJsonAsync("/api/operator/auth/login", new { username = operatorUser, pin = operatorPin });
         opLogin.EnsureSuccessStatusCode();
         var created = await op.PostAsJsonAsync("/api/operator/customers", new { name = loginName, mobile = $"0912{new Random().Next(1_000_000, 9_999_999)}" });
         created.EnsureSuccessStatusCode();

@@ -23,8 +23,8 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     env:
-      GAMECLUB_DATABASE: Host=localhost;Port=5432;Database=gameclub_test;Username=postgres;Password=postgres
-      GAMECLUB_TEST_DATABASE: Host=localhost;Port=5432;Database=gameclub_test;Username=postgres;Password=postgres
+      GAMECLUB_DATABASE: Host=localhost;Port=5432;Database=gameclub_test_${{ github.run_id }}_${{ github.run_attempt }}_linux;Username=postgres;Password=postgres
+      GAMECLUB_TEST_DATABASE: Host=localhost;Port=5432;Database=gameclub_test_${{ github.run_id }}_${{ github.run_attempt }}_linux;Username=postgres;Password=postgres
       GAMECLUB_API_KEY: ci-test-key
     steps:
       - uses: actions/checkout@v4
@@ -124,6 +124,11 @@ jobs:
         run: ./scripts/windows/shell-windowshell-inventory.ps1 -Role Excluded
       - name: test every target framework except server and windows kiosk integration
         run: dotnet test GameClub.slnx -c Release --nologo --filter "FullyQualifiedName!~GameClub.Server.Tests&FullyQualifiedName!~GameClub.Kiosk.Windows.IntegrationTests&FullyQualifiedName!~GameClub.Shell.Windows.IntegrationTests" --results-directory artifacts/windows-ci --logger "trx;LogFileName=windows-ci.trx"
+      - name: kiosk trust paths and ACL (L-3)
+        shell: pwsh
+        run: |
+          & ./installer/tests/KioskTrustPaths.Tests.ps1
+          & ./installer/tests/KioskTrustFileAcl.Tests.ps1
       - name: upload windows ci test artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -259,6 +264,64 @@ jobs:
             artifacts/ci-timeout-marker.log
             artifacts/**/*.trx
             artifacts/**/Sequence*.xml
+
+  windows-installer:
+    name: windows-2022 installer
+    timeout-minutes: 90
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.403
+      - name: pin Inno Setup 6.7.1
+        shell: pwsh
+        run: choco install innosetup --version=6.7.1 -y --no-progress --allow-downgrade
+      - name: PowerShell 5.1 parse installer scripts
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $files = Get-ChildItem -Path installer -Recurse -Include *.ps1,*.psm1 -File
+          foreach ($f in $files) {
+            $tokens = $null
+            $errors = $null
+            $null = [System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$tokens, [ref]$errors)
+            if ($errors -and $errors.Count -gt 0) {
+              foreach ($e in $errors) { Write-Error "$($f.FullName): $($e.Message)" }
+              exit 1
+            }
+          }
+          $ciInstaller = Join-Path $PWD 'scripts/windows/ci-installer.ps1'
+          $null = [System.Management.Automation.Language.Parser]::ParseFile($ciInstaller, [ref]$tokens, [ref]$errors)
+          if ($errors -and $errors.Count -gt 0) {
+            foreach ($e in $errors) { Write-Error "${ciInstaller}: $($e.Message)" }
+            exit 1
+          }
+          Write-Host "PowerShell 5.1 parse: ok ($($files.Count) installer files + ci-installer.ps1)"
+      - name: installer build
+        shell: pwsh
+        run: ./scripts/windows/ci-installer.ps1 -Phase Build
+      - name: installer acceptance
+        shell: pwsh
+        timeout-minutes: 50
+        run: ./scripts/windows/ci-installer.ps1 -Phase Acceptance
+      - name: installer acceptance hang diagnostics
+        if: always()
+        shell: pwsh
+        timeout-minutes: 5
+        run: ./scripts/windows/Write-InstallerAcceptanceStepDiagnostics.ps1
+      - name: upload installer artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: checkpoint-installers
+          path: |
+            installer/server/Output/CheckpointServerSetup-*.exe
+            installer/server/Output/CheckpointServerSetupHooks-*.exe
+            installer/kiosk/Output/CheckpointKioskSetup-*.exe
+            artifacts/installer/acceptance-logs/**
+            artifacts/installer/ci-acceptance-manifest.json
+            artifacts/installer/third-party-cache/**
 
   windows-shell:
     name: windows-2022 shell

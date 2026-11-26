@@ -27,6 +27,6 @@ sc.exe failure CheckpointGuard reset= 86400 actions= restart/60000/restart/60000
 sc.exe sdset CheckpointGuard $guardAcl | Out-Null
 $exePath = (Resolve-Path $KioskExe).Path
 Write-Host "Harden executable ACL with: icacls `"$exePath`" /deny ${KioskUser}:(WD,AD,WEA,WA)"
-icacls $exePath /deny "${KioskUser}:(WD,AD,WEA,WA)" | Out-Null
+icacls $exePath /deny "${KioskUser}:(WD,AD,WA)" | Out-Null
 Write-Host "Registered CheckpointGuard Windows service with DACL."
 Write-Host "Guard applies process-object ACL denying kiosk terminate on guard and shell when the service runs."

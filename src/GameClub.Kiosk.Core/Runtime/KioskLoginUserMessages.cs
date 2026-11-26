@@ -79,9 +79,16 @@ public static class KioskLoginUserMessages
     public static IReadOnlyCollection<string> MappedKeys => AllMappedKeys;
 
     public static string DisplayText(string key)
-        => TextByKey.TryGetValue(key, out var text)
+    {
+        if (string.Equals(key, KioskStatusMessages.Keys.ServerUnreachable, StringComparison.Ordinal))
+        {
+            return KioskStatusMessages.DisplayText(key);
+        }
+
+        return TextByKey.TryGetValue(key, out var text)
             ? text
             : TextByKey[Keys.Unknown];
+    }
 
     public static bool IsKnownKey(string key) => AllMappedKeys.Contains(key);
 
@@ -109,7 +116,7 @@ public static class KioskLoginUserMessages
     {
         if (transport == LoginTransportFailure.Unreachable)
         {
-            return Keys.Unreachable;
+            return KioskStatusMessages.Keys.ServerUnreachable;
         }
 
         if (transport == LoginTransportFailure.Timeout)
@@ -168,8 +175,46 @@ public static class KioskLoginUserMessages
         return null;
     }
 
+    /// <summary>Parses a 200 login body; on failure <paramref name="failureKey"/> is <see cref="Keys.Unknown"/>.</summary>
+    public static bool TryParseLoginSessionId(string? body, string? contentType, out Guid sessionId, out string failureKey)
+    {
+        sessionId = Guid.Empty;
+        failureKey = Keys.Unknown;
+        if (string.IsNullOrWhiteSpace(body))
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrEmpty(contentType)
+            && !contentType.Contains("json", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(body!);
+            if (!doc.RootElement.TryGetProperty("sessionId", out var sessionEl))
+            {
+                return false;
+            }
+
+            return sessionEl.ValueKind switch
+            {
+                JsonValueKind.Null => false,
+                JsonValueKind.String when Guid.TryParse(sessionEl.GetString(), out sessionId)
+                    && sessionId != Guid.Empty => true,
+                _ => false,
+            };
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
     public static string AppendToLockLine(string lockLineText, string loginError)
-        => string.Concat(lockLineText, " · ", loginError);
+        => string.Concat(lockLineText, KioskStatusMessages.DisplayText(KioskStatusMessages.Keys.Sep), loginError);
 
     public static bool ExposesCredential(string composedLockLine, string? password, string? deviceKey)
     {

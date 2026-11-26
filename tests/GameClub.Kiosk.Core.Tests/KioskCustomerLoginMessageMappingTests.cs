@@ -104,7 +104,7 @@ public sealed class KioskCustomerLoginMessageMappingTests
     }
 
     [Theory]
-    [InlineData(KioskLoginUserMessages.LoginTransportFailure.Unreachable, KioskLoginUserMessages.Keys.Unreachable)]
+    [InlineData(KioskLoginUserMessages.LoginTransportFailure.Unreachable, KioskStatusMessages.Keys.ServerUnreachable)]
     [InlineData(KioskLoginUserMessages.LoginTransportFailure.Timeout, KioskLoginUserMessages.Keys.Timeout)]
     public void transport_failure_maps_before_http(
         KioskLoginUserMessages.LoginTransportFailure transport,
@@ -135,10 +135,20 @@ public sealed class KioskCustomerLoginMessageMappingTests
     [Fact]
     public void login_error_survives_lock_line_refresh_cycle()
     {
-        const string lockBase = "Locked — PC-1 · no server response";
+        var lockState = KioskStationStatus.FormatLocalLockScreenState(
+            "PC-1",
+            leaseExpired: false,
+            KioskTransportPhase.Connected,
+            hubTransportConnected: true,
+            signalRAutoReconnecting: false,
+            pairingJustFailed: false,
+            consecutiveHeartbeatFailures: 2,
+            lastHeartbeatAckUtc: DateTime.UtcNow,
+            utcNow: DateTime.UtcNow,
+            lastErrorDetail: null);
         var error = KioskLoginUserMessages.DisplayText(KioskLoginUserMessages.Keys.Timeout);
-        var first = KioskLoginUserMessages.AppendToLockLine(lockBase, error);
-        var second = KioskLoginUserMessages.AppendToLockLine(lockBase, error);
+        var first = KioskStatusPresentationBuilder.Build(lockState, error, null).ToCombinedText();
+        var second = KioskStatusPresentationBuilder.Build(lockState, error, null).ToCombinedText();
         Assert.Equal(first, second);
     }
 }

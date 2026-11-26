@@ -23,9 +23,20 @@ public sealed class LocalOpenSessionsController(AppDbContext db, IConfiguration 
             return NotFound();
         }
 
-        var count = await db.Sessions.AsNoTracking()
-            .CountAsync(s => s.Status == SessionStatus.Open || s.Status == SessionStatus.Paused, ct);
-        return Ok(new { count });
+        var openSessions = await db.Sessions.AsNoTracking()
+            .Where(s => s.Status == SessionStatus.Open || s.Status == SessionStatus.Paused)
+            .Select(s => new { s.Id, s.StationId, s.StartedAtUtc })
+            .ToListAsync(ct);
+
+        var openFreeUseCount = await db.KioskFreeUses.AsNoTracking()
+            .CountAsync(r => r.EndedAtUtc == null, ct);
+
+        return Ok(new
+        {
+            count = openSessions.Count,
+            sessions = openSessions,
+            openFreeUses = openFreeUseCount,
+        });
     }
 
     private bool IsLoopback()

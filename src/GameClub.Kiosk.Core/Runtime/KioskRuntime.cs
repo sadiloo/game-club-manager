@@ -47,6 +47,7 @@ public sealed class KioskRuntime : IAsyncDisposable
     private int _internetApplyLastPublishedGeneration;
     private int _internetApplyInvocationCount;
     private KioskInternetAppliedReport? _lastInternetReport;
+    private bool _lastInternetReportGuardDecided;
     private bool _internetOffApplied;
 
     public KioskRuntimeState State { get; private set; } = KioskRuntimeState.Unpaired;
@@ -79,6 +80,10 @@ public sealed class KioskRuntime : IAsyncDisposable
     public DateTime? LastSuccessfulHeartbeatAckUtc { get; private set; }
 
     public string LastTransportErrorDetail { get; private set; } = "";
+
+    public bool LastTransportUnreachable { get; private set; }
+
+    public bool LastTransportTimeout { get; private set; }
 
     private long _lastTransportFailedSignalMs;
 
@@ -208,9 +213,18 @@ public sealed class KioskRuntime : IAsyncDisposable
             _monotonicRestartedForInstance = true;
         }
 
+        if (phase == KioskTransportPhase.Connected)
+        {
+            LastTransportUnreachable = false;
+            LastTransportTimeout = false;
+        }
+
         if (phase == KioskTransportPhase.LastError)
         {
             LastTransportErrorDetail = detail;
+            LastTransportTimeout = KioskServerTransportErrors.IsTimeoutDetail(detail);
+            LastTransportUnreachable = !LastTransportTimeout
+                && KioskServerTransportErrors.IsUnreachableDetail(detail);
         }
 
         ConnectionStatusChanged?.Invoke(phase, detail);
@@ -413,11 +427,15 @@ public sealed class KioskRuntime : IAsyncDisposable
                 return;
             }
 
+            // A guard verdict for this (epoch, version) -- applied, apply_failed, rejected_* -- is final. The guard
+            // records the version before it applies (InternetPipeServer.HandleApplyLocked), so a resend of the same
+            // version can only come back rejected_stale and would mask the real result. Only transport/pipe errors
+            // (the guard never decided) are retried on a later offer.
             var prior = Volatile.Read(ref _lastInternetReport);
             if (prior is not null
                 && prior.Epoch == key.Epoch
                 && prior.Version == key.Version
-                && string.IsNullOrEmpty(prior.Error))
+                && (_lastInternetReportGuardDecided || string.IsNullOrEmpty(prior.Error)))
             {
                 return;
             }
@@ -580,7 +598,7 @@ public sealed class KioskRuntime : IAsyncDisposable
                     On = command.Payload.On,
                     AppliedAtUtc = DateTime.UtcNow,
                     Error = err.GetString(),
-                });
+                }, guardDecided: true);
                 return;
             }
 
@@ -594,7 +612,7 @@ public sealed class KioskRuntime : IAsyncDisposable
                 AppliedAtUtc = root.TryGetProperty("appliedAtUtc", out var at) && at.ValueKind == JsonValueKind.String
                     ? DateTime.Parse(at.GetString()!).ToUniversalTime()
                     : DateTime.UtcNow,
-            });
+            }, guardDecided: true);
         }
         catch (Exception ex)
         {
@@ -606,15 +624,18 @@ public sealed class KioskRuntime : IAsyncDisposable
                 On = command.Payload.On,
                 AppliedAtUtc = DateTime.UtcNow,
                 Error = code,
-            });
+            }, guardDecided: false);
         }
     }
 
     /// <summary>
     /// Cancelled/stale worker generations may still publish <c>pipe_error</c> so the server can retry the command on a later beat.
     /// A superseded generation cannot overwrite a newer published report.
+    /// A guard-decided report (<paramref name="guardDecided"/>: the guard answered, with or without an error) is final
+    /// for its (epoch, version): no later report for the same version replaces it, so the server always receives the
+    /// guard's verdict. A transport/pipe error report (guard never decided) may be replaced by a later result.
     /// </summary>
-    private void PublishInternetReport(int workerGeneration, KioskInternetAppliedReport report)
+    private void PublishInternetReport(int workerGeneration, KioskInternetAppliedReport report, bool guardDecided)
     {
         lock (_internetApplyGate)
         {
@@ -623,7 +644,17 @@ public sealed class KioskRuntime : IAsyncDisposable
                 return;
             }
 
+            var current = _lastInternetReport;
+            if (current is not null
+                && _lastInternetReportGuardDecided
+                && current.Epoch == report.Epoch
+                && current.Version == report.Version)
+            {
+                return;
+            }
+
             _internetApplyLastPublishedGeneration = workerGeneration;
+            _lastInternetReportGuardDecided = guardDecided;
             Volatile.Write(ref _lastInternetReport, report);
         }
     }

@@ -7,6 +7,7 @@ using GameClub.Server.Operator;
 using GameClub.Server.Time;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
 
@@ -1220,7 +1221,7 @@ public sealed class ApiException(int status, string code, string message) : Exce
 
 public sealed class DatabaseSeed
 {
-    public static async Task EnsureAsync(AppDbContext db, CancellationToken ct = default)
+    public static async Task EnsureAsync(AppDbContext db, IConfiguration? configuration = null, CancellationToken ct = default)
     {
         if (!await db.StationGroups.AnyAsync(ct))
         {
@@ -1317,12 +1318,39 @@ public sealed class DatabaseSeed
         {
             if (!await db.OperatorUsers.AnyAsync(ct))
             {
-                var manager = new OperatorUserEntity { Id = Guid.NewGuid(), Username = "manager", Role = UserRole.Manager };
-                manager.PinHash = OperatorAuthService.HashPin(manager, "1234");
-                var op = new OperatorUserEntity { Id = Guid.NewGuid(), Username = "operator", Role = UserRole.Operator };
-                op.PinHash = OperatorAuthService.HashPin(op, "1111");
-                db.OperatorUsers.AddRange(manager, op);
-                await db.SaveChangesAsync(ct);
+                var initialUsers = configuration?.GetSection("InitialUsers").Get<List<Setup.InitialUserEntry>>();
+                if (initialUsers is { Count: > 0 })
+                {
+                    foreach (var entry in initialUsers)
+                    {
+                        if (string.IsNullOrWhiteSpace(entry.Username) || string.IsNullOrWhiteSpace(entry.PinHash))
+                        {
+                            continue;
+                        }
+
+                        var role = Enum.TryParse<UserRole>(entry.Role, true, out var parsed)
+                            ? parsed
+                            : UserRole.Operator;
+                        db.OperatorUsers.Add(new OperatorUserEntity
+                        {
+                            Id = Guid.NewGuid(),
+                            Username = entry.Username.Trim(),
+                            Role = role,
+                            PinHash = entry.PinHash,
+                        });
+                    }
+
+                    await db.SaveChangesAsync(ct);
+                }
+                else
+                {
+                    var manager = new OperatorUserEntity { Id = Guid.NewGuid(), Username = "manager", Role = UserRole.Manager };
+                    manager.PinHash = OperatorAuthService.HashPin(manager, "1234");
+                    var op = new OperatorUserEntity { Id = Guid.NewGuid(), Username = "operator", Role = UserRole.Operator };
+                    op.PinHash = OperatorAuthService.HashPin(op, "1111");
+                    db.OperatorUsers.AddRange(manager, op);
+                    await db.SaveChangesAsync(ct);
+                }
             }
         }
         catch (PostgresException ex) when (ex.SqlState == "42P01")

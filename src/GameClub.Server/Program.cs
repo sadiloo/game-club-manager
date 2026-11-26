@@ -1,10 +1,19 @@
+using GameClub.Server.Setup;
 using Microsoft.EntityFrameworkCore;
 
 namespace GameClub.Server;
 
 public partial class Program
 {
-    public static Task Main(string[] args) => ServerApplication.RunAsync(args);
+    public static Task Main(string[] args)
+    {
+        if (SetupCli.TryHandle(args, out var cliExit))
+        {
+            Environment.Exit(cliExit);
+        }
+
+        return ServerApplication.RunAsync(args);
+    }
 
     internal static async Task ApplyAuditImmutabilityAsync(Data.AppDbContext db)
     {

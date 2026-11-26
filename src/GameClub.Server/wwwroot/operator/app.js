@@ -832,13 +832,36 @@ async function refreshGrid() {
     title.textContent = t.id;
     el.appendChild(title);
     el.appendChild(document.createElement("br"));
-    const statusLabel =
-      (t.groupKind === "Pc" || t.groupKind === "1" || (t.groupId || "").startsWith("pc")) &&
-      t.status === "Playing" &&
-      !t.kioskConnected
-        ? "قطع از سرور"
-        : t.status;
-    el.appendChild(document.createTextNode(statusLabel));
+    if (t.status === "FreeUse" && t.freeUse) {
+      const fu = t.freeUse;
+      if (fu.noContact) {
+        el.appendChild(document.createTextNode("بی‌ارتباط"));
+        el.title =
+          "سرور بیش از ۳ دقیقه است از این سیستم خبر ندارد. زمان تا آخرین ارتباط حساب شده است.";
+        if (fu.startedAtUtc && fu.lastContactUtc) {
+          el.appendChild(document.createElement("br"));
+          el.appendChild(
+            document.createTextNode(kioskOpFormatElapsedBetween(fu.startedAtUtc, fu.lastContactUtc))
+          );
+        }
+      } else {
+        el.appendChild(document.createTextNode("رایگان"));
+        if (fu.startedAtUtc) {
+          el.appendChild(document.createElement("br"));
+          el.appendChild(document.createTextNode(kioskOpFormatElapsed(fu.startedAtUtc)));
+        }
+      }
+    } else if (t.status === "FreeUse") {
+      el.appendChild(document.createTextNode("رایگان"));
+    } else {
+      const statusLabel =
+        (t.groupKind === "Pc" || t.groupKind === "1" || (t.groupId || "").startsWith("pc")) &&
+        t.status === "Playing" &&
+        !t.kioskConnected
+          ? "قطع از سرور"
+          : t.status;
+      el.appendChild(document.createTextNode(statusLabel));
+    }
     if (t.amountToman != null) {
       el.appendChild(document.createElement("br"));
       el.appendChild(document.createTextNode(String(t.amountToman)));
@@ -2028,6 +2051,10 @@ async function refreshCafeSettingsUi() {
   if (isMgr) {
     document.getElementById("shiftsEnabledToggle").checked = !!state.shiftsEnabled;
     document.getElementById("multiOperatorToggle").checked = !!state.multiOperatorEnabled;
+    const idle = document.getElementById("mgrFreeIdleMinutes");
+    if (idle && state.kioskFreeUseIdleMinutes != null) {
+      idle.value = String(state.kioskFreeUseIdleMinutes).replace(/\d/g, (d) => "۰۱۲۳۴۵۶۷۸۹"[d]);
+    }
   }
   if (typeof ss14RefreshManagerGameUi === "function") {
     ss14RefreshManagerGameUi(isMgr);
@@ -2575,6 +2602,183 @@ async function ss14RefreshManagerGameUi(isMgr) {
 }
 // --- end SS-14 ---
 
+// --- K-OP (MVP installer B) ---
+const KIOSK_OP_FREE_IDLE_ERR_FORBIDDEN = "فقط مدیر یا مالک می‌تواند این را عوض کند.";
+const KIOSK_OP_FREE_IDLE_ERR_INVALID = "یک عدد کامل از ۱ تا ۲۴۰ وارد کنید.";
+
+function kioskOpFreeIdleErrorMessage(code, message) {
+  if (code === "free_idle_forbidden") return KIOSK_OP_FREE_IDLE_ERR_FORBIDDEN;
+  if (code === "free_idle_invalid") return KIOSK_OP_FREE_IDLE_ERR_INVALID;
+  if (typeof message === "string" && message.length > 0 && !message.startsWith("mgr.")) return message;
+  return "ذخیره نشد. دوباره امتحان کنید.";
+}
+
+function kioskOpShowMgrFreeIdleErr(text) {
+  const el = document.getElementById("mgrFreeIdleErr");
+  if (!el) return;
+  if (!text) {
+    el.textContent = "";
+    el.classList.add("hidden");
+    return;
+  }
+  el.textContent = text;
+  el.classList.remove("hidden");
+}
+
+async function kioskOpSaveFreeIdleMinutes() {
+  kioskOpShowMgrFreeIdleErr("");
+  const raw = (document.getElementById("mgrFreeIdleMinutes").value || "").replace(/[۰-۹]/g, (c) =>
+    String("۰۱۲۳۴۵۶۷۸۹".indexOf(c))
+  );
+  if (!raw.trim()) {
+    kioskOpShowMgrFreeIdleErr("تعداد دقیقه را وارد کنید.");
+    return;
+  }
+  const minutes = Number(raw);
+  if (!Number.isInteger(minutes) || minutes < 1 || minutes > 240) {
+    kioskOpShowMgrFreeIdleErr(KIOSK_OP_FREE_IDLE_ERR_INVALID);
+    return;
+  }
+  try {
+    const res = await fetch("/api/operator/shift/settings/kiosk-free-idle", {
+      method: "PUT",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kioskFreeUseIdleMinutes: minutes }),
+    });
+    const text = await res.text();
+    if (!res.ok) {
+      let code;
+      let message;
+      try {
+        const j = JSON.parse(text);
+        code = j.code;
+        message = j.message;
+      } catch (_) {}
+      kioskOpShowMgrFreeIdleErr(kioskOpFreeIdleErrorMessage(code, message));
+      return;
+    }
+    kioskOpShowMgrFreeIdleErr("");
+    const saved = document.getElementById("mgrFreeIdleSaved");
+    if (saved) {
+      saved.textContent = "ذخیره شد.";
+      saved.classList.remove("hidden");
+      window.setTimeout(() => saved.classList.add("hidden"), 3000);
+    }
+  } catch (_) {
+    kioskOpShowMgrFreeIdleErr("ذخیره نشد. دوباره امتحان کنید.");
+  }
+}
+function kioskOpFormatElapsed(startedAtUtc) {
+  const start = new Date(startedAtUtc).getTime();
+  const sec = Math.max(0, Math.floor((Date.now() - start) / 1000));
+  return kioskOpFormatDurationSeconds(sec);
+}
+
+function kioskOpFormatElapsedBetween(startedAtUtc, endUtc) {
+  const start = new Date(startedAtUtc).getTime();
+  const end = new Date(endUtc).getTime();
+  const sec = Math.max(0, Math.floor((end - start) / 1000));
+  return kioskOpFormatDurationSeconds(sec);
+}
+
+function kioskOpFormatDurationSeconds(totalSec) {
+  const m = Math.floor(totalSec / 60);
+  const h = Math.floor(m / 60);
+  const mm = String(m % 60).padStart(2, "0");
+  const hh = String(h).padStart(2, "0");
+  return `${hh}:${mm}`;
+}
+
+function kioskOpFormatDurationPersian(totalSec) {
+  if (totalSec < 60) return "کمتر از ۱ دقیقه";
+  const m = Math.floor(totalSec / 60);
+  const h = Math.floor(m / 60);
+  const rem = m % 60;
+  if (h > 0) return `${h} ساعت و ${rem} دقیقه`;
+  return `${m} دقیقه`;
+}
+
+function kioskOpFreeUseReasonLabel(r) {
+  if (r.endedAtUtc) {
+    if (r.endReason === "manual") return "دستی";
+    if (r.endReason === "auto_idle") return "خودکار";
+    if (r.endReason === "restart") return "خاموش/ری‌استارت";
+    return r.endReason || "—";
+  }
+  if (r.noContact) return "بی‌ارتباط";
+  return "در جریان";
+}
+
+function kioskOpRenderFreeUseReport(body) {
+  const note =
+    '<p class="muted">این استفاده‌ها رایگان‌اند و در درآمد و جمع دریافتی حساب نمی‌شوند.</p>';
+  const totalDur = kioskOpFormatDurationPersian(body.totalDurationSeconds || 0);
+  let summary = `<p>${body.count} مورد — مجموع مدت: ${totalDur}</p>`;
+  if (body.openLiveCount > 0) {
+    summary += `<p class="muted">(${body.openLiveCount} مورد هنوز باز است و تا همین حالا حساب شده است.)</p>`;
+  }
+  if (body.noContactCount > 0) {
+    summary += `<p class="muted">(${body.noContactCount} مورد بی‌ارتباط است و تا آخرین ارتباط حساب شده است.)</p>`;
+  }
+  const restartNote = body.hasRestartEnd
+    ? '<p class="muted">برای «خاموش/ری‌استارت»، زمان پایان آخرین زمان فعالیت ثبت‌شدهٔ همان سیستم است.</p>'
+    : "";
+  const noContactNote =
+    (body.noContactCount || 0) > 0
+      ? '<p class="muted">برای «بی‌ارتباط»، مدت تا آخرین ارتباط سیستم با سرور حساب شده است.</p>'
+      : "";
+  const rows = (body.rows || []).map((r) => {
+    let duration = kioskOpFormatDurationPersian(r.durationSeconds || 0);
+    if (!r.endedAtUtc && r.noContact) duration = `${duration} تا آخرین ارتباط`;
+    else if (!r.endedAtUtc) duration = `${duration} تا الان`;
+    return [
+      r.stationId,
+      r.actorRole === "manager" ? "مدیر کیوسک" : "اپراتور کیوسک",
+      r.startedAtUtc,
+      r.endedAtUtc || "—",
+      duration,
+      kioskOpFreeUseReasonLabel(r),
+    ];
+  });
+  return (
+    `<h3>استفادهٔ رایگان کیوسک</h3>${note}${summary}${restartNote}${noContactNote}` +
+    renderReportsTable(
+      "استفادهٔ رایگان کیوسک",
+      ["PC", "اپراتور کیوسک", "شروع", "پایان", "مدت", "علت پایان"],
+      rows.length ? rows : [["—", "—", "—", "—", "—", "—"]]
+    )
+  );
+}
+
+bindClick("freeUseReportBtn", async () => {
+  const from = await jalaliToGregorian(
+    Number(document.getElementById("usageFromJy").value),
+    Number(document.getElementById("usageFromJm").value),
+    Number(document.getElementById("usageFromJd").value)
+  );
+  const to = await jalaliToGregorian(
+    Number(document.getElementById("usageToJy").value),
+    Number(document.getElementById("usageToJm").value),
+    Number(document.getElementById("usageToJd").value)
+  );
+  const range = gregorianDayRangeUtc(from);
+  const rangeTo = gregorianDayRangeUtc(to);
+  const body = await api(
+    `/api/operator/reports/free-use?fromUtc=${encodeURIComponent(range.fromUtc)}&toUtc=${encodeURIComponent(rangeTo.toUtc)}`
+  );
+  document.getElementById("reportsOut").innerHTML = kioskOpRenderFreeUseReport(body);
+});
+
+bindClick("mgrFreeIdleSaveBtn", async () => {
+  await kioskOpSaveFreeIdleMinutes();
+});
+
+const mgrFreeIdleInput = document.getElementById("mgrFreeIdleMinutes");
+if (mgrFreeIdleInput) {
+  mgrFreeIdleInput.addEventListener("input", () => kioskOpShowMgrFreeIdleErr(""));
+}
+// --- end K-OP ---
 // --- PC internet (operator panel) ---
 function pcInternetFormatToman(n) {
   if (n == null) return "—";

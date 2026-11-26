@@ -23,6 +23,9 @@ internal sealed class FakeKioskHubTransport : IKioskHubTransport
 
     public Func<CancellationToken, Task<KioskHeartbeatAck>>? HeartbeatHandler { get; set; }
 
+    /// <summary>When set, takes precedence over <see cref="HeartbeatHandler"/> and sees the request the kiosk sent.</summary>
+    public Func<KioskHeartbeatRequest, CancellationToken, Task<KioskHeartbeatAck>>? HeartbeatRequestHandler { get; set; }
+
     public HubConnectionState State => _state;
 
     public event Func<Exception?, Task>? Closed;
@@ -60,6 +63,12 @@ internal sealed class FakeKioskHubTransport : IKioskHubTransport
         if (methodName == "Heartbeat")
         {
             HeartbeatCallCount++;
+            if (HeartbeatRequestHandler is not null)
+            {
+                var requestAck = await HeartbeatRequestHandler((KioskHeartbeatRequest)arg1!, cancellationToken);
+                return (T)(object)requestAck;
+            }
+
             if (HeartbeatHandler is not null)
             {
                 var ack = await HeartbeatHandler(cancellationToken);

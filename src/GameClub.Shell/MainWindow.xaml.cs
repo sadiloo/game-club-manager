@@ -50,7 +50,7 @@ public partial class MainWindow : Window
     private readonly PanelNavigationPendingRegistry _panelNavigationPending = new();
     private readonly HashSet<ulong> _loopbackPanelNavigationTimedOutIds = new();
     private bool _probeOkPanelNavTimeoutCycleConsumed;
-    private DispatcherTimer? _loopbackPanelNavTimeoutTimer;
+    private LoopbackPanelNavTimeoutTimer? _loopbackPanelNavTimeoutTimer;
     private DispatcherTimer? _healthyPanelProbeTimer;
     private int _healthyProbeConsecutiveFailures;
     private Task? _exhaustedRecoveryRetryTask;
@@ -544,68 +544,57 @@ public partial class MainWindow : Window
         _ = TryHealthyRunningPanelProbeCoreAsync();
     }
 
+    private LoopbackPanelNavTimeoutTimer LoopbackPanelNavTimeout =>
+        _loopbackPanelNavTimeoutTimer ??= new LoopbackPanelNavTimeoutTimer(
+            new DispatcherPanelNavTimeoutScheduler(),
+            () => DateTime.UtcNow,
+            () => _closed,
+            () => _probeOkPanelNavTimeoutCycleConsumed,
+            utcNow => TryConfirmTimedOutLoopbackPanelNavigation(utcNow, fromTimer: true),
+            (DateTime utcNow, out TimeSpan age, out ulong navigationId) =>
+                _panelNavigationPending.TryGetOldestPendingLoopbackPanelNavigation(
+                    IsLoopbackPanelTarget,
+                    utcNow,
+                    out age,
+                    out navigationId),
+            LogOfflineTrace);
+
     private void ArmLoopbackPanelNavTimeoutTimer(ulong navigationId)
     {
-        CancelLoopbackPanelNavTimeoutTimer("rearm");
+        LoopbackPanelNavTimeout.Cancel("rearm");
         _probeOkPanelNavTimeoutCycleConsumed = false;
-        _loopbackPanelNavTimeoutTimer = new DispatcherTimer
-        {
-            Interval = PendingLoopbackPanelNavigationTimeoutPolicy.Deadline,
-        };
-        _loopbackPanelNavTimeoutTimer.Tick += OnLoopbackPanelNavTimeoutTick;
-        _loopbackPanelNavTimeoutTimer.Start();
-        LogOfflineTrace(
-            "panel-nav-timeout-arm",
-            $"id={navigationId} deadlineSec={PendingLoopbackPanelNavigationTimeoutPolicy.Deadline.TotalSeconds:F0}");
+        LoopbackPanelNavTimeout.Arm(navigationId);
     }
 
-    private void CancelLoopbackPanelNavTimeoutTimer(string reason = "cancel")
+    private void CancelLoopbackPanelNavTimeoutTimer(string reason = "cancel") =>
+        _loopbackPanelNavTimeoutTimer?.Cancel(reason);
+
+    /// <summary>Production <see cref="IPanelNavTimeoutScheduler"/>: a one-shot DispatcherTimer on the UI thread.</summary>
+    private sealed class DispatcherPanelNavTimeoutScheduler : IPanelNavTimeoutScheduler
     {
-        if (_loopbackPanelNavTimeoutTimer is null)
+        public IDisposable Schedule(TimeSpan dueIn, Action onFire) => new Handle(dueIn, onFire);
+
+        private sealed class Handle : IDisposable
         {
-            return;
+            private readonly DispatcherTimer _timer;
+            private readonly Action _onFire;
+
+            public Handle(TimeSpan dueIn, Action onFire)
+            {
+                _onFire = onFire;
+                _timer = new DispatcherTimer { Interval = dueIn };
+                _timer.Tick += OnTick;
+                _timer.Start();
+            }
+
+            public void Dispose()
+            {
+                _timer.Stop();
+                _timer.Tick -= OnTick;
+            }
+
+            private void OnTick(object? sender, EventArgs e) => _onFire();
         }
-
-        _loopbackPanelNavTimeoutTimer.Stop();
-        _loopbackPanelNavTimeoutTimer.Tick -= OnLoopbackPanelNavTimeoutTick;
-        _loopbackPanelNavTimeoutTimer = null;
-        LogOfflineTrace("panel-nav-timeout-cancel", $"reason={reason}");
-    }
-
-    private void OnLoopbackPanelNavTimeoutTick(object? sender, EventArgs e)
-    {
-        CancelLoopbackPanelNavTimeoutTimer("fired");
-        if (_closed)
-        {
-            LogOfflineTrace("panel-nav-timeout-skip", "reason=closed");
-            return;
-        }
-
-        if (_probeOkPanelNavTimeoutCycleConsumed)
-        {
-            LogOfflineTrace("panel-nav-timeout-skip", "reason=cycleConsumed");
-            return;
-        }
-
-        var utcNow = DateTime.UtcNow;
-        if (TryConfirmTimedOutLoopbackPanelNavigation(utcNow, fromTimer: true))
-        {
-            return;
-        }
-
-        if (!_panelNavigationPending.TryGetOldestPendingLoopbackPanelNavigation(
-                IsLoopbackPanelTarget,
-                utcNow,
-                out var age,
-                out var navigationId))
-        {
-            LogOfflineTrace("panel-nav-timeout-skip", "reason=no-pending");
-            return;
-        }
-
-        LogOfflineTrace(
-            "panel-nav-timeout-skip",
-            $"reason=not-due pendingId={navigationId} ageSec={age.TotalSeconds:F1}");
     }
 
     private bool TryConfirmTimedOutLoopbackPanelNavigation(DateTime utcNow, bool fromTimer)
