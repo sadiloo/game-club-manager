@@ -155,19 +155,24 @@ public sealed class WindowsKioskWpfSmokeTests
             Assert.Fail(setupError.ToString());
         }
 
-        const int expectedSeconds = 2_160;
         const long startWalletToman = 48_667;
+        // R10k: the live server prices the wallet with its SEEDED pc-normal tariff (PilotSeed bands on an
+        // installed server, TestHost harness window under kiosk integration CI) at the time of day the
+        // session runs. The expected value comes from that seed data, not from a hard-coded day rate.
+        var tariff = SeededPcBandTariff.ForLiveServerFromEnvironment();
         string capturedStatus = null;
         string lastPollStatusText = null;
         string pollFailureDiagnostics = null;
         Exception inProcessError = null;
+        var loginStartedUtc = DateTime.MinValue;
+        var capturedUtc = DateTime.MinValue;
         var at = GameClub.Billing.TehranTime.FromUtc(DateTime.UtcNow);
-        var card = new RateCardBuilder().AddBase("pc-normal", PlayMode.Online, null, 80_000).Build();
+        var card = SeededTariffRateCard(tariff);
         var stabilityLogin = Environment.GetEnvironmentVariable("WPF_STABILITY_LOGIN") ?? "fund48667";
         var account = new PcAccount(stabilityLogin, startWalletToman);
         var estimatorSeconds = (int)TimeSpan.FromMinutes(
             RemainingTimeEstimator.Estimate(account, "pc-normal", PlayMode.Online, 1, at, card, graceMinuteEnabled: true).MoneyMinutes!.Value).TotalSeconds;
-        Assert.Equal(expectedSeconds, estimatorSeconds);
+        Assert.Equal(tariff.ExpectedRemainingSeconds(startWalletToman, at.DateTime), estimatorSeconds);
 
         _wpf.RunAsync(async () =>
         {
@@ -181,6 +186,7 @@ public sealed class WindowsKioskWpfSmokeTests
                     var host = GetField(window, "_host");
                     await WpfLiveServerTransportHelper.WaitForKioskRuntimeTransportConnectedAsync(host, TimeSpan.FromSeconds(60));
                     var login = host.GetType().GetMethod("LoginAsync", BindingFlags.Instance | BindingFlags.Public);
+                    loginStartedUtc = DateTime.UtcNow;
                     await (Task)login.Invoke(host, new object[] { stabilityLogin, "pass" });
                     var status = (System.Windows.Controls.TextBlock)GetField(window, "StatusText");
                     var pollStartedUtc = DateTime.UtcNow;
@@ -193,6 +199,7 @@ public sealed class WindowsKioskWpfSmokeTests
                         if (text.Contains("مانده", StringComparison.Ordinal))
                         {
                             capturedStatus = text;
+                            capturedUtc = DateTime.UtcNow;
                             break;
                         }
 
@@ -242,7 +249,28 @@ public sealed class WindowsKioskWpfSmokeTests
             PersianDigitToInt(match.Groups[1].Value[0]) * 10 + PersianDigitToInt(match.Groups[1].Value[1]),
             PersianDigitToInt(match.Groups[2].Value[0]) * 10 + PersianDigitToInt(match.Groups[2].Value[1]),
             PersianDigitToInt(match.Groups[3].Value[0]) * 10 + PersianDigitToInt(match.Groups[3].Value[1])).TotalSeconds;
-        Assert.InRange(displayedSeconds, expectedSeconds - 1, expectedSeconds + 1);
+        // The server builds the display at an instant between login and capture. Expected seconds are
+        // taken at the session start (login); a seeded band edge (08:30 / 00:00) can only fall between
+        // login and capture in the rare case below, where the display was built at one of the two.
+        var loginTehran = GameClub.Billing.TehranTime.FromUtc(loginStartedUtc).DateTime;
+        var capturedTehran = GameClub.Billing.TehranTime.FromUtc(capturedUtc).DateTime;
+        var expectedSeconds = tariff.ExpectedRemainingSeconds(startWalletToman, loginTehran);
+        var expectedAtCapture = tariff.ExpectedRemainingSeconds(startWalletToman, capturedTehran);
+        StabStepLog.Write(
+            "within_one_tick_expected",
+            $"{tariff.Describe(startWalletToman, loginTehran)} captured_tehran={capturedTehran:HH:mm:ss} expected_at_capture={expectedAtCapture} displayed_seconds={displayedSeconds}");
+        if (expectedAtCapture != expectedSeconds)
+        {
+            Assert.True(
+                (displayedSeconds >= expectedSeconds - 1 && displayedSeconds <= expectedSeconds + 1)
+                || (displayedSeconds >= expectedAtCapture - 1 && displayedSeconds <= expectedAtCapture + 1),
+                $"Band edge between login and capture: displayed {displayedSeconds}s must be within one tick of {expectedSeconds}s (login) or {expectedAtCapture}s (capture). {tariff.Describe(startWalletToman, loginTehran)}");
+        }
+        else
+        {
+            Assert.InRange(displayedSeconds, expectedSeconds - 1, expectedSeconds + 1);
+        }
+
         StabStepLog.Write("within_one_tick_end", $"displayed_seconds={displayedSeconds}");
     }
 
@@ -276,15 +304,12 @@ public sealed class WindowsKioskWpfSmokeTests
             Assert.Fail(setupError.ToString());
         }
 
-        const int expectedSeconds = 1_740;
         const long startWalletToman = 48_667;
         var at = GameClub.Billing.TehranTime.FromUtc(DateTime.UtcNow);
-        var harnessSpecialHours = PcSpecialBandLiveRateCardHelper.HarnessPcNormalSpecialBandForLiveServer();
-        var card = new RateCardBuilder()
-            .AddBase("pc-normal", PlayMode.Online, null, 80_000)
-            .AddBand(harnessSpecialHours)
-            .AddBandRate(PilotSeed.PcNormalBandId, "pc-normal", PlayMode.Online, null, 100_000)
-            .Build();
+        var tariff = SeededPcBandTariff.ForLiveServerFromEnvironment();
+        Assert.True(tariff.InBand(at.DateTime.TimeOfDay), $"night line needs the harness band to cover now: {tariff.Describe(startWalletToman, at.DateTime)}");
+        var expectedSeconds = tariff.ExpectedRemainingSeconds(startWalletToman, at.DateTime);
+        var card = SeededTariffRateCard(tariff);
         var account = new PcAccount("fund48667-night", startWalletToman);
         var estimatorSeconds = (int)TimeSpan.FromMinutes(
             RemainingTimeEstimator.Estimate(account, "pc-normal", PlayMode.Online, 1, at, card, graceMinuteEnabled: true).MoneyMinutes!.Value).TotalSeconds;
@@ -369,6 +394,17 @@ public sealed class WindowsKioskWpfSmokeTests
             PersianDigitToInt(match.Groups[3].Value[0]) * 10 + PersianDigitToInt(match.Groups[3].Value[1])).TotalSeconds;
         Assert.InRange(displayedSeconds, expectedSeconds - 1, expectedSeconds + 1);
     }
+
+    private static RateCard SeededTariffRateCard(SeededPcBandTariff tariff) => new RateCardBuilder()
+        .AddBase(PilotSeed.PcNormalGroupId, PlayMode.Online, null, tariff.BaseHourlyToman)
+        .AddBand(new TimeBand(
+            PilotSeed.PcNormalBandId,
+            PilotSeed.PcNormalGroupId,
+            "Seeded PC special hours " + tariff.Source,
+            new GameClub.Billing.TimeOfDay(tariff.BandStart.Hours, tariff.BandStart.Minutes, tariff.BandStart.Seconds),
+            new GameClub.Billing.TimeOfDay(tariff.BandEnd.Hours, tariff.BandEnd.Minutes, tariff.BandEnd.Seconds)))
+        .AddBandRate(PilotSeed.PcNormalBandId, PilotSeed.PcNormalGroupId, PlayMode.Online, null, tariff.BandHourlyToman)
+        .Build();
 
     private static object GetField(object target, string name) =>
         target.GetType().GetField(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)!.GetValue(target)!;
