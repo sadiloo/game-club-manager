@@ -740,7 +740,7 @@ function Wait-InstallerServerApiPort {
 }
 
 function Start-InstallerCheckpointGuard {
-    param([int] $MaxAttempts = 10)
+    param([int] $MaxAttempts = 15)
     if (-not (Get-Service CheckpointGuard -ErrorAction SilentlyContinue)) {
         throw "CheckpointGuard service not registered"
     }
@@ -749,12 +749,16 @@ function Start-InstallerCheckpointGuard {
             $svc = Get-Service CheckpointGuard -ErrorAction Stop
             if ($svc.Status -ne "Stopped") {
                 Stop-Service CheckpointGuard -Force -ErrorAction SilentlyContinue
-                $stopBy = (Get-Date).AddSeconds(90)
+                $null = & sc.exe stop CheckpointGuard 2>&1
+                $stopBy = (Get-Date).AddSeconds(120)
                 while ((Get-Date) -lt $stopBy -and (Get-Service CheckpointGuard).Status -ne "Stopped") {
                     Start-Sleep -Seconds 1
                 }
             }
-            Start-Service CheckpointGuard -ErrorAction Stop
+            $null = & sc.exe start CheckpointGuard 2>&1
+            if ($LASTEXITCODE -ne 0) {
+                Start-Service CheckpointGuard -ErrorAction Stop
+            }
             $deadline = (Get-Date).AddSeconds(45)
             while ((Get-Date) -lt $deadline) {
                 if ((Get-Service CheckpointGuard).Status -eq "Running") {
