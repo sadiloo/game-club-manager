@@ -310,6 +310,45 @@ function Write-CheckpointSetupFailureRecord {
     Write-Host "CHECKPOINT_SETUP_FAILURE recorded exit=$InstallerExitCode phase=$Phase"
 }
 
+function Wait-CheckpointGuardRunning {
+    <#
+    R10j (BL-rr8-1, product ruling): kiosk Setup may report success only when CheckpointGuard is already Running;
+    the 60 s service recovery is not acceptable. Start-Service returns as soon as the SCM sees SERVICE_RUNNING,
+    which a Guard that dies right after OnStart also reaches, so a single Running sample is not enough: wait up to
+    TimeoutSeconds for Running to hold for StableSeconds. Stopped after the start request fails at once.
+    Returns @{ Ok; Reason; Status; ElapsedMs }. GetStatus/Sleep are injectable for the box static test.
+    #>
+    param(
+        [int] $TimeoutSeconds = 30,
+        [double] $StableSeconds = 5,
+        [int] $PollMilliseconds = 500,
+        [scriptblock] $GetStatus = { $s = Get-Service CheckpointGuard -ErrorAction SilentlyContinue; if ($s) { [string]$s.Status } else { "Missing" } },
+        [scriptblock] $Sleep = { param([int] $Ms) Start-Sleep -Milliseconds $Ms }
+    )
+    $clock = [System.Diagnostics.Stopwatch]::StartNew()
+    $runningSinceMs = -1
+    $status = "Unknown"
+    while ($true) {
+        $status = [string](& $GetStatus)
+        $now = [int]$clock.ElapsedMilliseconds
+        if ($status -eq "Running") {
+            if ($runningSinceMs -lt 0) { $runningSinceMs = $now }
+            if (($now - $runningSinceMs) -ge ($StableSeconds * 1000)) {
+                return @{ Ok = $true; Reason = "running_stable"; Status = $status; ElapsedMs = $now }
+            }
+        } else {
+            $runningSinceMs = -1
+            if ($status -eq "Stopped" -or $status -eq "Missing") {
+                return @{ Ok = $false; Reason = "guard_stopped_after_start"; Status = $status; ElapsedMs = $now }
+            }
+        }
+        if ($now -ge ($TimeoutSeconds * 1000)) {
+            return @{ Ok = $false; Reason = "guard_not_running_within_${TimeoutSeconds}s"; Status = $status; ElapsedMs = $now }
+        }
+        & $Sleep $PollMilliseconds
+    }
+}
+
 Export-ModuleMember -Function @(
     "Get-CheckpointUtf8NoBomEncoding",
     "Set-CheckpointUtf8NoBomFile",
@@ -331,5 +370,6 @@ Export-ModuleMember -Function @(
     "Get-CheckpointIranTimeZone",
     "Get-CheckpointSetupFailureIniPath",
     "Clear-CheckpointSetupFailureRecord",
-    "Write-CheckpointSetupFailureRecord"
+    "Write-CheckpointSetupFailureRecord",
+    "Wait-CheckpointGuardRunning"
 )

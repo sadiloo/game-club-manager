@@ -101,15 +101,30 @@ public static class RegistryPolicyStore
 
     public static void Repair() => EnsureDefaults();
 
+    /// <summary>R10j: true when <c>HKU\&lt;kiosk sid&gt;</c> is loaded (kiosk logged on or hive loaded).</summary>
+    public static bool KioskHiveLoaded()
+    {
+        var sid = Environment.GetEnvironmentVariable("CHECKPOINT_KIOSK_SID")?.Trim();
+        return KioskRegistryPolicyTemplate.SidConfigured(sid) && HiveLoaded(sid!);
+    }
+
+    private static bool HiveLoaded(string sid)
+    {
+        using var root = Registry.Users.OpenSubKey(sid, writable: false);
+        return root is not null;
+    }
+
     private static RegistryKey? OpenKioskHive(string relativePath, bool writable)
     {
         var sid = Environment.GetEnvironmentVariable("CHECKPOINT_KIOSK_SID")?.Trim();
-        if (!KioskRegistryPolicyTemplate.SidConfigured(sid))
+        // R10j (BL-rr8-1): never CreateSubKey under HKEY_USERS for an unloaded hive — that throws and, on the
+        // watchdog thread, terminated the CheckpointGuard service right after it reported Running.
+        var fullPath = KioskRegistryPolicyTemplate.ResolveWritableKioskPolicyPath(sid, relativePath, HiveLoaded);
+        if (fullPath is null)
         {
             return null;
         }
 
-        var fullPath = $"{sid}\\{relativePath}";
         return writable
             ? Registry.Users.CreateSubKey(fullPath, true)
             : Registry.Users.OpenSubKey(fullPath, writable: false);

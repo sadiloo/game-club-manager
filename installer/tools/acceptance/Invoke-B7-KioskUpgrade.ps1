@@ -50,11 +50,37 @@ function Get-B7RawJsonProperty {
     }
 }
 
+# R10j (BL-rr8-1) item 1a: on ANY B-7 failure, dump the evidence first (both Inno log tails, sc query/qc/qfailure
+# CheckpointGuard, the Guard watchdog log, System SCM + Application crash events), then rethrow the original error.
+. (Join-Path $PSScriptRoot "Get-CheckpointGuardDiagnostics.ps1")
+function Write-B7FailureDiagnostics {
+    param([string[]] $InnoLogs)
+    try {
+        foreach ($line in (Get-CheckpointGuardDiagnosticLines -InnoLogs $InnoLogs)) { Write-Host "B-7 diag: $line" }
+    } catch {
+        Write-Host "B-7 diag: diagnostics failed: $($_.Exception.Message)"
+    }
+}
+
+# R10j item 1d: Guard must be Running IMMEDIATELY when kiosk Setup returns success (product ruling: no 60 s recovery,
+# not the B-5 retry helper). One sample: no wait, no start, no restart.
+function Assert-B7GuardRunningNow {
+    param([string] $When)
+    $guard = Get-Service CheckpointGuard -ErrorAction SilentlyContinue
+    if (-not $guard) { throw "B-7: CheckpointGuard missing after $When" }
+    if ($guard.Status -ne "Running") {
+        throw "B-7: CheckpointGuard must be Running after $When; status=$($guard.Status)"
+    }
+}
+
 $setupPath = "C:\ProgramData\Checkpoint\kiosk\setup.json"
 
 $lowLog = Join-Path $LogsDir "b7-kiosk-low-install.log"
+$highLog = Join-Path $LogsDir "b7-kiosk-upgrade.log"
+try {
 $pLow = Start-Process -FilePath $LowKioskSetup -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/LOG=$lowLog") -Wait -PassThru
 if ($pLow.ExitCode -notin 0, 3010) { throw "B-7: low kiosk install exit $($pLow.ExitCode)" }
+Assert-B7GuardRunningNow -When "low install"
 Assert-InnoSetupLogNoFailedRuns -LogPath $lowLog
 Assert-KioskPostinstallCompleted -InnoLogPath $lowLog
 
@@ -72,9 +98,9 @@ $beforeServerBase = [string]$before.Json.serverBase
 $beforeCompleted = Get-B7RawJsonProperty -Raw $before.Raw -Name "completedAtUtc"
 if (-not $beforeCompleted.Present) { throw "B-7: setup.json has no completedAtUtc before the upgrade" }
 
-$highLog = Join-Path $LogsDir "b7-kiosk-upgrade.log"
 $p = Start-Process -FilePath $HighKioskSetup -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/LOG=$highLog") -Wait -PassThru
 if ($p.ExitCode -notin 0, 3010) { throw "B-7: upgrade exit $($p.ExitCode)" }
+Assert-B7GuardRunningNow -When "upgrade"
 Assert-InnoSetupLogNoFailedRuns -LogPath $highLog
 Assert-KioskPostinstallCompleted -InnoLogPath $highLog
 if (-not (Test-Path $setupPath)) { throw "B-7: setup.json missing after upgrade" }
@@ -84,11 +110,10 @@ if ($null -eq $setup -or [string]::IsNullOrWhiteSpace($setup.serverBase)) { thro
 if ([string]$setup.serverBase -ne $beforeServerBase) { throw "B-7: upgrade changed serverBase '$beforeServerBase' -> '$($setup.serverBase)'" }
 $afterCompleted = Get-B7RawJsonProperty -Raw $after.Raw -Name "completedAtUtc"
 if (-not $afterCompleted.Present -or -not [string]::Equals($afterCompleted.Token, $beforeCompleted.Token, [StringComparison]::Ordinal)) { throw "B-7: upgrade changed completedAtUtc $($beforeCompleted.Token) -> $($afterCompleted.Token)" }
-$guard = Get-Service CheckpointGuard -ErrorAction SilentlyContinue
-if (-not $guard) { throw "B-7: CheckpointGuard missing after upgrade" }
-if ($guard.Status -ne "Running") {
-    throw "B-7: CheckpointGuard must be Running after upgrade; status=$($guard.Status)"
-}
 $kioskUser = Get-LocalUser -Name "CheckpointKiosk" -ErrorAction SilentlyContinue
 if (-not $kioskUser) { throw "B-7: CheckpointKiosk user missing after upgrade" }
+} catch {
+    Write-B7FailureDiagnostics -InnoLogs @($lowLog, $highLog)
+    throw
+}
 Write-Host "B-7: ok serverBase=$($setup.serverBase) completedAtUtc=$($afterCompleted.Text) preserved"

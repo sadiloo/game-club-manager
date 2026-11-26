@@ -178,8 +178,14 @@ echo "== kiosk"
 fresh_prefix; run kiosk-ok "$KREL" ""
 expect kiosk-ok "exit 0" bash -c "[ $RC = 0 ] && [ '$CALLS' = 'kiosk,' ]"
 expect kiosk-ok "PowerShell output reaches the Inno log" has "FAKEPS phase=kiosk"
+expect kiosk-ok "R10j: success finish reached (positive control for kiosk-guard-150)" has "Need to restart Windows?"
 fresh_prefix; run kiosk-fail "$KREL" "kiosk 1"
 expect kiosk-fail "exit 150 + abort logged" bash -c "[ $RC = 150 ] && grep -q CHECKPOINT_KIOSK_POSTINSTALL_ABORT '$LOG'"
+# R10j (BL-rr8-1): kiosk-postinstall exits 150 (phase=guard-running) when CheckpointGuard is not Running after start;
+# Setup must exit 150 itself and must not reach its success finish.
+fresh_prefix; run kiosk-guard-150 "$KREL" "kiosk 150"
+expect kiosk-guard-150 "R10j: postinstall exit 150 => Setup exit 150, abort exit=150 logged" bash -c "[ $RC = 150 ] && grep -aq 'CHECKPOINT_KIOSK_POSTINSTALL_ABORT exit=150' '$LOG'"
+expect kiosk-guard-150 "R10j: Setup does not reach its success finish" hasnot "Need to restart Windows?"
 fresh_prefix; run kiosk-hooks "$KHK" "kiosk 150" /KIOSKPOSTINSTALLFAIL=1
 expect kiosk-hooks "hooks build runs, hook logged, exit 150" bash -c "[ $RC = 150 ] && grep -q 'CHECKPOINT_KIOSK_INTERNAL_TEST_HOOK fail=1' '$LOG'"
 

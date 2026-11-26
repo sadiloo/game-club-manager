@@ -148,4 +148,32 @@ public static class KioskRegistryPolicyTemplate
     }
 
     public static bool SidConfigured(string? sid) => !string.IsNullOrWhiteSpace(sid);
+
+    /// <summary>
+    /// R10j (BL-rr8-1): <c>HKU\&lt;sid&gt;</c> exists only while the kiosk profile hive is loaded (kiosk logon
+    /// or <c>reg load</c>). Windows cannot create a direct child of HKEY_USERS (RegCreateKeyEx), so a write
+    /// before the hive is loaded threw inside the Guard watchdog thread and terminated the service right
+    /// after Start-Service reported Running. Returns the HKU-relative path to write, or null when the SID is
+    /// not configured or its hive is not loaded (the caller skips the write and retries on its next loop).
+    /// </summary>
+    public static string? ResolveWritableKioskPolicyPath(string? sid, string relativePath, Func<string, bool> hiveLoaded)
+    {
+        if (hiveLoaded is null)
+        {
+            throw new ArgumentNullException(nameof(hiveLoaded));
+        }
+
+        var trimmed = sid?.Trim();
+        if (!SidConfigured(trimmed))
+        {
+            return null;
+        }
+
+        if (!hiveLoaded(trimmed!))
+        {
+            return null;
+        }
+
+        return $"{trimmed}\\{relativePath}";
+    }
 }

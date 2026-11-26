@@ -113,6 +113,18 @@ try {
     $q = sc.exe query CheckpointGuard 2>&1
     throw "Start-Service CheckpointGuard failed: $($_.Exception.Message); sc query: $q"
 }
+# R10j (BL-rr8-1, product ruling): Setup reports success only with Guard already Running (no 60 s recovery).
+Write-KioskInstallStep "wait CheckpointGuard Running (max 30s, stable 5s)"
+$guardWait = Wait-CheckpointGuardRunning -TimeoutSeconds 30 -StableSeconds 5
+if (-not $guardWait.Ok) {
+    $q = (sc.exe query CheckpointGuard 2>&1 | Out-String) -replace '\s+', ' '
+    $watchdogLog = Join-Path $env:ProgramData "Checkpoint\guard\watchdog.log"
+    $tail = ""
+    if (Test-Path -LiteralPath $watchdogLog) { $tail = (Get-Content -LiteralPath $watchdogLog -Tail 10 -ErrorAction SilentlyContinue) -join " | " }
+    Write-Host "kiosk-postinstall: CHECKPOINT_KIOSK_POSTINSTALL_ABORT phase=guard-running reason=$($guardWait.Reason) status=$($guardWait.Status) elapsed_ms=$($guardWait.ElapsedMs); sc query: $q; watchdog.log: $tail"
+    exit $script:CheckpointSetupExitFailKioskPostinstall
+}
+Write-KioskInstallStep "CheckpointGuard Running (stable, elapsed_ms=$($guardWait.ElapsedMs))"
 
 $bytes = [Text.Encoding]::UTF8.GetBytes($password)
 $fp = [System.BitConverter]::ToString([System.Security.Cryptography.SHA256]::Create().ComputeHash($bytes)).Replace("-", "").ToLowerInvariant()

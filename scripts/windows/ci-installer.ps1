@@ -164,6 +164,13 @@ $notListed = @($onDisk | Where-Object { $staticTests -notcontains $_ })
 if ($notListed.Count -gt 0) {
     throw "ci-installer: installer/tests files not run by ci-installer: $($notListed -join ', ')"
 }
+# R10j item 2 (rr8 D6/D8): lines a static test must print on Windows CI (its own proof, e.g. the cmd stub self-check).
+$staticTestRequiredLines = @{
+    "BackupRestoreConfig.Tests.ps1" = @(
+        '^BackupRestoreConfig: stub self-check ok \(cmd stubs, got/want\): pg_restore --list safety=6/6 ',
+        '^BackupRestoreConfig: stub self-check negative control ok \(cmd stubs\): a safety --list stub forced to 0 is reported \([2-9]\d* problems\)$'
+    )
+}
 foreach ($name in $staticTests) {
     $testPath = Join-Path $root "installer/tests/$name"
     if (-not (Test-Path -LiteralPath $testPath)) { throw "ci-installer: static test missing: $testPath" }
@@ -171,6 +178,14 @@ foreach ($name in $staticTests) {
     Write-Host "ci-installer: static test $name (pester=$isPester)"
     if ($isPester) {
         & (Join-Path $root "scripts/windows/Invoke-CheckpointPesterFile.ps1") -Path $testPath
+    } elseif ($staticTestRequiredLines.ContainsKey($name)) {
+        $testOutput = @(& $testPath 6>&1 | ForEach-Object { $text = "$_"; Write-Host $text; $text })
+        foreach ($pattern in $staticTestRequiredLines[$name]) {
+            if (-not @($testOutput | Where-Object { $_ -match $pattern }).Count) {
+                throw "ci-installer: static test $name did not print a line matching /$pattern/"
+            }
+        }
+        Write-Host "ci-installer: static test $name required lines ok ($($staticTestRequiredLines[$name].Count))"
     } else {
         & $testPath
     }

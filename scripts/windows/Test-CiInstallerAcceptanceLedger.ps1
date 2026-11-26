@@ -212,5 +212,27 @@ $b7OkSample = $b7Ok.Groups[1].Value -replace '\$\([^)]*\)', 'v'
 $b7Pattern = [regex]::Match($driverSrc, "Name = `"B7`";[^}]*OkPattern = '([^']+)'").Groups[1].Value
 if (-not $b7Pattern -or $b7Pattern -notmatch 'preserved\$$') { throw "ledger self-check: driver B7 OkPattern must end with preserved`$ (got '$b7Pattern')" }
 if ($b7OkSample -notmatch $b7Pattern) { throw "ledger self-check: B-7 ok line '$b7OkSample' does not match the driver OkPattern /$b7Pattern/" }
+# R10j (BL-rr8-1) item 1d: B-7 checks Guard Running IMMEDIATELY after each kiosk Setup returns (no wait, no retry
+# helper), and item 1a: any B-7 failure dumps both Inno logs + Guard evidence before rethrowing.
+$b7n = $b7 -replace "`r`n", "`n"
+foreach ($pair in @(
+        @('if ($pLow.ExitCode -notin 0, 3010) { throw "B-7: low kiosk install exit $($pLow.ExitCode)" }', 'Assert-B7GuardRunningNow -When "low install"'),
+        @('if ($p.ExitCode -notin 0, 3010) { throw "B-7: upgrade exit $($p.ExitCode)" }', 'Assert-B7GuardRunningNow -When "upgrade"'))) {
+    if ($b7n.IndexOf($pair[0] + "`n" + $pair[1] + "`n", [StringComparison]::Ordinal) -lt 0) { throw "ledger self-check: B-7 must check Guard Running right after Setup returns: $($pair[1])" }
+}
+$b7Assert = [regex]::Match($b7n, '(?s)\nfunction Assert-B7GuardRunningNow \{\n(.*?)\n\}\n')
+if (-not $b7Assert.Success -or $b7Assert.Groups[1].Value -notmatch [regex]::Escape('if ($guard.Status -ne "Running") {') -or
+    $b7Assert.Groups[1].Value -notmatch [regex]::Escape('throw "B-7: CheckpointGuard must be Running after $When; status=$($guard.Status)"') -or
+    $b7Assert.Groups[1].Value -match 'Start-Sleep|while|for \(|Start-Service|sc\.exe') {
+    throw "ledger self-check: Assert-B7GuardRunningNow must be one immediate Running check (no wait / retry / start)"
+}
+if ($b7 -match 'Start-InstallerCheckpointGuard|Start-Service|Restart-Service|Start-Sleep') { throw "ledger self-check: B-7 must not start, restart or wait for CheckpointGuard (R10j item 1d)" }
+if ($b7n -notmatch '(?m)^\} catch \{\n    Write-B7FailureDiagnostics -InnoLogs @\(\$lowLog, \$highLog\)\n    throw\n\}\nWrite-Host "B-7: ok ') { throw "ledger self-check: B-7 failures must dump diagnostics for both Inno logs and rethrow, right before the ok line" }
+if ($b7n -notmatch '(?m)^try \{\n\$pLow = Start-Process ') { throw "ledger self-check: the B-7 diagnostics try must start before the low install" }
+$gd = Get-Content -LiteralPath (Join-Path $realAcceptance "Get-CheckpointGuardDiagnostics.ps1") -Raw
+foreach ($pin in @('foreach ($verb in @("query", "qc", "qfailure"))', '[System.IO.Path]::Combine($programData, "Checkpoint\guard\watchdog.log")', 'LogName = "System"; ProviderName = "Service Control Manager"', "GameClub\.Kiosk\.Guard")) {
+    if ($gd.IndexOf($pin, [StringComparison]::Ordinal) -lt 0) { throw "ledger self-check: Guard diagnostics lost: $pin" }
+}
+Write-Host "ledger self-check: B-7 immediate Guard Running checks (low + upgrade) and failure diagnostics pinned"
 Write-Host "ledger self-check: phase-matrix pins path and B-7 upgrade/seed pins ok"
 Write-Host "ledger self-check: ok"

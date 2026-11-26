@@ -110,6 +110,27 @@ foreach ($pair in @(@("installer/README.md", $readme), @("docs/install/server-in
     }
 }
 
+# R10j item 2 (rr8 D6/D8): the BackupRestoreConfig stub self-check lines are the CI proof that the cmd stubs return
+# the configured exit codes. Each line must stay, unconditional, right after its failure gate (ci-installer.ps1 also
+# requires both lines in the test's real output).
+$brc = (Get-Content -LiteralPath (Join-Path $root "installer/tests/BackupRestoreConfig.Tests.ps1") -Raw) -replace "`r`n", "`n"
+$brcPins = @(
+    @{ Name = "stub self-check ok"; Gate = 'if ($stubProblems.Count -gt 0) { Write-Error ("BackupRestoreConfig: stub self-check FAILED ($stubKind stubs): " + ($stubProblems -join '' || '')) }'
+        Line = 'Write-Host "BackupRestoreConfig: stub self-check ok ($stubKind stubs, got/want): $stubObserved"' },
+    @{ Name = "negative control ok"; Gate = 'if ($tamperedProblems.Count -lt 2) { Write-Error "stub self-check negative control: a pg_restore stub that returns 0 for the safety --list was not reported (got $($tamperedProblems.Count) problems)" }'
+        Line = 'Write-Host "BackupRestoreConfig: stub self-check negative control ok ($stubKind stubs): a safety --list stub forced to 0 is reported ($($tamperedProblems.Count) problems)"' }
+)
+foreach ($pin in $brcPins) {
+    $pair = [regex]::Match($brc, '(?m)^(\s*)' + [regex]::Escape($pin.Gate) + '\n\1' + [regex]::Escape($pin.Line) + '$')
+    if (-not $pair.Success) { $errors += "BackupRestoreConfig: '$($pin.Name)' line must be printed unconditionally right after its failure gate: $($pin.Line)" }
+    if ([regex]::Matches($brc, [regex]::Escape($pin.Line)).Count -ne 1) { $errors += "BackupRestoreConfig: '$($pin.Name)' line must appear exactly once" }
+}
+$ciInstaller = Get-Content -LiteralPath (Join-Path $root "scripts/windows/ci-installer.ps1") -Raw
+foreach ($needle in @("'^BackupRestoreConfig: stub self-check ok \(cmd stubs, got/want\): pg_restore --list safety=6/6 '",
+        "'^BackupRestoreConfig: stub self-check negative control ok \(cmd stubs\): a safety --list stub forced to 0 is reported \([2-9]\d* problems\)$'")) {
+    if ($ciInstaller.IndexOf($needle, [StringComparison]::Ordinal) -lt 0) { $errors += "ci-installer: must require the BackupRestoreConfig output line $needle" }
+}
+
 if ($errors.Count -gt 0) {
     foreach ($e in $errors) { Write-Error "RecoveryAndSkipSessionStatic: $e" -ErrorAction Continue }
     throw "RecoveryAndSkipSessionStatic: $($errors.Count) rule(s) failed"

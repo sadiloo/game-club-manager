@@ -49,12 +49,28 @@ internal sealed class GuardService : ServiceBase
         var identity = KioskGuardIdentity.Resolve();
         if (!identity.IsResolved)
         {
+            // R10j: fail visibly (log + non-zero exit) instead of a silent self-stop; kiosk-postinstall then fails with 150.
+            GuardWatchdogLog.Append($"guard.service_identity_unresolved user={identity.UserName}");
+            ExitCode = 1;
             Stop();
             return;
         }
 
         _cts = new CancellationTokenSource();
-        _thread = new Thread(() => GuardWatchdog.Run(_cts.Token)) { IsBackground = true, Name = "CheckpointGuard" };
+        var token = _cts.Token;
+        _thread = new Thread(() =>
+        {
+            try
+            {
+                GuardWatchdog.Run(token);
+            }
+            catch (Exception ex)
+            {
+                // R10j: record why the watchdog died before the process terminates (SCM then reports Stopped).
+                GuardWatchdogLog.Append($"guard.watchdog_failed error={ex.GetType().Name}: {ex.Message}");
+                throw;
+            }
+        }) { IsBackground = true, Name = "CheckpointGuard" };
         _thread.Start();
     }
 

@@ -41,6 +41,16 @@ foreach ($b5Path in $b5Candidates) {
     break
 }
 
+# R10j (BL-rr8-1): kiosk B-7 Inno logs + CheckpointGuard service / log / event evidence.
+$guardDiag = Join-Path $root "installer/tools/acceptance/Get-CheckpointGuardDiagnostics.ps1"
+if (Test-Path -LiteralPath $guardDiag) {
+    . $guardDiag
+    $b7Logs = @("b7-kiosk-low-install.log", "b7-kiosk-upgrade.log") | ForEach-Object { Join-Path $artifactDir $_ }
+    foreach ($line in (Get-CheckpointGuardDiagnosticLines -InnoLogs $b7Logs)) { Add-DiagLine $line }
+} else {
+    Add-DiagLine "guard: (Get-CheckpointGuardDiagnostics.ps1 missing)"
+}
+
 foreach ($svc in @("CheckpointServer", "CheckpointPostgres")) {
     Add-DiagLine "=== sc query $svc ==="
     & sc.exe query $svc 2>&1 | ForEach-Object { Add-DiagLine "sc: $_" }

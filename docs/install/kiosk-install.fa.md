@@ -11,4 +11,4 @@
 | کد | معنی |
 |---|---|
 | 0 | نصب موفق |
-| 150 | شکست مرحلهٔ پس‌نصب کیوسک (`kiosk-postinstall.ps1`) |
+| 150 | شکست مرحلهٔ پس‌نصب کیوسک (`kiosk-postinstall.ps1`)؛ از جمله `phase=guard-running`: سرویس CheckpointGuard ظرف ۳۰ ثانیه پس از شروع در حال اجرا (Running) نماند |

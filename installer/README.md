@@ -70,6 +70,6 @@ Kept in release builds on purpose. It skips the open-session check on upgrade (s
 | Code | Meaning |
 |------|---------|
 | 0 | Success |
-| 150 | Post-install `kiosk-postinstall.ps1` failed |
+| 150 | Post-install `kiosk-postinstall.ps1` failed (incl. `phase=guard-running`: CheckpointGuard not Running and stable within 30 s after start) |
 
 Release installers must not ship internal test-hook code (see `installer/tests/ServerPayloadStatic.Tests.ps1`).
