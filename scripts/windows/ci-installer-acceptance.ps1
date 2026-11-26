@@ -1,17 +1,24 @@
 # Dot-sourced from ci-installer.ps1 - requires $acceptance, $accounts, $logRoot, setup paths, versions.
-# R10e/R10f leg ledger. ONE table below ($script:AcceptanceLegTable) is the only list of legs, and the expected leg
-# count is pinned next to it ($script:AcceptanceExpectedLegCount = 22): dropping a leg from the table fails before any
-# leg runs. Every leg runs through Invoke-AcceptanceLeg, which fails the job unless:
+# R10e/R10f/R10g leg ledger. ONE table below ($script:AcceptanceLegTable) is the only list of legs. The total is
+# derived from that table and must match two independent pins before any leg runs (R10g, rr5 S4): the pinned count
+# ($script:AcceptanceExpectedLegCount) AND the SHA-256 of the ordered leg names ($script:AcceptanceLegNamesSha256);
+# in addition every Invoke-*/Reset-* script in the acceptance folder must be used by a leg. Dropping a leg and editing
+# the count line to 21 therefore still fails. Every leg runs through Invoke-AcceptanceLeg, which fails the job unless:
+#   - every native call in the leg (and the acceptance scripts it dot-sources) dispositions its exit code before the
+#     next native call (AcceptanceNativeExitAudit.ps1): a native failure followed by a native success is not lost;
 #   - the leg printed its own ok marker;
-#   - the leg printed no skip/skipped/skipping/"not run" wording, except the allow-listed lines of THAT leg;
+#   - the leg printed no skip/skipped/skipping/"not run"/omitted/"n/a" wording, except the allow-listed lines of THAT leg;
 #   - the leg left no non-zero exit behind: `exit N` anywhere (also after the ok marker) or a native command's
 #     non-zero $LASTEXITCODE that the leg did not consume.
+# A failing leg prints "ci-acceptance: LEG FAIL <name> (exit N, phase X)" before the job fails.
 # At the end the ledger must list every leg exactly once.
 $ErrorActionPreference = "Stop"
 
+. (Join-Path $PSScriptRoot "AcceptanceNativeExitAudit.ps1")
 $script:AcceptanceLedger = [System.Collections.Generic.List[string]]::new()
 # R10f item 7: skip wording that fails a leg. "Skipped: 0" in a VSTest summary is not a skip (a skipped test is).
-$script:AcceptanceSkipPattern = '(?i)\bskip(s|ped|ping)?\b|\bnot\s+run\b'
+# R10g (rr5 L17): "omitted", "n/a" and "not applicable" are skip wording too.
+$script:AcceptanceSkipPattern = '(?i)\bskip(s|ped|ping)?\b|\bnot\s+run\b|\bomit(s|ted|ting)?\b|\bn/a\b|\bnot\s+applicable\b'
 $script:AcceptanceNotASkipPattern = '(?i)\bSkipped:\s*0\b'
 
 function Test-AcceptanceSkipLine([string] $Line) {
@@ -29,33 +36,52 @@ function Invoke-AcceptanceLeg {
         [string[]] $AllowedSkipLines = @()
     )
     Write-Host "ci-acceptance: LEG BEGIN $Name"
-    $sw = [System.Diagnostics.Stopwatch]::StartNew()
-    $lines = [System.Collections.Generic.List[string]]::new()
+    $phase = "native-audit"
     $global:LASTEXITCODE = 0
-    & (Join-Path $acceptance $Script) @Params *>&1 | ForEach-Object {
-        $line = "$_"
-        Write-Host $line
-        $lines.Add($line)
-    }
-    $legExit = $global:LASTEXITCODE
-    $sw.Stop()
-    $ok = @($lines | Where-Object { $_ -match $OkPattern })
-    if ($ok.Count -eq 0) {
-        throw "ci-acceptance: LEG $Name finished without its ok marker /$OkPattern/ (vacuous or skipped leg)"
-    }
-    $skips = @($lines | Where-Object { (Test-AcceptanceSkipLine $_) -and ($AllowedSkipLines -notcontains $_.Trim()) })
-    if ($skips.Count -gt 0) {
-        throw "ci-acceptance: LEG $Name printed a skip that is not allow-listed for this leg: $($skips -join ' | ')"
-    }
-    if ($null -ne $legExit -and $legExit -ne 0) {
-        throw "ci-acceptance: LEG $Name left a non-zero exit code $legExit (exit N or an unchecked native command) after printing '$($ok[-1].Trim())'"
+    try {
+        $legPath = Join-Path $acceptance $Script
+        $unchecked = @(Get-AcceptanceDotSourcedScripts $legPath | ForEach-Object { Get-AcceptanceUncheckedNativeCalls $_ })
+        if ($unchecked.Count -gt 0) {
+            throw "ci-acceptance: LEG $Name has native calls whose exit code is never checked before the next native call (a later success would hide the failure): $($unchecked -join ' | ')"
+        }
+        $phase = "run"
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
+        $lines = [System.Collections.Generic.List[string]]::new()
+        & $legPath @Params *>&1 | ForEach-Object {
+            $line = "$_"
+            Write-Host $line
+            $lines.Add($line)
+        }
+        $legExit = $global:LASTEXITCODE
+        $sw.Stop()
+        $phase = "ok-marker"
+        $ok = @($lines | Where-Object { $_ -match $OkPattern })
+        if ($ok.Count -eq 0) {
+            throw "ci-acceptance: LEG $Name finished without its ok marker /$OkPattern/ (vacuous or skipped leg)"
+        }
+        $phase = "skip"
+        $skips = @($lines | Where-Object { (Test-AcceptanceSkipLine $_) -and ($AllowedSkipLines -notcontains $_.Trim()) })
+        if ($skips.Count -gt 0) {
+            throw "ci-acceptance: LEG $Name printed a skip that is not allow-listed for this leg: $($skips -join ' | ')"
+        }
+        $phase = "exit-code"
+        if ($null -ne $legExit -and $legExit -ne 0) {
+            throw "ci-acceptance: LEG $Name left a non-zero exit code $legExit (exit N or an unchecked native command) after printing '$($ok[-1].Trim())'"
+        }
+    } catch {
+        # R10g item 3 (rr5 L-rr5-3): name the failed leg, its exit code and the phase that failed, then fail the job.
+        $failExit = if ($null -ne $global:LASTEXITCODE) { $global:LASTEXITCODE } else { 0 }
+        Write-Host "ci-acceptance: LEG FAIL $Name (exit $failExit, phase $phase)"
+        throw
     }
     $script:AcceptanceLedger.Add($Name)
     Write-Host ("ci-acceptance: LEG OK {0} marker='{1}' seconds={2}" -f $Name, $ok[-1].Trim(), [int]$sw.Elapsed.TotalSeconds)
 }
 
-# ---- THE leg list (single source of truth) and its pinned count -------------------------------------------------
+# ---- THE leg list (single source of truth) and its two independent pins ----------------------------------------
 $script:AcceptanceExpectedLegCount = 22
+# SHA-256 (lower-case hex) of the leg names in table order joined with "\n". Changing the leg list needs this pin too.
+$script:AcceptanceLegNamesSha256 = "15ff5b7a49b449ef9845da60d3f587f6123de038784b93e62ba8ced4c6264442"
 $script:AcceptanceLegTable = @(
     @{ Name = "Reset-1"; Script = "Reset-InstallerAcceptanceMachine.ps1"; OkPattern = '^Reset-InstallerAcceptanceMachine: ok$' }
     @{ Name = "B2-WithoutOpenSessions"; Script = "Invoke-B2-Upgrade.ps1"; OkPattern = '^B-2 \(WithoutOpenSessions\): ok$'; Params = @{
@@ -96,6 +122,18 @@ $dupLegs = @($expectedLegs | Group-Object | Where-Object { $_.Count -gt 1 } | Fo
 if ($expectedLegs.Count -ne $script:AcceptanceExpectedLegCount -or $dupLegs.Count -gt 0) {
     throw "ci-acceptance: leg table has $($expectedLegs.Count) legs (duplicates=[$($dupLegs -join ',')]); the pinned count is $($script:AcceptanceExpectedLegCount)"
 }
+$legNamesSha = [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($expectedLegs -join "`n"))).ToLowerInvariant()
+if ($legNamesSha -ne $script:AcceptanceLegNamesSha256) {
+    throw "ci-acceptance: leg names sha256 $legNamesSha does not match the pinned $($script:AcceptanceLegNamesSha256) (leg table has $($expectedLegs.Count) legs: $($expectedLegs -join ','))"
+}
+$legScripts = @($script:AcceptanceLegTable | ForEach-Object { $_.Script } | Sort-Object -Unique)
+$unusedScripts = @(Get-ChildItem -LiteralPath $acceptance -File -Filter "*.ps1" |
+    Where-Object { $_.Name -match '^(Invoke|Reset)-' -and $_.Name -ne "Invoke-AcceptanceCommon.ps1" -and $legScripts -notcontains $_.Name } |
+    ForEach-Object { $_.Name })
+if ($unusedScripts.Count -gt 0) {
+    throw "ci-acceptance: acceptance scripts not used by any leg: $($unusedScripts -join ',')"
+}
+Write-Host "ci-acceptance: leg table $($expectedLegs.Count) legs = pinned count $($script:AcceptanceExpectedLegCount), names sha256 $legNamesSha"
 
 foreach ($leg in $script:AcceptanceLegTable) {
     $legParams = if ($leg.ContainsKey("Params")) { $leg.Params } else { @{} }

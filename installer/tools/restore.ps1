@@ -28,26 +28,22 @@ $restoreLog = Join-Path $restoreLogDir "restore.log"
 $env:PGPASSWORD = $cfg.Password
 $pgDump = Get-CheckpointPgExecutable -Name "pg_dump"
 # DEF-20: the safety dump goes to a NEW file; if pg_dump fails or writes 0 bytes, only that file is removed (logged).
+# DEF-23: the same holds when pg_dump exits 0 but its output fails `pg_restore --list` (-VerifyReadable). Older dumps
+# are never touched.
 $safety = Invoke-CheckpointPgDumpNewFile -PgDump $pgDump -PgArgs @("-Fc", "-h", $cfg.Host, "-p", $cfg.Port, "-U", $cfg.Username, "-d", $cfg.Database) `
-    -OutFile $pre -Label "restore-safety" -Log {
+    -OutFile $pre -Label "restore-safety" -VerifyReadable -Log {
         param([string]$line)
         Write-Host $line
         Add-Content -LiteralPath $restoreLog -Value ("{0:o} {1}" -f (Get-Date), $line)
     }
 if (-not $safety.Ok) {
-    if ($safety.Empty) {
+    if ($safety.Unreadable) {
+        Write-Error "Safety dump is unreadable ($($safety.Detail)); restore aborted before --clean."
+    } elseif ($safety.Empty) {
         Write-Error "Safety pg_dump wrote an empty file; restore aborted."
     } else {
         Write-Error "Safety pg_dump failed with exit code $($safety.ExitCode); restore aborted."
     }
-    exit 1
-}
-
-try {
-    Test-PostgresDumpReadable -DumpPath $pre
-}
-catch {
-    Write-Error "Safety dump is unreadable ($($_.Exception.Message)); restore aborted before --clean."
     exit 1
 }
 

@@ -49,13 +49,22 @@ CHECKPOINT_POSTINSTALL_UPGRADE_LEFT_STOPPED recovery_command="D:\CheckpointServe
 یکی از این دو راه:
 
 1. **اجرای دوبارهٔ نصاب جدید** پس از رفع علت: همان فرمان `recovery_command=` را با دسترسی Administrator اجرا کنید (`"<نصاب جدید>" /SKIPSESSIONCHECK=1 /LOG="C:\ProgramData\Checkpoint\logs\setup-recovery.log"`). این اجرا پیش از به‌روزرسانی پایگاه داده، پشتیبان خودش را می‌گیرد.
-2. **برگشت به نسخهٔ قبل**: حذف برنامه، نصب نصاب نسخهٔ قبلی (پوشهٔ دادهٔ PostgreSQL باقی می‌ماند و دوباره به کار می‌رود — `CHECKPOINT_REINSTALL_KEPT_PGDATA` — و پیش از آن یک `pre-reinstall-kept-*.dump` گرفته می‌شود) و سپس بازیابی آخرین پشتیبان پیش از ارتقا (`C:\ProgramData\Checkpoint\backups\pre-upgrade-<نسخهٔ قبل>-<زمان>.dump` یا تازه‌ترین `checkpoint-*.dump`) با `powershell -ExecutionPolicy Bypass -File "C:\Program Files\Checkpoint\Server\tools\restore.ps1" -DumpPath "<فایل پشتیبان>"`.
+2. **برگشت به نسخهٔ قبل**. ترتیب مهم است: سرور نسخهٔ قدیمی هرگز نباید روی طرح (schema) جدیدتر پایگاه داده روشن شود؛ پس اول، در حالی که هیچ CheckpointServer روشن نیست، پشتیبان پیش از ارتقا بازیابی می‌شود و فقط بعد از آن نسخهٔ قدیمی نصب و روشن می‌شود. با دسترسی Administrator:
+   1. سرور را متوقف کنید و جلوی روشن شدن دوباره‌اش را بگیرید: `sc.exe config CheckpointServer start= disabled` و سپس `sc.exe stop CheckpointServer` (سرویس CheckpointPostgres روشن می‌ماند).
+   2. آخرین پشتیبان پیش از ارتقا (`C:\ProgramData\Checkpoint\backups\pre-upgrade-<نسخهٔ قبل>-<زمان>.dump` یا تازه‌ترین `checkpoint-*.dump` پیش از ارتقا) را با ابزار نصب‌شده بازیابی کنید: `powershell -ExecutionPolicy Bypass -File "C:\Program Files\Checkpoint\Server\tools\restore.ps1" -DumpPath "<فایل پشتیبان>"`. restore.ps1 اول پشتیبان `pre-restore-*.dump` خودش را می‌گیرد؛ تلاش آن برای روشن کردن CheckpointServer در پایان، تا وقتی سرویس غیرفعال است، اثری ندارد.
+   3. فقط حالا برنامه را حذف کنید (پوشهٔ داده باقی می‌ماند) و نصاب نسخهٔ قبلی `CheckpointServerSetup` را نصب کنید. نصاب دادهٔ PostgreSQL باقی‌مانده را که اکنون روی طرح قدیمی است دوباره به کار می‌برد (`CHECKPOINT_REINSTALL_KEPT_PGDATA`، پس از گرفتن `pre-reinstall-kept-*.dump`)، سرویس CheckpointServer را دوباره ثبت و نسخهٔ قدیمی را روشن می‌کند.
+   4. پیش از باز کردن دوبارهٔ مجموعه، نسخه و داده‌ها را بررسی کنید. پس از گام ۳، restore.ps1 را بدون متوقف کردن سرور دوباره اجرا نکنید.
+   این راه فقط مستند شده است و هنوز آزمون پذیرش خودکار ندارد.
 
 Setup و پشتیبان‌گیری روزانه هیچ پشتیبانی را پاک نمی‌کنند؛ اگر `pg_dump` شکست بخورد فقط فایل ناقص یا خالیِ همان اجرا پاک و در گزارش ثبت می‌شود (`CHECKPOINT_PGDUMP_FAILED ... action=removed_own_failed_output`) و پشتیبان تازه هرگز روی فایل موجود نوشته نمی‌شود.
 
 ### گزینهٔ `/SKIPSESSIONCHECK=1` (فقط برای بازیابی)
 
-عمداً در نسخهٔ انتشار مانده است. بررسی جلسه‌های باز در ارتقا را رد می‌کند (در حالت بی‌صدا کد ۱۳۱ و در حالت عادی پرسش جلسهٔ باز). فقط برای بازیابی به کار ببرید، وقتی سرور خاموش است و تعداد جلسه‌های باز خوانده نمی‌شود یا خودتان جلسه‌ها را بسته‌اید؛ در آن اجرا از جلسه‌های باز محافظت نمی‌شود. هر بار استفاده در گزارش ثبت می‌شود: `CHECKPOINT_SKIPSESSIONCHECK used=1 ...`. فقط مقدار `1` بررسی را رد می‌کند؛ `/SKIPSESSIONCHECK=0` یا هر مقدار دیگر نادیده گرفته و با `used=0` ثبت می‌شود. اگر ارتقای بی‌صدا به‌دلیل در دسترس نبودن سرور با کد ۱۳۱ متوقف شود، همان خط `CHECKPOINT_OPEN_SESSIONS_SILENT` فرمان `recovery_command=` را هم نشان می‌دهد.
+عمداً در نسخهٔ انتشار مانده است. بررسی جلسه‌های باز در ارتقا را رد می‌کند (در حالت بی‌صدا کد ۱۳۱ و در حالت عادی پرسش جلسهٔ باز). فقط برای بازیابی به کار ببرید، وقتی سرور خاموش است و تعداد جلسه‌های باز خوانده نمی‌شود یا خودتان جلسه‌ها را بسته‌اید؛ در آن اجرا از جلسه‌های باز محافظت نمی‌شود.
+
+- **فقط مقدار `1` بررسی را رد می‌کند** و هر بار استفاده در گزارش ثبت می‌شود: `CHECKPOINT_SKIPSESSIONCHECK used=1 value=1 context=silent-upgrade|interactive-upgrade note=operator recovery flag: ...`.
+- **هر مقدار دیگر نادیده گرفته می‌شود و «نادیده گرفته شد» در گزارش ثبت می‌شود**: `/SKIPSESSIONCHECK=0`، `=yes`، `=true` و مانند آن‌ها خط `CHECKPOINT_SKIPSESSIONCHECK used=0 value=<مقدار> ... note=ignored: only /SKIPSESSIONCHECK=1 skips the open-session check` را می‌نویسند و بررسی جلسه‌های باز مثل نبودن گزینه انجام می‌شود.
+- **ارتقای بی‌صدا با تعداد نامشخص جلسه‌ها با کد ۱۳۱ (131) متوقف می‌شود** (رفتار عمدی): بدون `/SKIPSESSIONCHECK=1`، ارتقای `/VERYSILENT` که نمی‌تواند تعداد جلسه‌ها را از سرور بپرسد (سرور در دسترس نیست) با کد 131 خارج می‌شود و خط `CHECKPOINT_OPEN_SESSIONS_SILENT reason=open_session_count_unknown_server_unreachable` را همراه با `recovery_command=` ثبت می‌کند.
 
 کیوسک: کد **۱۵۰** برای شکست پس‌نصب — [kiosk-install.fa.md](kiosk-install.fa.md).
 

@@ -78,6 +78,7 @@ if (-not (Test-Path -LiteralPath $shellExe)) {
     throw "B-1: $shellExe missing from the installed payload (ci-installer publishes GameClub.Shell into stage-server)"
 }
 $acl = icacls $shellExe 2>&1 | Out-String
+if ($LASTEXITCODE -ne 0) { throw "B-1: icacls $shellExe failed exit ${LASTEXITCODE}: $acl" }
 if ($acl -notmatch "Administrators") { throw "B-1: shell exe ACL unexpected" }
 Write-Host "B-1: shell exe ACL ok"
 

@@ -33,6 +33,7 @@ foreach ($d in $dumps | Select-Object -First 1) {
 
 $xmlPath = Join-Path $env:TEMP "checkpoint-daily-backup-task.xml"
 schtasks.exe /Query /TN CheckpointDailyBackup /XML | Set-Content -LiteralPath (Join-Path $LogsDir "b3-task.xml")
+if ($LASTEXITCODE -ne 0) { throw "B-3: schtasks /Query CheckpointDailyBackup /XML failed exit $LASTEXITCODE (task not registered?)" }
 $xml = Get-Content (Join-Path $LogsDir "b3-task.xml") -Raw
 if ($xml -notmatch "StartWhenAvailable") { throw "B-3: StartWhenAvailable missing" }
 if ($xml -notmatch "Iran Standard Time" -and $xml -notmatch "StartBoundary") {

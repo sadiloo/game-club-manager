@@ -33,11 +33,11 @@ foreach ($svc in @("CheckpointServer", "CheckpointPostgres")) {
         if ($s.Status -eq "Running") {
             Stop-Service $svc -Force -ErrorAction SilentlyContinue
         }
-        & sc.exe delete $svc 2>&1 | Out-Null
+        & sc.exe delete $svc 2>&1 | Out-Null # native-exit: ignored best effort, consumed below
     }
 }
 
-& schtasks.exe /Delete /TN CheckpointDailyBackup /F 2>$null | Out-Null
+& schtasks.exe /Delete /TN CheckpointDailyBackup /F 2>$null | Out-Null # native-exit: ignored the task may not exist, consumed below
 # R10f item 7: sc delete / schtasks /Delete are best effort (the service or task may not exist on a fresh runner). Their
 # non-zero exit is expected and consumed here, so the leg ledger's "no unchecked native exit" rule stays meaningful.
 $global:LASTEXITCODE = 0

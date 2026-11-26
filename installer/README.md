@@ -48,13 +48,22 @@ CHECKPOINT_POSTINSTALL_UPGRADE_LEFT_STOPPED recovery_command="D:\CheckpointServe
 Pick one:
 
 1. **Rerun the new installer** once the cause in the log is fixed: run the `recovery_command=` line from the log as Administrator (`"<new CheckpointServerSetup.exe>" /SKIPSESSIONCHECK=1 /LOG="C:\ProgramData\Checkpoint\logs\setup-recovery.log"`). It takes its own pre-upgrade backup before migrating.
-2. **Go back to the previous version**: uninstall (the data folder stays), install the previous `CheckpointServerSetup` (it reuses the kept PostgreSQL data, `CHECKPOINT_REINSTALL_KEPT_PGDATA`, after taking a `pre-reinstall-kept-*.dump`), then restore the last dump from before the upgrade (`C:\ProgramData\Checkpoint\backups\pre-upgrade-<oldVersion>-<stamp>.dump`, or the newest `checkpoint-*.dump`) with `powershell -ExecutionPolicy Bypass -File "C:\Program Files\Checkpoint\Server\tools\restore.ps1" -DumpPath "<dump>"`.
+2. **Go back to the previous version**. Order matters: the older CheckpointServer must never start on the newer database schema, so the pre-upgrade dump is restored FIRST, while no CheckpointServer runs, and only then is the older version installed and started. As Administrator:
+   1. Stop the server and keep it from starting again: `sc.exe config CheckpointServer start= disabled` then `sc.exe stop CheckpointServer` (CheckpointPostgres keeps running).
+   2. Restore the last dump from before the upgrade (`C:\ProgramData\Checkpoint\backups\pre-upgrade-<oldVersion>-<stamp>.dump`, or the newest `checkpoint-*.dump` from before the upgrade) with the installed tool: `powershell -ExecutionPolicy Bypass -File "C:\Program Files\Checkpoint\Server\tools\restore.ps1" -DumpPath "<dump>"`. restore.ps1 takes its own `pre-restore-*.dump` first; its attempt to start CheckpointServer at the end does nothing while the service is disabled.
+   3. Only now uninstall (the data folder stays) and install the previous `CheckpointServerSetup`. It reuses the kept PostgreSQL data, now on the old schema (`CHECKPOINT_REINSTALL_KEPT_PGDATA`, after taking a `pre-reinstall-kept-*.dump`), registers CheckpointServer again and starts the older version.
+   4. Check the version and your data before reopening the club. Do not run restore.ps1 again after step 3 without stopping the server first.
+   This path is documented only; it is not yet exercised by an automated acceptance leg.
 
 Backups are never deleted by Setup or by the backup task; a failed `pg_dump` removes only the partial or empty file it wrote itself in that run (`CHECKPOINT_PGDUMP_FAILED ... action=removed_own_failed_output`), and a new dump never reuses an existing file name.
 
 ### `/SKIPSESSIONCHECK=1` (operator recovery flag)
 
-Kept in release builds on purpose. It skips the open-session check on upgrade (silent: exit 131; interactive: the open-sessions question). Use it only for recovery, when CheckpointServer is stopped and the open-session count cannot be read, or when you have closed the sessions yourself: open sessions are **not** protected in that run. Every use is logged: `CHECKPOINT_SKIPSESSIONCHECK used=1 value=1 context=silent-upgrade|interactive-upgrade ...`. Only the value `1` skips: `/SKIPSESSIONCHECK=0` (or any other value) is ignored and logged as `CHECKPOINT_SKIPSESSIONCHECK used=0 value=...`. When a silent upgrade exits 131 because the server cannot be asked for the count, the `CHECKPOINT_OPEN_SESSIONS_SILENT reason=open_session_count_unknown_server_unreachable` line also prints the `recovery_command=`.
+Kept in release builds on purpose. It skips the open-session check on upgrade (silent: exit 131; interactive: the open-sessions question). Use it only for recovery, when CheckpointServer is stopped and the open-session count cannot be read, or when you have closed the sessions yourself: open sessions are **not** protected in that run.
+
+- **Only the value `1` skips**, and every use is logged: `CHECKPOINT_SKIPSESSIONCHECK used=1 value=1 context=silent-upgrade|interactive-upgrade note=operator recovery flag: ...`.
+- **Any other value is ignored and logged as ignored**: `/SKIPSESSIONCHECK=0`, `=yes`, `=true` and so on give `CHECKPOINT_SKIPSESSIONCHECK used=0 value=<value> ... note=ignored: only /SKIPSESSIONCHECK=1 skips the open-session check`, and the open-session check runs as if the flag were absent.
+- **A silent upgrade whose open-session count is unknown stops with 131** (intended behaviour): without `/SKIPSESSIONCHECK=1`, a `/VERYSILENT` upgrade that cannot ask the server for the count (server unreachable) exits 131 and logs `CHECKPOINT_OPEN_SESSIONS_SILENT reason=open_session_count_unknown_server_unreachable` together with the `recovery_command=`.
 
 ### Kiosk
 

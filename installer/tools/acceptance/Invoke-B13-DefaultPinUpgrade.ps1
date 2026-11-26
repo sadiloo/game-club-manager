@@ -41,6 +41,7 @@ try {
 if ($LASTEXITCODE -ne 0) { throw "B-13: psql pin update failed" }
 
 $check = & $serverExe --check-default-pins 2>&1 | Out-String
+if ($LASTEXITCODE -ne 0) { throw "B-13: --check-default-pins failed exit ${LASTEXITCODE}: $check" }
 if ($check -notmatch [regex]::Escape($operatorUser)) {
     throw "B-13: expected $operatorUser in --check-default-pins; got: $check"
 }
@@ -60,6 +61,7 @@ $procSetup = Start-CheckpointServerSetup -LegLabel "b13-default-pins" -Exe $Serv
 if ($procSetup.ExitCode -ne 0) { throw "B-13: upgrade exit $($procSetup.ExitCode)" }
 
 $checkAfter = & $serverExe --check-default-pins 2>&1 | Out-String
+if ($LASTEXITCODE -ne 0) { throw "B-13: --check-default-pins after upgrade failed exit ${LASTEXITCODE}: $checkAfter" }
 if ($checkAfter.Trim()) {
     throw "B-13: default pins remain: $checkAfter"
 }

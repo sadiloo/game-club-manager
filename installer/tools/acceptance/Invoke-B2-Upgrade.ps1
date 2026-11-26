@@ -69,8 +69,11 @@ if ($before.Customers -ne $after.Customers -or $before.Sessions -ne $after.Sessi
 if ($before.Invoices -ne $after.Invoices -or $before.WalletLedger -ne $after.WalletLedger) {
     throw "B-2: row count mismatch invoices/wallet_ledger"
 }
-if ($billingBefore.WalletLedgerSumToman -ne $billingAfter.WalletLedgerSumToman) {
-    throw "B-2: wallet ledger sum changed"
+if ($billingBefore.WalletLedgerRealSumToman -ne $billingAfter.WalletLedgerRealSumToman) {
+    throw "B-2: wallet ledger real money sum changed ($($billingBefore.WalletLedgerRealSumToman) -> $($billingAfter.WalletLedgerRealSumToman))"
+}
+if ($billingBefore.WalletLedgerGiftSumToman -ne $billingAfter.WalletLedgerGiftSumToman) {
+    throw "B-2: wallet ledger gift money sum changed ($($billingBefore.WalletLedgerGiftSumToman) -> $($billingAfter.WalletLedgerGiftSumToman))"
 }
 if ($billingBefore.LeaseKeyCount -ne $billingAfter.LeaseKeyCount) {
     throw "B-2: kiosk lease signing key count changed"

@@ -90,12 +90,15 @@ function Invoke-CheckpointPgDumpNewFile {
     # Runs pg_dump into a file that must NOT exist yet. If pg_dump fails (non-zero exit) or leaves a 0-byte file,
     # the partial/empty file THIS call created is removed and the failure is logged (DEF-17). Existing dumps are
     # never touched: the target is checked to be new before pg_dump starts.
+    # -VerifyReadable (R10g DEF-23, ruling: an unreadable dump is a failed dump under PO-3/PO-G): pg_dump exit 0 with
+    # bytes that `pg_restore --list` cannot read is a failure too, and that same-run output is removed and logged.
     param(
         [Parameter(Mandatory)][string]$PgDump,
         [Parameter(Mandatory)][string[]]$PgArgs,
         [Parameter(Mandatory)][string]$OutFile,
         [string]$Label = "pg_dump",
-        [scriptblock]$Log = { param([string]$line) Write-Host $line }
+        [scriptblock]$Log = { param([string]$line) Write-Host $line },
+        [switch]$VerifyReadable
     )
     if (Test-Path -LiteralPath $OutFile) {
         throw "${Label}: refusing to write over an existing file $OutFile"
@@ -104,10 +107,23 @@ function Invoke-CheckpointPgDumpNewFile {
     $code = $LASTEXITCODE
     $exists = Test-Path -LiteralPath $OutFile
     $bytes = if ($exists) { (Get-Item -LiteralPath $OutFile).Length } else { -1 }
-    if ($code -eq 0 -and $bytes -gt 0) {
-        return [pscustomobject]@{ Ok = $true; ExitCode = 0; Empty = $false; OutFile = $OutFile }
+    $reason = $null
+    $detail = $null
+    if ($code -ne 0) {
+        $reason = "exit=$code"
+    } elseif ($bytes -le 0) {
+        $reason = "empty_output"
+    } elseif ($VerifyReadable) {
+        try {
+            Test-PostgresDumpReadable -DumpPath $OutFile
+        } catch {
+            $reason = "unreadable"
+            $detail = $_.Exception.Message
+        }
     }
-    $reason = if ($code -ne 0) { "exit=$code" } else { "empty_output" }
+    if (-not $reason) {
+        return [pscustomobject]@{ Ok = $true; ExitCode = 0; Empty = $false; Unreadable = $false; Detail = $null; OutFile = $OutFile }
+    }
     if ($exists) {
         $ownFailedOutput = $OutFile
         Remove-Item -LiteralPath $ownFailedOutput -Force
@@ -115,5 +131,5 @@ function Invoke-CheckpointPgDumpNewFile {
     } else {
         & $Log "CHECKPOINT_PGDUMP_FAILED label=$Label $reason output=$OutFile action=no_output_written"
     }
-    return [pscustomobject]@{ Ok = $false; ExitCode = $code; Empty = ($code -eq 0); OutFile = $OutFile }
+    return [pscustomobject]@{ Ok = $false; ExitCode = $code; Empty = ($reason -eq "empty_output"); Unreadable = ($reason -eq "unreadable"); Detail = $detail; OutFile = $OutFile }
 }

@@ -397,13 +397,47 @@ try {
     }
     Remove-Item -LiteralPath $goodOld, $goodCp -Force
 
-    $safetyUnreadStub = New-StubPgBinaries -PgDumpExit 0 -FirstListExit 6
-    $r = Invoke-RestoreScript -ScriptPath $goldenRestore -DumpPath $inputDump -ServerJsonPath $jsonPath -WorkProgramData $workDir -Stub $safetyUnreadStub
-    if (-not $r.Error) { Write-Error "expected safety dump readability failure" }
-    if ($r.Error.Exception.Message -notmatch 'Safety dump is unreadable') {
-        Write-Error "unexpected safety readability message: $($r.Error.Exception.Message)"
+    # DEF-23 (ruling: an unreadable dump is a failed dump under PO-3/PO-G): pg_dump exits 0 but the same-run safety dump
+    # fails `pg_restore --list`. Restore aborts before --clean, removes THAT dump with a log line, and leaves every older
+    # dump byte-identical.
+    $def23 = {
+        param([string]$RestorePath, [string]$Tag)
+        $problems = [System.Collections.Generic.List[string]]::new()
+        Get-ChildItem -LiteralPath $bkDir -File -ErrorAction SilentlyContinue | Remove-Item -Force
+        [System.IO.File]::WriteAllBytes($goodOld, [byte[]](7, 7, 7))
+        [System.IO.File]::WriteAllBytes($goodCp, [byte[]](8, 8, 8, 8))
+        Remove-Item -LiteralPath $restoreLogPath -Force -ErrorAction SilentlyContinue
+        $stub = New-StubPgBinaries -PgDumpExit 0 -FirstListExit 6
+        $rr = Invoke-RestoreScript -ScriptPath $RestorePath -DumpPath $inputDump -ServerJsonPath $jsonPath -WorkProgramData $workDir -Stub $stub
+        if (-not $rr.Error -or $rr.Error.Exception.Message -notmatch 'Safety dump is unreadable') { $problems.Add("expected 'Safety dump is unreadable'; got $($rr.Error)") }
+        if ($rr.CleanRan) { $problems.Add("restore reached --clean") }
+        $left = @(Get-ChildItem -LiteralPath $bkDir -File | ForEach-Object { $_.Name } | Sort-Object)
+        if (($left -join ",") -ne "checkpoint-20250101-000000.000.dump,pre-restore-20250101-000000.dump") { $problems.Add("the same-run unreadable safety dump must be removed and nothing else; left=[$($left -join ',')]") }
+        if ((([System.IO.File]::ReadAllBytes($goodOld)) -join ",") -ne "7,7,7" -or (([System.IO.File]::ReadAllBytes($goodCp)) -join ",") -ne "8,8,8,8") { $problems.Add("older dumps changed") }
+        $logText = if (Test-Path -LiteralPath $restoreLogPath) { Get-Content -LiteralPath $restoreLogPath -Raw } else { "" }
+        $re = 'CHECKPOINT_PGDUMP_FAILED label=restore-safety unreadable output=\S+pre-restore-\d{8}-\d{6}(-\d+)?\.dump bytes=[1-9]\d* action=removed_own_failed_output'
+        if ($logText -notmatch $re) { $problems.Add("restore.log lacks /$re/; got [$logText]") }
+        return $problems.ToArray()
     }
-    if ($r.CleanRan) { Write-Error "restore must not reach --clean when safety dump is unreadable" }
+    $def23Problems = @(& $def23 $goldenRestore "golden")
+    if ($def23Problems.Count -gt 0) { Write-Error "DEF-23: $($def23Problems -join ' | ')" }
+    # Mutant: the pre-R10g restore.ps1 shape (readability checked after the helper, no -VerifyReadable) must fail it.
+    $def23MutDir = Join-Path $workDir "def23-mutant"
+    New-Item -ItemType Directory -Force -Path $def23MutDir | Out-Null
+    Copy-Item -LiteralPath (Join-Path (Split-Path $goldenRestore -Parent) "CheckpointDbConfig.ps1") -Destination $def23MutDir
+    $def23MutPath = Join-Path $def23MutDir "restore.ps1"
+    $restoreSrc = [System.IO.File]::ReadAllText($goldenRestore)
+    $restoreMut = $restoreSrc.Replace(' -VerifyReadable -Log {', ' -Log {')
+    if ($restoreMut -eq $restoreSrc) { Write-Error "DEF-23 mutant: -VerifyReadable not found in restore.ps1" }
+    $restoreMut = $restoreMut.Replace("try {`r`n    Test-PostgresDumpReadable -DumpPath `$DumpPath", "try { Test-PostgresDumpReadable -DumpPath `$pre } catch { Write-Error ""Safety dump is unreadable (`$(`$_.Exception.Message)); restore aborted before --clean.""; exit 1 }`r`ntry {`r`n    Test-PostgresDumpReadable -DumpPath `$DumpPath").Replace("try {`n    Test-PostgresDumpReadable -DumpPath `$DumpPath", "try { Test-PostgresDumpReadable -DumpPath `$pre } catch { Write-Error ""Safety dump is unreadable (`$(`$_.Exception.Message)); restore aborted before --clean.""; exit 1 }`ntry {`n    Test-PostgresDumpReadable -DumpPath `$DumpPath")
+    [System.IO.File]::WriteAllText($def23MutPath, $restoreMut, [System.Text.UTF8Encoding]::new($true))
+    try {
+        $mutProblems = @(& $def23 $def23MutPath "mutant")
+        if ($mutProblems.Count -eq 0) { Write-Error "DEF-23 mutant (safety dump kept) was not caught" }
+        elseif (-not ($mutProblems -match 'must be removed')) { Write-Error "DEF-23 mutant caught for the wrong reason: $($mutProblems -join ' | ')" }
+        else { Write-Host "DEF-23 mutant (same-run unreadable safety dump kept) caught: $($mutProblems[0])" }
+    } finally { Remove-Item -LiteralPath $def23MutDir -Recurse -Force -ErrorAction SilentlyContinue }
+    Get-ChildItem -LiteralPath $bkDir -File -ErrorAction SilentlyContinue | Remove-Item -Force
 
     $inputUnreadStub = New-StubPgBinaries -PgDumpExit 0 -FirstListExit 0 -SecondListExit 7
     $r = Invoke-RestoreScript -ScriptPath $goldenRestore -DumpPath $inputDump -ServerJsonPath $jsonPath -WorkProgramData $workDir -Stub $inputUnreadStub
@@ -424,7 +458,8 @@ try {
 
     Assert-MutantKilled -Name 'no-safety-readable' -SourcePath $goldenRestore -WorkDir $workDir -Transform {
         param($t)
-        $t -replace '(?ms)try \{\r?\n\s*Test-PostgresDumpReadable -DumpPath \$pre\r?\n\}\r?\ncatch \{\r?\n\s*Write-Error "Safety dump is unreadable[^"]*"\r?\n\s*exit 1\r?\n\}\r?\n\r?\n', ''
+        # R10g DEF-23: the safety dump's readability check lives in the helper (-VerifyReadable).
+        $t.Replace(' -VerifyReadable -Log {', ' -Log {')
     } -GoldenSafe {
         param([string]$ScriptPath)
         $stub = New-StubPgBinaries -PgDumpExit 0 -FirstListExit 6

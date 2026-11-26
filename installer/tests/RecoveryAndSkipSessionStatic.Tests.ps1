@@ -78,6 +78,27 @@ foreach ($pair in @(@("installer/README.md", $readme), @("docs/install/server-in
     foreach ($s in @("/SKIPSESSIONCHECK=1", "CHECKPOINT_SKIPSESSIONCHECK", "recovery_command=", "setup-recovery.log", "restore.ps1")) {
         if ($pair[1] -notmatch [regex]::Escape($s)) { $errors += "$($pair[0]): recovery section must mention $s" }
     }
+    # R10g item 7: /SKIPSESSIONCHECK doc pins (only =1 skips and is logged; others logged as ignored; unknown count -> 131).
+    # Checked inside the /SKIPSESSIONCHECK section itself (the exit-code table elsewhere also names the 131 reason).
+    $skipSec = [regex]::Match($pair[1], '(?ms)^### [^\r\n]*/SKIPSESSIONCHECK=1[^\r\n]*\r?\n.*?(?=^### |^\S[^\r\n]*kiosk-install\.fa\.md|\z)')
+    if (-not $skipSec.Success) { $errors += "$($pair[0]): /SKIPSESSIONCHECK section not found" }
+    foreach ($s in @("CHECKPOINT_SKIPSESSIONCHECK used=1", "CHECKPOINT_SKIPSESSIONCHECK used=0", "note=ignored: only /SKIPSESSIONCHECK=1 skips the open-session check",
+            "/SKIPSESSIONCHECK=0", "131", "reason=open_session_count_unknown_server_unreachable")) {
+        if ($skipSec.Value -notmatch [regex]::Escape($s)) { $errors += "$($pair[0]): /SKIPSESSIONCHECK section must mention $s" }
+    }
+    # R10g item 5: recovery path 2 order. Server stopped and disabled, THEN restore.ps1, THEN the previous Setup.
+    $p2 = [regex]::Match($pair[1], '(?ms)^2\. \*\*.*?(?=^\S|\z)')
+    if (-not $p2.Success) { $errors += "$($pair[0]): recovery path 2 not found" }
+    else {
+        $t = $p2.Value
+        $iDisable = $t.IndexOf("sc.exe config CheckpointServer start= disabled")
+        $iStop = $t.IndexOf("sc.exe stop CheckpointServer")
+        $iRestore = $t.IndexOf("restore.ps1")
+        $iReinstall = $t.IndexOf("CHECKPOINT_REINSTALL_KEPT_PGDATA")
+        if ($iDisable -lt 0 -or $iStop -lt 0 -or $iRestore -lt 0 -or $iReinstall -lt 0 -or -not ($iDisable -lt $iStop -and $iStop -lt $iRestore -and $iRestore -lt $iReinstall)) {
+            $errors += "$($pair[0]): recovery path 2 must stop+disable CheckpointServer, then restore.ps1, then install the previous version (disable=$iDisable stop=$iStop restore=$iRestore reinstall=$iReinstall)"
+        }
+    }
 }
 
 if ($errors.Count -gt 0) {

@@ -2,6 +2,8 @@
 # against fake leg scripts in a temp dir: all legs ok => passes; a leg without its ok marker, any skip wording that is not
 # allow-listed for THAT leg, a non-zero exit (exit N, also after the ok marker, or an unchecked native exit code), a
 # throwing leg, or a leg table that no longer has the pinned 22 legs => throws.
+# R10g: also a native failure hidden by a later native success, omitted / n/a wording, a 21/21 edit (leg dropped AND
+# count line changed), and every failure must print "ci-acceptance: LEG FAIL <name> (exit N, phase X)".
 $ErrorActionPreference = "Stop"
 $driver = Join-Path $PSScriptRoot "ci-installer-acceptance.ps1"
 $markers = [ordered]@{
@@ -28,7 +30,8 @@ $markers = [ordered]@{
 }
 
 function Invoke-LedgerCase {
-    param([string] $Label, [hashtable] $Override = @{}, [bool] $ExpectThrow, [string] $ExpectMessage = "", [scriptblock] $DriverTransform = $null)
+    param([string] $Label, [hashtable] $Override = @{}, [bool] $ExpectThrow, [string] $ExpectMessage = "", [scriptblock] $DriverTransform = $null,
+        [string] $ExpectFailLine = "")
     $dir = Join-Path ([IO.Path]::GetTempPath()) ("cp-ledger-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
     New-Item -ItemType Directory -Force -Path $dir | Out-Null
     try {
@@ -42,9 +45,11 @@ function Invoke-LedgerCase {
             $mut = & $DriverTransform $src
             if ($mut -eq $src) { throw "ledger self-check ${Label}: driver transform made no change" }
             $driverPath = Join-Path $dir "ci-installer-acceptance.mutant.ps1"
+            Copy-Item -LiteralPath (Join-Path $PSScriptRoot "AcceptanceNativeExitAudit.ps1") -Destination $dir
             Set-Content -LiteralPath $driverPath -Value $mut
         }
         $threw = $null
+        $out = [System.Collections.Generic.List[string]]::new()
         try {
             & {
                 $acceptance = $dir; $accounts = "a.json"; $logRoot = $dir; $root = $dir
@@ -52,12 +57,18 @@ function Invoke-LedgerCase {
                 $kioskLow = "kl.exe"; $kioskHigh = "kh.exe"; $kioskHighHooks = "khh.exe"
                 $lowVersion = "0.0.9"; $appVersion = "1.0.0"; $high2Version = "1.0.1"
                 . $driverPath
-            } *>&1 | Out-Null
+            } *>&1 | ForEach-Object { $out.Add("$_") }
         } catch { $threw = $_.Exception.Message }
         if ($ExpectThrow -and -not $threw) { throw "ledger self-check ${Label}: driver must fail but passed" }
         if (-not $ExpectThrow -and $threw) { throw "ledger self-check ${Label}: driver must pass but threw: $threw" }
         if ($ExpectThrow -and $ExpectMessage -and ($threw -notlike $ExpectMessage)) {
             throw "ledger self-check ${Label}: driver failed for the wrong reason; expected [$ExpectMessage] got [$threw]"
+        }
+        if ($ExpectFailLine) {
+            $failLines = @($out | Where-Object { $_ -like "ci-acceptance: LEG FAIL *" })
+            if ($failLines.Count -ne 1 -or $failLines[0] -ne $ExpectFailLine) {
+                throw "ledger self-check ${Label}: expected exactly the line [$ExpectFailLine], got [$($failLines -join ' | ')]"
+            }
         }
         Write-Host "ledger self-check: $Label ok$(if ($threw) { " (threw: $threw)" })"
     } finally {
@@ -77,7 +88,10 @@ Invoke-LedgerCase -Label "throwing leg" -ExpectThrow $true -ExpectMessage "Q5 bo
 Invoke-LedgerCase -Label "Write-Error leg" -ExpectThrow $true -ExpectMessage "*B-4 boom*" -Override @{ "Invoke-B4-UninstallReinstall.ps1" = $p + "`$ErrorActionPreference = 'Stop'; Write-Error 'B-4 boom'; Write-Host 'B-4: ok backup=x'" }
 # R10f item 7 (rr4 L-1): every case the review found uncaught.
 # A real native process exiting 3 (cmd.exe on the Windows runner; sh where the self-check runs on Linux pwsh).
-$native3 = "if (`$IsLinux -or `$IsMacOS) { & sh -c 'exit 3' } else { & cmd.exe /c 'exit 3' }`n"
+# R10g: ONE native call site (the native-exit audit counts call sites), so a case can add exactly one check or annotation.
+$nativeSetup = "`$nat = if (`$IsLinux -or `$IsMacOS) { @('sh', '-c') } else { @('cmd.exe', '/c') }`n"
+$native3 = $nativeSetup + "& `$nat[0] `$nat[1] 'exit 3'`n"
+$native3Ignored = $nativeSetup + "& `$nat[0] `$nat[1] 'exit 3' # native-exit: ignored self-check leaves the exit behind on purpose`n"
 Invoke-LedgerCase -Label "skipped wording" -ExpectThrow $true -ExpectMessage "ci-acceptance: LEG B1 printed a skip that is not allow-listed*" -Override @{ "Invoke-B1-CleanServerInstall.ps1" = $p + "Write-Host 'B-1: shell ACL pin skipped (no admin)'`nWrite-Host 'B-1: ok'" }
 Invoke-LedgerCase -Label "dash skip wording" -ExpectThrow $true -ExpectMessage "ci-acceptance: LEG B5 printed a skip that is not allow-listed*" -Override @{ "Invoke-B5-KioskInstall.ps1" = $p + "Write-Host '- skip kiosk ACL probe'`nWrite-Host 'B-5: ok length=1'" }
 Invoke-LedgerCase -Label "not run wording" -ExpectThrow $true -ExpectMessage "ci-acceptance: LEG B7 printed a skip that is not allow-listed*" -Override @{ "Invoke-B7-KioskUpgrade.ps1" = $p + "Write-Host 'B-7: guard restart check not run'`nWrite-Host 'B-7: ok serverBase=http://x'" }
@@ -85,13 +99,60 @@ Invoke-LedgerCase -Label "skipped test in a VSTest summary" -ExpectThrow $true -
 Invoke-LedgerCase -Label "VSTest summary with Skipped: 0 is not a skip" -ExpectThrow $false -Override @{ "Invoke-B6-B12-KioskFirstRun.ps1" = $p + "Write-Host 'Passed!  - Failed:     0, Passed:     4, Skipped:     0, Total:     4, Duration: 1 s'`nWrite-Host 'B-6 + B-12: ok'" }
 Invoke-LedgerCase -Label "allow-listed skip printed by another leg" -ExpectThrow $true -ExpectMessage "ci-acceptance: LEG R8f-PostinstallFail printed a skip that is not allow-listed for this leg*" -Override @{ "Invoke-R8f-PostinstallFail.ps1" = $p + "Write-Host 'R8f-phase-matrix fresh: skip webview2 (WebView2 runtime already installed on this runner)'`nWrite-Host 'R8f-1: ok'" }
 Invoke-LedgerCase -Label "exit 1 after the ok marker" -ExpectThrow $true -ExpectMessage "ci-acceptance: LEG B4 left a non-zero exit code 1*" -Override @{ "Invoke-B4-UninstallReinstall.ps1" = $p + "Write-Host 'B-4: ok backup=x'`nexit 1" }
-Invoke-LedgerCase -Label "native non-zero exit after the ok marker" -ExpectThrow $true -ExpectMessage "ci-acceptance: LEG B13 left a non-zero exit code 3*" -Override @{ "Invoke-B13-DefaultPinUpgrade.ps1" = $p + "Write-Host 'B-13: ok'`n" + $native3 }
-Invoke-LedgerCase -Label "unchecked native non-zero exit before the ok marker" -ExpectThrow $true -ExpectMessage "ci-acceptance: LEG B3-BackupFlags left a non-zero exit code 3*" -Override @{ "Invoke-B3-BackupFlags.ps1" = $p + $native3 + "Write-Host 'B-3-flags: ok'" }
+Invoke-LedgerCase -Label "native non-zero exit after the ok marker" -ExpectThrow $true -ExpectMessage "ci-acceptance: LEG B13 left a non-zero exit code 3*" -ExpectFailLine "ci-acceptance: LEG FAIL B13 (exit 3, phase exit-code)" -Override @{ "Invoke-B13-DefaultPinUpgrade.ps1" = $p + "Write-Host 'B-13: ok'`n" + $native3Ignored }
+Invoke-LedgerCase -Label "unchecked native non-zero exit before the ok marker" -ExpectThrow $true -ExpectMessage "ci-acceptance: LEG B3-BackupFlags left a non-zero exit code 3*" -Override @{ "Invoke-B3-BackupFlags.ps1" = $p + $native3Ignored + "Write-Host 'B-3-flags: ok'" }
+Invoke-LedgerCase -Label "unchecked native call (no check, no annotation)" -ExpectThrow $true -ExpectMessage "ci-acceptance: LEG B3-BackupFlags has native calls whose exit code is never checked*Invoke-B3-BackupFlags.ps1:3:*" -ExpectFailLine "ci-acceptance: LEG FAIL B3-BackupFlags (exit 0, phase native-audit)" -Override @{ "Invoke-B3-BackupFlags.ps1" = $p + $native3 + "Write-Host 'B-3-flags: ok'" }
 Invoke-LedgerCase -Label "expected native failure checked and consumed" -ExpectThrow $false -Override @{ "Reset-InstallerAcceptanceMachine.ps1" = $p + $native3 + "if (`$LASTEXITCODE -ne 3) { throw 'x' }`n`$global:LASTEXITCODE = 0`nWrite-Host 'Reset-InstallerAcceptanceMachine: ok'" }
+# R10g item 4 (rr5 L11b): a native failure followed by a native success. $LASTEXITCODE ends at 0, the leg must still fail.
+Invoke-LedgerCase -Label "native failure followed by a native success" -ExpectThrow $true -ExpectMessage "ci-acceptance: LEG B7 has native calls whose exit code is never checked*Invoke-B7-KioskUpgrade.ps1:3:*" -ExpectFailLine "ci-acceptance: LEG FAIL B7 (exit 0, phase native-audit)" -Override @{
+    "Invoke-B7-KioskUpgrade.ps1" = $p + $nativeSetup + "& `$nat[0] `$nat[1] 'exit 3'`n& `$nat[0] `$nat[1] 'exit 0'`nif (`$LASTEXITCODE -ne 0) { throw 'x' }`nWrite-Host 'B-7: ok serverBase=http://x'"
+}
+Invoke-LedgerCase -Label "native failure blindly reset (assignment is not a check), then a native success" -ExpectThrow $true -ExpectMessage "ci-acceptance: LEG B7 has native calls whose exit code is never checked*Invoke-B7-KioskUpgrade.ps1:3:*" -ExpectFailLine "ci-acceptance: LEG FAIL B7 (exit 0, phase native-audit)" -Override @{
+    "Invoke-B7-KioskUpgrade.ps1" = $p + $nativeSetup + "& `$nat[0] `$nat[1] 'exit 3'`n`$global:LASTEXITCODE = 0`n& `$nat[0] `$nat[1] 'exit 0'`nif (`$LASTEXITCODE -ne 0) { throw 'x' }`nWrite-Host 'B-7: ok serverBase=http://x'"
+}
+Invoke-LedgerCase -Label "native failure checked, then a native success" -ExpectThrow $false -Override @{
+    "Invoke-B7-KioskUpgrade.ps1" = $p + $nativeSetup + "& `$nat[0] `$nat[1] 'exit 3'`nif (`$LASTEXITCODE -ne 3) { throw 'x' }`n& `$nat[0] `$nat[1] 'exit 0'`nif (`$LASTEXITCODE -ne 0) { throw 'x' }`nWrite-Host 'B-7: ok serverBase=http://x'"
+}
+# R10g item 4 (rr5 L17): omitted / n/a / not applicable wording.
+Invoke-LedgerCase -Label "omitted (n/a) wording" -ExpectThrow $true -ExpectMessage "ci-acceptance: LEG B8 printed a skip that is not allow-listed*" -ExpectFailLine "ci-acceptance: LEG FAIL B8 (exit 0, phase skip)" -Override @{ "Invoke-B8-WindowsBillingRestart.ps1" = $p + "Write-Host 'B-8: pc billing check omitted'`nWrite-Host 'B-8: ok ps5=1 pc=1 cap=1'" }
+Invoke-LedgerCase -Label "n/a wording" -ExpectThrow $true -ExpectMessage "ci-acceptance: LEG B5 printed a skip that is not allow-listed*" -Override @{ "Invoke-B5-KioskInstall.ps1" = $p + "Write-Host 'B-5: ACL probe: n/a'`nWrite-Host 'B-5: ok length=1'" }
+Invoke-LedgerCase -Label "not applicable wording" -ExpectThrow $true -ExpectMessage "ci-acceptance: LEG B5 printed a skip that is not allow-listed*" -Override @{ "Invoke-B5-KioskInstall.ps1" = $p + "Write-Host 'B-5: ACL probe not applicable here'`nWrite-Host 'B-5: ok length=1'" }
+# R10g item 3: LEG FAIL line for a throwing leg and for a missing ok marker.
+Invoke-LedgerCase -Label "LEG FAIL line for a throwing leg" -ExpectThrow $true -ExpectMessage "Q5 boom" -ExpectFailLine "ci-acceptance: LEG FAIL Q5-SilentOpenSessions (exit 0, phase run)" -Override @{ "Invoke-Q5-SilentOpenSessions.ps1" = $p + "throw 'Q5 boom'" }
+Invoke-LedgerCase -Label "LEG FAIL line for a missing ok marker" -ExpectThrow $true -ExpectMessage "ci-acceptance: LEG B1 finished without its ok marker*" -ExpectFailLine "ci-acceptance: LEG FAIL B1 (exit 0, phase ok-marker)" -Override @{ "Invoke-B1-CleanServerInstall.ps1" = $p + "Write-Host 'B-1: nothing'" }
+Invoke-LedgerCase -Label "LEG FAIL line for exit 4 thrown after a failed native" -ExpectThrow $true -ExpectMessage "boom4" -ExpectFailLine "ci-acceptance: LEG FAIL B4 (exit 4, phase run)" -Override @{ "Invoke-B4-UninstallReinstall.ps1" = $p + $nativeSetup + "& `$nat[0] `$nat[1] 'exit 4'`nif (`$LASTEXITCODE -ne 0) { throw 'boom4' }" }
 Invoke-LedgerCase -Label "leg removed from the one leg table (21 legs)" -ExpectThrow $true -ExpectMessage "ci-acceptance: leg table has 21 legs*pinned count is 22" -DriverTransform {
     param($src) $src -replace '(?m)^\s*@\{ Name = "B13";[^\r\n]*\r?\n', ''
 }
 Invoke-LedgerCase -Label "leg duplicated in the leg table (23 legs)" -ExpectThrow $true -ExpectMessage "ci-acceptance: leg table has 23 legs (duplicates=``[B13``])*" -DriverTransform {
     param($src) $src -replace '(?m)^(\s*@\{ Name = "B13";[^\r\n]*\r?\n)', '$1$1'
 }
+# R10g item 4 (rr5 S4): dropping a leg AND editing the count line to 21 must still fail (names sha256 pin).
+Invoke-LedgerCase -Label "21/21 edit: leg dropped and count line changed" -ExpectThrow $true -ExpectMessage "ci-acceptance: leg names sha256 * does not match the pinned *" -DriverTransform {
+    param($src) ($src -replace '(?m)^\s*@\{ Name = "R8f-InvalidAccounts";[^\r\n]*\r?\n', '') -replace 'AcceptanceExpectedLegCount = 22', 'AcceptanceExpectedLegCount = 21'
+}
+# ... and with the sha pin edited too, the unused leg script still fails it.
+Invoke-LedgerCase -Label "21/21 edit with the sha pin recomputed: leg script unused" -ExpectThrow $true -ExpectMessage "ci-acceptance: acceptance scripts not used by any leg: Invoke-R8f-InvalidAccounts.ps1" -DriverTransform {
+    param($src)
+    $m = ($src -replace '(?m)^\s*@\{ Name = "R8f-InvalidAccounts";[^\r\n]*\r?\n', '') -replace 'AcceptanceExpectedLegCount = 22', 'AcceptanceExpectedLegCount = 21'
+    $names = [regex]::Matches($m, '(?m)^\s*@\{ Name = "([^"]+)"') | ForEach-Object { $_.Groups[1].Value }
+    $sha = [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($names -join "`n"))).ToLowerInvariant()
+    $m -replace 'AcceptanceLegNamesSha256 = "[0-9a-f]{64}"', ('AcceptanceLegNamesSha256 = "' + $sha + '"')
+}
+# R10g: the REAL acceptance scripts pass the native-exit audit (the driver also refuses them per leg on Windows), and a
+# real check removed again (B-1 icacls) is found.
+. (Join-Path $PSScriptRoot "AcceptanceNativeExitAudit.ps1")
+$realAcceptance = Join-Path $PSScriptRoot "..\..\installer\tools\acceptance"
+$realFindings = @(Get-ChildItem -LiteralPath $realAcceptance -Filter "*.ps1" -File | ForEach-Object { Get-AcceptanceUncheckedNativeCalls $_.FullName })
+if ($realFindings.Count -ne 0) { throw "ledger self-check: real acceptance scripts have unchecked native calls: $($realFindings -join ' | ')" }
+$b1 = Get-Content -LiteralPath (Join-Path $realAcceptance "Invoke-B1-CleanServerInstall.ps1") -Raw
+$b1Mut = $b1 -replace '(?m)^if \(\$LASTEXITCODE -ne 0\) \{ throw "B-1: icacls[^\r\n]*\r?\n', ''
+if ($b1Mut -eq $b1) { throw "ledger self-check: B-1 icacls check not found for the audit negative control" }
+$tmpB1 = Join-Path ([IO.Path]::GetTempPath()) ("cp-audit-" + [guid]::NewGuid().ToString("N").Substring(0, 8) + ".ps1")
+try {
+    Set-Content -LiteralPath $tmpB1 -Value $b1Mut
+    $neg = @(Get-AcceptanceUncheckedNativeCalls $tmpB1)
+    if ($neg.Count -ne 1 -or $neg[0] -notmatch 'icacls') { throw "ledger self-check: audit missed the unchecked icacls: [$($neg -join ' | ')]" }
+} finally { Remove-Item -LiteralPath $tmpB1 -Force -ErrorAction SilentlyContinue }
+Write-Host "ledger self-check: real acceptance scripts native-exit audit ok (negative control icacls found)"
 Write-Host "ledger self-check: ok"

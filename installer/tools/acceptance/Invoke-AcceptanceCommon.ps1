@@ -141,7 +141,7 @@ function Write-InnoSetupHangDiagnostics {
             }
     }
     foreach ($svc in @("CheckpointServer", "CheckpointPostgres")) {
-        & sc.exe query $svc 2>&1 | ForEach-Object { Write-Host "installer hang diagnostics: sc $svc $_" }
+        & sc.exe query $svc 2>&1 | ForEach-Object { Write-Host "installer hang diagnostics: sc $svc $_" } # native-exit: ignored diagnostics only (the service may not exist)
     }
     if ($LogPath -and (Test-Path -LiteralPath $LogPath)) {
         Write-Host "installer hang diagnostics: === tail $LogPath ==="
@@ -593,7 +593,12 @@ function Remove-InstallerB6PrefixedTestDatabase {
     $pw = $m.Groups[1].Value
     $psql = Get-InstallerPsqlExecutable
     $env:PGPASSWORD = $pw
-    $null = & $psql -h 127.0.0.1 -p 5433 -U postgres -d postgres -c "DROP DATABASE IF EXISTS `"$DatabaseName`" WITH (FORCE);" 2>&1
+    $out = & $psql -h 127.0.0.1 -p 5433 -U postgres -d postgres -c "DROP DATABASE IF EXISTS `"$DatabaseName`" WITH (FORCE);" 2>&1
+    # R10g: cleanup of the acceptance-only test DB is best effort, but a failure is visible and does not leave a stale exit.
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "installer acceptance: drop of test database $DatabaseName failed (exit $LASTEXITCODE, best effort): $out"
+        $global:LASTEXITCODE = 0
+    }
 }
 
 function Invoke-WithInstallerKioskServerVerifyTestEnvironment {
@@ -671,7 +676,7 @@ function Write-InstallerAcceptanceFailureDiagnostics {
         $s = Get-Service $svcName -ErrorAction SilentlyContinue
         if ($s) {
             Write-Host "installer acceptance diagnostics: Status=$($s.Status) StartType=$($s.StartType)"
-            & sc.exe query $svcName 2>&1 | ForEach-Object { Write-Host "installer acceptance diagnostics: $_" }
+            & sc.exe query $svcName 2>&1 | ForEach-Object { Write-Host "installer acceptance diagnostics: $_" } # native-exit: ignored diagnostics only
         } else {
             Write-Host "installer acceptance diagnostics: service not registered"
         }
@@ -785,6 +790,8 @@ function Start-InstallerCheckpointGuard {
             if ($svc.Status -ne "Stopped") {
                 Stop-Service CheckpointGuard -Force -ErrorAction SilentlyContinue
                 $null = & sc.exe stop CheckpointGuard 2>&1
+                # R10g: Stop-Service above already asked; the loop below waits for Stopped either way.
+                if ($LASTEXITCODE -ne 0) { Write-Host "CheckpointGuard restart: sc stop exit $LASTEXITCODE (waiting for Stopped)" }
                 $stopBy = (Get-Date).AddSeconds(120)
                 while ((Get-Date) -lt $stopBy -and (Get-Service CheckpointGuard).Status -ne "Stopped") {
                     Start-Sleep -Seconds 1
@@ -962,7 +969,8 @@ function Get-InstallerBillingFingerprint {
     $env:PGPASSWORD = $pw
     $q = @"
 SELECT
- coalesce((SELECT sum("AmountToman") FROM wallet_ledger), 0),
+ coalesce((SELECT sum("RealDeltaToman") FROM wallet_ledger), 0),
+ coalesce((SELECT sum("GiftDeltaToman") FROM wallet_ledger), 0),
  (SELECT count(*) FROM kiosk_lease_signing_keys),
  coalesce((SELECT left("LeaseVerifyPublicKeyPem", 32) FROM kiosk_devices LIMIT 1), '');
 "@
@@ -975,11 +983,15 @@ SELECT
         $ErrorActionPreference = $oldEap
     }
     if ($LASTEXITCODE -ne 0) { throw "psql billing fingerprint failed: $out" }
-    $parts = $out.Trim() -split '\|'
+    # R10g BL-rr5-1: wallet_ledger has no "AmountToman"; real and gift money are separate columns, summed and compared
+    # separately (a shift between real and gift money must still fail B-2).
+    $parts = ([string]($out | Out-String)).Trim() -split '\|'
+    if ($parts.Count -ne 4) { throw "psql billing fingerprint: expected 4 fields, got $($parts.Count): $out" }
     return [PSCustomObject]@{
-        WalletLedgerSumToman = [int64]$parts[0]
-        LeaseKeyCount        = [int]$parts[1]
-        DeviceLeaseKeyPrefix = [string]$parts[2]
+        WalletLedgerRealSumToman = [int64]$parts[0]
+        WalletLedgerGiftSumToman = [int64]$parts[1]
+        LeaseKeyCount            = [int]$parts[2]
+        DeviceLeaseKeyPrefix     = [string]$parts[3]
     }
 }
 
