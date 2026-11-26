@@ -39,6 +39,11 @@ foreach ($svc in @("CheckpointServer", "CheckpointPostgres")) {
 
 & schtasks.exe /Delete /TN CheckpointDailyBackup /F 2>$null | Out-Null
 
+$staleFailPhase = Join-Path "C:\ProgramData\Checkpoint\config" ".internal-test-fail-phase"
+if (Test-Path -LiteralPath $staleFailPhase) {
+    Remove-Item -LiteralPath $staleFailPhase -Force
+}
+
 foreach ($dir in @("pgdata", "backups", "config")) {
     $p = Join-Path "C:\ProgramData\Checkpoint" $dir
     if (Test-Path -LiteralPath $p) {
