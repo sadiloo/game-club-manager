@@ -79,11 +79,11 @@ public sealed class InpageFormsPr51R14oTests(GameClubWebApplicationFactory facto
         var confirm = await op.PostAsJsonAsync(confirmPath, new { previewCollectibleToman = 0L, payments });
         Assert.Equal(HttpStatusCode.BadRequest, preview.StatusCode);
         Assert.Equal(HttpStatusCode.BadRequest, confirm.StatusCode);
-        var previewMsg = (await preview.Content.ReadFromJsonAsync<JsonElement>())!.GetProperty("message").GetString();
-        var confirmMsg = (await confirm.Content.ReadFromJsonAsync<JsonElement>())!.GetProperty("message").GetString();
-        Assert.Equal(previewMsg, confirmMsg);
-        Assert.Contains("۰", previewMsg, StringComparison.Ordinal);
-        Assert.Contains("تومان", previewMsg, StringComparison.Ordinal);
+        var previewBody = (await preview.Content.ReadFromJsonAsync<JsonElement>())!;
+        var confirmBody = (await confirm.Content.ReadFromJsonAsync<JsonElement>())!;
+        AssertPaymentInvalidPayableZero(previewBody);
+        AssertPaymentInvalidPayableZero(confirmBody);
+        Assert.Equal(previewBody.GetProperty("message").GetString(), confirmBody.GetProperty("message").GetString());
         using var scope = factory.Services.CreateScope();
         Assert.Equal(0, await scope.ServiceProvider.GetRequiredService<AppDbContext>()
             .Invoices.CountAsync(i => i.SessionId == sessionId));
@@ -107,14 +107,22 @@ public sealed class InpageFormsPr51R14oTests(GameClubWebApplicationFactory facto
             new { previewCollectibleToman = 0L, payments });
         Assert.Equal(HttpStatusCode.BadRequest, preview.StatusCode);
         Assert.Equal(HttpStatusCode.BadRequest, confirm.StatusCode);
-        Assert.Equal(
-            (await preview.Content.ReadFromJsonAsync<JsonElement>())!.GetProperty("message").GetString(),
-            (await confirm.Content.ReadFromJsonAsync<JsonElement>())!.GetProperty("message").GetString());
+        var previewBody = (await preview.Content.ReadFromJsonAsync<JsonElement>())!;
+        var confirmBody = (await confirm.Content.ReadFromJsonAsync<JsonElement>())!;
+        AssertPaymentInvalidPayableZero(previewBody);
+        AssertPaymentInvalidPayableZero(confirmBody);
+        Assert.Equal(previewBody.GetProperty("message").GetString(), confirmBody.GetProperty("message").GetString());
     }
 
     [Fact]
     public async Task gate_mutant_r14o_zero_bill_wallet_preview_bypass_kills_parity_pin()
     {
         await r14o_zero_bill_wallet_only_preview_confirm_same_400_payable_zero();
+    }
+
+    private static void AssertPaymentInvalidPayableZero(JsonElement body)
+    {
+        Assert.Equal("payment_invalid", body.GetProperty("code").GetString());
+        Assert.Equal("مبلغ قابل پرداخت ۰ تومان است", body.GetProperty("message").GetString());
     }
 }

@@ -28,9 +28,8 @@ public sealed class KioskFixR6AcceptanceTests(GameClubWebApplicationFactory fact
             payments = new[] { new { method = "Wallet", amountToman = 500L } },
         });
         Assert.Equal(HttpStatusCode.BadRequest, preview.StatusCode);
-        var message = (await preview.Content.ReadFromJsonAsync<JsonElement>())!.GetProperty("message").GetString();
-        Assert.Contains("۰", message, StringComparison.Ordinal);
-        Assert.Contains("تومان", message, StringComparison.Ordinal);
+        var body = (await preview.Content.ReadFromJsonAsync<JsonElement>())!;
+        AssertPaymentInvalidPayableZero(body);
     }
 
     [Fact]
@@ -43,9 +42,14 @@ public sealed class KioskFixR6AcceptanceTests(GameClubWebApplicationFactory fact
             payments = new[] { new { method = "Wallet", amountToman = 500L } },
         });
         Assert.Equal(HttpStatusCode.BadRequest, preview.StatusCode);
-        var message = (await preview.Content.ReadFromJsonAsync<JsonElement>())!.GetProperty("message").GetString();
-        Assert.Contains("۰", message, StringComparison.Ordinal);
-        Assert.Contains("تومان", message, StringComparison.Ordinal);
+        var body = (await preview.Content.ReadFromJsonAsync<JsonElement>())!;
+        AssertPaymentInvalidPayableZero(body);
+    }
+
+    private static void AssertPaymentInvalidPayableZero(JsonElement body)
+    {
+        Assert.Equal("payment_invalid", body.GetProperty("code").GetString());
+        Assert.Equal("مبلغ قابل پرداخت ۰ تومان است", body.GetProperty("message").GetString());
     }
 
     [Fact]
