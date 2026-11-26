@@ -46,5 +46,57 @@ public sealed class LocalOpenSessionsEndpointTests(GameClubWebApplicationFactory
         Assert.Equal(1, body!.Count);
     }
 
+    [Fact]
+    public async Task open_sessions_counts_and_lists_paused_session_as_still_open()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var client = factory.CreateClientWithKey();
+        var op = await factory.CreateOperatorClientAsync();
+        // PC stations cannot be paused (409 pc_pause); a console station is the pausable kind.
+        await S3TestHelpers.RegisterConsole(client, op, "ps-paused");
+        var paused = await S3TestHelpers.StartSession(client, "ps-paused");
+        var pause = await op.PostAsJsonAsync($"/api/operator/sessions/{paused}/pause", new { });
+        pause.EnsureSuccessStatusCode();
+
+        string pausedStationId;
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<Data.AppDbContext>();
+            var row = await db.Sessions.AsNoTracking().SingleAsync(s => s.Id == paused);
+            Assert.Equal(SessionStatus.Paused, row.Status);
+            pausedStationId = row.StationId;
+        }
+
+        var response = await factory.CreateClientWithKey().GetAsync("/api/local/open-sessions");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonOpenSessionsDetail>();
+        Assert.NotNull(body);
+        Assert.Equal(1, body!.Count);
+        var listed = Assert.Single(body.Sessions);
+        Assert.Equal(paused, listed.Id);
+        Assert.Equal(pausedStationId, listed.StationId);
+        Assert.Equal(0, body.OpenFreeUses);
+    }
+
+    [Fact]
+    public async Task open_sessions_returns_404_for_missing_or_wrong_api_key()
+    {
+        var missing = factory.CreateClient();
+        var missingResponse = await missing.GetAsync("/api/local/open-sessions");
+        Assert.Equal(HttpStatusCode.NotFound, missingResponse.StatusCode);
+
+        var wrong = factory.CreateClient();
+        wrong.DefaultRequestHeaders.Add(ApiKeyMiddleware.HeaderName, "wrong-key");
+        var wrongResponse = await wrong.GetAsync("/api/local/open-sessions");
+        Assert.Equal(HttpStatusCode.NotFound, wrongResponse.StatusCode);
+
+        var right = await factory.CreateClientWithKey().GetAsync("/api/local/open-sessions");
+        Assert.Equal(HttpStatusCode.OK, right.StatusCode);
+    }
+
     private sealed record JsonOpenSessions(int Count);
+
+    private sealed record JsonOpenSession(Guid Id, string StationId, DateTime StartedAtUtc);
+
+    private sealed record JsonOpenSessionsDetail(int Count, IReadOnlyList<JsonOpenSession> Sessions, int OpenFreeUses);
 }
