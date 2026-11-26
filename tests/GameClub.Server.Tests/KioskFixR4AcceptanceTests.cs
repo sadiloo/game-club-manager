@@ -92,7 +92,7 @@ public sealed class KioskFixR4AcceptanceTests(GameClubWebApplicationFactory fact
         await using (var scope = factory.Services.CreateAsyncScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            await DatabaseSeed.EnsureAsync(db);
+            await DatabaseSeed.EnsureAsync(db, allowDefaultDevelopmentUsers: true);
         }
 
         (await mgr.PostAsJsonAsync("/api/operator/games", new

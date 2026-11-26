@@ -295,12 +295,50 @@ try {
     if (-not $err) { Write-Error "expected pg_dump failure to abort backup" }
     if ($err.Exception.Message -notmatch 'pg_dump failed with exit code 3') { throw $err }
 
+    # DEF-17: pg_dump fails after writing a partial file -> that file (and only that file) is removed + logged.
+    $partialDir = Join-Path $workDir "backups-partial"
+    $partialLogs = Join-Path $workDir "logs-partial"
+    New-Item -ItemType Directory -Force -Path $partialDir | Out-Null
+    $previousDump = Join-Path $partialDir "checkpoint-20250101-000000.000.dump"
+    $previousPre = Join-Path $partialDir "pre-upgrade-0.0.9-20250101-0000.dump"
+    [System.IO.File]::WriteAllBytes($previousDump, [byte[]]@(1, 2, 3))
+    [System.IO.File]::WriteAllBytes($previousPre, [byte[]]@(4, 5))
+    $stubPartial = New-StubPgBinaries -PgDumpExit 3 -PgDumpWriteOnFailure
+    $err = Invoke-BackupScript -ScriptPath $goldenBackup -BackupDir $partialDir -ServerJsonPath $jsonPath -LogsDir $partialLogs -Stub $stubPartial
+    if (-not $err -or $err.Exception.Message -notmatch 'pg_dump failed with exit code 3') { Write-Error "DEF-17: expected pg_dump exit 3 failure; got $err" }
+    $left = @(Get-ChildItem -LiteralPath $partialDir -File | ForEach-Object { $_.Name } | Sort-Object)
+    if (($left -join ',') -ne 'checkpoint-20250101-000000.000.dump,pre-upgrade-0.0.9-20250101-0000.dump') {
+        Write-Error "DEF-17: failed pg_dump must remove only its own partial output; left=[$($left -join ',')]"
+    }
+    if ((Get-Item -LiteralPath $previousDump).Length -ne 3 -or (Get-Item -LiteralPath $previousPre).Length -ne 2) {
+        Write-Error "DEF-17: previous backups must be untouched"
+    }
+    $partialLog = Get-Content -LiteralPath (Join-Path $partialLogs "backup.log") -Raw
+    if ($partialLog -notmatch 'CHECKPOINT_PGDUMP_FAILED label=backup-daily exit=3 output=\S+checkpoint-\S+\.dump bytes=[1-9]\d* action=removed_own_failed_output') {
+        Write-Error "DEF-17: backup.log must log the removed partial output; log=$partialLog"
+    }
+
     $stubBackupEmpty = New-StubPgBinaries -PgDumpExit 0 -PgDumpWriteZeroBytes
     $err = Invoke-BackupScript -ScriptPath $goldenBackup -BackupDir (Join-Path $workDir "backups-empty") -ServerJsonPath $jsonPath -LogsDir (Join-Path $workDir "logs-empty") -Stub $stubBackupEmpty
     if (-not $err) { Write-Error "expected zero-byte pg_dump output to abort backup" }
     if ($err.Exception.Message -notmatch '^Dump file is empty:') {
         Write-Error "expected Dump file is empty message; got $($err.Exception.Message)"
     }
+    $emptyLeft = @(Get-ChildItem -LiteralPath (Join-Path $workDir "backups-empty") -File)
+    if ($emptyLeft.Count -ne 0) { Write-Error "DEF-17: 0-byte pg_dump output must be removed; left=$($emptyLeft.Name -join ',')" }
+
+    # DEF-17: a new dump never overwrites an existing name.
+    $nameDir = Join-Path $workDir "names"
+    New-Item -ItemType Directory -Force -Path $nameDir | Out-Null
+    $n1 = Get-CheckpointNewDumpPath -Directory $nameDir -Stem "pre-upgrade-1-20250101-0000"
+    [System.IO.File]::WriteAllBytes($n1, [byte[]]@(1))
+    $n2 = Get-CheckpointNewDumpPath -Directory $nameDir -Stem "pre-upgrade-1-20250101-0000"
+    if ((Split-Path $n1 -Leaf) -ne 'pre-upgrade-1-20250101-0000.dump' -or (Split-Path $n2 -Leaf) -ne 'pre-upgrade-1-20250101-0000-2.dump') {
+        Write-Error "DEF-17: Get-CheckpointNewDumpPath must pick a fresh name; got $n1 / $n2"
+    }
+    $refused = $false
+    try { $null = Invoke-CheckpointPgDumpNewFile -PgDump "pg_dump-must-not-run" -PgArgs @("-Fc") -OutFile $n1 -Log { param($l) } } catch { $refused = $_.Exception.Message -match 'refusing to write over an existing file' }
+    if (-not $refused -or (Get-Item -LiteralPath $n1).Length -ne 1) { Write-Error "DEF-17: Invoke-CheckpointPgDumpNewFile must refuse an existing target" }
 
     $stubBackupListFail = New-StubPgBinaries -PgDumpExit 0 -FirstListExit 11
     $err = Invoke-BackupScript -ScriptPath $goldenBackup -BackupDir (Join-Path $workDir "backups-listfail") -ServerJsonPath $jsonPath -LogsDir (Join-Path $workDir "logs-listfail") -Stub $stubBackupListFail
@@ -431,8 +469,9 @@ try {
     if ($daily -notmatch "MinFreeBytes") {
         throw "backup-daily must expose MinFreeBytes parameter"
     }
-    $lowFlag = Join-Path $workDir "logs\backup-low-disk.flag"
     $pd = Join-Path $workDir "ProgramData\Checkpoint"
+    # BL-1/DEF-16: backup-daily writes the flag into -LogsDir, i.e. $pd\logs (not $workDir\logs).
+    $lowFlag = Join-Path $pd "logs\backup-low-disk.flag"
     New-Item -ItemType Directory -Force -Path (Join-Path $pd "backups"), (Join-Path $pd "logs") | Out-Null
     $env:ProgramData = $pd
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "..\tools\backup-daily.ps1") `

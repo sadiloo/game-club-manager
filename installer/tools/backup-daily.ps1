@@ -38,13 +38,18 @@ try {
 
     $cfg = Read-CheckpointServerJsonConfig -ServerJsonPath $ServerJsonPath
     $stamp = Get-Date -Format "yyyyMMdd-HHmmss.fff"
-    $dump = Join-Path $PrimaryBackupDir "checkpoint-$stamp.dump"
+    $dump = Get-CheckpointNewDumpPath -Directory $PrimaryBackupDir -Stem "checkpoint-$stamp"
 
     $env:PGPASSWORD = $cfg.Password
     $pgDump = Get-CheckpointPgExecutable -Name "pg_dump"
-    & $pgDump -Fc -h $cfg.Host -p $cfg.Port -U $cfg.Username -d $cfg.Database -f $dump
-    if ($LASTEXITCODE -ne 0) {
-        throw "pg_dump failed with exit code $LASTEXITCODE"
+    $run = Invoke-CheckpointPgDumpNewFile -PgDump $pgDump -OutFile $dump -Label "backup-daily" `
+        -PgArgs @("-Fc", "-h", $cfg.Host, "-p", $cfg.Port, "-U", $cfg.Username, "-d", $cfg.Database) `
+        -Log { param([string]$line) Write-BackupLog $line }
+    if ($run.ExitCode -ne 0) {
+        throw "pg_dump failed with exit code $($run.ExitCode)"
+    }
+    if ($run.Empty) {
+        throw "Dump file is empty: $dump"
     }
 
     Test-PostgresDumpReadable -DumpPath $dump

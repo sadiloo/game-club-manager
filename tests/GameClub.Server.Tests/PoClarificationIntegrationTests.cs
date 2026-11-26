@@ -27,7 +27,7 @@ public sealed class PoClarificationIntegrationTests(GameClubWebApplicationFactor
             UPDATE rate_lines SET "HourlyToman" = 80000
               WHERE "GroupId" = 'pc-normal' AND "IsSpecialBand" = false AND "PlayMode" = 'Online' AND "PlayerCount" IS NULL;
             """);
-        await DatabaseSeed.EnsureAsync(db);
+        await DatabaseSeed.EnsureAsync(db, allowDefaultDevelopmentUsers: true);
     }
 
     [Fact]

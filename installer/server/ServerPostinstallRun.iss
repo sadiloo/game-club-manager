@@ -29,7 +29,7 @@ begin
   Params := '-NoProfile -ExecutionPolicy Bypass -File "' + Script + '"';
   if Mode <> '' then
     Params := Params + ' -InstallMode ' + Mode;
-  Params := Params + ' -InstallPhase ' + Phase + ExtraArgs;
+  Params := Params + ' -InstallPhase ' + Phase + ExtraArgs + ' -SetupExe "' + ExpandConstant('{srcexe}') + '"';
   Log('CHECKPOINT_POSTINSTALL_EXEC phase=' + Phase);
   if not ExecAndLogOutput(Ps, Params, '', SW_HIDE, ewWaitUntilTerminated, Rc, nil) then
   begin

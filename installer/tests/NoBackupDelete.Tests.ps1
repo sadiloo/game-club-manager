@@ -8,7 +8,14 @@ function Test-BackupDeletionPsLine([string]$line) {
     $deletes = $line -match 'Remove-Item\b|\bdel\b|\berase\b|\brm\b|\brmdir\b|\[IO\.File\]::Delete|\[IO\.Directory\]::Delete|\[System\.IO\.Directory\]::Delete|\[System\.IO\.File\]::Delete|\bDirectory\.Delete\b|\bClear-Content\b|\bDelTree\b'
     if (-not $deletes) { return $false }
 
-    return $line -match '(?i)backups|\\pgdata|/pgdata|\.dump|\bpgdata\b|\$dump\b|\$DumpPath\b|\$old\b|\$pre\b|\$pgdata\b|\$f\.FullName'
+    return $line -match '(?i)backups|\\pgdata|/pgdata|\.dump|\bpgdata\b|\$dump\b|\$DumpPath\b|\$old\b|\$pre\b|\$pgdata\b|\$f\.FullName|\$ownFailedOutput\b|\$preDump\b'
+}
+
+# DEF-17: the ONLY sanctioned delete is pg_dump's own failed output, inside Invoke-CheckpointPgDumpNewFile in
+# CheckpointDbConfig.ps1 (the target is proven new before pg_dump runs). The same line anywhere else is a hit.
+$script:SanctionedDumpDeleteLine = 'Remove-Item -LiteralPath $ownFailedOutput -Force'
+function Test-SanctionedOwnFailedDumpDelete([string]$fileName, [string]$functionName, [string]$line) {
+    return ($fileName -eq 'CheckpointDbConfig.ps1') -and ($functionName -eq 'Invoke-CheckpointPgDumpNewFile') -and ($line.Trim() -eq $script:SanctionedDumpDeleteLine)
 }
 
 function Test-InnoDeleteEntryLine([string]$line) {
@@ -22,15 +29,18 @@ function Find-BackupDeletionHits {
     foreach ($scanPath in $ScanPaths) {
         if (-not (Test-Path -LiteralPath $scanPath)) { continue }
         if ((Get-Item -LiteralPath $scanPath).PSIsContainer) {
-            $files = Get-ChildItem -Path $scanPath -Include *.ps1 -Recurse -File -ErrorAction SilentlyContinue
+            $files = Get-ChildItem -Path $scanPath -Include *.ps1, *.psm1 -Recurse -File -ErrorAction SilentlyContinue
         } else {
             $files = @(Get-Item -LiteralPath $scanPath)
         }
         foreach ($file in $files) {
             $lineNo = 0
+            $fn = $null
             foreach ($line in (Get-Content -LiteralPath $file.FullName)) {
                 $lineNo++
-                if ($file.Extension -eq '.ps1' -and (Test-BackupDeletionPsLine $line)) {
+                if ($line -match '^\s*function\s+([\w-]+)') { $fn = $Matches[1] }
+                if ($file.Extension -in '.ps1', '.psm1' -and (Test-BackupDeletionPsLine $line)) {
+                    if (Test-SanctionedOwnFailedDumpDelete -fileName $file.Name -functionName $fn -line $line) { continue }
                     $hits += "$($file.FullName):$lineNo"
                 }
             }
@@ -92,6 +102,9 @@ $negatives = @{
     "RmdirCmd.ps1"              = 'rmdir C:\ProgramData\Checkpoint\pgdata'
     "ClearContent.ps1"          = 'Clear-Content C:\ProgramData\Checkpoint\backups\x.dump'
     "DelTree.ps1"               = 'DelTree "C:\ProgramData\Checkpoint\backups"'
+    "OwnFailedOutsideHelper.ps1" = "function Invoke-SomethingElse {`n    Remove-Item -LiteralPath `$ownFailedOutput -Force`n}"
+    "PsmRemoveDump.psm1"        = 'Remove-Item $dump'
+    "RemovePreDump.ps1"         = 'Remove-Item -LiteralPath $preDump -Force'
     "UninstallDelete.iss"       = @'
 [UninstallDelete]
 Type: filesandordirs; Name: "{commonappdata}\Checkpoint\backups"
@@ -118,6 +131,19 @@ try {
 }
 finally {
     Remove-Item -LiteralPath $negativeDir -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# The sanctioned delete exists exactly once, inside the helper, after the new-target guard.
+$dbConfig = Get-Content -LiteralPath (Join-Path $root "installer\tools\CheckpointDbConfig.ps1") -Raw
+$iFn = $dbConfig.IndexOf('function Invoke-CheckpointPgDumpNewFile')
+$iGuard = $dbConfig.IndexOf('refusing to write over an existing file', [Math]::Max(0, $iFn))
+$iRun = $dbConfig.IndexOf('& $PgDump @PgArgs -f $OutFile', [Math]::Max(0, $iFn))
+$iDel = $dbConfig.IndexOf($script:SanctionedDumpDeleteLine)
+if ($iFn -lt 0 -or $iGuard -lt $iFn -or $iRun -lt $iGuard -or $iDel -lt $iRun) {
+    Write-Error "NoBackupDelete: Invoke-CheckpointPgDumpNewFile must refuse an existing target before pg_dump and delete only afterwards"
+}
+if (([regex]::Matches($dbConfig, [regex]::Escape($script:SanctionedDumpDeleteLine))).Count -ne 1) {
+    Write-Error "NoBackupDelete: the sanctioned own-failed-output delete must appear exactly once"
 }
 
 Write-Host "NoBackupDelete: ok"

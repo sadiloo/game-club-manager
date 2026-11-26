@@ -120,21 +120,49 @@ function Sync-InstallerStagedTools {
 Sync-InstallerStagedTools -Mode Release
 
 Write-Host "ci-installer: static installer rules"
-& (Join-Path $root "installer/tests/NoPwshInstaller.Tests.ps1")
-& (Join-Path $root "installer/tests/NoBackupDelete.Tests.ps1")
-& (Join-Path $root "installer/tests/BackupRestoreConfig.Tests.ps1")
-& (Join-Path $root "installer/tests/PersianIslKeys.Tests.ps1")
-& (Join-Path $root "installer/tests/IsccVersionGate.Tests.ps1")
-& (Join-Path $root "installer/tests/IssAppVersionStatic.Tests.ps1")
-& (Join-Path $root "installer/tests/KioskInstallStatic.Tests.ps1")
-& (Join-Path $root "installer/tests/BackupDailyTehran.Tests.ps1")
-& (Join-Path $root "installer/tests/PowerShell51InstallerStatic.Tests.ps1")
-& (Join-Path $root "installer/tests/PostinstallPhaseExitCodes.Tests.ps1")
-& (Join-Path $root "installer/tests/UpgradeRestoreNoDumpStatic.Tests.ps1")
-& (Join-Path $root "installer/tests/ServerWizardStatic.Tests.ps1")
-& (Join-Path $root "installer/tests/ServerPayloadStatic.Tests.ps1")
-& (Join-Path $root "installer/tests/ServerFinishLanStatic.Tests.ps1")
-& (Join-Path $root "installer/tests/KioskTrustFileAcl.Tests.ps1")
+# R10e item 2: Describe/It files run through Invoke-CheckpointPesterFile.ps1, which throws on any failed, skipped or
+# missing test; plain throw-style files run with & under ErrorActionPreference=Stop. The self-check first proves (in a
+# child process) that a deliberately failing fixture really fails the runner.
+& (Join-Path $root "scripts/windows/Test-CheckpointPesterRunner.ps1")
+# Leg ledger self-check: the Acceptance phase fails on a vacuous/skipped/missing leg (fake legs, no installs).
+& (Join-Path $root "scripts/windows/Test-CiInstallerAcceptanceLedger.ps1")
+$staticTests = @(
+    "NoPwshInstaller.Tests.ps1",
+    "NoBackupDelete.Tests.ps1",
+    "BackupRestoreConfig.Tests.ps1",
+    "PersianIslKeys.Tests.ps1",
+    "IsccVersionGate.Tests.ps1",
+    "IssAppVersionStatic.Tests.ps1",
+    "KioskInstallStatic.Tests.ps1",
+    "BackupDailyTehran.Tests.ps1",
+    "PowerShell51InstallerStatic.Tests.ps1",
+    "PostinstallPhaseExitCodes.Tests.ps1",
+    "UpgradeRestoreNoDumpStatic.Tests.ps1",
+    "RecoveryAndSkipSessionStatic.Tests.ps1",
+    "ServerWizardStatic.Tests.ps1",
+    "InstallerAcceptanceHarness.Tests.ps1",
+    "ServerPayloadStatic.Tests.ps1",
+    "ServerFinishLanStatic.Tests.ps1",
+    "KioskTrustFileAcl.Tests.ps1",
+    "KioskTrustPaths.Tests.ps1"
+)
+$onDisk = @(Get-ChildItem -LiteralPath (Join-Path $root "installer/tests") -Filter "*.Tests.ps1" -File | ForEach-Object { $_.Name })
+$notListed = @($onDisk | Where-Object { $staticTests -notcontains $_ })
+if ($notListed.Count -gt 0) {
+    throw "ci-installer: installer/tests files not run by ci-installer: $($notListed -join ', ')"
+}
+foreach ($name in $staticTests) {
+    $testPath = Join-Path $root "installer/tests/$name"
+    if (-not (Test-Path -LiteralPath $testPath)) { throw "ci-installer: static test missing: $testPath" }
+    $isPester = (Get-Content -LiteralPath $testPath -Raw) -match '(?m)^\uFEFF?\s*Describe\s'
+    Write-Host "ci-installer: static test $name (pester=$isPester)"
+    if ($isPester) {
+        & (Join-Path $root "scripts/windows/Invoke-CheckpointPesterFile.ps1") -Path $testPath
+    } else {
+        & $testPath
+    }
+    Write-Host "ci-installer: static test $name ok"
+}
 
 Write-Host "ci-installer: server finish LAN IPv4 probe (Get-ServerLanIPv4Addresses.ps1)"
 $lanProbe = Join-Path $root "installer/tools/Get-ServerLanIPv4Addresses.ps1"

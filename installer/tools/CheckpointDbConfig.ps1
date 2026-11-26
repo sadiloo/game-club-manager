@@ -71,3 +71,49 @@ function Test-PostgresDumpReadable {
         throw "pg_restore --list failed for $DumpPath"
     }
 }
+function Get-CheckpointNewDumpPath {
+    # A dump name that does not exist yet, so a new dump never overwrites a previous one (DEF-17).
+    param(
+        [Parameter(Mandatory)][string]$Directory,
+        [Parameter(Mandatory)][string]$Stem
+    )
+    $candidate = Join-Path $Directory "$Stem.dump"
+    $n = 2
+    while (Test-Path -LiteralPath $candidate) {
+        $candidate = Join-Path $Directory "$Stem-$n.dump"
+        $n++
+    }
+    return $candidate
+}
+
+function Invoke-CheckpointPgDumpNewFile {
+    # Runs pg_dump into a file that must NOT exist yet. If pg_dump fails (non-zero exit) or leaves a 0-byte file,
+    # the partial/empty file THIS call created is removed and the failure is logged (DEF-17). Existing dumps are
+    # never touched: the target is checked to be new before pg_dump starts.
+    param(
+        [Parameter(Mandatory)][string]$PgDump,
+        [Parameter(Mandatory)][string[]]$PgArgs,
+        [Parameter(Mandatory)][string]$OutFile,
+        [string]$Label = "pg_dump",
+        [scriptblock]$Log = { param([string]$line) Write-Host $line }
+    )
+    if (Test-Path -LiteralPath $OutFile) {
+        throw "${Label}: refusing to write over an existing file $OutFile"
+    }
+    & $PgDump @PgArgs -f $OutFile | Out-Host
+    $code = $LASTEXITCODE
+    $exists = Test-Path -LiteralPath $OutFile
+    $bytes = if ($exists) { (Get-Item -LiteralPath $OutFile).Length } else { -1 }
+    if ($code -eq 0 -and $bytes -gt 0) {
+        return [pscustomobject]@{ Ok = $true; ExitCode = 0; Empty = $false; OutFile = $OutFile }
+    }
+    $reason = if ($code -ne 0) { "exit=$code" } else { "empty_output" }
+    if ($exists) {
+        $ownFailedOutput = $OutFile
+        Remove-Item -LiteralPath $ownFailedOutput -Force
+        & $Log "CHECKPOINT_PGDUMP_FAILED label=$Label $reason output=$OutFile bytes=$bytes action=removed_own_failed_output"
+    } else {
+        & $Log "CHECKPOINT_PGDUMP_FAILED label=$Label $reason output=$OutFile action=no_output_written"
+    }
+    return [pscustomobject]@{ Ok = $false; ExitCode = $code; Empty = ($code -eq 0); OutFile = $OutFile }
+}

@@ -361,6 +361,14 @@ begin
     DeleteFile(PreUpgradeDumpMarkerPath);
 end;
 
+{ PO-F: the exact command an operator runs after fixing the cause of a failed upgrade. /SKIPSESSIONCHECK=1 is
+  required because CheckpointServer is stopped, so the open-session count cannot be read (silent Setup would exit 131). }
+function CheckpointRecoveryCommandLine: String;
+begin
+  Result := '"' + ExpandConstant('{srcexe}') + '" /SKIPSESSIONCHECK=1 /LOG="' +
+    ExpandConstant('{commonappdata}') + '\Checkpoint\logs\setup-recovery.log"';
+end;
+
 { F6: after the post-install phases started on an upgrade, the upgraded binaries are on disk and
   CheckpointServer migrates the database on start. Without this run's pre-upgrade dump, leave it stopped. }
 procedure RestoreCheckpointUpgradeAfterPostinstallFailure;
@@ -373,6 +381,7 @@ begin
     Log('CHECKPOINT_POSTINSTALL_UPGRADE_LEFT_STOPPED reason=no_preupgrade_backup service=CheckpointServer ' +
       'action=fix the cause shown in this log, then run the same Setup again; do not start CheckpointServer by hand ' +
       '(it would migrate the database without a backup)');
+    Log('CHECKPOINT_POSTINSTALL_UPGRADE_LEFT_STOPPED recovery_command=' + CheckpointRecoveryCommandLine);
     Exit;
   end;
   Log('CHECKPOINT_POSTINSTALL_UPGRADE_RESTORE start CheckpointServer dump=' + Dump);
@@ -426,10 +435,23 @@ begin
       mbError, MB_OK);
 end;
 
+{ Item 7: a failed FIRST install leaves both services stopped (the PowerShell abort cleanup does the same; this also
+  covers a phase whose PowerShell could not run at all). An upgrade is handled by the F6 restore above. }
+procedure StopCheckpointServicesAfterFreshInstallFailure;
+var RcServer, RcPg: Integer;
+begin
+  if not IsFirstInstall then Exit;
+  if not Exec('sc.exe', 'stop CheckpointServer', '', SW_HIDE, ewWaitUntilTerminated, RcServer) then RcServer := -1;
+  if not Exec('sc.exe', 'stop CheckpointPostgres', '', SW_HIDE, ewWaitUntilTerminated, RcPg) then RcPg := -1;
+  Log('CHECKPOINT_SETUP_FRESH_ABORT_SERVICES_STOPPED services=CheckpointServer,CheckpointPostgres sc_server_rc=' +
+    IntToStr(RcServer) + ' sc_postgres_rc=' + IntToStr(RcPg));
+end;
+
 procedure AbortPostinstallPhaseFailed(const Phase: String; const ExitCode: Integer);
 begin
   GSetupFailureExitCode := ExitCode;
   RestoreCheckpointUpgradeAfterPostinstallFailure;
+  StopCheckpointServicesAfterFreshInstallFailure;
   LogSetupFailureIniMessage;
   Log('CHECKPOINT_POSTINSTALL_ABORT phase=' + Phase + ' exit=' + IntToStr(ExitCode));
   CurRunFailed(0);
@@ -872,6 +894,18 @@ begin
   Unknown := True;
 end;
 
+{ Item 12: /SKIPSESSIONCHECK stays in release as an explicit operator recovery flag (README: Recovery). Every use is
+  logged; the open-session check is skipped ONLY through this function. }
+function SkipSessionCheckRequested(const Context: String): Boolean;
+var V: String;
+begin
+  V := ExpandConstant('{param:SKIPSESSIONCHECK|}');
+  Result := V <> '';
+  if Result then
+    Log('CHECKPOINT_SKIPSESSIONCHECK used=1 value=' + V + ' context=' + Context +
+      ' note=operator recovery flag: the open-session check is skipped; open sessions are NOT protected by this Setup run');
+end;
+
 procedure EnforceSilentUpgradeOpenSessionPolicy;
 var
   Count: Integer;
@@ -879,7 +913,7 @@ var
 begin
   if IsFirstInstall then Exit;
   if not WizardSilent then Exit;
-  if ExpandConstant('{param:SKIPSESSIONCHECK|}') <> '' then Exit;
+  if SkipSessionCheckRequested('silent-upgrade') then Exit;
   QueryOpenSessionCount(Count, Unknown);
   if Unknown then
   begin
@@ -903,7 +937,7 @@ var
 begin
   Result := True;
   if IsFirstInstall or WizardSilent then Exit;
-  if ExpandConstant('{param:SKIPSESSIONCHECK|}') <> '' then Exit;
+  if SkipSessionCheckRequested('interactive-upgrade') then Exit;
   QueryOpenSessionCount(Count, Unknown);
   if (not Unknown) and (Count = 0) then Exit;
 

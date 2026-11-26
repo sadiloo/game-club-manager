@@ -61,11 +61,12 @@ fresh_prefix() { WINEPREFIX="$RUN" wineserver -k 2>/dev/null || true; sleep 1; r
 # run <label> <exe> <failspec "phase code;phase code"> [setup args...]  -> sets RC, CALLS, LOG
 run() {
   local label=$1 exe=$2 fs=$3; shift 3
-  LOG="$WORK/inno-$label.log"; rm -f "$LOG" "$RUN/drive_c/fakeps-calls.log"
+  LOG="$WORK/inno-$label.log"; rm -f "$LOG" "$RUN/drive_c/fakeps-calls.log" "$RUN/drive_c/fakeps-cmdlines.log"
   echo "$fs" | tr ';' '\n' > "$RUN/drive_c/fakeps-fail.txt"
   set +e; WINEPREFIX="$RUN" timeout 600 wine "$exe" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART "/LOG=$(winp "$LOG")" "$@" >/dev/null 2>&1; RC=$?; set -e
   WINEPREFIX="$RUN" wineserver -w 2>/dev/null || true
   CALLS="$(tr -d '\r' < "$RUN/drive_c/fakeps-calls.log" 2>/dev/null | tr '\n' ',' || true)"
+  CMDLINES="$(tr -d '\r' < "$RUN/drive_c/fakeps-cmdlines.log" 2>/dev/null || true)"
   echo "   run $label exit=$RC calls=[$CALLS]"
 }
 # Make the prefix look like an installed server so the next Setup is an upgrade (IsFirstInstall=false).
@@ -89,6 +90,11 @@ expect() { # <label> <cond-description> <command...>
 has() { grep -aqF -- "$1" "$LOG"; }
 hasnot() { ! grep -aqF -- "$1" "$LOG"; }
 calls_are() { [ "$CALLS" = "$1" ]; }
+every_ps_call_has() { [ -n "$CMDLINES" ] && ! printf '%s\n' "$CMDLINES" | grep -v -aF -- "$1" | grep -q . ; }
+svc_state() { WINEPREFIX="$RUN" wine sc query "$1" 2>/dev/null | tr -d '\r' | awk '/STATE/ {print $4}'; }
+svc_is() { local st; st="$(svc_state "$1")"; echo "   sc query $1 => ${st:-<none>}"; [ "$st" = "$2" ]; }
+SRELW="$(winp "$SREL")"
+RECOVERY="recovery_command=\"$SRELW\" /SKIPSESSIONCHECK=1 /LOG=\"C:\\ProgramData\\Checkpoint\\logs\\setup-recovery.log\""
 
 echo "== fresh install: per-phase codes + stop at first failure"
 fresh_prefix; run fresh-ok "$SREL" "" "$ACC"
@@ -103,6 +109,22 @@ expect fresh-accounts-1 "other accounts failure => 136" bash -c "[ $RC = 136 ]"
 fresh_prefix; run fresh-start "$SREL" "start 1" "$ACC"
 expect fresh-start "exit 140" bash -c "[ $RC = 140 ]"
 expect fresh-start "PowerShell output reaches the Inno log (ExecAndLogOutput)" has "FAKEPS phase=start"
+expect fresh-start "every PowerShell phase gets -SetupExe {srcexe} (PO-F)" every_ps_call_has "-SetupExe \"$SRELW\""
+
+echo "== item 7: a failed FIRST install leaves CheckpointServer and CheckpointPostgres stopped"
+for spec in "services 1:137" "start 1:140"; do
+  fs=${spec%%:*}; code=${spec#*:}; ph=${fs%% *}
+  fresh_prefix
+  WINEPREFIX="$RUN" wine sc create CheckpointServer binPath= 'C:\Program Files\Checkpoint\Server\GameClub.Server.exe' >/dev/null 2>&1 || true
+  WINEPREFIX="$RUN" wine sc create CheckpointPostgres binPath= 'C:\windows\system32\cmd.exe' >/dev/null 2>&1 || true
+  WINEPREFIX="$RUN" wineserver -w 2>/dev/null || true; rm -f "$RUN/drive_c/checkpoint-server-exec.log"
+  run "fresh-install-stopped-$ph" "$SREL" "$fs" "$ACC"
+  expect "fresh-install-stopped-$ph" "exit $code" bash -c "[ $RC = $code ]"
+  expect "fresh-install-stopped-$ph" "Setup stopped both services (logged)" has "CHECKPOINT_SETUP_FRESH_ABORT_SERVICES_STOPPED services=CheckpointServer,CheckpointPostgres sc_server_rc="
+  expect "fresh-install-stopped-$ph" "CheckpointServer state STOPPED" svc_is CheckpointServer STOPPED
+  expect "fresh-install-stopped-$ph" "CheckpointPostgres state STOPPED" svc_is CheckpointPostgres STOPPED
+  expect "fresh-install-stopped-$ph" "server binary never started" server_not_started
+done
 
 echo "== hooks build: test hook flag does not crash Setup (SetEnvironmentVariable arity)"
 fresh_prefix; run hooks-testfailphase "$SHK" "" "$ACC" /TESTFAILPHASE=database
@@ -117,7 +139,13 @@ for spec in "upgrade-pins 1:141:upgrade-pins," "upgrade-stop 1:142:upgrade-pins,
   expect "up-$ph" "F6 left-stopped logged" has "CHECKPOINT_POSTINSTALL_UPGRADE_LEFT_STOPPED reason=no_preupgrade_backup"
   expect "up-$ph" "F6 no restore start" hasnot "CHECKPOINT_POSTINSTALL_UPGRADE_RESTORE start"
   expect "up-$ph" "F6 server binary never started (DB unmigrated)" server_not_started
+  expect "up-$ph" "PO-F exact recovery command logged" has "CHECKPOINT_POSTINSTALL_UPGRADE_LEFT_STOPPED $RECOVERY"
+  expect "up-$ph" "item 12 /SKIPSESSIONCHECK use logged" has "CHECKPOINT_SKIPSESSIONCHECK used=1 value=1 context=silent-upgrade"
+  expect "up-$ph" "upgrade failure is not a fresh-install stop" hasnot "CHECKPOINT_SETUP_FRESH_ABORT_SERVICES_STOPPED"
 done
+run up-recovery-rerun "$SREL" "" /SKIPSESSIONCHECK=1 "$PINS"
+expect up-recovery-rerun "PO-F: rerunning the new installer (recovery command) after left-stopped completes all four phases" bash -c "[ $RC = 0 ] && [ '$CALLS' = 'upgrade-pins,upgrade-stop,upgrade-backup,upgrade-start,none,' ]"
+expect up-recovery-rerun "recovery rerun logs the /SKIPSESSIONCHECK use" has "CHECKPOINT_SKIPSESSIONCHECK used=1 value=1 context=silent-upgrade"
 seed_upgrade; run up-start-with-dump "$SREL" "upgrade-start 1" /SKIPSESSIONCHECK=1 "$PINS"
 expect up-start-with-dump "exit 144 after all four phases" bash -c "[ $RC = 144 ] && [ '$CALLS' = 'upgrade-pins,upgrade-stop,upgrade-backup,upgrade-start,' ]"
 expect up-start-with-dump "restore with dump logged" has "CHECKPOINT_POSTINSTALL_UPGRADE_RESTORE start CheckpointServer dump=C:\\ProgramData\\Checkpoint\\backups\\pre-upgrade-wine-fake.dump"
@@ -131,6 +159,7 @@ expect up-stale-marker "stale marker from an earlier run is cleared at Setup sta
 expect up-stale-marker "stale marker => server binary never started" server_not_started
 seed_upgrade; run up-silent-unknown "$SREL" "" "$PINS"
 expect up-silent-unknown "silent upgrade, open-session count unknown => 131 + reason" bash -c "[ $RC = 131 ] && grep -q 'CHECKPOINT_OPEN_SESSIONS_SILENT reason=open_session_count_unknown_server_unreachable' '$LOG'"
+expect up-silent-unknown "no /SKIPSESSIONCHECK => no skip line" hasnot "CHECKPOINT_SKIPSESSIONCHECK"
 
 echo "== kiosk"
 fresh_prefix; run kiosk-ok "$KREL" ""

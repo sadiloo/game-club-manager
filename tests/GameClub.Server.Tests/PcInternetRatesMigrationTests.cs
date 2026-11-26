@@ -27,7 +27,7 @@ public sealed class PcInternetRatesMigrationTests(GameClubWebApplicationFactory 
     {
         await db.Database.MigrateAsync();
         db.GetService<IMigrator>().Migrate(PrePcInternetMigration);
-        await DatabaseSeed.EnsureAsync(db);
+        await DatabaseSeed.EnsureAsync(db, allowDefaultDevelopmentUsers: true);
     }
 
     private static async Task WithPrePcInternetSeedAsync(GameClubWebApplicationFactory factory, Func<AppDbContext, Task> body)

@@ -6,12 +6,15 @@ param(
     [string] $AccountsFile = "",
     [string] $DefaultPinsFile = "",
     [string] $ServerExe = "C:\Program Files\Checkpoint\Server\GameClub.Server.exe",
-    [string] $SecondaryBackupDir = ""
+    [string] $SecondaryBackupDir = "",
+    # Path of the running Setup exe ({srcexe}); used only to print the exact recovery command (PO-F).
+    [string] $SetupExe = ""
 )
 
 $ErrorActionPreference = "Stop"
 Import-Module (Join-Path $PSScriptRoot "CheckpointInstall.Common.psm1") -Force
 . (Join-Path $PSScriptRoot "checkpoint-setup-exit-codes.ps1")
+. (Join-Path $PSScriptRoot "CheckpointDbConfig.ps1")
 
 $programData = "C:\ProgramData\Checkpoint"
 $configDir = Join-Path $programData "config"
@@ -38,6 +41,12 @@ function Get-CheckpointPreUpgradeDumpForThisRun {
     return $dump
 }
 
+function Get-CheckpointRecoveryCommandLine {
+    # Same text as ServerWizard.inc.iss CheckpointRecoveryCommandLine (PO-F; README: Recovery).
+    $exe = if ($SetupExe) { $SetupExe } else { "<path of this CheckpointServerSetup exe>" }
+    return "`"$exe`" /SKIPSESSIONCHECK=1 /LOG=`"C:\ProgramData\Checkpoint\logs\setup-recovery.log`""
+}
+
 function Invoke-CheckpointPostinstallAbortCleanup {
     if ($InstallMode -eq "upgrade") {
         $dump = Get-CheckpointPreUpgradeDumpForThisRun
@@ -45,6 +54,7 @@ function Invoke-CheckpointPostinstallAbortCleanup {
             # The upgraded binaries are already on disk; starting CheckpointServer now would migrate the
             # database with no pre-upgrade backup. Leave it stopped (F6 ruling).
             Write-Host "CHECKPOINT_POSTINSTALL_UPGRADE_LEFT_STOPPED reason=no_preupgrade_backup service=CheckpointServer action=fix the cause shown in the Setup log, then run the same Setup again; do not start CheckpointServer by hand (it would migrate the database without a backup)"
+            Write-Host "CHECKPOINT_POSTINSTALL_UPGRADE_LEFT_STOPPED recovery_command=$(Get-CheckpointRecoveryCommandLine)"
             Stop-Service CheckpointServer -ErrorAction SilentlyContinue
             Add-CheckpointUtf8NoBomLine -Path $phaseTrace -Line "upgrade_restore=left_stopped reason=no_preupgrade_backup"
             return
@@ -166,12 +176,14 @@ if ($InstallMode -eq "upgrade") {
         $oldVer = $env:CHECKPOINT_UPGRADE_FROM
         if (-not $oldVer) { $oldVer = "unknown" }
         $stamp = Get-Date -Format "yyyyMMdd-HHmm"
-        $preDump = Join-Path $backupsDir "pre-upgrade-$oldVer-$stamp.dump"
+        # A rerun in the same minute gets a new name (-2, -3, ...): a previous pre-upgrade dump is never overwritten.
+        $preDump = Get-CheckpointNewDumpPath -Directory $backupsDir -Stem "pre-upgrade-$oldVer-$stamp"
         $env:PGPASSWORD = $dbPassword
         $pgDump = Join-Path $pgRoot "bin\pg_dump.exe"
-        & $pgDump -Fc -h 127.0.0.1 -p 5433 -U postgres -d checkpoint -f $preDump
-        if ($LASTEXITCODE -ne 0) { throw "pre-upgrade pg_dump failed" }
-        if (-not (Test-Path -LiteralPath $preDump) -or (Get-Item -LiteralPath $preDump).Length -le 0) {
+        $run = Invoke-CheckpointPgDumpNewFile -PgDump $pgDump -OutFile $preDump -Label "upgrade-backup" `
+            -PgArgs @("-Fc", "-h", "127.0.0.1", "-p", "5433", "-U", "postgres", "-d", "checkpoint")
+        if ($run.ExitCode -ne 0) { throw "pre-upgrade pg_dump failed" }
+        if ($run.Empty -or -not (Test-Path -LiteralPath $preDump) -or (Get-Item -LiteralPath $preDump).Length -le 0) {
             throw "pre-upgrade pg_dump produced no dump at $preDump"
         }
         Set-CheckpointUtf8NoBomFile -Path $preUpgradeDumpMarker -Content $preDump
@@ -216,13 +228,16 @@ if (Test-Phase @("webview2")) {
 if (Test-Phase @("reinstall-kept-pg")) {
     & (Join-Path $PSScriptRoot "Initialize-CheckpointPostgres.ps1") -PgRoot $pgRoot -SuperPassword $dbPassword -ReinstallKeptCluster
     $stamp = Get-Date -Format "yyyyMMdd-HHmm"
-    $preDump = Join-Path $backupsDir "pre-reinstall-kept-$stamp.dump"
+    $preDump = Get-CheckpointNewDumpPath -Directory $backupsDir -Stem "pre-reinstall-kept-$stamp"
     $env:PGPASSWORD = $dbPassword
     $pgDump = Join-Path $pgRoot "bin\pg_dump.exe"
-    & $pgDump -Fc -h 127.0.0.1 -p 5433 -U postgres -d checkpoint -f $preDump
-    if ($LASTEXITCODE -ne 0) {
-        & $pgDump -Fc -h 127.0.0.1 -p 5433 -U postgres -f $preDump
-        if ($LASTEXITCODE -ne 0) { throw "pre-reinstall-kept pg_dump failed" }
+    $run = Invoke-CheckpointPgDumpNewFile -PgDump $pgDump -OutFile $preDump -Label "reinstall-kept-pg" `
+        -PgArgs @("-Fc", "-h", "127.0.0.1", "-p", "5433", "-U", "postgres", "-d", "checkpoint")
+    if (-not $run.Ok) {
+        # Second attempt (default database name). The first attempt's own partial output was already removed.
+        $run = Invoke-CheckpointPgDumpNewFile -PgDump $pgDump -OutFile $preDump -Label "reinstall-kept-pg-retry" `
+            -PgArgs @("-Fc", "-h", "127.0.0.1", "-p", "5433", "-U", "postgres")
+        if (-not $run.Ok) { throw "pre-reinstall-kept pg_dump failed" }
     }
     Write-Host "server-postinstall: pre-reinstall-kept backup $preDump"
     if ($InstallPhase -ne "install-all") { Complete-CheckpointPostinstallPhase }
@@ -273,6 +288,7 @@ if ((Test-Phase @("accounts")) -and -not $isUpgrade) {
             $hash = $proc.StandardOutput.ReadToEnd()
             $proc.WaitForExit()
             if ($proc.ExitCode -ne 0) { throw "--hash-pin failed for $($role.Key)" }
+            if ([string]::IsNullOrWhiteSpace($hash)) { throw "CHECKPOINT_ACCOUNTS_INVALID blank pin hash for $($role.Key)" }
             $initialUsers += @{
                 username = $user
                 role     = $role.Role
@@ -290,6 +306,15 @@ if ((Test-Phase @("accounts")) -and -not $isUpgrade) {
     }
     if ($initialUsers.Count -lt 3) {
         throw "CHECKPOINT_ACCOUNTS_INVALID expected three accounts (manager1, manager2, operator); got $($initialUsers.Count)"
+    }
+    # DEF-13b / PO-D: the server refuses to seed without a Manager and accepts role NAMES only; fail here first.
+    foreach ($u in $initialUsers) {
+        if (@("Owner", "Manager", "Operator") -cnotcontains [string]$u.role) {
+            throw "CHECKPOINT_ACCOUNTS_INVALID role must be a role name (Owner, Manager, Operator); got '$($u.role)'"
+        }
+    }
+    if (@($initialUsers | Where-Object { $_.role -ceq "Manager" }).Count -lt 1) {
+        throw "CHECKPOINT_ACCOUNTS_INVALID at least one Manager is required"
     }
     $serverJson.InitialUsers = $initialUsers
     $json = $serverJson | ConvertTo-Json -Depth 5

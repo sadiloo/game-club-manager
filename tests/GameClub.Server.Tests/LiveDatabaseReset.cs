@@ -43,7 +43,7 @@ public static class LiveDatabaseReset
         var options = new DbContextOptionsBuilder<AppDbContext>().UseNpgsql(connectionString).Options;
         await using var db = new AppDbContext(options);
         await db.Database.ExecuteSqlRawAsync(TruncateSqlPreserveLeaseSigningKeys);
-        await DatabaseSeed.EnsureAsync(db);
+        await DatabaseSeed.EnsureAsync(db, allowDefaultDevelopmentUsers: true);
         if (!await db.GameCatalogCategories.AnyAsync(c => c.Id == 2))
         {
             db.GameCatalogCategories.Add(new GameCatalogCategoryEntity { Id = 2, Name = "اختصاصی", SortOrder = 2 });

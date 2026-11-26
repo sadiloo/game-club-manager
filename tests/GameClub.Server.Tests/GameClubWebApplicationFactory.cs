@@ -188,7 +188,7 @@ public class GameClubWebApplicationFactory : WebApplicationFactory<Program>
         using var scope = host.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         db.Database.Migrate();
-        DatabaseSeed.EnsureAsync(db, scope.ServiceProvider.GetService<IConfiguration>()).GetAwaiter().GetResult();
+        DatabaseSeed.EnsureAsync(db, scope.ServiceProvider.GetService<IConfiguration>(), allowDefaultDevelopmentUsers: true).GetAwaiter().GetResult();
         Program.ApplyAuditImmutabilityAsync(db).GetAwaiter().GetResult();
     }
 }
@@ -227,7 +227,7 @@ internal static class S3TestHelpers
         using var scope = factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         await db.Database.ExecuteSqlRawAsync(TruncateSql);
-        await DatabaseSeed.EnsureAsync(db);
+        await DatabaseSeed.EnsureAsync(db, allowDefaultDevelopmentUsers: true);
         await EnsureCatalogCategoryTwoForTestsAsync(db);
         await EnsureOwnerUserForTestsAsync(db);
     }

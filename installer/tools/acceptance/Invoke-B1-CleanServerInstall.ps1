@@ -73,11 +73,12 @@ if (-not $ps5Line) { throw "B-1: ps5 offline 1-player rate line missing" }
 if ([int]$ps5Line.hourlyToman -ne 110000) { throw "B-1: ps5 offline 1-player rate expected 110000; got $($ps5Line.hourlyToman)" }
 
 $shellExe = "C:\Program Files\Checkpoint\Server\GameClub.Shell.exe"
+# R10e leg audit: no silent skip. scripts/windows/ci-installer.ps1 publishes GameClub.Shell into the server payload.
 if (-not (Test-Path -LiteralPath $shellExe)) {
-    Write-Host "B-1: shell exe not in payload (server-only); skip shell ACL pin"
-} else {
-    $acl = icacls $shellExe 2>&1 | Out-String
-    if ($acl -notmatch "Administrators") { throw "B-1: shell exe ACL unexpected" }
+    throw "B-1: $shellExe missing from the installed payload (ci-installer publishes GameClub.Shell into stage-server)"
 }
+$acl = icacls $shellExe 2>&1 | Out-String
+if ($acl -notmatch "Administrators") { throw "B-1: shell exe ACL unexpected" }
+Write-Host "B-1: shell exe ACL ok"
 
 Write-Host "B-1: ok"

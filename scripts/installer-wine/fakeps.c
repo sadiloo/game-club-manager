@@ -12,6 +12,7 @@ int main(void) {
   if (p) sscanf(p + 14, "%127s", phase); else if (strstr(cl, "kiosk-postinstall")) strcpy(phase, "kiosk");
   printf("FAKEPS phase=%s\n", phase); fflush(stdout);
   FILE *l = fopen("C:\\fakeps-calls.log", "a"); if (l) { fprintf(l, "%s\n", phase); fclose(l); }
+  FILE *c = fopen("C:\\fakeps-cmdlines.log", "a"); if (c) { fprintf(c, "%s\n", cl); fclose(c); }
   int rc = 0; FILE *f = fopen("C:\\fakeps-fail.txt", "r"); char fp[128]; int code;
   if (f) { while (fscanf(f, "%127s %d", fp, &code) == 2) if (!strcmp(fp, phase)) { rc = code; break; } fclose(f); }
   if (rc == 0 && !strcmp(phase, "upgrade-backup")) {

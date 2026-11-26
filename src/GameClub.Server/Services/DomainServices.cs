@@ -1221,7 +1221,38 @@ public sealed class ApiException(int status, string code, string message) : Exce
 
 public sealed class DatabaseSeed
 {
-    public static async Task EnsureAsync(AppDbContext db, IConfiguration? configuration = null, CancellationToken ct = default)
+    /// <summary>Role NAMES only (case-insensitive). Numeric strings such as "0" or "99" are refused even when the value is defined.</summary>
+    internal static bool TryParseRoleName(string? value, out UserRole role)
+    {
+        role = default;
+        var name = value?.Trim();
+        if (string.IsNullOrEmpty(name))
+        {
+            return false;
+        }
+
+        foreach (var candidate in Enum.GetNames<UserRole>())
+        {
+            if (string.Equals(candidate, name, StringComparison.OrdinalIgnoreCase))
+            {
+                role = Enum.Parse<UserRole>(candidate);
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <param name="allowDefaultDevelopmentUsers">
+    /// Only when true (Development, or an isolated gameclub_test_* database) may an empty InitialUsers list fall back
+    /// to the built-in manager/operator users with PINs 1234/1111. Installed servers pass false: no InitialUsers means
+    /// seeding fails instead of creating well-known PINs.
+    /// </param>
+    public static async Task EnsureAsync(
+        AppDbContext db,
+        IConfiguration? configuration = null,
+        CancellationToken ct = default,
+        bool allowDefaultDevelopmentUsers = false)
     {
         if (!await db.StationGroups.AnyAsync(ct))
         {
@@ -1321,6 +1352,7 @@ public sealed class DatabaseSeed
                 var initialUsers = configuration?.GetSection("InitialUsers").Get<List<Setup.InitialUserEntry>>();
                 if (initialUsers is { Count: > 0 })
                 {
+                    var seeded = new List<OperatorUserEntity>(initialUsers.Count);
                     foreach (var entry in initialUsers)
                     {
                         if (string.IsNullOrWhiteSpace(entry.Username))
@@ -1335,13 +1367,13 @@ public sealed class DatabaseSeed
                                 "InitialUsers seeding refused: blank pin hash.");
                         }
 
-                        if (!Enum.TryParse<UserRole>(entry.Role, true, out var role) || !Enum.IsDefined(role))
+                        if (!TryParseRoleName(entry.Role, out var role))
                         {
                             throw new InvalidOperationException(
-                                $"InitialUsers seeding refused: unknown role '{entry.Role}'.");
+                                $"InitialUsers seeding refused: unknown role '{entry.Role}' (role names only: {string.Join(", ", Enum.GetNames<UserRole>())}).");
                         }
 
-                        db.OperatorUsers.Add(new OperatorUserEntity
+                        seeded.Add(new OperatorUserEntity
                         {
                             Id = Guid.NewGuid(),
                             Username = entry.Username.Trim(),
@@ -1350,7 +1382,20 @@ public sealed class DatabaseSeed
                         });
                     }
 
+                    if (!seeded.Any(u => u.Role == UserRole.Manager))
+                    {
+                        throw new InvalidOperationException(
+                            "InitialUsers seeding refused: at least one Manager is required.");
+                    }
+
+                    db.OperatorUsers.AddRange(seeded);
                     await db.SaveChangesAsync(ct);
+                }
+                else if (!allowDefaultDevelopmentUsers)
+                {
+                    throw new InvalidOperationException(
+                        "InitialUsers seeding refused: no InitialUsers configured (at least one Manager is required); "
+                        + "the default manager/operator PINs are only used in Development or on an isolated gameclub_test_* database.");
                 }
                 else
                 {

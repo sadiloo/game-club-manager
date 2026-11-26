@@ -26,7 +26,7 @@ public sealed class ScopeGapIntegrationTests(GameClubWebApplicationFactory facto
             UPDATE rate_lines SET "HourlyToman" = 80000
               WHERE "GroupId" = 'pc-normal' AND "IsSpecialBand" = false AND "PlayMode" = 'Online' AND "PlayerCount" IS NULL;
             """);
-        await GameClub.Server.Services.DatabaseSeed.EnsureAsync(db);
+        await GameClub.Server.Services.DatabaseSeed.EnsureAsync(db, allowDefaultDevelopmentUsers: true);
         await db.Database.ExecuteSqlRawAsync(
             """UPDATE branch_cafe_settings SET "ShiftsEnabled" = false, "MultiOperatorEnabled" = false WHERE "Id" = 1;""");
     }

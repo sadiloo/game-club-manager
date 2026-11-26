@@ -259,6 +259,20 @@ function Test-InnoLogShowsPostinstallFailForPhase {
     return $false
 }
 
+function Invoke-AcceptanceDotnetTest {
+    # R10e leg audit: a dotnet test filter that matches nothing exits 0. Require the VSTest summary with >= 1 passed test.
+    param(
+        [Parameter(Mandatory)][string] $Label,
+        [Parameter(Mandatory)][string[]] $DotnetArgs
+    )
+    $lines = @(& dotnet @DotnetArgs | ForEach-Object { $l = "$_"; Write-Host $l; $l })
+    $code = $LASTEXITCODE
+    if ($code -ne 0) { throw "${Label}: dotnet test failed exit $code" }
+    $summary = @($lines | Where-Object { $_ -match 'Passed!\s+-\s+Failed:\s+0,\s+Passed:\s+[1-9]\d*,' })
+    if ($summary.Count -eq 0) { throw "${Label}: no 'Passed! - Failed: 0, Passed: N' summary with N >= 1 (filter matched no tests?)" }
+    Write-Host "${Label}: $($summary[-1].Trim())"
+}
+
 function Start-CheckpointServerSetup {
     param(
         [string] $LegLabel,
@@ -268,7 +282,9 @@ function Start-CheckpointServerSetup {
         [string] $LogPath = $null,
         [int] $ExpectExitCode = 0,
         [hashtable] $SetupEnvironment = $null,
-        [string] $IntendedPostinstallFailPhase = $null
+        [string] $IntendedPostinstallFailPhase = $null,
+        # Only Install-ServerSetup sets this (it prints Inno hang diagnostics before throwing on a non-zero exit).
+        [switch] $CallerChecksExit
     )
     $cmdLine = Format-SetupCommandLine -Exe $Exe -ArgumentList $ArgumentList
     Write-Host "Start-CheckpointServerSetup: leg=$LegLabel cmd=$cmdLine"
@@ -355,6 +371,11 @@ function Start-CheckpointServerSetup {
                 Assert-NoCheckpointSetupProcesses -Context "expected-exit leg $LegLabel"
                 return [PSCustomObject]@{ Process = $proc; ExitCode = $exitCode; LegLabel = $LegLabel }
             }
+            if ($exitCode -ne 0 -and -not $CallerChecksExit) {
+                # R10e: an ExpectExitCode 0 leg (e.g. an upgrade seed install) must really exit 0.
+                Write-SetupProcessFailureUiText -Reason "unexpected exit $exitCode expected 0 leg $LegLabel"
+                throw "setup leg pin: exit $exitCode expected 0 (leg=$LegLabel)"
+            }
             Write-AcceptanceHarnessTrace "Assert-InnoLogClosedForLeg $LogPath" {
                 Assert-InnoLogClosedForLeg -LogPath $LogPath -LegStartUtc $legStartUtc
             } | Out-Null
@@ -418,7 +439,7 @@ function Install-ServerSetup {
     }
 
     $result = Write-AcceptanceHarnessTrace "Start-CheckpointServerSetup leg=$LegLabel" {
-        Start-CheckpointServerSetup -LegLabel $LegLabel -Exe $Exe -ArgumentList $setupArgs -TimeoutSeconds 2700 -LogPath $logPath
+        Start-CheckpointServerSetup -LegLabel $LegLabel -Exe $Exe -ArgumentList $setupArgs -TimeoutSeconds 2700 -LogPath $logPath -CallerChecksExit
     }
     if ($result.ExitCode -ne 0) {
         Write-InnoSetupHangDiagnostics -LogPath $logPath
@@ -978,6 +999,16 @@ function Assert-InstallerUpgradeLeftStoppedNoDump {
     }
     if (Select-String -LiteralPath $InnoLogPath -Pattern "CHECKPOINT_POSTINSTALL_UPGRADE_RESTORE start" -SimpleMatch) {
         throw "${LegLabel}: Inno log shows an upgrade restore start without a pre-upgrade backup"
+    }
+    # PO-F: the exact recovery command (Inno + PowerShell lines).
+    $recoveryPattern = 'CHECKPOINT_POSTINSTALL_UPGRADE_LEFT_STOPPED recovery_command="[^"]+\.exe" /SKIPSESSIONCHECK=1 /LOG="C:\\ProgramData\\Checkpoint\\logs\\setup-recovery\.log"'
+    $recoveryHits = @(Select-String -LiteralPath $InnoLogPath -Pattern $recoveryPattern)
+    if ($recoveryHits.Count -lt 2) {
+        throw "${LegLabel}: Inno log must carry the recovery_command line from Setup and from PowerShell; found $($recoveryHits.Count)"
+    }
+    # Item 12: every caller of this helper passes /SKIPSESSIONCHECK=1, and Setup must log that use.
+    if (-not (Select-String -LiteralPath $InnoLogPath -Pattern "CHECKPOINT_SKIPSESSIONCHECK used=1 value=1 context=silent-upgrade" -SimpleMatch)) {
+        throw "${LegLabel}: Inno log missing CHECKPOINT_SKIPSESSIONCHECK used=1 (the leg passed /SKIPSESSIONCHECK=1)"
     }
     $newDumps = @(Get-ChildItem -LiteralPath "C:\ProgramData\Checkpoint\backups" -Filter "pre-upgrade-*.dump" -ErrorAction SilentlyContinue |
         Where-Object { $_.LastWriteTime -ge $LegStart })

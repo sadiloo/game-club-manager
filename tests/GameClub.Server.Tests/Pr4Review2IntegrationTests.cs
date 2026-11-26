@@ -164,7 +164,7 @@ public sealed class Pr4Review2IntegrationTests(GameClubWebApplicationFactory fac
             var options = new DbContextOptionsBuilder<AppDbContext>().UseNpgsql(targetConn).Options;
             await using var db = new AppDbContext(options);
             await db.Database.MigrateAsync("20261104134405_Step2PoClarifications");
-            await DatabaseSeed.EnsureAsync(db);
+            await DatabaseSeed.EnsureAsync(db, allowDefaultDevelopmentUsers: true);
 
             await db.Database.ExecuteSqlRawAsync("""
                 INSERT INTO stations ("Id", "Name", "GroupId", "IsActive")

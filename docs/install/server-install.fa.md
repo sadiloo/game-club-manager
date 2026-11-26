@@ -34,6 +34,29 @@
 
 با اولین شکست در پس‌نصب، مراحل بعدی اجرا نمی‌شوند. در نصب تازهٔ ناموفق، سرویس‌ها در صورت نیاز متوقف می‌مانند (`CHECKPOINT_POSTINSTALL_ABORT_SERVICES_STOPPED` در گزارش). در ارتقای ناموفق، تلاش می‌شود داده و پشتیبان قبلی دست‌نخورده بماند و سرویس‌ها تا حد ممکن به وضعیت قبل برگردند. اگر پشتیبان پیش از ارتقای همین اجرا ساخته شده باشد، سرور دوباره روشن می‌شود (`CHECKPOINT_POSTINSTALL_UPGRADE_RESTORE`). اگر ارتقا پیش از ساخته شدن این پشتیبان شکست بخورد (upgrade-pins، upgrade-stop یا upgrade-backup)، سرور چک‌پوینت **خاموش می‌ماند** تا پایگاه داده بدون پشتیبان به‌روز نشود (`CHECKPOINT_POSTINSTALL_UPGRADE_LEFT_STOPPED reason=no_preupgrade_backup`). در این حالت علت را در گزارش نصب برطرف کنید و همان نصاب را دوباره اجرا کنید؛ سرور را دستی روشن نکنید.
 
+در نصب تازهٔ ناموفق، خود Setup هم هر دو سرویس CheckpointServer و CheckpointPostgres را متوقف می‌کند (`CHECKPOINT_SETUP_FRESH_ABORT_SERVICES_STOPPED`).
+
+سرور نصب‌شده هرگز رمزهای پیش‌فرض ۱۲۳۴/۱۱۱۱ نمی‌سازد: فهرست کاربران اولیه باید دست‌کم یک مدیر (Manager) داشته باشد، نقش فقط با نام پذیرفته می‌شود (`Owner`، `Manager`، `Operator`؛ عددهایی مثل `0` رد می‌شوند) و فهرست خالی یعنی شکست نصب.
+
+## بازیابی پس از ارتقای ناموفق (MVP)
+
+در این نسخه **برگشت خودکار به فایل‌های نسخهٔ قبل وجود ندارد** (پس از MVP). اگر در گزارش `CHECKPOINT_POSTINSTALL_UPGRADE_LEFT_STOPPED` آمد، Setup فرمان دقیق بازیابی را هم در گزارش می‌نویسد:
+
+```
+CHECKPOINT_POSTINSTALL_UPGRADE_LEFT_STOPPED recovery_command="D:\CheckpointServerSetup-1.2.3.exe" /SKIPSESSIONCHECK=1 /LOG="C:\ProgramData\Checkpoint\logs\setup-recovery.log"
+```
+
+یکی از این دو راه:
+
+1. **اجرای دوبارهٔ نصاب جدید** پس از رفع علت: همان فرمان `recovery_command=` را با دسترسی Administrator اجرا کنید (`"<نصاب جدید>" /SKIPSESSIONCHECK=1 /LOG="C:\ProgramData\Checkpoint\logs\setup-recovery.log"`). این اجرا پیش از به‌روزرسانی پایگاه داده، پشتیبان خودش را می‌گیرد.
+2. **برگشت به نسخهٔ قبل**: حذف برنامه، نصب نصاب نسخهٔ قبلی (پوشهٔ دادهٔ PostgreSQL باقی می‌ماند و دوباره به کار می‌رود — `CHECKPOINT_REINSTALL_KEPT_PGDATA` — و پیش از آن یک `pre-reinstall-kept-*.dump` گرفته می‌شود) و سپس بازیابی آخرین پشتیبان پیش از ارتقا (`C:\ProgramData\Checkpoint\backups\pre-upgrade-<نسخهٔ قبل>-<زمان>.dump` یا تازه‌ترین `checkpoint-*.dump`) با `powershell -ExecutionPolicy Bypass -File "C:\Program Files\Checkpoint\Server\tools\restore.ps1" -DumpPath "<فایل پشتیبان>"`.
+
+Setup و پشتیبان‌گیری روزانه هیچ پشتیبانی را پاک نمی‌کنند؛ اگر `pg_dump` شکست بخورد فقط فایل ناقص یا خالیِ همان اجرا پاک و در گزارش ثبت می‌شود (`CHECKPOINT_PGDUMP_FAILED ... action=removed_own_failed_output`) و پشتیبان تازه هرگز روی فایل موجود نوشته نمی‌شود.
+
+### گزینهٔ `/SKIPSESSIONCHECK=1` (فقط برای بازیابی)
+
+عمداً در نسخهٔ انتشار مانده است. بررسی جلسه‌های باز در ارتقا را رد می‌کند (در حالت بی‌صدا کد ۱۳۱ و در حالت عادی پرسش جلسهٔ باز). فقط برای بازیابی به کار ببرید، وقتی سرور خاموش است و تعداد جلسه‌های باز خوانده نمی‌شود یا خودتان جلسه‌ها را بسته‌اید؛ در آن اجرا از جلسه‌های باز محافظت نمی‌شود. هر بار استفاده در گزارش ثبت می‌شود: `CHECKPOINT_SKIPSESSIONCHECK used=1 ...`.
+
 کیوسک: کد **۱۵۰** برای شکست پس‌نصب — [kiosk-install.fa.md](kiosk-install.fa.md).
 
 جزئیات مرحلهٔ شکست در `C:\ProgramData\Checkpoint\logs\checkpoint-setup-failure.ini`، `postinstall-phase-trace.log` و گزارش Inno (`/LOG=`) ثبت می‌شود. نصاب انتشار بدون کد هوک داخلی است؛ نصاب Hooks جداست و `/TESTFAILPHASE=` فقط در آن build فعال است.

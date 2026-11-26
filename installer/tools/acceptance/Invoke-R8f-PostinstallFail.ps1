@@ -26,6 +26,23 @@ $setupArgs = @(
 Start-CheckpointServerSetup -LegLabel "r8f-postinstall-fail-fresh" -Exe $ServerSetupHooks -ArgumentList $setupArgs `
     -TimeoutSeconds 900 -LogPath $r8fFreshLog -ExpectExitCode $script:CheckpointSetupExitFailStart `
         -IntendedPostinstallFailPhase "start" | Out-Null
+# Item 7: a failed FIRST install leaves both services stopped (Setup logs it; PowerShell logs its own cleanup).
+if (-not (Select-String -LiteralPath $r8fFreshLog -Pattern "CHECKPOINT_SETUP_FRESH_ABORT_SERVICES_STOPPED services=CheckpointServer,CheckpointPostgres" -SimpleMatch)) {
+    throw "R8f-1 fresh: Inno log missing CHECKPOINT_SETUP_FRESH_ABORT_SERVICES_STOPPED"
+}
+if (-not (Select-String -LiteralPath $r8fFreshLog -Pattern "CHECKPOINT_POSTINSTALL_ABORT_SERVICES_STOPPED" -SimpleMatch)) {
+    throw "R8f-1 fresh: Inno log missing the PowerShell CHECKPOINT_POSTINSTALL_ABORT_SERVICES_STOPPED line"
+}
+foreach ($svcName in @("CheckpointServer", "CheckpointPostgres")) {
+    $svc = Get-Service $svcName -ErrorAction SilentlyContinue
+    if (-not $svc) { throw "R8f-1 fresh: $svcName service missing (the start phase runs after services were registered)" }
+    if ($svc.Status -ne "Stopped") {
+        try { $svc.WaitForStatus("Stopped", [TimeSpan]::FromSeconds(60)) } catch { Write-Host "R8f-1 fresh: $svcName WaitForStatus: $($_.Exception.Message)" }
+        $svc.Refresh()
+    }
+    if ($svc.Status -ne "Stopped") { throw "R8f-1 fresh: $svcName must be Stopped after a failed first install; status=$($svc.Status)" }
+    Write-Host "R8f-1 fresh: $svcName Stopped"
+}
 
 Write-Host "R8f-1 upgrade: postinstall fail hook (upgrade-backup)"
 & (Join-Path $PSScriptRoot "Reset-InstallerAcceptanceMachine.ps1")

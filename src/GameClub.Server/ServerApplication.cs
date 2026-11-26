@@ -30,6 +30,26 @@ public static class ServerApplication
         }
     }
 
+    /// <summary>
+    /// Default manager/operator PINs (1234/1111) are allowed only in Development or on an isolated test database whose
+    /// name starts with gameclub_test. An installed server (Production, no GAMECLUB_TEST_DATABASE) never gets them.
+    /// </summary>
+    internal static bool AllowDefaultDevelopmentUsers(bool isDevelopment, string? isolatedTestCs)
+    {
+        if (isDevelopment)
+        {
+            return true;
+        }
+
+        if (string.IsNullOrWhiteSpace(isolatedTestCs))
+        {
+            return false;
+        }
+
+        var db = new Npgsql.NpgsqlConnectionStringBuilder(isolatedTestCs).Database;
+        return db is not null && db.StartsWith("gameclub_test", StringComparison.Ordinal);
+    }
+
     public static async Task RunAsync(string[] args, Action<WebApplicationBuilder>? configureBuilder = null)
     {
         var builder = WebApplication.CreateBuilder(args);
@@ -87,7 +107,10 @@ public static class ServerApplication
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
             await db.Database.MigrateAsync();
-            await DatabaseSeed.EnsureAsync(db, builder.Configuration);
+            await DatabaseSeed.EnsureAsync(
+                db,
+                builder.Configuration,
+                allowDefaultDevelopmentUsers: AllowDefaultDevelopmentUsers(builder.Environment.IsDevelopment(), isolatedTestCs));
             await Program.ApplyAuditImmutabilityAsync(db);
         }
 

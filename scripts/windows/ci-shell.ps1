@@ -19,15 +19,6 @@ $env:SHELL_A3_BILLING_WAIT_SECONDS = "600"
 
 $configDir = "C:\ProgramData\Checkpoint\config"
 New-Item -ItemType Directory -Force -Path $configDir | Out-Null
-@"
-{
-  "GAMECLUB_API_KEY": "$($env:GAMECLUB_API_KEY)",
-  "ConnectionStrings": {
-    "Default": "$($env:GAMECLUB_DATABASE)"
-  },
-  "OperatorSessionSecret": "$($env:OperatorSessionSecret)"
-}
-"@ | Set-Content -Path (Join-Path $configDir "server.json") -Encoding UTF8
 
 if (-not (Get-Service -Name postgresql* -ErrorAction SilentlyContinue)) {
     choco install postgresql17 --params '/Password:postgres' -y --no-progress
@@ -41,6 +32,24 @@ dotnet publish src/GameClub.Server/GameClub.Server.csproj -c Release -f net10.0 
 
 $publishDir = Resolve-Path "src/GameClub.Server/bin/Release/net10.0/win-x64/publish"
 $serverExe = Join-Path $publishDir "GameClub.Server.exe"
+
+# R10e DEF-13b: an installed (Production, no GAMECLUB_TEST_DATABASE in the service env) server no longer falls back to
+# the built-in 1234/1111 users. Configure the CI operator users explicitly, hashed by the server itself (--hash-pin).
+function Get-CiServerPinHash([string] $Pin) {
+    $hash = ($Pin | & $serverExe --hash-pin | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($hash)) { throw "ci-shell: --hash-pin failed exit $LASTEXITCODE" }
+    return $hash
+}
+[ordered]@{
+    GAMECLUB_API_KEY      = $env:GAMECLUB_API_KEY
+    ConnectionStrings     = @{ Default = $env:GAMECLUB_DATABASE }
+    OperatorSessionSecret = $env:OperatorSessionSecret
+    InitialUsers          = @(
+        [ordered]@{ username = "manager"; role = "Manager"; pinHash = (Get-CiServerPinHash "1234") },
+        [ordered]@{ username = "operator"; role = "Operator"; pinHash = (Get-CiServerPinHash "1111") }
+    )
+} | ConvertTo-Json -Depth 5 | Set-Content -Path (Join-Path $configDir "server.json") -Encoding UTF8
+Write-Host "ci-shell: server.json written with explicit InitialUsers (manager=Manager, operator=Operator)"
 
 if (-not (Get-Service -Name CheckpointServer -ErrorAction SilentlyContinue)) {
     sc.exe create CheckpointServer binPath= "`"$serverExe`"" start= delayed-auto | Out-Null

@@ -36,7 +36,7 @@ public sealed class AcceptanceScenarioTests(GameClubWebApplicationFactory factor
             UPDATE rate_lines SET "HourlyToman" = 130000
               WHERE "GroupId" = 'pc-vip' AND "IsSpecialBand" = true AND "PlayMode" = 'Online' AND "PlayerCount" IS NULL;
             """);
-        await DatabaseSeed.EnsureAsync(db);
+        await DatabaseSeed.EnsureAsync(db, allowDefaultDevelopmentUsers: true);
     }
 
     [Fact]
