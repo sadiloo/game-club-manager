@@ -31,6 +31,10 @@ stage() { # <mode Release|Hooks> <dir>
   for n in kiosk-postinstall.ps1 CheckpointInstall.Common.psm1 checkpoint-setup-exit-codes.ps1; do cp "$d/server/tools/$n" "$d/guard/tools/"; done
 }
 stage Release "$WORK/stage-release"; stage Hooks "$WORK/stage-hooks"
+echo "== DEF-19: staged payload readable by Windows PowerShell 5.1 (BOM or ASCII; cp1252/cp1256 decode emulation)"
+for st in stage-release stage-hooks; do for sub in server/tools guard/tools; do
+  if pwsh -NoProfile -File "$ROOT/installer/ci/Test-StagedPayloadEncoding.ps1" -Dirs "$WORK/$st/$sub" > "$WORK/def19-$st-${sub%%/*}.txt" 2>&1; then pass "def19 $st/$sub"; else fail "def19 $st/$sub: $(grep -m1 FAIL "$WORK/def19-$st-${sub%%/*}.txt")"; fi
+done; done
 
 echo "== compile 4 installers (ISCC 6.7.1)"
 mkdir -p "$WORK/out"
@@ -102,6 +106,8 @@ expect fresh-ok "exit 0, all 7 phases" bash -c "[ $RC = 0 ] && [ '$CALLS' = 'web
 fresh_prefix; run fresh-database "$SREL" "database 7" "$ACC"
 expect fresh-database "exit 135, nothing after database" bash -c "[ $RC = 135 ] && [ '$CALLS' = 'webview2,database,' ]"
 expect fresh-database "abort logged" has "CHECKPOINT_POSTINSTALL_ABORT phase=database exit=135"
+expect fresh-database "DEF-21: Inno failure line names the real phase (no failure ini)" has "CHECKPOINT_POSTINSTALL_FAILED CurRunRecId=0 phase=database exit=135"
+expect fresh-database "DEF-21: no (postinstall) placeholder" hasnot "phase=(postinstall)"
 fresh_prefix; run fresh-accounts-132 "$SREL" "accounts 132" "$ACC"
 expect fresh-accounts-132 "invalid accounts passes 132 through" bash -c "[ $RC = 132 ] && [ '$CALLS' = 'webview2,database,accounts,' ]"
 fresh_prefix; run fresh-accounts-1 "$SREL" "accounts 1" "$ACC"
@@ -160,6 +166,13 @@ expect up-stale-marker "stale marker => server binary never started" server_not_
 seed_upgrade; run up-silent-unknown "$SREL" "" "$PINS"
 expect up-silent-unknown "silent upgrade, open-session count unknown => 131 + reason" bash -c "[ $RC = 131 ] && grep -q 'CHECKPOINT_OPEN_SESSIONS_SILENT reason=open_session_count_unknown_server_unreachable' '$LOG'"
 expect up-silent-unknown "no /SKIPSESSIONCHECK => no skip line" hasnot "CHECKPOINT_SKIPSESSIONCHECK"
+expect up-silent-unknown "R10f item 4: the 131 unreachable line prints the recovery command" has "CHECKPOINT_OPEN_SESSIONS_SILENT reason=open_session_count_unknown_server_unreachable $RECOVERY"
+for v in 0 yes; do
+  seed_upgrade; run "up-silent-skip$v" "$SREL" "" "/SKIPSESSIONCHECK=$v" "$PINS"
+  expect "up-silent-skip$v" "R10f item 8: /SKIPSESSIONCHECK=$v does NOT skip => still 131, no postinstall phase ran" bash -c "[ $RC = 131 ] && ! printf '%s' '$CALLS' | grep -qE 'webview2|database'"
+  expect "up-silent-skip$v" "R10f item 8: logged as ignored (used=0 value=$v)" has "CHECKPOINT_SKIPSESSIONCHECK used=0 value=$v context=silent-upgrade"
+  expect "up-silent-skip$v" "R10f item 8: no used=1 line" hasnot "CHECKPOINT_SKIPSESSIONCHECK used=1"
+done
 
 echo "== kiosk"
 fresh_prefix; run kiosk-ok "$KREL" ""

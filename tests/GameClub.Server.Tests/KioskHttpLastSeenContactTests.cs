@@ -85,6 +85,19 @@ public sealed class KioskHttpLastSeenContactTests(Pr52R4HttpLastSeenWebApplicati
         Assert.True(contact2Utc > contact1Utc);
     }
 
+    /// <summary>
+    /// R10f item 6 (rr4 L-10): the reset must clear kiosk_free_uses, otherwise a second run of the free-use scenario on
+    /// the SAME database sees the earlier run's free-use row. Runs the scenario three times on this collection's database.
+    /// </summary>
+    [Fact]
+    public async Task open_free_use_scenario_passes_three_times_on_the_same_database()
+    {
+        for (var run = 1; run <= 3; run++)
+        {
+            await open_free_use_http_only_contact_updates_grid_and_report_duration_across_clock_steps();
+        }
+    }
+
     [Fact]
     public async Task paid_kiosk_session_bill_and_lease_match_with_or_without_http_last_seen_stamps()
     {

@@ -38,6 +38,9 @@ foreach ($svc in @("CheckpointServer", "CheckpointPostgres")) {
 }
 
 & schtasks.exe /Delete /TN CheckpointDailyBackup /F 2>$null | Out-Null
+# R10f item 7: sc delete / schtasks /Delete are best effort (the service or task may not exist on a fresh runner). Their
+# non-zero exit is expected and consumed here, so the leg ledger's "no unchecked native exit" rule stays meaningful.
+$global:LASTEXITCODE = 0
 
 $staleFailPhase = Join-Path "C:\ProgramData\Checkpoint\config" ".internal-test-fail-phase"
 if (Test-Path -LiteralPath $staleFailPhase) {

@@ -11,7 +11,7 @@ public static class LiveDatabaseReset
     /// <summary>Like <see cref="S3TestHelpers.TruncateSql"/> but keeps kiosk lease signing keys (live relaunch must reuse the same key).</summary>
     public const string TruncateSqlPreserveLeaseSigningKeys = """
         TRUNCATE wallet_topup_corrections, invoice_member_effects, loyalty_hour_ledger, wallet_ledger, pending_wallet_topups, customer_members, branch_member_settings, branch_cafe_settings, close_records, shifts, invoice_catalog_lines, open_sale_lines, open_sales, catalog_items, catalog_categories RESTART IDENTITY CASCADE;
-        TRUNCATE kiosk_heartbeats, kiosk_devices, kiosk_pairing_codes, customer_credentials, game_catalog_entries, game_catalog_categories, station_kiosk_profiles RESTART IDENTITY CASCADE;
+        TRUNCATE kiosk_free_uses, kiosk_heartbeats, kiosk_devices, kiosk_pairing_codes, customer_credentials, game_catalog_entries, game_catalog_categories, station_kiosk_profiles RESTART IDENTITY CASCADE;
         TRUNCATE game_rate_lines, game_titles RESTART IDENTITY CASCADE;
         DO $truncate$
         BEGIN

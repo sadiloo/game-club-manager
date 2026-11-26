@@ -18,7 +18,7 @@ if (-not (Test-Path $psql)) {
 
 $conn = $env:GAMECLUB_TEST_DATABASE
 if ([string]::IsNullOrWhiteSpace($conn)) {
-    $conn = "Host=localhost;Port=5432;Database=gameclub_test;Username=postgres;Password=postgres;SSL Mode=Disable"
+    $conn = "Host=localhost;Port=5432;Database=gameclub_test_ci;Username=postgres;Password=postgres;SSL Mode=Disable"
 }
 if ($conn -match 'Password=([^;]+)') {
     $env:PGPASSWORD = $Matches[1]
@@ -26,7 +26,7 @@ if ($conn -match 'Password=([^;]+)') {
 elseif (-not $env:PGPASSWORD) {
     $env:PGPASSWORD = "postgres"
 }
-$db = if ($conn -match 'Database=([^;]+)') { $Matches[1] } else { "gameclub_test" }
+$db = if ($conn -match 'Database=([^;]+)') { $Matches[1] } else { "gameclub_test_ci" }
 $hostName = if ($conn -match 'Host=([^;]+)') { $Matches[1] } else { "127.0.0.1" }
 $port = if ($conn -match 'Port=([^;]+)') { $Matches[1] } else { "5432" }
 $user = if ($conn -match 'Username=([^;]+)') { $Matches[1] } else { "postgres" }

@@ -143,8 +143,8 @@ jobs:
     timeout-minutes: 54
     runs-on: windows-2022
     env:
-      GAMECLUB_DATABASE: Host=localhost;Port=5432;Database=gameclub_test;Username=postgres;Password=postgres;SSL Mode=Disable
-      GAMECLUB_TEST_DATABASE: Host=localhost;Port=5432;Database=gameclub_test;Username=postgres;Password=postgres;SSL Mode=Disable
+      GAMECLUB_DATABASE: Host=localhost;Port=5432;Database=gameclub_test_ci;Username=postgres;Password=postgres;SSL Mode=Disable
+      GAMECLUB_TEST_DATABASE: Host=localhost;Port=5432;Database=gameclub_test_ci;Username=postgres;Password=postgres;SSL Mode=Disable
       GAMECLUB_API_KEY: ci-test-key
       OperatorSessionSecret: ci-operator-secret-r11
       CHECKPOINT_SERVER_URL: http://127.0.0.1:5225
@@ -175,8 +175,8 @@ jobs:
             Start-Sleep -Seconds 3
           }
           if ($LASTEXITCODE -ne 0) { throw 'postgresql service not ready' }
-          $exists = & $psql -h 127.0.0.1 -U postgres -c "SELECT 1 FROM pg_database WHERE datname='gameclub_test'" -tA 2>$null
-          if (-not $exists) { & $psql -h 127.0.0.1 -U postgres -c "CREATE DATABASE gameclub_test;" }
+          $exists = & $psql -h 127.0.0.1 -U postgres -c "SELECT 1 FROM pg_database WHERE datname='gameclub_test_ci'" -tA 2>$null
+          if (-not $exists) { & $psql -h 127.0.0.1 -U postgres -c "CREATE DATABASE gameclub_test_ci;" }
       - name: windows kiosk integration
         # Run 44740272933: main kiosk phase ~12 min; 2× headroom so a hang fails visibly.
         timeout-minutes: 25
@@ -333,8 +333,8 @@ jobs:
     timeout-minutes: 45
     runs-on: windows-2022
     env:
-      GAMECLUB_DATABASE: Host=localhost;Port=5432;Database=gameclub_test;Username=postgres;Password=postgres;SSL Mode=Disable
-      GAMECLUB_TEST_DATABASE: Host=localhost;Port=5432;Database=gameclub_test;Username=postgres;Password=postgres;SSL Mode=Disable
+      GAMECLUB_DATABASE: Host=localhost;Port=5432;Database=gameclub_test_ci;Username=postgres;Password=postgres;SSL Mode=Disable
+      GAMECLUB_TEST_DATABASE: Host=localhost;Port=5432;Database=gameclub_test_ci;Username=postgres;Password=postgres;SSL Mode=Disable
       GAMECLUB_API_KEY: ci-test-key
       OperatorSessionSecret: ci-operator-secret-r11
     steps:
@@ -356,8 +356,8 @@ jobs:
             Start-Sleep -Seconds 3
           }
           if ($LASTEXITCODE -ne 0) { throw 'postgresql service not ready' }
-          $exists = & $psql -h 127.0.0.1 -U postgres -c "SELECT 1 FROM pg_database WHERE datname='gameclub_test'" -tA 2>$null
-          if (-not $exists) { & $psql -h 127.0.0.1 -U postgres -c "CREATE DATABASE gameclub_test;" }
+          $exists = & $psql -h 127.0.0.1 -U postgres -c "SELECT 1 FROM pg_database WHERE datname='gameclub_test_ci'" -tA 2>$null
+          if (-not $exists) { & $psql -h 127.0.0.1 -U postgres -c "CREATE DATABASE gameclub_test_ci;" }
       - name: windows shell integration
         shell: pwsh
         run: ./scripts/windows/ci-shell.ps1

@@ -374,6 +374,29 @@ try {
     }
     if ($r.CleanRan) { Write-Error "restore must not reach --clean when safety pg_dump fails" }
 
+    # DEF-20: a failed / empty SAFETY dump removes only its own new file; earlier backups stay byte-identical.
+    $bkDir = Join-Path $workDir "Checkpoint\backups"
+    $goodOld = Join-Path $bkDir "pre-restore-20250101-000000.dump"
+    $goodCp = Join-Path $bkDir "checkpoint-20250101-000000.000.dump"
+    [System.IO.File]::WriteAllBytes($goodOld, [byte[]](7, 7, 7))
+    [System.IO.File]::WriteAllBytes($goodCp, [byte[]](8, 8, 8, 8))
+    $restoreLogPath = Join-Path $workDir "Checkpoint\logs\restore.log"
+    foreach ($case in @(
+            @{ Name = "partial"; Stub = (New-StubPgBinaries -PgDumpExit 4 -PgDumpWriteOnFailure); Msg = 'Safety pg_dump failed with exit code 4'; LogRe = 'CHECKPOINT_PGDUMP_FAILED label=restore-safety exit=4 output=\S+pre-restore-\d{8}-\d{6}(-\d+)?\.dump bytes=[1-9]\d* action=removed_own_failed_output' },
+            @{ Name = "empty"; Stub = (New-StubPgBinaries -PgDumpExit 0 -PgDumpWriteZeroBytes); Msg = 'Safety pg_dump wrote an empty file'; LogRe = 'CHECKPOINT_PGDUMP_FAILED label=restore-safety empty_output output=\S+pre-restore-\d{8}-\d{6}(-\d+)?\.dump bytes=0 action=removed_own_failed_output' })) {
+        Remove-Item -LiteralPath $restoreLogPath -Force -ErrorAction SilentlyContinue
+        $r = Invoke-RestoreScript -ScriptPath $goldenRestore -DumpPath $inputDump -ServerJsonPath $jsonPath -WorkProgramData $workDir -Stub $case.Stub
+        if (-not $r.Error -or $r.Error.Exception.Message -notmatch [regex]::Escape($case.Msg)) { Write-Error "DEF-20 $($case.Name): expected '$($case.Msg)'; got $($r.Error)" }
+        if ($r.CleanRan) { Write-Error "DEF-20 $($case.Name): restore must not reach --clean" }
+        $left = @(Get-ChildItem -LiteralPath $bkDir -File | ForEach-Object { $_.Name } | Sort-Object)
+        $expect = @("checkpoint-20250101-000000.000.dump", "pre-restore-20250101-000000.dump")
+        if (($left -join ",") -ne ($expect -join ",")) { Write-Error "DEF-20 $($case.Name): only the failed safety dump may be removed; left=[$($left -join ',')]" }
+        if ((([System.IO.File]::ReadAllBytes($goodOld)) -join ",") -ne "7,7,7" -or (([System.IO.File]::ReadAllBytes($goodCp)) -join ",") -ne "8,8,8,8") { Write-Error "DEF-20 $($case.Name): earlier backups changed" }
+        $logText = if (Test-Path -LiteralPath $restoreLogPath) { Get-Content -LiteralPath $restoreLogPath -Raw } else { "" }
+        if ($logText -notmatch $case.LogRe) { Write-Error "DEF-20 $($case.Name): restore.log lacks /$($case.LogRe)/; got [$logText]" }
+    }
+    Remove-Item -LiteralPath $goodOld, $goodCp -Force
+
     $safetyUnreadStub = New-StubPgBinaries -PgDumpExit 0 -FirstListExit 6
     $r = Invoke-RestoreScript -ScriptPath $goldenRestore -DumpPath $inputDump -ServerJsonPath $jsonPath -WorkProgramData $workDir -Stub $safetyUnreadStub
     if (-not $r.Error) { Write-Error "expected safety dump readability failure" }
@@ -431,7 +454,7 @@ try {
 
     Assert-MutantKilled -Name 'no-safety-pgdump-exit' -SourcePath $goldenRestore -WorkDir $workDir -Transform {
         param($t)
-        $t -replace '(?ms)\$pgDump = Get-CheckpointPgExecutable -Name "pg_dump"\r?\n& \$pgDump[^\r\n]+\r?\nif \(\$LASTEXITCODE -ne 0\) \{\r?\n\s*Write-Error "Safety pg_dump failed[^"]*"\r?\n\s*exit 1\r?\n\}\r?\n\r?\n', "`$pgDump = Get-CheckpointPgExecutable -Name `"pg_dump`"`n& `$pgDump -Fc -h `$cfg.Host -p `$cfg.Port -U `$cfg.Username -d `$cfg.Database -f `$pre`n"
+        $t.Replace('if (-not $safety.Ok) {', 'if ($false) {')
     } -GoldenSafe {
         param([string]$ScriptPath)
         $stub = New-StubPgBinaries -PgDumpExit 4 -PgDumpWriteOnFailure
@@ -479,6 +502,19 @@ try {
         -ServerJsonPath $jsonPath -MinFreeBytes ([long]::MaxValue) 2>&1 | Out-Null
     if (-not (Test-Path -LiteralPath $lowFlag)) {
         throw "backup-daily must write low-disk flag when MinFreeBytes exceeds available space"
+    }
+    # R10f item 10 (rr4): a missing logs folder is created before the low-disk flag is written.
+    $missingLogs = Join-Path $pd "logs-missing-r10f"
+    if (Test-Path -LiteralPath $missingLogs) { throw "test setup: $missingLogs must not exist" }
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "..\tools\backup-daily.ps1") `
+        -PrimaryBackupDir (Join-Path $pd "backups") -LogsDir $missingLogs `
+        -ServerJsonPath $jsonPath -MinFreeBytes ([long]::MaxValue) 2>&1 | Out-Null
+    $missingFlag = Join-Path $missingLogs "backup-low-disk.flag"
+    if (-not (Test-Path -LiteralPath $missingFlag)) {
+        throw "backup-daily must create a missing -LogsDir and write the low-disk flag there"
+    }
+    if ((Get-Content -LiteralPath (Join-Path $missingLogs "backup.log") -Raw) -notmatch 'low disk flag written freeBytes=\d+') {
+        throw "backup-daily must log the low-disk flag into the created -LogsDir"
     }
 
     Write-Host "BackupRestoreConfig: ok"

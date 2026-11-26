@@ -32,7 +32,7 @@ public static class ServerApplication
 
     /// <summary>
     /// Default manager/operator PINs (1234/1111) are allowed only in Development or on an isolated test database whose
-    /// name starts with gameclub_test. An installed server (Production, no GAMECLUB_TEST_DATABASE) never gets them.
+    /// name starts with gameclub_test_ (R10f: the underscore is required; plain gameclub_test is refused). An installed server (Production, no GAMECLUB_TEST_DATABASE) never gets them.
     /// </summary>
     internal static bool AllowDefaultDevelopmentUsers(bool isDevelopment, string? isolatedTestCs)
     {
@@ -47,7 +47,7 @@ public static class ServerApplication
         }
 
         var db = new Npgsql.NpgsqlConnectionStringBuilder(isolatedTestCs).Database;
-        return db is not null && db.StartsWith("gameclub_test", StringComparison.Ordinal);
+        return db is not null && db.StartsWith("gameclub_test_", StringComparison.Ordinal);
     }
 
     public static async Task RunAsync(string[] args, Action<WebApplicationBuilder>? configureBuilder = null)

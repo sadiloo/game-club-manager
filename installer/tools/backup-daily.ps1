@@ -21,6 +21,11 @@ function Write-BackupLog([string]$line) {
 }
 
 try {
+    # R10f item 10 (rr4): the flags below live in $LogsDir; create it first so a missing logs folder cannot turn the
+    # low-disk warning into a Set-Content failure.
+    if (-not (Test-Path -LiteralPath $LogsDir)) {
+        New-Item -ItemType Directory -Force -Path $LogsDir | Out-Null
+    }
     if (-not (Test-Path -LiteralPath $PrimaryBackupDir)) {
         New-Item -ItemType Directory -Force -Path $PrimaryBackupDir | Out-Null
     }

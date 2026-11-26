@@ -117,7 +117,19 @@ function Sync-InstallerStagedTools {
     Write-Host "ci-installer: staged tools mode=$Mode serverTools=$serverTools guardTools=$guardTools"
 }
 
+function Invoke-StagedPayloadPs51Check([string] $Label) {
+    # DEF-19: the staged scripts must load under Windows PowerShell 5.1 itself (powershell.exe, not pwsh): the
+    # checker parses each file through the real 5.1 loader and the ANSI decode 5.1 uses for BOM-less files.
+    $checker = Join-Path $root "installer/ci/Test-StagedPayloadEncoding.ps1"
+    foreach ($dir in @((Join-Path $stageServer "tools"), (Join-Path $stageGuard "tools"))) {
+        & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $checker -Dirs $dir | ForEach-Object { Write-Host "ci-installer: ps51 $_" }
+        if ($LASTEXITCODE -ne 0) { throw "ci-installer: staged $Label payload fails Windows PowerShell 5.1 (exit $LASTEXITCODE) in $dir" }
+    }
+    Write-Host "ci-installer: staged $Label payload ok under Windows PowerShell 5.1"
+}
+
 Sync-InstallerStagedTools -Mode Release
+Invoke-StagedPayloadPs51Check -Label "release"
 
 Write-Host "ci-installer: static installer rules"
 # R10e item 2: Describe/It files run through Invoke-CheckpointPesterFile.ps1, which throws on any failed, skipped or
@@ -142,6 +154,7 @@ $staticTests = @(
     "ServerWizardStatic.Tests.ps1",
     "InstallerAcceptanceHarness.Tests.ps1",
     "ServerPayloadStatic.Tests.ps1",
+    "StagedPayloadEncoding.Tests.ps1",
     "ServerFinishLanStatic.Tests.ps1",
     "KioskTrustFileAcl.Tests.ps1",
     "KioskTrustPaths.Tests.ps1"
@@ -313,6 +326,7 @@ $serverHigh2 = Invoke-IsccCompile -IssPath $serverIss -Version $high2Version
 $kioskLow = Invoke-IsccCompile -IssPath $kioskIss -Version $lowVersion
 $kioskHigh = Invoke-IsccCompile -IssPath $kioskIss -Version $appVersion
 Sync-InstallerStagedTools -Mode Hooks
+Invoke-StagedPayloadPs51Check -Label "hooks"
 $serverHighHooks = Invoke-IsccCompile -IssPath $serverIss -Version $appVersion -InternalTestHooks
 $kioskHighHooks = Invoke-IsccCompile -IssPath $kioskIss -Version $appVersion -InternalTestHooks
 Sync-InstallerStagedTools -Mode Release

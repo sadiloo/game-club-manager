@@ -10,7 +10,7 @@ New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
 $logDir = Join-Path $artifactDir "shell-windows-logs"
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 
-$env:GAMECLUB_DATABASE = $env:GAMECLUB_DATABASE ?? "Host=127.0.0.1;Port=5432;Database=gameclub_test;Username=postgres;Password=postgres;SSL Mode=Disable"
+$env:GAMECLUB_DATABASE = $env:GAMECLUB_DATABASE ?? "Host=127.0.0.1;Port=5432;Database=gameclub_test_ci;Username=postgres;Password=postgres;SSL Mode=Disable"
 $env:GAMECLUB_API_KEY = $env:GAMECLUB_API_KEY ?? "ci-test-key"
 $env:OperatorSessionSecret = $env:OperatorSessionSecret ?? "ci-operator-secret-r11"
 $env:CHECKPOINT_SERVER_URL = "http://127.0.0.1:5000"

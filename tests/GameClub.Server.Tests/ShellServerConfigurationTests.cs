@@ -50,7 +50,7 @@ public sealed class ShellServerConfigurationTests
     {
         var cs = Environment.GetEnvironmentVariable("GAMECLUB_TEST_DATABASE")
             ?? Environment.GetEnvironmentVariable("GAMECLUB_DATABASE")
-            ?? "Host=localhost;Database=gameclub_test;Username=postgres;Password=postgres";
+            ?? "Host=localhost;Database=gameclub_test_ci;Username=postgres;Password=postgres";
         Assert.Throws<InvalidOperationException>(() =>
         {
             using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>

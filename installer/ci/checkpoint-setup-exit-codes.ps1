@@ -1,4 +1,4 @@
-# Must match ServerWizard.inc.iss / KioskWizard.inc.iss (Inno 0–5 = built-in; Checkpoint 128+).
+# Must match ServerWizard.inc.iss / KioskWizard.inc.iss (Inno 0-5 = built-in; Checkpoint 128+).
 $script:CheckpointSetupExitDowngradeBlocked = 128
 $script:CheckpointSetupExitPostinstallFailed = 129
 $script:CheckpointSetupExitExistingDataKept = 130

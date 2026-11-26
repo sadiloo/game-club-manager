@@ -63,6 +63,25 @@ public sealed class DatabaseSeedInitialUsersValidationTests
     public Task initial_users_unknown_role_is_refused() =>
         AssertSeedingRefusedAsync(Config(("badrole", "NotARealRole", Hash)), "unknown role 'NotARealRole'");
 
+    // R10f item 9 (rr4): a blank or missing role is refused, never defaulted to some role.
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData(null)]
+    public Task initial_users_blank_or_null_role_is_refused(string? role) =>
+        AssertSeedingRefusedAsync(Config(("boss", "Manager", Hash), ("norole", role, Hash)), $"unknown role '{role}'");
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("\t")]
+    public void try_parse_role_name_rejects_blank_or_null(string? role)
+    {
+        Assert.False(DatabaseSeed.TryParseRoleName(role, out var parsed));
+        Assert.Equal(default, parsed);
+    }
+
     [Theory]
     [InlineData("0")]
     [InlineData("1")]
@@ -142,7 +161,10 @@ public sealed class DatabaseSeedInitialUsersValidationTests
     [InlineData(false, "", false)]
     [InlineData(false, "Host=localhost;Database=checkpoint_copy;Username=x;Password=y", false)]
     [InlineData(false, "Host=localhost;Database=gameclub;Username=x;Password=y", false)]
-    [InlineData(false, "Host=localhost;Database=gameclub_test;Username=x;Password=y", true)]
+    // R10f item 5: only the gameclub_test_ prefix (with underscore) counts; plain gameclub_test or lookalikes do not.
+    [InlineData(false, "Host=localhost;Database=gameclub_test;Username=x;Password=y", false)]
+    [InlineData(false, "Host=localhost;Database=gameclub_testx;Username=x;Password=y", false)]
+    [InlineData(false, "Host=localhost;Database=gameclub_test_ci;Username=x;Password=y", true)]
     [InlineData(false, "Host=localhost;Database=gameclub_test_abc;Username=x;Password=y", true)]
     public void default_pins_policy_is_development_or_isolated_gameclub_test_only(bool isDevelopment, string? isolatedCs, bool expected) =>
         Assert.Equal(expected, ServerApplication.AllowDefaultDevelopmentUsers(isDevelopment, isolatedCs));

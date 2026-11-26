@@ -20,13 +20,26 @@ if (-not (Test-Path -LiteralPath $safeDir)) {
 
 Write-Host "پشتیبان امنیتی قبل از بازیابی …"
 $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
-$pre = Join-Path $safeDir "pre-restore-$stamp.dump"
+$pre = Get-CheckpointNewDumpPath -Directory $safeDir -Stem "pre-restore-$stamp"
+$restoreLogDir = Join-Path $env:ProgramData "Checkpoint\logs"
+if (-not (Test-Path -LiteralPath $restoreLogDir)) { New-Item -ItemType Directory -Force -Path $restoreLogDir | Out-Null }
+$restoreLog = Join-Path $restoreLogDir "restore.log"
 
 $env:PGPASSWORD = $cfg.Password
 $pgDump = Get-CheckpointPgExecutable -Name "pg_dump"
-& $pgDump -Fc -h $cfg.Host -p $cfg.Port -U $cfg.Username -d $cfg.Database -f $pre
-if ($LASTEXITCODE -ne 0) {
-    Write-Error "Safety pg_dump failed with exit code $LASTEXITCODE; restore aborted."
+# DEF-20: the safety dump goes to a NEW file; if pg_dump fails or writes 0 bytes, only that file is removed (logged).
+$safety = Invoke-CheckpointPgDumpNewFile -PgDump $pgDump -PgArgs @("-Fc", "-h", $cfg.Host, "-p", $cfg.Port, "-U", $cfg.Username, "-d", $cfg.Database) `
+    -OutFile $pre -Label "restore-safety" -Log {
+        param([string]$line)
+        Write-Host $line
+        Add-Content -LiteralPath $restoreLog -Value ("{0:o} {1}" -f (Get-Date), $line)
+    }
+if (-not $safety.Ok) {
+    if ($safety.Empty) {
+        Write-Error "Safety pg_dump wrote an empty file; restore aborted."
+    } else {
+        Write-Error "Safety pg_dump failed with exit code $($safety.ExitCode); restore aborted."
+    }
     exit 1
 }
 

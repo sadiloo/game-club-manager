@@ -726,7 +726,7 @@ function Invoke-DotNetWithWatchdog {
 }
 
 if (-not $env:GAMECLUB_TEST_DATABASE) {
-    $env:GAMECLUB_TEST_DATABASE = "Host=localhost;Port=5432;Database=gameclub_test;Username=postgres;Password=postgres;SSL Mode=Disable"
+    $env:GAMECLUB_TEST_DATABASE = "Host=localhost;Port=5432;Database=gameclub_test_ci;Username=postgres;Password=postgres;SSL Mode=Disable"
     $env:GAMECLUB_DATABASE = $env:GAMECLUB_TEST_DATABASE
     $env:GAMECLUB_API_KEY = "ci-test-key"
 }

@@ -34,6 +34,17 @@ $reads = [regex]::Matches($inc, [regex]::Escape("{param:SKIPSESSIONCHECK|}")).Co
 if ($reads -ne 1) { $errors += "Inno: {param:SKIPSESSIONCHECK|} must be read exactly once (in SkipSessionCheckRequested); found $reads" }
 $m = [regex]::Match($inc, '(?s)function SkipSessionCheckRequested\(const Context: String\): Boolean;.*?\r?\nend;')
 if (-not $m.Success -or $m.Value -notmatch "if Result then\s*\r?\n\s*Log\('CHECKPOINT_SKIPSESSIONCHECK used=1") { $errors += "Inno: SkipSessionCheckRequested must log CHECKPOINT_SKIPSESSIONCHECK used=1 when the flag is present" }
+# R10f item 8: only the value 1 skips; any other value is logged as ignored.
+if (-not $m.Success -or $m.Value -notmatch [regex]::Escape("Result := V = '1';")) { $errors += "Inno: SkipSessionCheckRequested must skip only for /SKIPSESSIONCHECK=1" }
+if (-not $m.Success -or $m.Value -notmatch "CHECKPOINT_SKIPSESSIONCHECK used=0 value=") { $errors += "Inno: an ignored /SKIPSESSIONCHECK value must be logged (used=0)" }
+# R10f item 4: the silent 131 server-unreachable line prints the recovery command.
+if ($inc -notmatch [regex]::Escape("Log('CHECKPOINT_OPEN_SESSIONS_SILENT reason=open_session_count_unknown_server_unreachable recovery_command=' +") + '\s*\r?\n\s*CheckpointRecoveryCommandLine\);') {
+    $errors += "Inno: the silent 131 unreachable line must print recovery_command="
+}
+# DEF-21: the Inno failure line falls back to the phase AbortPostinstallPhaseFailed was given.
+if ($inc -notmatch [regex]::Escape("  GSetupFailurePhase := Phase;") -or $inc -notmatch [regex]::Escape("PhaseOut := GSetupFailurePhase")) {
+    $errors += "Inno: CHECKPOINT_POSTINSTALL_FAILED must name the real phase when no failure ini exists (DEF-21)"
+}
 foreach ($ctx in @("silent-upgrade", "interactive-upgrade")) {
     if ($inc -notmatch [regex]::Escape("if SkipSessionCheckRequested('$ctx') then Exit;")) { $errors += "Inno: $ctx open-session check must go through SkipSessionCheckRequested" }
 }

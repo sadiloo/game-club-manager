@@ -54,7 +54,7 @@ Backups are never deleted by Setup or by the backup task; a failed `pg_dump` rem
 
 ### `/SKIPSESSIONCHECK=1` (operator recovery flag)
 
-Kept in release builds on purpose. It skips the open-session check on upgrade (silent: exit 131; interactive: the open-sessions question). Use it only for recovery, when CheckpointServer is stopped and the open-session count cannot be read, or when you have closed the sessions yourself: open sessions are **not** protected in that run. Every use is logged: `CHECKPOINT_SKIPSESSIONCHECK used=1 value=1 context=silent-upgrade|interactive-upgrade ...`.
+Kept in release builds on purpose. It skips the open-session check on upgrade (silent: exit 131; interactive: the open-sessions question). Use it only for recovery, when CheckpointServer is stopped and the open-session count cannot be read, or when you have closed the sessions yourself: open sessions are **not** protected in that run. Every use is logged: `CHECKPOINT_SKIPSESSIONCHECK used=1 value=1 context=silent-upgrade|interactive-upgrade ...`. Only the value `1` skips: `/SKIPSESSIONCHECK=0` (or any other value) is ignored and logged as `CHECKPOINT_SKIPSESSIONCHECK used=0 value=...`. When a silent upgrade exits 131 because the server cannot be asked for the count, the `CHECKPOINT_OPEN_SESSIONS_SILENT reason=open_session_count_unknown_server_unreachable` line also prints the `recovery_command=`.
 
 ### Kiosk
 

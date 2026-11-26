@@ -54,6 +54,7 @@ var
   GReinstallWithKeptPgData: Boolean;
   GPostinstallFailureShown: Boolean;
   GSetupFailureExitCode: Integer;
+  GSetupFailurePhase: String;
 
 function WindowsServiceExists(const ServiceName: String): Boolean;
 var Rc: Integer;
@@ -327,6 +328,9 @@ begin
     Result := GSetupFailureExitCode;
     if ReadSetupFailureFromIni(Phase, IniExit) then
       PhaseOut := Phase
+    else if GSetupFailurePhase <> '' then
+      { DEF-21: the PowerShell phase may have died before writing its failure record (e.g. a parse error). }
+      PhaseOut := GSetupFailurePhase
     else
       PhaseOut := '(postinstall)';
     Exit;
@@ -450,6 +454,7 @@ end;
 procedure AbortPostinstallPhaseFailed(const Phase: String; const ExitCode: Integer);
 begin
   GSetupFailureExitCode := ExitCode;
+  GSetupFailurePhase := Phase;
   RestoreCheckpointUpgradeAfterPostinstallFailure;
   StopCheckpointServicesAfterFreshInstallFailure;
   LogSetupFailureIniMessage;
@@ -900,10 +905,14 @@ function SkipSessionCheckRequested(const Context: String): Boolean;
 var V: String;
 begin
   V := ExpandConstant('{param:SKIPSESSIONCHECK|}');
-  Result := V <> '';
+  { R10f item 8: only /SKIPSESSIONCHECK=1 skips; =0 or any other value is logged and ignored. }
+  Result := V = '1';
   if Result then
     Log('CHECKPOINT_SKIPSESSIONCHECK used=1 value=' + V + ' context=' + Context +
-      ' note=operator recovery flag: the open-session check is skipped; open sessions are NOT protected by this Setup run');
+      ' note=operator recovery flag: the open-session check is skipped; open sessions are NOT protected by this Setup run')
+  else if V <> '' then
+    Log('CHECKPOINT_SKIPSESSIONCHECK used=0 value=' + V + ' context=' + Context +
+      ' note=ignored: only /SKIPSESSIONCHECK=1 skips the open-session check');
 end;
 
 procedure EnforceSilentUpgradeOpenSessionPolicy;
@@ -917,7 +926,9 @@ begin
   QueryOpenSessionCount(Count, Unknown);
   if Unknown then
   begin
-    Log('CHECKPOINT_OPEN_SESSIONS_SILENT reason=open_session_count_unknown_server_unreachable');
+    { R10f item 4: the operator needs the exact command when the server cannot be asked (e.g. it is stopped). }
+    Log('CHECKPOINT_OPEN_SESSIONS_SILENT reason=open_session_count_unknown_server_unreachable recovery_command=' +
+      CheckpointRecoveryCommandLine);
     ExitProcess(CHECKPOINT_EXIT_OPEN_SESSIONS_SILENT);
   end;
   if Count > 0 then

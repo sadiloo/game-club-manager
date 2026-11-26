@@ -93,6 +93,16 @@ function Assert-NoCheckpointSetupProcesses {
     throw "setup leg pin: $($procs.Count) leftover CheckpointServerSetup* process(es) at $Context"
 }
 
+function Get-InnoLogPostinstallAbort {
+    # DEF-21: the phase/exit Setup itself logged when a postinstall phase failed (ExitProcess skips "Log closed.").
+    param([string] $LogPath)
+    if (-not $LogPath -or -not (Test-Path -LiteralPath $LogPath)) { return "" }
+    $hit = @(Get-Content -LiteralPath $LogPath -Encoding UTF8 -ErrorAction SilentlyContinue |
+            ForEach-Object { if ($_ -match 'CHECKPOINT_POSTINSTALL_ABORT phase=\S+ exit=\d+') { $Matches[0] } })
+    if ($hit.Count -eq 0) { return "" }
+    return $hit[-1]
+}
+
 function Assert-InnoLogClosedForLeg {
     param(
         [string] $LogPath,
@@ -371,10 +381,18 @@ function Start-CheckpointServerSetup {
                 Assert-NoCheckpointSetupProcesses -Context "expected-exit leg $LegLabel"
                 return [PSCustomObject]@{ Process = $proc; ExitCode = $exitCode; LegLabel = $LegLabel }
             }
-            if ($exitCode -ne 0 -and -not $CallerChecksExit) {
-                # R10e: an ExpectExitCode 0 leg (e.g. an upgrade seed install) must really exit 0.
-                Write-SetupProcessFailureUiText -Reason "unexpected exit $exitCode expected 0 leg $LegLabel"
-                throw "setup leg pin: exit $exitCode expected 0 (leg=$LegLabel)"
+            if ($exitCode -ne 0) {
+                # DEF-21: report Setup's REAL exit code (and the phase Inno logged); a Setup that ended through
+                # ExitProcess has no "Log closed." line, so that check must not hide the exit code.
+                $abort = Get-InnoLogPostinstallAbort -LogPath $LogPath
+                Write-Host "Start-CheckpointServerSetup: leg=$LegLabel setup exit=$exitCode $abort"
+                if (-not $CallerChecksExit) {
+                    # R10e: an ExpectExitCode 0 leg (e.g. an upgrade seed install) must really exit 0.
+                    Write-SetupProcessFailureUiText -Reason "unexpected exit $exitCode expected 0 leg $LegLabel"
+                    throw "setup leg pin: exit $exitCode expected 0 (leg=$LegLabel) $abort"
+                }
+                Assert-NoCheckpointSetupProcesses -Context "failed leg $LegLabel"
+                return [PSCustomObject]@{ Process = $proc; ExitCode = $exitCode; LegLabel = $LegLabel; Abort = $abort }
             }
             Write-AcceptanceHarnessTrace "Assert-InnoLogClosedForLeg $LogPath" {
                 Assert-InnoLogClosedForLeg -LogPath $LogPath -LegStartUtc $legStartUtc
@@ -447,7 +465,7 @@ function Install-ServerSetup {
         $artifactDir = Join-Path $PSScriptRoot "..\..\..\artifacts\installer\acceptance-logs"
         New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
         Copy-Item -LiteralPath $logPath -Destination (Join-Path $artifactDir (Split-Path $logPath -Leaf)) -Force
-        throw "setup exit $($result.ExitCode) leg=$LegLabel exe=$Exe"
+        throw "setup exit $($result.ExitCode) leg=$LegLabel exe=$Exe $(Get-InnoLogPostinstallAbort -LogPath $logPath)"
     }
     Write-AcceptanceHarnessTrace "Assert-InnoSetupLogNoFailedRuns $logPath" {
         Assert-InnoSetupLogNoFailedRuns -LogPath $logPath
@@ -779,6 +797,9 @@ function Start-InstallerCheckpointGuard {
             $deadline = (Get-Date).AddSeconds(45)
             while ((Get-Date) -lt $deadline) {
                 if ((Get-Service CheckpointGuard).Status -eq "Running") {
+                    # R10f item 7: a non-zero `sc stop` / `sc start` above was handled (Start-Service fallback, Running
+                    # now); consume it so the leg ledger does not see a stale native exit code.
+                    $global:LASTEXITCODE = 0
                     return
                 }
                 Start-Sleep -Seconds 1
