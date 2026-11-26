@@ -245,6 +245,35 @@ function Get-CheckpointDailyBackupStartBoundaryUtc {
     return [System.TimeZoneInfo]::ConvertTimeToUtc($localNine, $tehran).ToString("yyyy-MM-dd'T'HH:mm:ss'Z'")
 }
 
+function Get-CheckpointSetupFailureIniPath {
+    return Join-Path $env:ProgramData "Checkpoint\logs\checkpoint-setup-failure.ini"
+}
+
+function Clear-CheckpointSetupFailureRecord {
+    $path = Get-CheckpointSetupFailureIniPath
+    if (Test-Path -LiteralPath $path) {
+        Remove-Item -LiteralPath $path -Force
+    }
+}
+
+function Write-CheckpointSetupFailureRecord {
+    param(
+        [Parameter(Mandatory)][string] $Phase,
+        [Parameter(Mandatory)][int] $InstallerExitCode,
+        [string] $Message = ""
+    )
+    $logsDir = Join-Path $env:ProgramData "Checkpoint\logs"
+    New-Item -ItemType Directory -Force -Path $logsDir | Out-Null
+    $path = Get-CheckpointSetupFailureIniPath
+    $lines = @(
+        "installerExitCode=$InstallerExitCode",
+        "phase=$Phase",
+        "message=$($Message -replace '[\r\n]', ' ')"
+    )
+    Set-Content -LiteralPath $path -Value ($lines -join "`n") -Encoding utf8NoBOM
+    Write-Host "CHECKPOINT_SETUP_FAILURE recorded exit=$InstallerExitCode phase=$Phase"
+}
+
 Export-ModuleMember -Function @(
     "New-CheckpointPlainSecureString",
     "Test-CheckpointKioskPasswordLocked",
@@ -260,5 +289,8 @@ Export-ModuleMember -Function @(
     "Set-CheckpointServerJsonAcl",
     "Set-KioskTrustFileAcl",
     "Get-CheckpointDailyBackupStartBoundaryUtc",
-    "Get-CheckpointIranTimeZone"
+    "Get-CheckpointIranTimeZone",
+    "Get-CheckpointSetupFailureIniPath",
+    "Clear-CheckpointSetupFailureRecord",
+    "Write-CheckpointSetupFailureRecord"
 )

@@ -78,8 +78,10 @@ try {
     Invoke-RestMethod -Uri "$base/api/operator/auth/login" -Method POST -Body $badBody -ContentType "application/json" | Out-Null
     throw "B-13: old pin 1111 must not work"
 } catch {
-    if ($_.ErrorDetails.Message -notmatch "401" -and $_.Exception.Message -notmatch "401") {
-        Write-Host "B-13: old pin rejected"
+    $status = $null
+    if ($_.Exception.Response) { $status = $_.Exception.Response.StatusCode.value__ }
+    if ($status -ne 401) {
+        throw "B-13: old pin 1111 must not work (expected 401); got status=$status"
     }
 }
 

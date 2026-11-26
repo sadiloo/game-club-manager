@@ -34,4 +34,14 @@ $ps5Json = $ps5Bill.Content | ConvertFrom-Json
 $pcJson = $pcBill.Content | ConvertFrom-Json
 if ($null -eq $ps5Json.unroundedPayableToman) { throw "B-8: PS5 bill missing" }
 if ($null -eq $pcJson.unroundedPayableToman) { throw "B-8: PC bill missing" }
-Write-Host "B-8: ok ps5=$($ps5Json.unroundedPayableToman) pc=$($pcJson.unroundedPayableToman)"
+if ([int]$pcJson.unroundedPayableToman -ne 0) { throw "B-8: PC offline bill expected 0; got $($pcJson.unroundedPayableToman)" }
+if ([int]$ps5Json.unroundedPayableToman -lt 1) { throw "B-8: PS5 bill must be positive; got $($ps5Json.unroundedPayableToman)" }
+$headers = Get-InstallerApiHeaders
+$rates = Invoke-RestMethod -Method Get -Uri "http://127.0.0.1:5000/api/rates" -Headers $headers
+$ps5Line = @($rates.lines) | Where-Object { $_.groupId -eq "ps5" -and $_.playMode -eq "Offline" -and $_.playerCount -eq 1 -and -not $_.isSpecialBand } | Select-Object -First 1
+if (-not $ps5Line) { throw "B-8: ps5 rate line missing" }
+$maxReasonable = [int]$ps5Line.hourlyToman
+if ([int]$ps5Json.unroundedPayableToman -gt $maxReasonable) {
+    throw "B-8: PS5 bill $($ps5Json.unroundedPayableToman) exceeds 1h offline cap $maxReasonable"
+}
+Write-Host "B-8: ok ps5=$($ps5Json.unroundedPayableToman) pc=$($pcJson.unroundedPayableToman) cap=$maxReasonable"

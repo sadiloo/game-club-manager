@@ -11,6 +11,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 Import-Module (Join-Path $PSScriptRoot "CheckpointInstall.Common.psm1") -Force
+. (Join-Path $PSScriptRoot "..\ci\checkpoint-setup-exit-codes.ps1")
 
 $programData = "C:\ProgramData\Checkpoint"
 $configDir = Join-Path $programData "config"
@@ -27,18 +28,40 @@ function Test-Phase([string[]] $Names) {
 
 New-Item -ItemType Directory -Force -Path $configDir, $logsDir, $backupsDir | Out-Null
 
-$failPhasePath = Join-Path $configDir ".internal-test-fail-phase"
-if (Test-Path -LiteralPath $failPhasePath) {
-    $failPhase = (Get-Content -LiteralPath $failPhasePath -Raw).Trim()
-    if ($failPhase -eq $InstallPhase) {
-        Write-Host "CHECKPOINT_POSTINSTALL_FAILED phase=$InstallPhase (acceptance file hook)"
-        exit 1
+if ($env:CHECKPOINT_INTERNAL_TEST_HOOKS -eq "1") {
+    $failPhasePath = Join-Path $configDir ".internal-test-fail-phase"
+    if (Test-Path -LiteralPath $failPhasePath) {
+        $failPhase = (Get-Content -LiteralPath $failPhasePath -Raw).Trim()
+        if ($failPhase -eq $InstallPhase) {
+            Write-Host "CHECKPOINT_POSTINSTALL_FAILED phase=$InstallPhase (acceptance file hook)"
+            Write-CheckpointSetupFailureRecord -Phase $InstallPhase -InstallerExitCode $script:CheckpointSetupExitPostinstallFailed -Message "internal test file hook"
+            exit $script:CheckpointSetupExitPostinstallFailed
+        }
     }
 }
 
 if ($env:CHECKPOINT_INTERNAL_TEST_HOOKS -eq "1" -and $env:CHECKPOINT_TEST_FAIL_PHASE -eq $InstallPhase) {
     Write-Host "CHECKPOINT_POSTINSTALL_FAILED phase=$InstallPhase (internal test hook)"
-    exit 1
+    Write-CheckpointSetupFailureRecord -Phase $InstallPhase -InstallerExitCode $script:CheckpointSetupExitPostinstallFailed -Message "TESTFAILPHASE hook"
+    exit $script:CheckpointSetupExitPostinstallFailed
+}
+
+function Exit-CheckpointPostinstallFailure {
+    param(
+        [Parameter(Mandatory)][string] $Phase,
+        [int] $InstallerExitCode = $script:CheckpointSetupExitPostinstallFailed,
+        [string] $Message = ""
+    )
+    Write-CheckpointSetupFailureRecord -Phase $Phase -InstallerExitCode $InstallerExitCode -Message $Message
+    exit $InstallerExitCode
+}
+
+trap {
+    $msg = $_.Exception.Message
+    if ($msg -match "CHECKPOINT_ACCOUNTS_INVALID") {
+        Exit-CheckpointPostinstallFailure -Phase $InstallPhase -InstallerExitCode $script:CheckpointSetupExitInvalidAccounts -Message $msg
+    }
+    Exit-CheckpointPostinstallFailure -Phase $InstallPhase -InstallerExitCode $script:CheckpointSetupExitPostinstallFailed -Message $msg
 }
 
 $isUpgrade = Test-Path -LiteralPath $configPath
@@ -170,7 +193,15 @@ if ((Test-Phase @("accounts")) -and -not $isUpgrade) {
             )) {
             $user = $acc.$($role.Key + "User")
             $pin = $acc.$($role.Key + "Pin")
-            if (-not $user -or -not $pin) { continue }
+            if ([string]::IsNullOrWhiteSpace($user)) {
+                throw "CHECKPOINT_ACCOUNTS_INVALID blank username for $($role.Key)"
+            }
+            if ([string]::IsNullOrWhiteSpace($pin)) {
+                throw "CHECKPOINT_ACCOUNTS_INVALID blank pin for $($role.Key)"
+            }
+            if ($user -match '\s') {
+                throw "CHECKPOINT_ACCOUNTS_INVALID whitespace in username for $($role.Key)"
+            }
             $psi = New-Object System.Diagnostics.ProcessStartInfo
             $psi.FileName = $ServerExe
             $psi.Arguments = "--hash-pin"
@@ -199,11 +230,10 @@ if ((Test-Phase @("accounts")) -and -not $isUpgrade) {
         GAMECLUB_API_KEY      = $apiKey
         Urls                  = "http://0.0.0.0:5000"
     }
-    if ($initialUsers.Count -gt 0) {
-        $serverJson.InitialUsers = $initialUsers
-    } else {
-        throw "First install requires non-empty InitialUsers (accounts file missing)."
+    if ($initialUsers.Count -lt 3) {
+        throw "CHECKPOINT_ACCOUNTS_INVALID expected three accounts (manager1, manager2, operator); got $($initialUsers.Count)"
     }
+    $serverJson.InitialUsers = $initialUsers
     $json = $serverJson | ConvertTo-Json -Depth 5
     Set-Content -LiteralPath $configPath -Value $json -Encoding UTF8
     Set-CheckpointServerJsonAcl -ConfigPath $configPath
@@ -260,4 +290,5 @@ if (Test-Phase @("start", "install-all")) {
     if (Test-Path -LiteralPath $stagingSecretsPath) {
         Remove-Item -LiteralPath $stagingSecretsPath -Force
     }
+    Clear-CheckpointSetupFailureRecord
 }

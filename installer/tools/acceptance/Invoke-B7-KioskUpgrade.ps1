@@ -18,4 +18,11 @@ if (Test-Path $setupPath) {
 $p = Start-Process -FilePath $HighKioskSetup -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART") -Wait -PassThru
 if ($p.ExitCode -notin 0, 3010) { throw "B-7: upgrade exit $($p.ExitCode)" }
 if (-not (Test-Path $setupPath)) { throw "B-7: setup.json missing after upgrade" }
-Write-Host "B-7: ok"
+$setup = Get-Content $setupPath -Raw | ConvertFrom-Json
+if ([string]::IsNullOrWhiteSpace($setup.serverBase)) { throw "B-7: setup.json serverBase missing" }
+$guard = Get-Service CheckpointGuard -ErrorAction SilentlyContinue
+if (-not $guard) { throw "B-7: CheckpointGuard missing after upgrade" }
+if ($guard.Status -ne "Running") { Start-InstallerCheckpointGuard }
+$kioskUser = Get-LocalUser -Name "CheckpointKiosk" -ErrorAction SilentlyContinue
+if (-not $kioskUser) { throw "B-7: CheckpointKiosk user missing after upgrade" }
+Write-Host "B-7: ok serverBase=$($setup.serverBase)"

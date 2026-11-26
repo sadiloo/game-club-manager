@@ -11,7 +11,7 @@ param(
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "Invoke-AcceptanceCommon.ps1")
 
-Write-Host "R8f-1 fresh: postinstall fail hook (start phase)"
+Write-Host "R8f-1 fresh: postinstall fail hook (start phase, hooks artifact)"
 & (Join-Path $PSScriptRoot "Reset-InstallerAcceptanceMachine.ps1")
 New-Item -ItemType Directory -Force -Path $LogsDir | Out-Null
 $r8fFreshLog = Join-Path $LogsDir "acceptance-setup-r8f-postinstall-fail-fresh.log"
@@ -20,16 +20,12 @@ $setupArgs = @(
     "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART",
     "/ACCOUNTS=$AccountsFile",
     "/SKIPSESSIONCHECK=1",
+    "/TESTFAILPHASE=start",
     "/LOG=`"$r8fFreshLog`""
 )
-Set-AcceptancePostinstallFailPhase -Phase "start"
-try {
-    Start-CheckpointServerSetup -LegLabel "r8f-postinstall-fail-fresh" -Exe $ServerSetup -ArgumentList $setupArgs `
-        -TimeoutSeconds 900 -LogPath $r8fFreshLog -ExpectExitCode $script:CheckpointSetupExitPostinstallFailed `
-        -IntendedPostinstallFailPhase "start" | Out-Null
-} finally {
-    Clear-AcceptancePostinstallFailPhase
-}
+Start-CheckpointServerSetup -LegLabel "r8f-postinstall-fail-fresh" -Exe $ServerSetupHooks -ArgumentList $setupArgs `
+    -TimeoutSeconds 900 -LogPath $r8fFreshLog -ExpectExitCode $script:CheckpointSetupExitPostinstallFailed `
+    -IntendedPostinstallFailPhase "start" | Out-Null
 
 Write-Host "R8f-1 upgrade: postinstall fail hook (upgrade-backup)"
 & (Join-Path $PSScriptRoot "Reset-InstallerAcceptanceMachine.ps1")
@@ -50,14 +46,10 @@ $upgradeArgs = @(
     "/SKIPSESSIONCHECK=1",
     "/LOG=`"$r8fUpgradeLog`""
 )
-Set-AcceptancePostinstallFailPhase -Phase "upgrade-backup"
-try {
-    Start-CheckpointServerSetup -LegLabel "r8f-postinstall-fail-upgrade" -Exe $ServerSetup -ArgumentList $upgradeArgs `
-        -TimeoutSeconds 900 -LogPath $r8fUpgradeLog -ExpectExitCode $script:CheckpointSetupExitPostinstallFailed `
-        -IntendedPostinstallFailPhase "upgrade-backup" | Out-Null
-} finally {
-    Clear-AcceptancePostinstallFailPhase
-}
+$upgradeArgs += "/TESTFAILPHASE=upgrade-backup"
+Start-CheckpointServerSetup -LegLabel "r8f-postinstall-fail-upgrade" -Exe $ServerSetupHooks -ArgumentList $upgradeArgs `
+    -TimeoutSeconds 900 -LogPath $r8fUpgradeLog -ExpectExitCode $script:CheckpointSetupExitPostinstallFailed `
+    -IntendedPostinstallFailPhase "upgrade-backup" | Out-Null
 
 if (-not (Get-Service CheckpointServer -ErrorAction SilentlyContinue)) {
     throw "R8f-1 upgrade: CheckpointServer service missing after failed upgrade (DeinitializeSetup restore expected)"

@@ -73,13 +73,21 @@ if ($secrets.OperatorSessionSecret -ne $secretsAfter.OperatorSessionSecret) {
 if ($secrets.ApiKey -ne $secretsAfter.ApiKey) {
     throw "B-2: API key changed"
 }
+$beforeUsers = $secrets.InitialUsersJson
+$afterUsers = $secretsAfter.InitialUsersJson
+if ($beforeUsers -ne $afterUsers) {
+    throw "B-2: InitialUsers changed during upgrade"
+}
 
 $pre = Get-ChildItem "C:\ProgramData\Checkpoint\backups\pre-upgrade-$LowVersion-*.dump" -ErrorAction SilentlyContinue | Select-Object -First 1
 if (-not $pre) { throw "B-2: pre-upgrade dump missing" }
 
 $upgradeLog = "C:\ProgramData\Checkpoint\logs\upgrade.log"
 if (-not (Test-Path $upgradeLog)) { throw "B-2: upgrade.log missing" }
-if (-not (Select-String -Path $upgradeLog -Pattern "downtimeSeconds=")) { throw "B-2: upgrade downtime not logged" }
+$downtimeLine = Select-String -Path $upgradeLog -Pattern "downtimeSeconds=(\d+)" | Select-Object -Last 1
+if (-not $downtimeLine) { throw "B-2: upgrade downtime not logged" }
+$downtimeSec = [int]$downtimeLine.Matches[0].Groups[1].Value
+if ($downtimeSec -ge 600) { throw "B-2: upgrade downtime $downtimeSec s must be < 600" }
 
 if (-not $SkipDowngradeCheck) {
     $pgPin = Get-InstallerPostgreSqlBinFingerprint

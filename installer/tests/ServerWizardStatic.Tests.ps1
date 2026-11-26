@@ -81,14 +81,20 @@
     It "postinstall fail and existing pgdata exit codes (R8f)" {
         $script:Inc | Should -Match "CHECKPOINT_EXIT_POSTINSTALL_FAILED = 129"
         $script:Inc | Should -Match "CHECKPOINT_EXIT_EXISTING_DATA_KEPT = 130"
+        $script:Inc | Should -Match "CHECKPOINT_EXIT_OPEN_SESSIONS_SILENT = 131"
+        $script:Inc | Should -Match "CHECKPOINT_EXIT_INVALID_ACCOUNTS = 132"
         $script:Inc | Should -Match "procedure CurRunFailed"
+        $script:Inc | Should -Match "function GetCustomSetupExitCode"
         $script:Inc | Should -Match "CHECKPOINT_POSTINSTALL_FAILED"
-        $script:Inc | Should -Match "ExitProcess\(CHECKPOINT_EXIT_POSTINSTALL_FAILED\)"
         $script:Inc | Should -Match "procedure AbortExistingDataKept"
         $script:Inc | Should -Match "CHECKPOINT_EXISTING_DATA_KEPT"
+        $script:Inc | Should -Match "CHECKPOINT_OPEN_SESSIONS_SILENT"
+        $script:Inc | Should -Match "EnforceSilentUpgradeOpenSessionPolicy"
         $exitCodes = Get-Content -LiteralPath (Join-Path $PSScriptRoot "..\ci\checkpoint-setup-exit-codes.ps1") -Raw
         $exitCodes | Should -Match "CheckpointSetupExitPostinstallFailed = 129"
         $exitCodes | Should -Match "CheckpointSetupExitExistingDataKept = 130"
+        $exitCodes | Should -Match "CheckpointSetupExitOpenSessionsSilent = 131"
+        $exitCodes | Should -Match "CheckpointSetupExitInvalidAccounts = 132"
     }
 
     It "PostgreSQL payload only on first install (§2.2)" {

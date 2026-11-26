@@ -65,6 +65,12 @@ Invoke-DotnetPublish @(
     "-o", $stageServer, "--nologo"
 ) -Label "publish server win-x64"
 
+$devAppSettings = Join-Path $stageServer "appsettings.Development.json"
+if (Test-Path -LiteralPath $devAppSettings) {
+    Remove-Item -LiteralPath $devAppSettings -Force
+    Write-Host "ci-installer: removed appsettings.Development.json from server payload"
+}
+
 $shellProj = Join-Path $root "src/GameClub.Shell/GameClub.Shell.csproj"
 if (Test-Path -LiteralPath $shellProj) {
     Invoke-DotnetPublish @(
@@ -100,6 +106,7 @@ Write-Host "ci-installer: static installer rules"
 & (Join-Path $root "installer/tests/KioskInstallStatic.Tests.ps1")
 & (Join-Path $root "installer/tests/BackupDailyTehran.Tests.ps1")
 & (Join-Path $root "installer/tests/ServerWizardStatic.Tests.ps1")
+& (Join-Path $root "installer/tests/ServerPayloadStatic.Tests.ps1")
 & (Join-Path $root "installer/tests/ServerFinishLanStatic.Tests.ps1")
 & (Join-Path $root "installer/tests/KioskTrustFileAcl.Tests.ps1")
 

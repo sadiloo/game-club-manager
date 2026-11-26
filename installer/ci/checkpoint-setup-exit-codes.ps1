@@ -2,3 +2,8 @@
 $script:CheckpointSetupExitDowngradeBlocked = 128
 $script:CheckpointSetupExitPostinstallFailed = 129
 $script:CheckpointSetupExitExistingDataKept = 130
+$script:CheckpointSetupExitOpenSessionsSilent = 131
+$script:CheckpointSetupExitInvalidAccounts = 132
+
+# Process exit codes from server-postinstall.ps1 (mapped by Setup via checkpoint-setup-failure.ini).
+$script:CheckpointPostinstallProcessExitInvalidAccounts = 40

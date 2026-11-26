@@ -26,6 +26,7 @@ function Get-PgDataTreeHash {
 }
 
 Write-Host "R8f-b: seed install for pgdata refuse pin"
+& (Join-Path $PSScriptRoot "Reset-InstallerAcceptanceMachine.ps1")
 New-Item -ItemType Directory -Force -Path $LogsDir | Out-Null
 $r8fBSeedLog = Join-Path $LogsDir "acceptance-setup-r8f-b-seed.log"
 if (Test-Path -LiteralPath $r8fBSeedLog) { Remove-Item -LiteralPath $r8fBSeedLog -Force }

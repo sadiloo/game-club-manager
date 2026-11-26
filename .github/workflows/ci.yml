@@ -317,11 +317,16 @@ jobs:
           name: checkpoint-installers
           path: |
             installer/server/Output/CheckpointServerSetup-*.exe
-            installer/server/Output/CheckpointServerSetupHooks-*.exe
             installer/kiosk/Output/CheckpointKioskSetup-*.exe
             artifacts/installer/acceptance-logs/**
             artifacts/installer/ci-acceptance-manifest.json
             artifacts/installer/third-party-cache/**
+      - name: upload installer hooks artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: checkpoint-installer-hooks
+          path: installer/server/Output/CheckpointServerSetupHooks-*.exe
 
   windows-shell:
     name: windows-2022 shell

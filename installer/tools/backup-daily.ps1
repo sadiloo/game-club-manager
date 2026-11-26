@@ -10,6 +10,10 @@ $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "CheckpointDbConfig.ps1")
 
 $logPath = Join-Path $LogsDir "backup.log"
+$secondaryMissingFlag = Join-Path $LogsDir "backup-secondary-missing.flag"
+$lowDiskFlag = Join-Path $LogsDir "backup-low-disk.flag"
+$minFreeBytes = 5GB
+
 function Write-BackupLog([string]$line) {
     if (-not (Test-Path -LiteralPath $LogsDir)) {
         New-Item -ItemType Directory -Force -Path $LogsDir | Out-Null
@@ -20,6 +24,17 @@ function Write-BackupLog([string]$line) {
 try {
     if (-not (Test-Path -LiteralPath $PrimaryBackupDir)) {
         New-Item -ItemType Directory -Force -Path $PrimaryBackupDir | Out-Null
+    }
+
+    $driveRoot = [System.IO.Path]::GetPathRoot((Resolve-Path -LiteralPath $PrimaryBackupDir).Path)
+    if ($driveRoot) {
+        $drive = New-Object System.IO.DriveInfo($driveRoot)
+        if ($drive.AvailableFreeSpace -lt $minFreeBytes) {
+            Set-Content -LiteralPath $lowDiskFlag -Value "فضای آزاد دیسک پشتیبان کمتر از ۵ گیگابایت است." -Encoding UTF8
+            Write-BackupLog "low disk flag written freeBytes=$($drive.AvailableFreeSpace)"
+        } elseif (Test-Path -LiteralPath $lowDiskFlag) {
+            Remove-Item -LiteralPath $lowDiskFlag -Force
+        }
     }
 
     $cfg = Read-CheckpointServerJsonConfig -ServerJsonPath $ServerJsonPath
@@ -37,9 +52,14 @@ try {
 
     if ($SecondaryBackupDir) {
         if (-not (Test-Path -LiteralPath $SecondaryBackupDir)) {
+            Set-Content -LiteralPath $secondaryMissingFlag -Value "پوشهٔ دوم پشتیبان در زمان اجرا در دسترس نیست." -Encoding UTF8
+            Write-BackupLog "secondary missing at runtime dir=$SecondaryBackupDir"
             throw "Secondary backup folder missing: $SecondaryBackupDir"
         }
         Copy-Item -LiteralPath $dump -Destination (Join-Path $SecondaryBackupDir (Split-Path $dump -Leaf))
+        if (Test-Path -LiteralPath $secondaryMissingFlag) {
+            Remove-Item -LiteralPath $secondaryMissingFlag -Force
+        }
     }
 
     Write-BackupLog "backup ok $dump"

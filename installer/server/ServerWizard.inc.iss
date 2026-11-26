@@ -4,6 +4,8 @@ const
   CHECKPOINT_EXIT_DOWNGRADE_BLOCKED = 128;
   CHECKPOINT_EXIT_POSTINSTALL_FAILED = 129;
   CHECKPOINT_EXIT_EXISTING_DATA_KEPT = 130;
+  CHECKPOINT_EXIT_OPEN_SESSIONS_SILENT = 131;
+  CHECKPOINT_EXIT_INVALID_ACCOUNTS = 132;
   CHECKPOINT_EXPECTED_PG_MAJOR_STR = '16';
 
 procedure ExitProcess(uExitCode: UINT);
@@ -36,6 +38,7 @@ var
   GUpgradeStoppedServer: Boolean;
   GInstallReachedDone: Boolean;
   GReinstallWithKeptPgData: Boolean;
+  GPostinstallFailureShown: Boolean;
 
 function WindowsServiceExists(const ServiceName: String): Boolean;
 var Rc: Integer;
@@ -192,23 +195,180 @@ begin
 end;
 #endif
 
+function SetupFailureIniPath: String;
+begin
+  Result := ExpandConstant('{commonappdata}\Checkpoint\logs\checkpoint-setup-failure.ini');
+end;
+
+function ParseIniInteger(const Line, Key: String; var Value: Integer): Boolean;
+var
+  P: Integer;
+  Rest: String;
+begin
+  Result := False;
+  if CompareText(Copy(Line, 1, Length(Key)), Key) <> 0 then Exit;
+  if (Length(Line) <= Length(Key)) or (Line[Length(Key) + 1] <> '=') then Exit;
+  Rest := Trim(Copy(Line, Length(Key) + 2, MaxInt));
+  Value := StrToIntDef(Rest, -1);
+  Result := Value >= 0;
+end;
+
+function ReadSetupFailureFromIni(var PhaseOut: String; var ExitCodeOut: Integer): Boolean;
+var
+  Path: String;
+  Lines: TArrayOfString;
+  I: Integer;
+  Line: String;
+  Code: Integer;
+begin
+  Result := False;
+  PhaseOut := '';
+  ExitCodeOut := 0;
+  Path := SetupFailureIniPath;
+  if not FileExists(Path) then Exit;
+  if not LoadStringsFromFile(Path, Lines) then Exit;
+  for I := 0 to GetArrayLength(Lines) - 1 do
+  begin
+    Line := Trim(Lines[I]);
+    if ParseIniInteger(Line, 'installerExitCode', Code) then
+      ExitCodeOut := Code
+    else if CompareText(Copy(Line, 1, 6), 'phase=') = 0 then
+      PhaseOut := Trim(Copy(Line, 7, MaxInt));
+  end;
+  Result := (ExitCodeOut <> 0) and (PhaseOut <> '');
+end;
+
+function ScanInnoLogFailedPostinstall(var PhaseOut: String; var ProcExitOut: Integer): Boolean;
+var
+  LogPath: String;
+  Lines: TArrayOfString;
+  I: Integer;
+  Line, PendingPhase: String;
+  Pending: Boolean;
+begin
+  Result := False;
+  PhaseOut := '';
+  ProcExitOut := 0;
+  LogPath := ExpandConstant('{log}');
+  if LogPath = '' then Exit;
+  if not LoadStringsFromFile(LogPath, Lines) then Exit;
+  Pending := False;
+  PendingPhase := '';
+  for I := 0 to GetArrayLength(Lines) - 1 do
+  begin
+    Line := Lines[I];
+    if Pos('server-postinstall.ps1', Line) > 0 then
+      if Pos('-InstallPhase ', Line) > 0 then
+      begin
+        PendingPhase := Copy(Line, Pos('-InstallPhase ', Line) + 14, MaxInt);
+        PendingPhase := Trim(Copy(PendingPhase, 1, Pos(' ', PendingPhase + ' ') - 1));
+        if (Length(PendingPhase) > 0) and (PendingPhase[Length(PendingPhase)] = '"') then
+          SetLength(PendingPhase, Length(PendingPhase) - 1);
+        Pending := True;
+        Continue;
+      end;
+    if Pending and (Pos('-- Run entry --', Line) > 0) then
+    begin
+      Pending := False;
+      Continue;
+    end;
+    if Pending and (Pos('Process exit code:', Line) > 0) then
+    begin
+      ProcExitOut := StrToIntDef(Trim(Copy(Line, Pos(':', Line) + 1, MaxInt)), 0);
+      if ProcExitOut <> 0 then
+      begin
+        PhaseOut := PendingPhase;
+        Result := True;
+        Exit;
+      end;
+      Pending := False;
+    end;
+  end;
+end;
+
+function MapPostinstallProcessExit(const ProcExit: Integer): Integer;
+begin
+  if ProcExit = 40 then
+    Result := CHECKPOINT_EXIT_INVALID_ACCOUNTS
+  else if ProcExit = CHECKPOINT_EXIT_INVALID_ACCOUNTS then
+    Result := CHECKPOINT_EXIT_INVALID_ACCOUNTS
+  else if ProcExit = CHECKPOINT_EXIT_POSTINSTALL_FAILED then
+    Result := CHECKPOINT_EXIT_POSTINSTALL_FAILED
+  else if ProcExit <> 0 then
+    Result := CHECKPOINT_EXIT_POSTINSTALL_FAILED
+  else
+    Result := 0;
+end;
+
+function ResolveSetupFailureExitCode(var PhaseOut: String): Integer;
+var
+  IniExit, ProcExit: Integer;
+  Phase: String;
+begin
+  Result := 0;
+  PhaseOut := '';
+  if ReadSetupFailureFromIni(Phase, IniExit) then
+  begin
+    PhaseOut := Phase;
+    Result := IniExit;
+    Exit;
+  end;
+  if ScanInnoLogFailedPostinstall(Phase, ProcExit) then
+  begin
+    PhaseOut := Phase;
+    Result := MapPostinstallProcessExit(ProcExit);
+  end;
+end;
+
 procedure CurRunFailed(CurRunRecId: Integer);
 var
   LogPath, PhaseHint: String;
+  ExitCode: Integer;
 begin
-  Log('CHECKPOINT_POSTINSTALL_FAILED CurRunRecId=' + IntToStr(CurRunRecId));
-  LogPath := ExpandConstant('{log}');
-  PhaseHint := ExpandConstant('{param:TESTFAILPHASE|}');
+  ExitCode := ResolveSetupFailureExitCode(PhaseHint);
+  if ExitCode = 0 then
+    ExitCode := CHECKPOINT_EXIT_POSTINSTALL_FAILED;
+  if PhaseHint = '' then
+    PhaseHint := ExpandConstant('{param:TESTFAILPHASE|}');
   if PhaseHint = '' then
     PhaseHint := '(see log for InstallPhase)';
-  if WizardSilent then
-    ExitProcess(CHECKPOINT_EXIT_POSTINSTALL_FAILED)
-  else
-  begin
+  Log('CHECKPOINT_POSTINSTALL_FAILED CurRunRecId=' + IntToStr(CurRunRecId) + ' phase=' + PhaseHint + ' exit=' + IntToStr(ExitCode));
+  LogPath := ExpandConstant('{log}');
+  if GPostinstallFailureShown then Exit;
+  GPostinstallFailureShown := True;
+  if not WizardSilent then
     MsgBox(
       Format('مرحلهٔ پس‌نصب (%s) ناموفق بود. جزئیات در فایل گزارش:%n%s', [PhaseHint, LogPath]),
       mbError, MB_OK);
-    ExitProcess(CHECKPOINT_EXIT_POSTINSTALL_FAILED);
+end;
+
+function GetCustomSetupExitCode: Integer;
+var
+  Phase: String;
+begin
+  Result := ResolveSetupFailureExitCode(Phase);
+  if Result <> 0 then
+    Log('CHECKPOINT_SETUP_CUSTOM_EXIT exit=' + IntToStr(Result) + ' phase=' + Phase);
+end;
+
+procedure EnforceSilentUpgradeOpenSessionPolicy;
+var
+  Count: Integer;
+  Unknown: Boolean;
+begin
+  if IsFirstInstall then Exit;
+  if not WizardSilent then Exit;
+  if ExpandConstant('{param:SKIPSESSIONCHECK|}') <> '' then Exit;
+  QueryOpenSessionCount(Count, Unknown);
+  if Unknown then
+  begin
+    Log('CHECKPOINT_OPEN_SESSIONS_SILENT reason=unknown');
+    ExitProcess(CHECKPOINT_EXIT_OPEN_SESSIONS_SILENT);
+  end;
+  if Count > 0 then
+  begin
+    Log('CHECKPOINT_OPEN_SESSIONS_SILENT count=' + IntToStr(Count));
+    ExitProcess(CHECKPOINT_EXIT_OPEN_SESSIONS_SILENT);
   end;
 end;
 
@@ -778,7 +938,7 @@ begin
 end;
 
 procedure CurPageChanged(CurPageID: Integer);
-var BaseWelcome, Wv2Line: String; Idx: Integer;
+var BaseWelcome, Wv2Line: String; Idx: Integer; FailPhase: String;
 begin
   if CurPageID = wpReady then Exit;
 
@@ -813,7 +973,11 @@ begin
     UpdateBackupDirWarnings;
 
   if CurPageID = wpFinished then
+  begin
+    if ResolveSetupFailureExitCode(FailPhase) <> 0 then
+      CurRunFailed(0);
     UpdateServerFinishPage;
+  end;
 end;
 
 procedure InitializeWizard;

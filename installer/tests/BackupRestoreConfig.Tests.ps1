@@ -421,6 +421,14 @@ try {
         return -not $r.Error
     }
 
+    $daily = Get-Content -LiteralPath (Join-Path $PSScriptRoot "..\tools\backup-daily.ps1") -Raw
+    if ($daily -notmatch "backup-secondary-missing\.flag") {
+        throw "backup-daily must write backup-secondary-missing.flag at runtime"
+    }
+    if ($daily -notmatch "backup-low-disk\.flag") {
+        throw "backup-daily must write backup-low-disk.flag when free space < 5GB"
+    }
+
     Write-Host "BackupRestoreConfig: ok"
 } finally {
     foreach ($stubDir in $script:StubDirs) {

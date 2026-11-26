@@ -343,15 +343,10 @@ function Start-CheckpointServerSetup {
                 }
             if ($ExpectExitCode -ne 0) {
                 if ($exitCode -ne $ExpectExitCode) {
-                    if ($ExpectExitCode -eq $script:CheckpointSetupExitPostinstallFailed -and $IntendedPostinstallFailPhase -and $LogPath -and `
+                    if ($IntendedPostinstallFailPhase -and $LogPath -and `
                             (Test-InnoLogShowsPostinstallFailForPhase -LogPath $LogPath -InstallPhase $IntendedPostinstallFailPhase)) {
-                        if ($exitCode -eq $script:CheckpointSetupExitPostinstallFailed) {
-                            Assert-NoCheckpointSetupProcesses -Context "expected-exit leg $LegLabel"
-                            return [PSCustomObject]@{ Process = $proc; ExitCode = $exitCode; LegLabel = $LegLabel }
-                        }
-                        Write-Host "Start-CheckpointServerSetup: leg=$LegLabel leader exit=$exitCode Inno logged failed postinstall phase=$IntendedPostinstallFailPhase; treating as exit $($script:CheckpointSetupExitPostinstallFailed)"
-                        Assert-NoCheckpointSetupProcesses -Context "expected-exit leg $LegLabel"
-                        return [PSCustomObject]@{ Process = $proc; ExitCode = $script:CheckpointSetupExitPostinstallFailed; LegLabel = $LegLabel }
+                        Write-SetupProcessFailureUiText -Reason "exit $exitCode expected $ExpectExitCode leg $LegLabel (Inno logged phase $IntendedPostinstallFailPhase)"
+                        throw "setup leg pin: exit $exitCode expected $ExpectExitCode (leg=$LegLabel phase=$IntendedPostinstallFailPhase)"
                     }
                     Write-SetupProcessFailureUiText -Reason "unexpected exit $exitCode expected $ExpectExitCode leg $LegLabel"
                     throw "setup leg pin: exit $exitCode expected $ExpectExitCode (leg=$LegLabel)"

@@ -152,5 +152,6 @@ begin
     end;
   end;
   EvaluatePgDataForFreshInstall;
+  EnforceSilentUpgradeOpenSessionPolicy;
   Result := True;
 end;

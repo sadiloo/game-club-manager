@@ -22,4 +22,8 @@ Describe "installer acceptance harness" {
         $script:Common | Should -Match '\$setupArgs'
         $script:Common | Should -Not -Match 'ArgumentList \$args'
     }
+
+    It "Start-CheckpointServerSetup must not rewrite setup exit codes (DEF-8)" {
+        $script:Common | Should -Not -Match "treating as exit"
+    }
 }
