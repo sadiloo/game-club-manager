@@ -1069,8 +1069,32 @@ public sealed class WindowsKioskServerIntegrationTests
             await Task.Delay(TimeSpan.FromSeconds(3));
 
             op = await backend.CreateOperatorClientAsync();
-            var tile = (await op.GetFromJsonAsync<JsonElement[]>("/api/operator/grid"))!
-                .Single(t => t.GetProperty("id").GetString() == "PC-KILL");
+            // KioskDeviceAuthMiddleware stamps LastSeenUtc on the kiosk's HTTP login, and the grid reports
+            // kioskConnected while LastSeenUtc is within 15 s. Wait (max 30 s) until the killed kiosk reads as
+            // disconnected so the ON press below really happens while the kiosk is disconnected.
+            var disconnectedDeadline = DateTime.UtcNow.AddSeconds(30);
+            JsonElement tile;
+            while (true)
+            {
+                tile = (await op.GetFromJsonAsync<JsonElement[]>("/api/operator/grid"))!
+                    .Single(t => t.GetProperty("id").GetString() == "PC-KILL");
+                if (!tile.GetProperty("kioskConnected").GetBoolean())
+                {
+                    break;
+                }
+
+                if (DateTime.UtcNow >= disconnectedDeadline)
+                {
+                    var lastSeen = tile.TryGetProperty("kioskLastSeenUtc", out var seenProp) ? seenProp.ToString() : "<absent>";
+                    var lastConnected = tile.GetProperty("kioskConnected").GetBoolean();
+                    Assert.Fail(
+                        "PC-KILL tile still reports kioskConnected=true after polling the grid for 30 s following the kiosk kill and server relaunch "
+                        + $"(last kioskConnected={lastConnected}, kioskLastSeenUtc={lastSeen}, nowUtc={DateTime.UtcNow:O}).");
+                }
+
+                await Task.Delay(1_000);
+            }
+
             var rv = tile.GetProperty("rowVersion").GetUInt32();
             var pressAt = DateTime.UtcNow;
             (await op.PostAsJsonAsync($"/api/operator/sessions/{sessionId}/internet", new

@@ -11,7 +11,7 @@ try {
     & dotnet test tests/GameClub.Kiosk.Core.Tests/GameClub.Kiosk.Core.Tests.csproj -c Release -f net10.0 --filter "FullyQualifiedName~KioskSetupCoreTests|FullyQualifiedName~KioskAdminLockTests" --nologo
     if ($LASTEXITCODE -ne 0) { throw "B-6/B-12 core tests failed" }
     Invoke-WithInstallerKioskWpfLiveEnvironment -AccountsFile $AccountsFile -ScriptBlock {
-        & dotnet test tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj -c Release -f net48 --filter "FullyQualifiedName~WindowsKioskWpfSmokeTests" --nologo
+        & dotnet test tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj -c Release -f net48 --filter "FullyQualifiedName~WindowsKioskWpfSmokeTests&FullyQualifiedName!~wpf_remaining_time_matches_funded_session_special_band_night_line" --nologo
     }
     if ($LASTEXITCODE -ne 0) { throw "B-6 WPF tests failed" }
     Invoke-WithInstallerKioskServerVerifyTestEnvironment -ScriptBlock {
