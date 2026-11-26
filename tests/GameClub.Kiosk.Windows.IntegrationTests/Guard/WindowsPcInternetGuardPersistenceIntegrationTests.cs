@@ -75,8 +75,35 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
     }
 
     private const string TamperOpenEgressScript =
-        "Set-NetFirewallProfile -Name Domain,Private,Public -DefaultOutboundAction NotConfigured; "
-        + "Get-NetFirewallRule -Group 'Checkpoint Internet Off' | Select-Object -First 1 | Remove-NetFirewallRule -ErrorAction SilentlyContinue";
+        "$ErrorActionPreference='Continue'; "
+        + "foreach ($p in @('Domain','Private','Public')) "
+        + "{ Set-NetFirewallProfile -Name $p -DefaultOutboundAction NotConfigured -ErrorAction SilentlyContinue }; "
+        + "$rule = Get-NetFirewallRule -Group 'Checkpoint Internet Off' -ErrorAction SilentlyContinue | Select-Object -First 1; "
+        + "if ($rule) { Remove-NetFirewallRule -InputObject $rule -ErrorAction Stop }";
+
+    private static void TamperOpenEgressOrFail(string phase)
+    {
+        const int attempts = 3;
+        Exception last = null;
+        for (var i = 1; i <= attempts; i++)
+        {
+            try
+            {
+                WindowsIntegrationRunPowerShell.Run(TamperOpenEgressScript);
+                return;
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or TimeoutException)
+            {
+                last = ex;
+                Console.WriteLine($"TAMPER_EGRESS attempt={i}/{attempts} phase={phase} err={ex.Message}");
+                Thread.Sleep(500);
+            }
+        }
+
+        Assert.Fail(
+            $"phase={phase}: egress tamper PowerShell failed after {attempts} attempts "
+            + $"(Set-NetFirewallProfile NotConfigured + optional rule remove). Last: {last?.Message}");
+    }
 
     [Fact(Timeout = 60_000)]
     public async Task internet_corrupt_guard_config_still_launches_shell_within_shell_gate()
@@ -189,7 +216,7 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
                 int.TryParse(offGroupCountText, out var offGroupCount) && offGroupCount > 0,
                 "precondition: Checkpoint Internet Off rule group must be non-empty before tamper.");
 
-            WindowsIntegrationRunPowerShell.Run(TamperOpenEgressScript);
+            TamperOpenEgressOrFail(nameof(internet_off_guard_process_restart_reasserts_before_pipe_ready));
             Assert.True(TryTcp("1.1.1.1", 443, 3_000), "Sanity: profile tamper must temporarily open egress.");
             GuardTimeline("tamper_egress_open");
 
@@ -314,7 +341,7 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
             pipeThread = new Thread(() => server.Run(cts.Token)) { IsBackground = true, Name = "TestInternetPipe" };
             pipeThread.Start();
 
-            WindowsIntegrationRunPowerShell.Run(TamperOpenEgressScript);
+            TamperOpenEgressOrFail(nameof(internet_off_drift_restores_deleted_rule_within_harness_interval));
             Assert.True(TryTcp("1.1.1.1", 443, 2_000), "Profile tamper must temporarily allow egress.");
 
             var deadline = DateTime.UtcNow.AddSeconds(15);

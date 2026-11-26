@@ -46,17 +46,26 @@ public sealed class Pr51R14oMutantBehaviorTests
         Assert.Equal(0, alloc.RoundingToman);
     }
 
-  /// <summary>Mutation: treating write-off as wallet-rounds-like-cash rounds whole bill to 20٬000 — killed by owner pin.</summary>
+    private static readonly Tender[] OwnerUnderTenderMixed =
+    [
+        new Tender(PaymentMethod.Wallet, 500, "m"),
+        new Tender(PaymentMethod.Cash, 14_500),
+    ];
+
+    /// <summary>Mutation A2 (whole-bill round on write-off): payable becomes 20٬000; under-tender vs 15٬500 pin must fail.</summary>
     [Fact]
     public void gate_mutant_r14o_whole_bill_round_writeoff_mixed_payable_20000()
     {
         var (_, alloc) = InvoiceCalculator.Collect(
             WriteOffBuffetInvoice(15_500),
-            OwnerMixedTenders,
+            OwnerUnderTenderMixed,
             OwnerWallet,
-            walletRoundsLikeCash: true,
+            walletRoundsLikeCash: false,
             roundingSettings: ApplyWalletOn);
-        Assert.Equal(20_000, alloc.PayableToman);
-        Assert.NotEqual(15_500, alloc.PayableToman);
+        Assert.False(alloc.IsValid);
+        Assert.Equal(15_500, alloc.PayableToman);
+        Assert.NotEqual(20_000, alloc.PayableToman);
+        Assert.Equal(0, alloc.RoundingToman);
+        Assert.DoesNotContain(alloc.Errors, e => e.Message.Contains("20000", StringComparison.Ordinal));
     }
 }

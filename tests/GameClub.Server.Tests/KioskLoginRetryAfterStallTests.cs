@@ -27,6 +27,13 @@ public sealed class KioskLoginRetryAfterStallTests(GameClubWebApplicationFactory
     [Fact(Timeout = 240_000)]
     public async Task retry_login_after_first_attach_reuses_single_open_session()
     {
+        KioskAttachPathTestSeam.InjectBeforeMemberStartAsync = null;
+        if (factory.LoginStallGate is not null)
+        {
+            factory.LoginStallGate.Dispose();
+            factory.LoginStallGate = null;
+        }
+
         await S3TestHelpers.ResetAsync(factory);
         await S3TestHelpers.RegisterPc(factory.CreateClientWithKey(), RaceStationId, PilotSeed.PcNormalGroupId);
         await S3TestHelpers.RegisterPc(factory.CreateClientWithKey(), RetryStationId, PilotSeed.PcNormalGroupId);
@@ -55,7 +62,12 @@ public sealed class KioskLoginRetryAfterStallTests(GameClubWebApplicationFactory
             }).ToArray();
 
             var raceResponses = await Task.WhenAll(raceTasks);
-            Assert.DoesNotContain(raceResponses, r => (int)r.StatusCode >= 500);
+            var serverErrors = raceResponses.Where(r => (int)r.StatusCode >= 500).ToArray();
+            Assert.True(
+                serverErrors.Length == 0,
+                await DescribeUnexpectedStatusCodesAsync(
+                    "race_parallel_login",
+                    serverErrors));
             Assert.Equal(1, raceResponses.Count(r => r.StatusCode == HttpStatusCode.OK));
             foreach (var response in raceResponses.Where(r => r.StatusCode == HttpStatusCode.Conflict))
             {
@@ -92,9 +104,16 @@ public sealed class KioskLoginRetryAfterStallTests(GameClubWebApplicationFactory
         responseHold.ReleaseResponse();
 
         var slowResponse = await slowLogin;
-        Assert.DoesNotContain(new[] { slowResponse, retryResponse }, r => (int)r.StatusCode >= 500);
-        slowResponse.EnsureSuccessStatusCode();
-        retryResponse.EnsureSuccessStatusCode();
+        var stallBodies = new[] { slowResponse, retryResponse }.Where(r => (int)r.StatusCode >= 500).ToArray();
+        Assert.True(
+            stallBodies.Length == 0,
+            await DescribeUnexpectedStatusCodesAsync("stall_retry_login", stallBodies));
+        Assert.True(
+            slowResponse.IsSuccessStatusCode,
+            await DescribeUnexpectedStatusAsync("slow_login", slowResponse));
+        Assert.True(
+            retryResponse.IsSuccessStatusCode,
+            await DescribeUnexpectedStatusAsync("retry_login", retryResponse));
 
         var slowSessionId = JsonDocument.Parse(await slowResponse.Content.ReadAsStringAsync())
             .RootElement.GetProperty("sessionId").GetGuid();
@@ -104,6 +123,25 @@ public sealed class KioskLoginRetryAfterStallTests(GameClubWebApplicationFactory
         Assert.Equal(slowSessionId, retrySessionId);
         Assert.Equal(1, await db.Sessions.CountAsync(
             s => s.StationId == RetryStationId && s.Status == SessionStatus.Open));
+    }
+
+    private static async Task<string> DescribeUnexpectedStatusAsync(string label, HttpResponseMessage response)
+    {
+        var body = await response.Content.ReadAsStringAsync();
+        return $"{label} status={(int)response.StatusCode} {response.StatusCode} body={body}";
+    }
+
+    private static async Task<string> DescribeUnexpectedStatusCodesAsync(
+        string label,
+        IReadOnlyList<HttpResponseMessage> responses)
+    {
+        var parts = new List<string> { label, $"count={responses.Count}" };
+        foreach (var response in responses)
+        {
+            parts.Add(await DescribeUnexpectedStatusAsync("response", response));
+        }
+
+        return string.Join(" | ", parts);
     }
 
     private static async Task SeedMemberAsync(

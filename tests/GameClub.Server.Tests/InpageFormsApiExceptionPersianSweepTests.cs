@@ -14,7 +14,9 @@ public sealed class InpageFormsApiExceptionPersianSweepTests
         foreach (var file in Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories))
         {
             var rel = Path.GetRelativePath(root, file).Replace('\\', '/');
-            if (rel.StartsWith("Kiosk/", StringComparison.Ordinal))
+            if (rel.StartsWith("Kiosk/", StringComparison.Ordinal)
+                || rel.Contains("/obj/", StringComparison.Ordinal)
+                || rel.Contains("/bin/", StringComparison.Ordinal))
             {
                 continue;
             }
