@@ -17,7 +17,7 @@ $ErrorActionPreference = "Stop"
 
 & (Join-Path $acceptance "Invoke-R8f-PostinstallFail.ps1") -ServerSetupHooks $serverHighHooks -ServerSetup $serverHigh `
     -AccountsFile $accounts -LowSetup $serverLow -LowVersion $lowVersion -HighVersion $appVersion -LogsDir $logRoot
-& (Join-Path $acceptance "Invoke-R8f-ExistingPgDataRefuse.ps1") -ServerSetup $serverHigh -AccountsFile $accounts
+& (Join-Path $acceptance "Invoke-R8f-ExistingPgDataRefuse.ps1") -ServerSetup $serverHigh -AccountsFile $accounts -LogsDir $logRoot
 
 Copy-Item -Force "C:\ProgramData\Checkpoint\logs\upgrade.log" (Join-Path $logRoot "upgrade.log") -ErrorAction SilentlyContinue
 Write-Host "ci-installer: acceptance done"

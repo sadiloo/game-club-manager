@@ -1,6 +1,7 @@
 param(
     [string] $ServerSetup,
-    [string] $AccountsFile
+    [string] $AccountsFile,
+    [string] $LogsDir = "C:\ProgramData\Checkpoint\logs"
 )
 
 $ErrorActionPreference = "Stop"
@@ -25,8 +26,16 @@ function Get-PgDataTreeHash {
 }
 
 Write-Host "R8f-b: seed install for pgdata refuse pin"
-$seedArgs = @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/ACCOUNTS=$AccountsFile")
-Start-CheckpointServerSetup -LegLabel "r8f-b-seed" -Exe $ServerSetup -ArgumentList $seedArgs -TimeoutSeconds 2700 | Out-Null
+New-Item -ItemType Directory -Force -Path $LogsDir | Out-Null
+$r8fBSeedLog = Join-Path $LogsDir "acceptance-setup-r8f-b-seed.log"
+if (Test-Path -LiteralPath $r8fBSeedLog) { Remove-Item -LiteralPath $r8fBSeedLog -Force }
+$seedArgs = @(
+    "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART",
+    "/ACCOUNTS=$AccountsFile",
+    "/LOG=`"$r8fBSeedLog`""
+)
+Start-CheckpointServerSetup -LegLabel "r8f-b-seed" -Exe $ServerSetup -ArgumentList $seedArgs `
+    -TimeoutSeconds 2700 -LogPath $r8fBSeedLog | Out-Null
 
 $unins = Get-ChildItem "C:\Program Files\Checkpoint\Server\unins*.exe" | Select-Object -First 1
 if (-not $unins) { throw "R8f-b: uninstaller missing" }
@@ -38,12 +47,15 @@ Set-Content -LiteralPath $pgVer -Value "99" -NoNewline -Encoding ASCII
 $beforeHash = Get-PgDataTreeHash
 if (-not $beforeHash) { throw "R8f-b: pgdata hash missing after junk" }
 
+$r8fBRefuseLog = Join-Path $LogsDir "acceptance-setup-r8f-existing-pgdata-refuse.log"
+if (Test-Path -LiteralPath $r8fBRefuseLog) { Remove-Item -LiteralPath $r8fBRefuseLog -Force }
 $setupArgs = @(
     "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART",
-    "/ACCOUNTS=$AccountsFile"
+    "/ACCOUNTS=$AccountsFile",
+    "/LOG=`"$r8fBRefuseLog`""
 )
 Start-CheckpointServerSetup -LegLabel "r8f-existing-pgdata-refuse" -Exe $ServerSetup -ArgumentList $setupArgs `
-    -TimeoutSeconds 600 -ExpectExitCode $script:CheckpointSetupExitExistingDataKept | Out-Null
+    -TimeoutSeconds 600 -LogPath $r8fBRefuseLog -ExpectExitCode $script:CheckpointSetupExitExistingDataKept | Out-Null
 
 $afterHash = Get-PgDataTreeHash
 if ($beforeHash -ne $afterHash) {
