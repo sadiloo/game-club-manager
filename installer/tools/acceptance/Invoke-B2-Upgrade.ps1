@@ -27,6 +27,7 @@ Write-AcceptanceHarnessTrace "Seed-InstallerAcceptanceData" {
 } | Out-Null
 
 $before = Write-AcceptanceHarnessTrace "Get-InstallerDbCounts (before upgrade)" { Get-InstallerDbCounts }
+$billingBefore = Write-AcceptanceHarnessTrace "Get-InstallerBillingFingerprint (before)" { Get-InstallerBillingFingerprint }
 $secrets = Write-AcceptanceHarnessTrace "Get-ServerSecretsFingerprint (before)" { Get-ServerSecretsFingerprint }
 
 Write-Host "B-2 ($Mode): fingerprint PostgreSQL\bin + pgdata before high upgrade"
@@ -48,6 +49,7 @@ Write-AcceptanceHarnessTrace "B-2 leg high upgrade $LowVersion->$HighVersion" {
 } | Out-Null
 
 $after = Write-AcceptanceHarnessTrace "Get-InstallerDbCounts (after upgrade)" { Get-InstallerDbCounts }
+$billingAfter = Write-AcceptanceHarnessTrace "Get-InstallerBillingFingerprint (after)" { Get-InstallerBillingFingerprint }
 $secretsAfter = Write-AcceptanceHarnessTrace "Get-ServerSecretsFingerprint (after)" { Get-ServerSecretsFingerprint }
 $pgBinAfter = Write-AcceptanceHarnessTrace "Get-InstallerPostgreSqlBinFingerprint (after)" { Get-InstallerPostgreSqlBinFingerprint }
 $pgDataListingAfter = Write-AcceptanceHarnessTrace "Get-InstallerPgDataStableListingHash (after)" { Get-InstallerPgDataStableListingHash }
@@ -66,6 +68,15 @@ if ($before.Customers -ne $after.Customers -or $before.Sessions -ne $after.Sessi
 }
 if ($before.Invoices -ne $after.Invoices -or $before.WalletLedger -ne $after.WalletLedger) {
     throw "B-2: row count mismatch invoices/wallet_ledger"
+}
+if ($billingBefore.WalletLedgerSumToman -ne $billingAfter.WalletLedgerSumToman) {
+    throw "B-2: wallet ledger sum changed"
+}
+if ($billingBefore.LeaseKeyCount -ne $billingAfter.LeaseKeyCount) {
+    throw "B-2: kiosk lease signing key count changed"
+}
+if ($billingBefore.DeviceLeaseKeyPrefix -ne $billingAfter.DeviceLeaseKeyPrefix) {
+    throw "B-2: kiosk device lease verify key prefix changed"
 }
 if ($secrets.OperatorSessionSecret -ne $secretsAfter.OperatorSessionSecret) {
     throw "B-2: OperatorSessionSecret changed"

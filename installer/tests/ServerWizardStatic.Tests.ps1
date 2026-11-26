@@ -14,13 +14,16 @@
         $script:Inc | Should -Match "این پوشه روی همان دیسک پشتیبان اصلی است"
     }
 
-    It "install StatusMsg steps (§1.8)" {
-        $script:Iss | Should -Match "در حال آماده کردن پایگاه داده"
-        $script:Iss | Should -Match "در حال آماده کردن حساب‌ها"
-        $script:Iss | Should -Match "در حال نصب سرویس‌های چک‌پوینت"
-        $script:Iss | Should -Match "در حال تنظیم فایروال"
-        $script:Iss | Should -Match "در حال تنظیم پشتیبان روزانه"
-        $script:Iss | Should -Match "در حال روشن کردن سرور"
+    It "postinstall phases run from ssPostInstall Exec (§1.8)" {
+        $runIss = Join-Path $PSScriptRoot "..\server\ServerPostinstallRun.iss"
+        $run = Get-Content -LiteralPath $runIss -Raw
+        $run | Should -Match "RunServerPostinstallExec\('database'"
+        $run | Should -Match "RunServerPostinstallExec\('accounts'"
+        $run | Should -Match "RunServerPostinstallExec\('services'"
+        $run | Should -Match "RunServerPostinstallExec\('firewall'"
+        $run | Should -Match "RunServerPostinstallExec\('backup'"
+        $run | Should -Match "RunServerPostinstallExec\('start'"
+        $script:Inc | Should -Match "RunCheckpointServerPostinstallPhases"
     }
 
     It "default-pin upgrade page title (§2.3)" {
@@ -31,11 +34,12 @@
         $script:Inc | Should -Match "DEFAULTPINS"
     }
 
-    It "upgrade StatusMsg steps (§2.2)" {
-        $script:Iss | Should -Match "در حال توقف سرور"
-        $script:Iss | Should -Match "در حال گرفتن پشتیبان پیش از ارتقا"
-        $script:Iss | Should -Match "upgrade-stop"
-        $script:Iss | Should -Match "upgrade-start"
+    It "upgrade postinstall phases (§2.2)" {
+        $runIss = Join-Path $PSScriptRoot "..\server\ServerPostinstallRun.iss"
+        $run = Get-Content -LiteralPath $runIss -Raw
+        $run | Should -Match "upgrade-stop"
+        $run | Should -Match "upgrade-backup"
+        $run | Should -Match "upgrade-start"
     }
 
     It "inline field errors not MsgBox (§1.5)" {
@@ -95,6 +99,19 @@
         $exitCodes | Should -Match "CheckpointSetupExitExistingDataKept = 130"
         $exitCodes | Should -Match "CheckpointSetupExitOpenSessionsSilent = 131"
         $exitCodes | Should -Match "CheckpointSetupExitInvalidAccounts = 132"
+        $exitCodes | Should -Match "CheckpointSetupExitFailStart = 140"
+        $exitCodes | Should -Match "CheckpointSetupExitFailUpgradeBackup = 143"
+    }
+
+    It "per-phase postinstall exit codes (DEF-8)" {
+        $runIss = Join-Path $PSScriptRoot "..\server\ServerPostinstallRun.iss"
+        $run = Get-Content -LiteralPath $runIss -Raw
+        $run | Should -Match "CHECKPOINT_EXIT_FAIL_DATABASE"
+        $run | Should -Match "AbortPostinstallPhaseFailed"
+        $script:Inc | Should -Match "procedure AbortPostinstallPhaseFailed"
+        $script:Inc | Should -Match "CHECKPOINT_EXIT_FAIL_UPGRADE_START = 144"
+        $exitCodes = Get-Content -LiteralPath (Join-Path $PSScriptRoot "..\ci\checkpoint-setup-exit-codes.ps1") -Raw
+        $exitCodes | Should -Match "CheckpointSetupExitFailKioskPostinstall = 150"
     }
 
     It "PostgreSQL payload only on first install (§2.2)" {

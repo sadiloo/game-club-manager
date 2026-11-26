@@ -7,7 +7,15 @@ param(
 
 $ErrorActionPreference = "Stop"
 Import-Module (Join-Path $PSScriptRoot "CheckpointInstall.Common.psm1") -Force
+. (Join-Path $PSScriptRoot "checkpoint-setup-exit-codes.ps1")
 Import-Module Microsoft.PowerShell.LocalAccounts -ErrorAction SilentlyContinue
+
+#region CHECKPOINT_INTERNAL_TEST_HOOKS_BEGIN
+if ($env:CHECKPOINT_INTERNAL_TEST_HOOKS -eq "1" -and $env:CHECKPOINT_KIOSK_POSTINSTALL_FAIL -eq "1") {
+    Write-Host "CHECKPOINT_KIOSK_POSTINSTALL_FAILED (internal test hook)"
+    exit $script:CheckpointSetupExitFailKioskPostinstall
+}
+#endregion CHECKPOINT_INTERNAL_TEST_HOOKS_END
 
 function Write-KioskInstallStep {
     param([string] $Message)

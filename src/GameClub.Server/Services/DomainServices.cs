@@ -1323,14 +1323,24 @@ public sealed class DatabaseSeed
                 {
                     foreach (var entry in initialUsers)
                     {
-                        if (string.IsNullOrWhiteSpace(entry.Username) || string.IsNullOrWhiteSpace(entry.PinHash))
+                        if (string.IsNullOrWhiteSpace(entry.Username))
                         {
-                            continue;
+                            throw new InvalidOperationException(
+                                "InitialUsers seeding refused: blank username.");
                         }
 
-                        var role = Enum.TryParse<UserRole>(entry.Role, true, out var parsed)
-                            ? parsed
-                            : UserRole.Operator;
+                        if (string.IsNullOrWhiteSpace(entry.PinHash))
+                        {
+                            throw new InvalidOperationException(
+                                "InitialUsers seeding refused: blank pin hash.");
+                        }
+
+                        if (!Enum.TryParse<UserRole>(entry.Role, true, out var role))
+                        {
+                            throw new InvalidOperationException(
+                                $"InitialUsers seeding refused: unknown role '{entry.Role}'.");
+                        }
+
                         db.OperatorUsers.Add(new OperatorUserEntity
                         {
                             Id = Guid.NewGuid(),

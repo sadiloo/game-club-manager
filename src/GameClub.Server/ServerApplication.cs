@@ -15,6 +15,21 @@ namespace GameClub.Server;
 
 public static class ServerApplication
 {
+    internal static void RefuseLiveCheckpointTestDatabase(string? isolatedTestCs)
+    {
+        if (string.IsNullOrWhiteSpace(isolatedTestCs))
+        {
+            return;
+        }
+
+        var isolatedDb = new Npgsql.NpgsqlConnectionStringBuilder(isolatedTestCs).Database;
+        if (string.Equals(isolatedDb, "checkpoint", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                "Refusing to use the live checkpoint database as GAMECLUB_TEST_DATABASE.");
+        }
+    }
+
     public static async Task RunAsync(string[] args, Action<WebApplicationBuilder>? configureBuilder = null)
     {
         var builder = WebApplication.CreateBuilder(args);
@@ -29,17 +44,10 @@ public static class ServerApplication
             ?? "Host=localhost;Database=gameclub;Username=postgres;Password=postgres";
 
         var isolatedTestCs = Environment.GetEnvironmentVariable("GAMECLUB_TEST_DATABASE");
+        RefuseLiveCheckpointTestDatabase(isolatedTestCs);
         if (!string.IsNullOrWhiteSpace(isolatedTestCs))
         {
-            var isolated = new Npgsql.NpgsqlConnectionStringBuilder(isolatedTestCs);
-            var isolatedDb = isolated.Database;
-            if (string.Equals(isolatedDb, "checkpoint", StringComparison.OrdinalIgnoreCase))
-            {
-                throw new InvalidOperationException(
-                    "Refusing to use the live checkpoint database as GAMECLUB_TEST_DATABASE.");
-            }
-
-            connectionString = isolated.ConnectionString;
+            connectionString = new Npgsql.NpgsqlConnectionStringBuilder(isolatedTestCs).ConnectionString;
         }
 
         if (!builder.Environment.IsDevelopment())

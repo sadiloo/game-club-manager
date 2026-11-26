@@ -22,7 +22,9 @@ $setup = Get-Content $setupPath -Raw | ConvertFrom-Json
 if ([string]::IsNullOrWhiteSpace($setup.serverBase)) { throw "B-7: setup.json serverBase missing" }
 $guard = Get-Service CheckpointGuard -ErrorAction SilentlyContinue
 if (-not $guard) { throw "B-7: CheckpointGuard missing after upgrade" }
-if ($guard.Status -ne "Running") { Start-InstallerCheckpointGuard }
+if ($guard.Status -ne "Running") {
+    throw "B-7: CheckpointGuard must be Running after upgrade; status=$($guard.Status)"
+}
 $kioskUser = Get-LocalUser -Name "CheckpointKiosk" -ErrorAction SilentlyContinue
 if (-not $kioskUser) { throw "B-7: CheckpointKiosk user missing after upgrade" }
 Write-Host "B-7: ok serverBase=$($setup.serverBase)"

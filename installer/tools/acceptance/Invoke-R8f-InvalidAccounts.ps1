@@ -27,8 +27,9 @@ $result = Start-CheckpointServerSetup -LegLabel "r8f-invalid-accounts" -Exe $Ser
 if ($result.ExitCode -ne $script:CheckpointSetupExitInvalidAccounts) {
     throw "R8f-invalid-accounts: expected exit $($script:CheckpointSetupExitInvalidAccounts); got $($result.ExitCode)"
 }
-if (-not (Select-String -LiteralPath $logPath -Pattern "CHECKPOINT_ACCOUNTS_INVALID" -SimpleMatch)) {
-    throw "R8f-invalid-accounts: log missing CHECKPOINT_ACCOUNTS_INVALID"
+$logRaw = Get-Content -LiteralPath $logPath -Raw
+if ($logRaw -notmatch "CHECKPOINT_ACCOUNTS_INVALID" -and $logRaw -notmatch "CHECKPOINT_SETUP_FAILURE message=.*CHECKPOINT_ACCOUNTS_INVALID") {
+    throw "R8f-invalid-accounts: log missing CHECKPOINT_ACCOUNTS_INVALID (direct or via failure record)"
 }
 
 Write-Host "R8f-invalid-accounts: ok"

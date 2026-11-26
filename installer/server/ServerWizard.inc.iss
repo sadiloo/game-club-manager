@@ -6,6 +6,18 @@ const
   CHECKPOINT_EXIT_EXISTING_DATA_KEPT = 130;
   CHECKPOINT_EXIT_OPEN_SESSIONS_SILENT = 131;
   CHECKPOINT_EXIT_INVALID_ACCOUNTS = 132;
+  CHECKPOINT_EXIT_FAIL_WEBVIEW2 = 133;
+  CHECKPOINT_EXIT_FAIL_REINSTALL_KEPT_PG = 134;
+  CHECKPOINT_EXIT_FAIL_DATABASE = 135;
+  CHECKPOINT_EXIT_FAIL_ACCOUNTS_PHASE = 136;
+  CHECKPOINT_EXIT_FAIL_SERVICES = 137;
+  CHECKPOINT_EXIT_FAIL_FIREWALL = 138;
+  CHECKPOINT_EXIT_FAIL_BACKUP = 139;
+  CHECKPOINT_EXIT_FAIL_START = 140;
+  CHECKPOINT_EXIT_FAIL_UPGRADE_PINS = 141;
+  CHECKPOINT_EXIT_FAIL_UPGRADE_STOP = 142;
+  CHECKPOINT_EXIT_FAIL_UPGRADE_BACKUP = 143;
+  CHECKPOINT_EXIT_FAIL_UPGRADE_START = 144;
   CHECKPOINT_EXPECTED_PG_MAJOR_STR = '16';
 
 procedure ExitProcess(uExitCode: UINT);
@@ -39,6 +51,7 @@ var
   GInstallReachedDone: Boolean;
   GReinstallWithKeptPgData: Boolean;
   GPostinstallFailureShown: Boolean;
+  GSetupFailureExitCode: Integer;
 
 function WindowsServiceExists(const ServiceName: String): Boolean;
 var Rc: Integer;
@@ -302,22 +315,69 @@ end;
 
 function ResolveSetupFailureExitCode(var PhaseOut: String): Integer;
 var
-  IniExit, ProcExit: Integer;
+  IniExit: Integer;
   Phase: String;
 begin
   Result := 0;
   PhaseOut := '';
+  if GSetupFailureExitCode <> 0 then
+  begin
+    Result := GSetupFailureExitCode;
+    if ReadSetupFailureFromIni(Phase, IniExit) then
+      PhaseOut := Phase
+    else
+      PhaseOut := '(postinstall)';
+    Exit;
+  end;
   if ReadSetupFailureFromIni(Phase, IniExit) then
   begin
     PhaseOut := Phase;
     Result := IniExit;
-    Exit;
   end;
-  if ScanInnoLogFailedPostinstall(Phase, ProcExit) then
+end;
+
+procedure RestoreCheckpointUpgradeAfterPostinstallFailure;
+var Rc: Integer;
+begin
+  if GUpgradeStoppedServer and (not GInstallReachedDone) then
   begin
-    PhaseOut := Phase;
-    Result := MapPostinstallProcessExit(ProcExit);
+    Log('CHECKPOINT_POSTINSTALL_UPGRADE_RESTORE start CheckpointServer');
+    Exec('sc.exe', 'start CheckpointServer', '', SW_HIDE, ewWaitUntilTerminated, Rc);
   end;
+end;
+
+procedure LogSetupFailureIniMessage;
+var
+  Path: String;
+  Lines: TArrayOfString;
+  I: Integer;
+  Line: String;
+begin
+  Path := SetupFailureIniPath;
+  if not FileExists(Path) then Exit;
+  if not LoadStringsFromFile(Path, Lines) then Exit;
+  for I := 0 to GetArrayLength(Lines) - 1 do
+  begin
+    Line := Trim(Lines[I]);
+    if CompareText(Copy(Line, 1, 8), 'message=') = 0 then
+      Log('CHECKPOINT_SETUP_FAILURE ' + Line);
+  end;
+end;
+
+procedure ClearSetupFailureIni;
+begin
+  if FileExists(SetupFailureIniPath) then
+    DeleteFile(SetupFailureIniPath);
+end;
+
+procedure AbortPostinstallPhaseFailed(const Phase: String; const ExitCode: Integer);
+begin
+  GSetupFailureExitCode := ExitCode;
+  RestoreCheckpointUpgradeAfterPostinstallFailure;
+  LogSetupFailureIniMessage;
+  Log('CHECKPOINT_POSTINSTALL_ABORT phase=' + Phase + ' exit=' + IntToStr(ExitCode));
+  CurRunFailed(0);
+  ExitProcess(ExitCode);
 end;
 
 procedure CurRunFailed(CurRunRecId: Integer);
@@ -349,27 +409,6 @@ begin
   Result := ResolveSetupFailureExitCode(Phase);
   if Result <> 0 then
     Log('CHECKPOINT_SETUP_CUSTOM_EXIT exit=' + IntToStr(Result) + ' phase=' + Phase);
-end;
-
-procedure EnforceSilentUpgradeOpenSessionPolicy;
-var
-  Count: Integer;
-  Unknown: Boolean;
-begin
-  if IsFirstInstall then Exit;
-  if not WizardSilent then Exit;
-  if ExpandConstant('{param:SKIPSESSIONCHECK|}') <> '' then Exit;
-  QueryOpenSessionCount(Count, Unknown);
-  if Unknown then
-  begin
-    Log('CHECKPOINT_OPEN_SESSIONS_SILENT reason=unknown');
-    ExitProcess(CHECKPOINT_EXIT_OPEN_SESSIONS_SILENT);
-  end;
-  if Count > 0 then
-  begin
-    Log('CHECKPOINT_OPEN_SESSIONS_SILENT count=' + IntToStr(Count));
-    ExitProcess(CHECKPOINT_EXIT_OPEN_SESSIONS_SILENT);
-  end;
 end;
 
 function IsWebView2Installed: Boolean;
@@ -773,6 +812,7 @@ begin
   ScriptPath := ExpandConstant('{pf}\Checkpoint\Server\tools\Get-InstallerOpenSessionCount.ps1');
   if not FileExists(ScriptPath) then
   begin
+    Log('CHECKPOINT_OPEN_SESSION_COUNT reason=open_session_count_unknown_server_unreachable');
     Unknown := True;
     Exit;
   end;
@@ -789,11 +829,34 @@ begin
       end;
       if Line = 'UNKNOWN' then
       begin
+        Log('CHECKPOINT_OPEN_SESSION_COUNT reason=open_session_count_unknown_server_unreachable');
         Unknown := True;
         Exit;
       end;
     end;
+  Log('CHECKPOINT_OPEN_SESSION_COUNT reason=open_session_count_unknown_server_unreachable');
   Unknown := True;
+end;
+
+procedure EnforceSilentUpgradeOpenSessionPolicy;
+var
+  Count: Integer;
+  Unknown: Boolean;
+begin
+  if IsFirstInstall then Exit;
+  if not WizardSilent then Exit;
+  if ExpandConstant('{param:SKIPSESSIONCHECK|}') <> '' then Exit;
+  QueryOpenSessionCount(Count, Unknown);
+  if Unknown then
+  begin
+    Log('CHECKPOINT_OPEN_SESSIONS_SILENT reason=open_session_count_unknown_server_unreachable');
+    ExitProcess(CHECKPOINT_EXIT_OPEN_SESSIONS_SILENT);
+  end;
+  if Count > 0 then
+  begin
+    Log('CHECKPOINT_OPEN_SESSIONS_SILENT count=' + IntToStr(Count));
+    ExitProcess(CHECKPOINT_EXIT_OPEN_SESSIONS_SILENT);
+  end;
 end;
 
 function ConfirmUpgradeDespiteOpenSessions: Boolean;
@@ -1161,6 +1224,7 @@ begin
       SetEnvironmentVariable('CHECKPOINT_REINSTALL_KEPT_DATA', '1', 0);
       SetEnvironmentVariable('CHECKPOINT_UPGRADE_FROM', 'reinstall-kept', 0);
     end;
+    RunCheckpointServerPostinstallPhases;
   end;
   if CurStep = ssDone then
     GInstallReachedDone := True;
@@ -1184,3 +1248,5 @@ begin
   GUpgradeStoppedServer := True;
   StopCheckpointServerForUpgrade;
 end;
+
+#include "ServerPostinstallRun.iss"

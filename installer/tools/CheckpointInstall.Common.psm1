@@ -1,6 +1,42 @@
 ﻿# Shared helpers for Checkpoint installers (B).
 $ErrorActionPreference = "Stop"
 
+function Get-CheckpointUtf8NoBomEncoding {
+    return New-Object System.Text.UTF8Encoding $false
+}
+
+function Set-CheckpointUtf8NoBomFile {
+    param(
+        [Parameter(Mandatory)][string] $Path,
+        [Parameter(Mandatory)][string] $Content
+    )
+    $parent = Split-Path -Parent $Path
+    if ($parent -and -not (Test-Path -LiteralPath $parent)) {
+        New-Item -ItemType Directory -Force -Path $parent | Out-Null
+    }
+    [System.IO.File]::WriteAllText($Path, $Content, (Get-CheckpointUtf8NoBomEncoding))
+}
+
+function Add-CheckpointUtf8NoBomLine {
+    param(
+        [Parameter(Mandatory)][string] $Path,
+        [Parameter(Mandatory)][string] $Line
+    )
+    $parent = Split-Path -Parent $Path
+    if ($parent -and -not (Test-Path -LiteralPath $parent)) {
+        New-Item -ItemType Directory -Force -Path $parent | Out-Null
+    }
+    $enc = Get-CheckpointUtf8NoBomEncoding
+    $fs = [System.IO.File]::Open($Path, [System.IO.FileMode]::Append, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
+    try {
+        $sw = New-Object System.IO.StreamWriter($fs, $enc)
+        $sw.WriteLine($Line)
+        $sw.Flush()
+    } finally {
+        $fs.Close()
+    }
+}
+
 function Get-CheckpointRepoRoot {
     param([string] $StartDir = $PSScriptRoot)
     $dir = $StartDir
@@ -270,11 +306,14 @@ function Write-CheckpointSetupFailureRecord {
         "phase=$Phase",
         "message=$($Message -replace '[\r\n]', ' ')"
     )
-    Set-Content -LiteralPath $path -Value ($lines -join "`n") -Encoding utf8NoBOM
+    Set-CheckpointUtf8NoBomFile -Path $path -Content ($lines -join "`n")
     Write-Host "CHECKPOINT_SETUP_FAILURE recorded exit=$InstallerExitCode phase=$Phase"
 }
 
 Export-ModuleMember -Function @(
+    "Get-CheckpointUtf8NoBomEncoding",
+    "Set-CheckpointUtf8NoBomFile",
+    "Add-CheckpointUtf8NoBomLine",
     "New-CheckpointPlainSecureString",
     "Test-CheckpointKioskPasswordLocked",
     "Set-CheckpointWinlogonAutoLogonPassword",

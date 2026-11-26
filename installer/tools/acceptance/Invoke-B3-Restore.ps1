@@ -12,12 +12,21 @@ $latest = Get-ChildItem -LiteralPath $backupDir -Filter "checkpoint-*.dump" -Err
     Sort-Object LastWriteTime -Descending | Select-Object -First 1
 if (-not $latest) { throw "B-3-restore: no checkpoint dump in $backupDir" }
 
-$cfg = Read-CheckpointServerJsonConfig
-$table = "b3_restore_probe_" + ([guid]::NewGuid().ToString("N").Substring(0, 8))
+$serverJson = "C:\ProgramData\Checkpoint\config\server.json"
+$cfg = Read-CheckpointServerJsonConfig -ServerJsonPath $serverJson
 $env:PGPASSWORD = $cfg.Password
 $psql = Get-CheckpointPgExecutable -Name "psql"
-& $psql -h $cfg.Host -p $cfg.Port -U $cfg.Username -d $cfg.Database -v ON_ERROR_STOP=1 -c "CREATE TABLE `"$table`" (id int primary key);" 2>&1 | Out-Null
-if ($LASTEXITCODE -ne 0) { throw "B-3-restore: create probe table failed" }
+
+$beforeRaw = & $psql -h $cfg.Host -p $cfg.Port -U $cfg.Username -d $cfg.Database -tAc @"
+SELECT "HourlyToman" FROM rate_lines WHERE "GroupId"='ps5' AND "PlayMode"='Offline' AND "PlayerCount"=1 AND "IsSpecialBand"=false LIMIT 1;
+"@ 2>&1
+if ($LASTEXITCODE -ne 0) { throw "B-3-restore: read ps5 rate failed: $beforeRaw" }
+$dumpedValue = [int]$beforeRaw.Trim()
+$tampered = $dumpedValue + 37
+$upd = & $psql -h $cfg.Host -p $cfg.Port -U $cfg.Username -d $cfg.Database -v ON_ERROR_STOP=1 -c @"
+UPDATE rate_lines SET "HourlyToman"=$tampered WHERE "GroupId"='ps5' AND "PlayMode"='Offline' AND "PlayerCount"=1 AND "IsSpecialBand"=false;
+"@ 2>&1
+if ($LASTEXITCODE -ne 0) { throw "B-3-restore: tamper rate failed: $upd" }
 
 $restoreLog = Join-Path $LogsDir "b3-restore.log"
 $restoreScript = "C:\Program Files\Checkpoint\Server\tools\restore.ps1"
@@ -29,11 +38,15 @@ if ($LASTEXITCODE -ne 0) {
     throw "B-3-restore: restore.ps1 failed exit $LASTEXITCODE (see $restoreLog)"
 }
 
-$exists = & $psql -h $cfg.Host -p $cfg.Port -U $cfg.Username -d $cfg.Database -tAc "SELECT to_regclass('public.$table') IS NOT NULL;" 2>&1
-if (($exists.Trim()) -eq "t") {
-    throw "B-3-restore: probe table still present after restore (restore did not roll back post-dump writes)"
+$afterRaw = & $psql -h $cfg.Host -p $cfg.Port -U $cfg.Username -d $cfg.Database -tAc @"
+SELECT "HourlyToman" FROM rate_lines WHERE "GroupId"='ps5' AND "PlayMode"='Offline' AND "PlayerCount"=1 AND "IsSpecialBand"=false LIMIT 1;
+"@ 2>&1
+if ($LASTEXITCODE -ne 0) { throw "B-3-restore: read rate after restore failed: $afterRaw" }
+$restored = [int]$afterRaw.Trim()
+if ($restored -ne $dumpedValue) {
+    throw "B-3-restore: rate not restored to dump value; expected $dumpedValue got $restored (tampered was $tampered)"
 }
 
 Assert-InstallerServerServicesRunning
 Assert-InstallerServerHealthOk
-Write-Host "B-3-restore: ok dump=$($latest.Name)"
+Write-Host "B-3-restore: ok dump=$($latest.Name) ps5_rate=$restored"

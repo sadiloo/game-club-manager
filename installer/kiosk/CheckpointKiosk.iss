@@ -8,9 +8,16 @@
 #ifndef StagingGuardDir
   #define StagingGuardDir "..\..\artifacts\installer\stage-guard"
 #endif
+#ifndef CheckpointInternalTestHooks
+  #define CheckpointInternalTestHooks "0"
+#endif
 
 #define AppName "چک‌پوینت کیوسک"
-#define SetupBase "CheckpointKioskSetup-" + AppVersion
+#if CheckpointInternalTestHooks == "1"
+  #define SetupBase "CheckpointKioskSetupHooks-" + AppVersion
+#else
+  #define SetupBase "CheckpointKioskSetup-" + AppVersion
+#endif
 
 [Setup]
 AppId={{1B3B2A4E-5A6D-4E5C-8F9A-2E1D3C4B5A6F}
@@ -41,15 +48,13 @@ RightToLeft=yes
 [Files]
 Source: "{#StagingKioskDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#StagingGuardDir}\*"; DestDir: "{pf}\Checkpoint\Guard"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "..\tools\kiosk-postinstall.ps1"; DestDir: "{pf}\Checkpoint\Guard\tools"; Flags: ignoreversion
-Source: "..\tools\CheckpointInstall.Common.psm1"; DestDir: "{pf}\Checkpoint\Guard\tools"; Flags: ignoreversion
+Source: "{#StagingGuardDir}\tools\kiosk-postinstall.ps1"; DestDir: "{pf}\Checkpoint\Guard\tools"; Flags: ignoreversion
+Source: "{#StagingGuardDir}\tools\CheckpointInstall.Common.psm1"; DestDir: "{pf}\Checkpoint\Guard\tools"; Flags: ignoreversion
+Source: "{#StagingGuardDir}\tools\checkpoint-setup-exit-codes.ps1"; DestDir: "{pf}\Checkpoint\Guard\tools"; Flags: ignoreversion
 Source: "..\..\docs\install\kiosk-install.fa.md"; DestDir: "{app}\docs"; Flags: ignoreversion
 
 [Dirs]
 Name: "{commonappdata}\Checkpoint\kiosk"; Permissions: admins-full
-
-[Run]
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{pf}\Checkpoint\Guard\tools\kiosk-postinstall.ps1"""; StatusMsg: "پیکربندی کاربر کیوسک و نگهبان…"; Flags: runhidden logoutput
 
 [UninstallRun]
 Filename: "sc.exe"; Parameters: "stop CheckpointGuard"; Flags: runhidden
@@ -61,14 +66,24 @@ Type: filesandordirs; Name: "{app}"
 Type: filesandordirs; Name: "{pf}\Checkpoint\Guard"
 
 [Code]
+#include "KioskWizard.inc.iss"
+
 function InitializeSetup: Boolean;
 begin
+#if CheckpointInternalTestHooks == "1"
+  ApplyKioskInternalTestHooks;
+#endif
   Result := True;
 end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
-  { Must stay False: NeedsRestart True can skip deferred [Run] at Finish (Inno 6.7.x). Mandatory config uses a normal [Run] (no postinstall). }
+  { Must stay False: NeedsRestart True can skip deferred [Run] at Finish (Inno 6.7.x). Mandatory kiosk config runs from ssPostInstall via Exec. }
   NeedsRestart := False;
   Result := '';
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  KioskCurStepChanged(CurStep);
 end;

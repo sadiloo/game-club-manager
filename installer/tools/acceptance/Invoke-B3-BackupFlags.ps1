@@ -38,9 +38,18 @@ Remove-Item -LiteralPath $secFlag -Force -ErrorAction SilentlyContinue
 & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $scriptPath -SecondaryBackupDir $secondary | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "B-3-flags: backup failed after secondary restored" }
 
-# Low-disk flag: invoke script body with mocked DriveInfo is unit-tested; here pin Register script unchanged.
-$reg = Get-Content (Join-Path (Split-Path $PSScriptRoot -Parent) "backup-daily.ps1") -Raw
-if ($reg -notmatch "backup-low-disk\.flag") { throw "B-3-flags: backup-daily must reference low-disk flag" }
-if ($reg -notmatch "DriveInfo") { throw "B-3-flags: backup-daily must check disk free space" }
+if (Test-Path -LiteralPath $lowFlag) { Remove-Item $lowFlag -Force }
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $scriptPath `
+    -MinFreeBytes ([long]::MaxValue) -SecondaryBackupDir $secondary 2>&1 | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "B-3-flags: low-disk probe backup must still succeed" }
+if (-not (Test-Path -LiteralPath $lowFlag)) {
+    throw "B-3-flags: backup-low-disk.flag not written when MinFreeBytes exceeds free space"
+}
+Remove-Item -LiteralPath $lowFlag -Force
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $scriptPath -SecondaryBackupDir $secondary | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "B-3-flags: backup failed after low-disk flag cleared" }
+if (Test-Path -LiteralPath $lowFlag) {
+    throw "B-3-flags: backup-low-disk.flag must be cleared when disk is sufficient"
+}
 
 Write-Host "B-3-flags: ok"

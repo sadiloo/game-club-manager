@@ -19,12 +19,15 @@ $ErrorActionPreference = "Stop"
 
 & (Join-Path $acceptance "Invoke-R8f-PostinstallFail.ps1") -ServerSetupHooks $serverHighHooks -ServerSetup $serverHigh `
     -AccountsFile $accounts -LowSetup $serverLow -LowVersion $lowVersion -HighVersion $appVersion -LogsDir $logRoot
+& (Join-Path $acceptance "Invoke-R8f-PostinstallPhaseMatrix.ps1") -ServerSetupHooks $serverHighHooks -AccountsFile $accounts `
+    -LowSetup $serverLow -HighSetup $serverHigh -LowVersion $lowVersion -HighVersion $appVersion -LogsDir $logRoot
+& (Join-Path $acceptance "Invoke-R8f-KioskPostinstallFail.ps1") -KioskSetupHooks $kioskHighHooks -LogsDir $logRoot
 & (Join-Path $acceptance "Invoke-R8f-ReleaseIgnoresFailPhase.ps1") -ServerSetup $serverHigh -AccountsFile $accounts -LogsDir $logRoot
 & (Join-Path $acceptance "Invoke-R8f-InvalidAccounts.ps1") -ServerSetup $serverHigh -LogsDir $logRoot
 & (Join-Path $acceptance "Invoke-R8f-ExistingPgDataRefuse.ps1") -ServerSetup $serverHigh -AccountsFile $accounts -LogsDir $logRoot
 & (Join-Path $acceptance "Invoke-Q5-SilentOpenSessions.ps1") -LowSetup $serverLow -HighSetup $serverHigh2 `
     -AccountsFile $accounts -LowVersion $lowVersion -LogsDir $logRoot
-& (Join-Path $acceptance "Invoke-Q5-InteractiveOpenSessionsProbe.ps1") -LogsDir $logRoot
+& (Join-Path $acceptance "Invoke-Q5-InteractiveOpenSessionsProbe.ps1") -LogsDir $logRoot -AccountsFile $accounts
 
 Copy-Item -Force "C:\ProgramData\Checkpoint\logs\upgrade.log" (Join-Path $logRoot "upgrade.log") -ErrorAction SilentlyContinue
 Write-Host "ci-installer: acceptance done"

@@ -11,7 +11,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 Import-Module (Join-Path $PSScriptRoot "CheckpointInstall.Common.psm1") -Force
-. (Join-Path $PSScriptRoot "..\ci\checkpoint-setup-exit-codes.ps1")
+. (Join-Path $PSScriptRoot "checkpoint-setup-exit-codes.ps1")
 
 $programData = "C:\ProgramData\Checkpoint"
 $configDir = Join-Path $programData "config"
@@ -21,37 +21,38 @@ $serverDir = "C:\Program Files\Checkpoint\Server"
 $logsDir = Join-Path $programData "logs"
 $backupsDir = Join-Path $programData "backups"
 $stagingSecretsPath = Join-Path $configDir ".install-secrets.json"
+$phaseTrace = Join-Path $logsDir "postinstall-phase-trace.log"
 
 function Test-Phase([string[]] $Names) {
     return ($InstallPhase -eq "install-all") -or ($Names -contains $InstallPhase)
 }
 
-New-Item -ItemType Directory -Force -Path $configDir, $logsDir, $backupsDir | Out-Null
-
-if ($env:CHECKPOINT_INTERNAL_TEST_HOOKS -eq "1") {
-    $failPhasePath = Join-Path $configDir ".internal-test-fail-phase"
-    if (Test-Path -LiteralPath $failPhasePath) {
-        $failPhase = (Get-Content -LiteralPath $failPhasePath -Raw).Trim()
-        if ($failPhase -eq $InstallPhase) {
-            Write-Host "CHECKPOINT_POSTINSTALL_FAILED phase=$InstallPhase (acceptance file hook)"
-            Write-CheckpointSetupFailureRecord -Phase $InstallPhase -InstallerExitCode $script:CheckpointSetupExitPostinstallFailed -Message "internal test file hook"
-            exit $script:CheckpointSetupExitPostinstallFailed
+function Invoke-CheckpointPostinstallAbortCleanup {
+    if ($InstallMode -eq "upgrade") {
+        Write-Host "CHECKPOINT_POSTINSTALL_UPGRADE_RESTORE start CheckpointServer"
+        try {
+            Start-Service CheckpointServer -ErrorAction Stop
+        } catch {
+            Write-Host "CHECKPOINT_POSTINSTALL_UPGRADE_RESTORE start failed: $($_.Exception.Message)"
         }
+    } else {
+        Write-Host "CHECKPOINT_POSTINSTALL_ABORT_SERVICES_STOPPED"
+        Stop-Service CheckpointServer -ErrorAction SilentlyContinue
+        Stop-Service CheckpointPostgres -ErrorAction SilentlyContinue
     }
-}
-
-if ($env:CHECKPOINT_INTERNAL_TEST_HOOKS -eq "1" -and $env:CHECKPOINT_TEST_FAIL_PHASE -eq $InstallPhase) {
-    Write-Host "CHECKPOINT_POSTINSTALL_FAILED phase=$InstallPhase (internal test hook)"
-    Write-CheckpointSetupFailureRecord -Phase $InstallPhase -InstallerExitCode $script:CheckpointSetupExitPostinstallFailed -Message "TESTFAILPHASE hook"
-    exit $script:CheckpointSetupExitPostinstallFailed
 }
 
 function Exit-CheckpointPostinstallFailure {
     param(
         [Parameter(Mandatory)][string] $Phase,
-        [int] $InstallerExitCode = $script:CheckpointSetupExitPostinstallFailed,
+        [int] $InstallerExitCode = -1,
         [string] $Message = ""
     )
+    if ($InstallerExitCode -lt 0) {
+        $InstallerExitCode = Get-CheckpointPostinstallPhaseExitCode -InstallPhase $Phase
+    }
+    Invoke-CheckpointPostinstallAbortCleanup
+    Add-CheckpointUtf8NoBomLine -Path $phaseTrace -Line "phase=$Phase status=fail exit=$InstallerExitCode"
     Write-CheckpointSetupFailureRecord -Phase $Phase -InstallerExitCode $InstallerExitCode -Message $Message
     exit $InstallerExitCode
 }
@@ -61,8 +62,46 @@ trap {
     if ($msg -match "CHECKPOINT_ACCOUNTS_INVALID") {
         Exit-CheckpointPostinstallFailure -Phase $InstallPhase -InstallerExitCode $script:CheckpointSetupExitInvalidAccounts -Message $msg
     }
-    Exit-CheckpointPostinstallFailure -Phase $InstallPhase -InstallerExitCode $script:CheckpointSetupExitPostinstallFailed -Message $msg
+    Exit-CheckpointPostinstallFailure -Phase $InstallPhase -Message $msg
 }
+
+New-Item -ItemType Directory -Force -Path $configDir, $logsDir, $backupsDir | Out-Null
+
+function Complete-CheckpointPostinstallPhase {
+    if ($InstallPhase -ne "install-all") {
+        Add-CheckpointUtf8NoBomLine -Path $phaseTrace -Line "phase=$InstallPhase status=ok"
+    }
+    exit 0
+}
+
+if ($InstallPhase -ne "install-all") {
+    Write-Host "CHECKPOINT_POSTINSTALL_PHASE_BEGIN phase=$InstallPhase"
+    Add-CheckpointUtf8NoBomLine -Path $phaseTrace -Line "phase=$InstallPhase status=begin"
+}
+
+#region CHECKPOINT_INTERNAL_TEST_HOOKS_BEGIN
+if ($env:CHECKPOINT_INTERNAL_TEST_HOOKS -eq "1") {
+    $failPhasePath = Join-Path $configDir ".internal-test-fail-phase"
+    if (Test-Path -LiteralPath $failPhasePath) {
+        $failPhase = (Get-Content -LiteralPath $failPhasePath -Raw).Trim()
+        if ($failPhase -eq $InstallPhase) {
+            Write-Host "CHECKPOINT_POSTINSTALL_FAILED phase=$InstallPhase (acceptance file hook)"
+            $exitCode = Get-CheckpointPostinstallPhaseExitCode -InstallPhase $InstallPhase
+            Write-CheckpointSetupFailureRecord -Phase $InstallPhase -InstallerExitCode $exitCode -Message "internal test file hook"
+            Invoke-CheckpointPostinstallAbortCleanup
+            exit $exitCode
+        }
+    }
+}
+
+if ($env:CHECKPOINT_INTERNAL_TEST_HOOKS -eq "1" -and $env:CHECKPOINT_TEST_FAIL_PHASE -eq $InstallPhase) {
+    Write-Host "CHECKPOINT_POSTINSTALL_FAILED phase=$InstallPhase (internal test hook)"
+    $exitCode = Get-CheckpointPostinstallPhaseExitCode -InstallPhase $InstallPhase
+    Write-CheckpointSetupFailureRecord -Phase $InstallPhase -InstallerExitCode $exitCode -Message "TESTFAILPHASE hook"
+    Invoke-CheckpointPostinstallAbortCleanup
+    exit $exitCode
+}
+#endregion CHECKPOINT_INTERNAL_TEST_HOOKS_END
 
 $isUpgrade = Test-Path -LiteralPath $configPath
 if ($InstallMode -eq "upgrade") { $isUpgrade = $true }
@@ -102,11 +141,11 @@ if ($InstallMode -eq "upgrade") {
                 Write-Host "server-postinstall: upgrade-pins skip (empty DEFAULTPINS)"
             }
         }
-        if ($InstallPhase -eq "upgrade-pins") { exit 0 }
+        if ($InstallPhase -eq "upgrade-pins") { Complete-CheckpointPostinstallPhase }
     }
     if (Test-Phase @("upgrade-stop", "upgrade", "install-all")) {
         Stop-Service CheckpointServer -ErrorAction SilentlyContinue
-        if ($InstallPhase -eq "upgrade-stop") { exit 0 }
+        if ($InstallPhase -eq "upgrade-stop") { Complete-CheckpointPostinstallPhase }
     }
     if (Test-Phase @("upgrade-backup", "upgrade", "install-all")) {
         $oldVer = $env:CHECKPOINT_UPGRADE_FROM
@@ -118,7 +157,7 @@ if ($InstallMode -eq "upgrade") {
         & $pgDump -Fc -h 127.0.0.1 -p 5433 -U postgres -d checkpoint -f $preDump
         if ($LASTEXITCODE -ne 0) { throw "pre-upgrade pg_dump failed" }
         $env:CHECKPOINT_PREUPGRADE_DUMP = $preDump
-        if ($InstallPhase -eq "upgrade-backup") { exit 0 }
+        if ($InstallPhase -eq "upgrade-backup") { Complete-CheckpointPostinstallPhase }
     }
     if (Test-Phase @("upgrade-start", "upgrade", "install-all")) {
         if ($AccountsFile -and (Test-Path -LiteralPath $AccountsFile)) {
@@ -139,7 +178,7 @@ if ($InstallMode -eq "upgrade") {
             $preDump = (Get-ChildItem -Path $backupsDir -Filter "pre-upgrade-$oldVer-*.dump" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1).FullName
         }
         Add-Content -LiteralPath (Join-Path $logsDir "upgrade.log") -Value "$(Get-Date -Format o) downtimeSeconds=$([int]$sw.Elapsed.TotalSeconds) preDump=$preDump"
-        exit 0
+        Complete-CheckpointPostinstallPhase
     }
 }
 
@@ -152,7 +191,7 @@ if (Test-Phase @("webview2")) {
             Start-Process -FilePath $wv2.FullName -ArgumentList "/silent", "/install" -Wait -NoNewWindow
         }
     }
-    if ($InstallPhase -ne "install-all") { exit 0 }
+    if ($InstallPhase -ne "install-all") { Complete-CheckpointPostinstallPhase }
 }
 
 if (Test-Phase @("reinstall-kept-pg")) {
@@ -167,12 +206,12 @@ if (Test-Phase @("reinstall-kept-pg")) {
         if ($LASTEXITCODE -ne 0) { throw "pre-reinstall-kept pg_dump failed" }
     }
     Write-Host "server-postinstall: pre-reinstall-kept backup $preDump"
-    if ($InstallPhase -ne "install-all") { exit 0 }
+    if ($InstallPhase -ne "install-all") { Complete-CheckpointPostinstallPhase }
 }
 
 if (Test-Phase @("database")) {
     & (Join-Path $PSScriptRoot "Initialize-CheckpointPostgres.ps1") -PgRoot $pgRoot -SuperPassword $dbPassword
-    if ($InstallPhase -ne "install-all") { exit 0 }
+    if ($InstallPhase -ne "install-all") { Complete-CheckpointPostinstallPhase }
 }
 
 $initialUsers = @()
@@ -237,7 +276,7 @@ if ((Test-Phase @("accounts")) -and -not $isUpgrade) {
     $json = $serverJson | ConvertTo-Json -Depth 5
     Set-Content -LiteralPath $configPath -Value $json -Encoding UTF8
     Set-CheckpointServerJsonAcl -ConfigPath $configPath
-    if ($InstallPhase -eq "accounts") { exit 0 }
+    if ($InstallPhase -eq "accounts") { Complete-CheckpointPostinstallPhase }
 }
 
 if ($InstallMode -eq "upgrade" -and $AccountsFile -and (Test-Path -LiteralPath $AccountsFile)) {
@@ -258,7 +297,7 @@ if (Test-Phase @("services")) {
             throw "CheckpointServer service registration failed"
         }
     }
-    if ($InstallPhase -ne "install-all") { exit 0 }
+    if ($InstallPhase -ne "install-all") { Complete-CheckpointPostinstallPhase }
 }
 
 if (Test-Phase @("firewall")) {
@@ -267,7 +306,7 @@ if (Test-Phase @("firewall")) {
     if (-not $existingRule) {
         New-NetFirewallRule -DisplayName $ruleName -Direction Inbound -Action Allow -Protocol TCP -LocalPort 5000 -Profile Private, Domain | Out-Null
     }
-    if ($InstallPhase -ne "install-all") { exit 0 }
+    if ($InstallPhase -ne "install-all") { Complete-CheckpointPostinstallPhase }
 }
 
 if (Test-Phase @("backup")) {
@@ -278,7 +317,7 @@ if (Test-Phase @("backup")) {
         if (Test-Path -LiteralPath $flag) { Remove-Item -LiteralPath $flag -Force }
     }
     & (Join-Path $PSScriptRoot "Register-CheckpointDailyBackup.ps1") -BackupScriptPath (Join-Path $PSScriptRoot "backup-daily.ps1") -SecondaryBackupDir $SecondaryBackupDir
-    if ($InstallPhase -ne "install-all") { exit 0 }
+    if ($InstallPhase -ne "install-all") { Complete-CheckpointPostinstallPhase }
 }
 
 if (Test-Phase @("start", "install-all")) {
@@ -291,4 +330,5 @@ if (Test-Phase @("start", "install-all")) {
         Remove-Item -LiteralPath $stagingSecretsPath -Force
     }
     Clear-CheckpointSetupFailureRecord
+    if ($InstallPhase -eq "start") { Complete-CheckpointPostinstallPhase }
 }

@@ -34,7 +34,8 @@ $ps5Json = $ps5Bill.Content | ConvertFrom-Json
 $pcJson = $pcBill.Content | ConvertFrom-Json
 if ($null -eq $ps5Json.unroundedPayableToman) { throw "B-8: PS5 bill missing" }
 if ($null -eq $pcJson.unroundedPayableToman) { throw "B-8: PC bill missing" }
-if ([int]$pcJson.unroundedPayableToman -ne 0) { throw "B-8: PC offline bill expected 0; got $($pcJson.unroundedPayableToman)" }
+# Product question open (tech-lead ruling d): pins *current* behaviour only — PC offline payable is 0 today, not a locked spec rule.
+if ([int]$pcJson.unroundedPayableToman -ne 0) { throw "B-8: PC offline bill current behaviour is 0; got $($pcJson.unroundedPayableToman)" }
 if ([int]$ps5Json.unroundedPayableToman -lt 1) { throw "B-8: PS5 bill must be positive; got $($ps5Json.unroundedPayableToman)" }
 $headers = Get-InstallerApiHeaders
 $rates = Invoke-RestMethod -Method Get -Uri "http://127.0.0.1:5000/api/rates" -Headers $headers

@@ -3,7 +3,8 @@ param(
     [string] $PrimaryBackupDir = "C:\ProgramData\Checkpoint\backups",
     [string] $SecondaryBackupDir = "",
     [string] $LogsDir = "C:\ProgramData\Checkpoint\logs",
-    [string] $ServerJsonPath = "$env:ProgramData\Checkpoint\config\server.json"
+    [string] $ServerJsonPath = "$env:ProgramData\Checkpoint\config\server.json",
+    [long] $MinFreeBytes = 5368709120
 )
 
 $ErrorActionPreference = "Stop"
@@ -12,8 +13,6 @@ $ErrorActionPreference = "Stop"
 $logPath = Join-Path $LogsDir "backup.log"
 $secondaryMissingFlag = Join-Path $LogsDir "backup-secondary-missing.flag"
 $lowDiskFlag = Join-Path $LogsDir "backup-low-disk.flag"
-$minFreeBytes = 5GB
-
 function Write-BackupLog([string]$line) {
     if (-not (Test-Path -LiteralPath $LogsDir)) {
         New-Item -ItemType Directory -Force -Path $LogsDir | Out-Null
@@ -29,7 +28,7 @@ try {
     $driveRoot = [System.IO.Path]::GetPathRoot((Resolve-Path -LiteralPath $PrimaryBackupDir).Path)
     if ($driveRoot) {
         $drive = New-Object System.IO.DriveInfo($driveRoot)
-        if ($drive.AvailableFreeSpace -lt $minFreeBytes) {
+        if ($drive.AvailableFreeSpace -lt $MinFreeBytes) {
             Set-Content -LiteralPath $lowDiskFlag -Value "فضای آزاد دیسک پشتیبان کمتر از ۵ گیگابایت است." -Encoding UTF8
             Write-BackupLog "low disk flag written freeBytes=$($drive.AvailableFreeSpace)"
         } elseif (Test-Path -LiteralPath $lowDiskFlag) {

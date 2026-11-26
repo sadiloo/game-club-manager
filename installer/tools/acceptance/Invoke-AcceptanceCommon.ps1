@@ -214,7 +214,8 @@ function Set-AcceptancePostinstallFailPhase {
     $configDir = "C:\ProgramData\Checkpoint\config"
     New-Item -ItemType Directory -Force -Path $configDir | Out-Null
     $path = Join-Path $configDir ".internal-test-fail-phase"
-    Set-Content -LiteralPath $path -Value $Phase -Encoding utf8NoBOM
+    $enc = New-Object System.Text.UTF8Encoding $false
+    [System.IO.File]::WriteAllText($path, $Phase, $enc)
 }
 
 function Clear-AcceptancePostinstallFailPhase {
@@ -465,7 +466,7 @@ function Assert-KioskPostinstallCompleted {
     $logRun = $false
     if (Test-Path -LiteralPath $InnoLogPath) {
         $raw = Get-Content -LiteralPath $InnoLogPath -Raw -Encoding UTF8 -ErrorAction Stop
-        if ($raw -match '(?m)Parameters:\s+.*kiosk-postinstall\.ps1') {
+        if ($raw -match 'CHECKPOINT_KIOSK_POSTINSTALL_EXEC' -or $raw -match '(?m)Parameters:\s+.*kiosk-postinstall\.ps1') {
             $logRun = $true
         }
     }
@@ -909,6 +910,35 @@ function Get-InstallerPsqlExecutable {
     $psql = "C:\Program Files\Checkpoint\PostgreSQL\bin\psql.exe"
     if (-not (Test-Path -LiteralPath $psql)) { throw "psql missing at $psql" }
     return $psql
+}
+
+function Get-InstallerBillingFingerprint {
+    $json = Get-InstallerServerJson
+    $cs = [string]$json.ConnectionStrings.Default
+    $m = [regex]::Match($cs, 'Password=([^;]+)')
+    $pw = $m.Groups[1].Value
+    $env:PGPASSWORD = $pw
+    $q = @"
+SELECT
+ coalesce((SELECT sum("AmountToman") FROM wallet_ledger), 0),
+ (SELECT count(*) FROM kiosk_lease_signing_keys),
+ coalesce((SELECT left("LeaseVerifyPublicKeyPem", 32) FROM kiosk_devices LIMIT 1), '');
+"@
+    $psql = Get-InstallerPsqlExecutable
+    $oldEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $out = & $psql -h 127.0.0.1 -p 5433 -U postgres -d checkpoint -At -F '|' -c $q 2>&1
+    } finally {
+        $ErrorActionPreference = $oldEap
+    }
+    if ($LASTEXITCODE -ne 0) { throw "psql billing fingerprint failed: $out" }
+    $parts = $out.Trim() -split '\|'
+    return [PSCustomObject]@{
+        WalletLedgerSumToman = [int64]$parts[0]
+        LeaseKeyCount        = [int]$parts[1]
+        DeviceLeaseKeyPrefix = [string]$parts[2]
+    }
 }
 
 function Get-InstallerDbCounts {

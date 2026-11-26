@@ -428,6 +428,19 @@ try {
     if ($daily -notmatch "backup-low-disk\.flag") {
         throw "backup-daily must write backup-low-disk.flag when free space < 5GB"
     }
+    if ($daily -notmatch "MinFreeBytes") {
+        throw "backup-daily must expose MinFreeBytes parameter"
+    }
+    $lowFlag = Join-Path $workDir "logs\backup-low-disk.flag"
+    $pd = Join-Path $workDir "ProgramData\Checkpoint"
+    New-Item -ItemType Directory -Force -Path (Join-Path $pd "backups"), (Join-Path $pd "logs") | Out-Null
+    $env:ProgramData = $pd
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "..\tools\backup-daily.ps1") `
+        -PrimaryBackupDir (Join-Path $pd "backups") -LogsDir (Join-Path $pd "logs") `
+        -ServerJsonPath $jsonPath -MinFreeBytes ([long]::MaxValue) 2>&1 | Out-Null
+    if (-not (Test-Path -LiteralPath $lowFlag)) {
+        throw "backup-daily must write low-disk flag when MinFreeBytes exceeds available space"
+    }
 
     Write-Host "BackupRestoreConfig: ok"
 } finally {

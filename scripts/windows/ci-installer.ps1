@@ -27,6 +27,7 @@ if ($Phase -eq "Acceptance") {
     $serverHighHooks = $manifest.ServerHighHooks
     $kioskLow = $manifest.KioskLow
     $kioskHigh = $manifest.KioskHigh
+    $kioskHighHooks = $manifest.KioskHighHooks
     $accounts = $manifest.AccountsFile
     $acceptance = $manifest.AcceptanceDir
     $logRoot = $manifest.LogsDir
@@ -96,6 +97,28 @@ Invoke-DotnetPublish @(
 
 & (Join-Path $root "installer/tools/Fetch-InstallerThirdParty.ps1") -SkipIfPresent
 
+function Sync-InstallerStagedTools {
+    param(
+        [ValidateSet("Release", "Hooks")]
+        [string] $Mode = "Release"
+    )
+    $srcTools = Join-Path $root "installer/tools"
+    $serverTools = Join-Path $stageServer "tools"
+    $guardTools = Join-Path $stageGuard "tools"
+    New-Item -ItemType Directory -Force -Path $serverTools, $guardTools | Out-Null
+    Get-ChildItem -LiteralPath $srcTools -File | Where-Object { $_.Extension -in '.ps1', '.psm1' } | Copy-Item -Destination $serverTools -Force
+    Copy-Item -LiteralPath (Join-Path $root "installer/ci/checkpoint-setup-exit-codes.ps1") -Destination $serverTools -Force
+    if ($Mode -eq "Release") {
+        & (Join-Path $root "installer/ci/Strip-ReleaseInstallerPayload.ps1") -ToolsDir $serverTools
+    }
+    foreach ($name in @("kiosk-postinstall.ps1", "CheckpointInstall.Common.psm1", "checkpoint-setup-exit-codes.ps1")) {
+        Copy-Item -LiteralPath (Join-Path $serverTools $name) -Destination $guardTools -Force
+    }
+    Write-Host "ci-installer: staged tools mode=$Mode serverTools=$serverTools guardTools=$guardTools"
+}
+
+Sync-InstallerStagedTools -Mode Release
+
 Write-Host "ci-installer: static installer rules"
 & (Join-Path $root "installer/tests/NoPwshInstaller.Tests.ps1")
 & (Join-Path $root "installer/tests/NoBackupDelete.Tests.ps1")
@@ -105,6 +128,8 @@ Write-Host "ci-installer: static installer rules"
 & (Join-Path $root "installer/tests/IssAppVersionStatic.Tests.ps1")
 & (Join-Path $root "installer/tests/KioskInstallStatic.Tests.ps1")
 & (Join-Path $root "installer/tests/BackupDailyTehran.Tests.ps1")
+& (Join-Path $root "installer/tests/PowerShell51InstallerStatic.Tests.ps1")
+& (Join-Path $root "installer/tests/PostinstallPhaseExitCodes.Tests.ps1")
 & (Join-Path $root "installer/tests/ServerWizardStatic.Tests.ps1")
 & (Join-Path $root "installer/tests/ServerPayloadStatic.Tests.ps1")
 & (Join-Path $root "installer/tests/ServerFinishLanStatic.Tests.ps1")
@@ -256,11 +281,14 @@ $kioskIss = Join-Path $root "installer/kiosk/CheckpointKiosk.iss"
 $serverLow = Invoke-IsccCompile -IssPath $serverIss -Version $lowVersion
 $serverHigh = Invoke-IsccCompile -IssPath $serverIss -Version $appVersion
 $serverHigh2 = Invoke-IsccCompile -IssPath $serverIss -Version $high2Version
-$serverHighHooks = Invoke-IsccCompile -IssPath $serverIss -Version $appVersion -InternalTestHooks
 $kioskLow = Invoke-IsccCompile -IssPath $kioskIss -Version $lowVersion
 $kioskHigh = Invoke-IsccCompile -IssPath $kioskIss -Version $appVersion
+Sync-InstallerStagedTools -Mode Hooks
+$serverHighHooks = Invoke-IsccCompile -IssPath $serverIss -Version $appVersion -InternalTestHooks
+$kioskHighHooks = Invoke-IsccCompile -IssPath $kioskIss -Version $appVersion -InternalTestHooks
+Sync-InstallerStagedTools -Mode Release
 
-foreach ($outPath in @($serverLow, $serverHigh, $serverHigh2, $serverHighHooks, $kioskLow, $kioskHigh)) {
+foreach ($outPath in @($serverLow, $serverHigh, $serverHigh2, $serverHighHooks, $kioskLow, $kioskHigh, $kioskHighHooks)) {
     $len = (Get-Item -LiteralPath $outPath).Length
     Write-Host ("ci-installer: installer path={0} bytes={1}" -f $outPath, $len)
 }
@@ -278,6 +306,7 @@ New-Item -ItemType Directory -Force -Path $manifestDir | Out-Null
     ServerHighHooks = $serverHighHooks
     KioskLow       = $kioskLow
     KioskHigh      = $kioskHigh
+    KioskHighHooks = $kioskHighHooks
     AccountsFile   = (Join-Path $root "installer/ci/accounts-silent.json")
     AcceptanceDir  = (Join-Path $root "installer/tools/acceptance")
     LogsDir        = (Join-Path $root "artifacts/installer/acceptance-logs")

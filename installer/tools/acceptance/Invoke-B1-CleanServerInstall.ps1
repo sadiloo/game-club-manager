@@ -38,6 +38,9 @@ foreach ($pin in @("5678", "8765", "4321")) {
         throw "B-1: pin found in install log"
     }
 }
+if ($log -match "CHECKPOINT_ACCOUNTS_INVALID") {
+    throw "B-1: CHECKPOINT_ACCOUNTS_INVALID must not appear on successful install (grep negative control)"
+}
 
 $base = (Get-InstallerLiveServerBaseUrl).TrimEnd("/")
 $acc = Get-Content -LiteralPath $AccountsFile -Raw | ConvertFrom-Json
