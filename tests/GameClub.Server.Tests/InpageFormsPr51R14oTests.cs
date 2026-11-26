@@ -40,9 +40,15 @@ public sealed class InpageFormsPr51R14oTests(GameClubWebApplicationFactory facto
         Assert.Equal(15_500, confirmCollectible);
         using var scope = factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        var invoice = await db.Invoices.SingleAsync(i => i.SessionId == sessionId);
+        var invoice = await db.Invoices.Include(i => i.PaymentLines).SingleAsync(i => i.SessionId == sessionId);
         Assert.Equal(15_500, invoice.CollectibleToman);
         Assert.NotEqual(20_000, invoice.CollectibleToman);
+        Assert.Equal(500, invoice.PaymentLines.Single(p => p.Method == PaymentMethod.Wallet).AmountToman);
+        Assert.Equal(15_000, invoice.PaymentLines.Single(p => p.Method == PaymentMethod.Cash).AmountToman);
+        var spend = await db.WalletLedger.AsNoTracking().SingleAsync(w => w.Kind == WalletLedgerKind.InvoiceSpend);
+        Assert.Equal(-500, spend.RealDeltaToman + spend.GiftDeltaToman);
+        var member = await db.CustomerMembers.SingleAsync(m => m.CustomerId == invoice.CustomerId);
+        Assert.Equal(0, member.RealToman);
         var invoiceNumber = invoice.Number;
         var inv = await op.GetFromJsonAsync<JsonElement>($"/api/operator/invoices/{invoiceNumber}");
         Assert.Equal(15_500, inv.GetProperty("collectibleToman").GetInt64());
@@ -86,6 +92,26 @@ public sealed class InpageFormsPr51R14oTests(GameClubWebApplicationFactory facto
         Assert.Equal(previewBody.GetProperty("message").GetString(), confirmBody.GetProperty("message").GetString());
         using var scope = factory.Services.CreateScope();
         Assert.Equal(0, await scope.ServiceProvider.GetRequiredService<AppDbContext>()
+            .Invoices.CountAsync(i => i.SessionId == sessionId));
+    }
+
+    [Fact]
+    public async Task r14o_zero_bill_guest_wallet_preview_400_wallet_requires_member()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var op = await factory.CreateOperatorClientAsync();
+        var api = factory.CreateClientWithKey();
+        await S3TestHelpers.RegisterPc(api, "PC-R14O-ZERO-G", PilotSeed.PcNormalGroupId);
+        factory.Clock.SetTehran(2026, 6, 11, 14, 0);
+        var sessionId = await S3TestHelpers.StartSession(api, "PC-R14O-ZERO-G");
+        factory.Clock.SetTehran(2026, 6, 11, 14, 0, 40);
+        (await api.PostAsync($"/api/sessions/{sessionId}/stop", null)).EnsureSuccessStatusCode();
+        var payments = new[] { new { method = "Wallet", amountToman = 1_000L } };
+        var preview = await op.PostAsJsonAsync($"/api/operator/sessions/{sessionId}/bill/preview", new { payments });
+        Assert.Equal(HttpStatusCode.BadRequest, preview.StatusCode);
+        var body = (await preview.Content.ReadFromJsonAsync<JsonElement>())!;
+        Assert.Equal("wallet_requires_member", body.GetProperty("code").GetString());
+        Assert.Equal(0, await factory.Services.CreateScope().ServiceProvider.GetRequiredService<AppDbContext>()
             .Invoices.CountAsync(i => i.SessionId == sessionId));
     }
 

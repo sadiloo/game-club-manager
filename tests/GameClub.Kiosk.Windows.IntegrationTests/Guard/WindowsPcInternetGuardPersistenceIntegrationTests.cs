@@ -74,35 +74,51 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
         };
     }
 
+    private const string TamperPreStateCaptureScript =
+        "Write-Output '=== FW_PROFILES_PRE_TAMPER ==='; "
+        + "Get-NetFirewallProfile -ErrorAction Stop | ForEach-Object { "
+        + "Write-Output (\"PROFILE Name=$($_.Name) Enabled=$($_.Enabled) DefaultOutboundAction=$($_.DefaultOutboundAction)\") }; "
+        + "Write-Output '=== FW_RULES_CHECKPOINT_INTERNET_OFF_PRE_TAMPER ==='; "
+        + "Get-NetFirewallRule -Group 'Checkpoint Internet Off' -ErrorAction Stop | ForEach-Object { "
+        + "Write-Output (\"RULE Name=$($_.Name) Enabled=$($_.Enabled) Action=$($_.Action) Direction=$($_.Direction)\") }";
+
     private const string TamperOpenEgressScript =
-        "$ErrorActionPreference='Continue'; "
-        + "foreach ($p in @('Domain','Private','Public')) "
-        + "{ Set-NetFirewallProfile -Name $p -DefaultOutboundAction NotConfigured -ErrorAction SilentlyContinue }; "
-        + "$rule = Get-NetFirewallRule -Group 'Checkpoint Internet Off' -ErrorAction SilentlyContinue | Select-Object -First 1; "
-        + "if ($rule) { Remove-NetFirewallRule -InputObject $rule -ErrorAction Stop }";
+        "try { "
+        + "Set-NetFirewallProfile -Name Domain -DefaultOutboundAction NotConfigured -ErrorAction Stop; "
+        + "Set-NetFirewallProfile -Name Private -DefaultOutboundAction NotConfigured -ErrorAction Stop; "
+        + "Set-NetFirewallProfile -Name Public -DefaultOutboundAction NotConfigured -ErrorAction Stop; "
+        + "$rule = Get-NetFirewallRule -Group 'Checkpoint Internet Off' -ErrorAction Stop | Select-Object -First 1; "
+        + "if ($null -eq $rule) { throw [System.InvalidOperationException]::new('Checkpoint Internet Off rule group empty before rule remove') }; "
+        + "Remove-NetFirewallRule -InputObject $rule -ErrorAction Stop; "
+        + "exit 0 } catch { "
+        + "Write-Output ('TAMPER_PS_EXIT_DIAGNOSTIC exit_code=1'); "
+        + "Write-Output ('EXCEPTION_TYPE=' + $_.Exception.GetType().FullName); "
+        + "Write-Output ('EXCEPTION_TOSTRING=' + $_.Exception.ToString()); "
+        + "Write-Output ('SCRIPT_STACK_TRACE=' + $_.ScriptStackTrace); "
+        + "if ($Error.Count -gt 0) { Write-Output ('ERROR_0_TOSTRING=' + $Error[0].ToString()) }; "
+        + "Write-Output ('LASTEXITCODE=' + $LASTEXITCODE); "
+        + "exit 1 }";
 
     private static void TamperOpenEgressOrFail(string phase)
     {
-        const int attempts = 3;
-        Exception last = null;
-        for (var i = 1; i <= attempts; i++)
+        var preState = WindowsIntegrationRunPowerShell.RunResult(TamperPreStateCaptureScript);
+        if (preState.ExitCode != 0)
         {
-            try
-            {
-                WindowsIntegrationRunPowerShell.Run(TamperOpenEgressScript);
-                return;
-            }
-            catch (Exception ex) when (ex is InvalidOperationException or TimeoutException)
-            {
-                last = ex;
-                Console.WriteLine($"TAMPER_EGRESS attempt={i}/{attempts} phase={phase} err={ex.Message}");
-                Thread.Sleep(500);
-            }
+            Assert.Fail(
+                $"phase={phase}: pre-tamper firewall state capture failed. "
+                + $"exitCode={preState.ExitCode} stdout={preState.StdOut} stderr={preState.StdErr}");
+        }
+
+        var tamper = WindowsIntegrationRunPowerShell.RunResult(TamperOpenEgressScript);
+        if (tamper.ExitCode == 0)
+        {
+            return;
         }
 
         Assert.Fail(
-            $"phase={phase}: egress tamper PowerShell failed after {attempts} attempts "
-            + $"(Set-NetFirewallProfile NotConfigured + optional rule remove). Last: {last?.Message}");
+            $"phase={phase}: egress tamper failed (single run). "
+            + $"exitCode={tamper.ExitCode} stdout={tamper.StdOut} stderr={tamper.StdErr} "
+            + $"preTamperState={preState.StdOut}");
     }
 
     [Fact(Timeout = 60_000)]

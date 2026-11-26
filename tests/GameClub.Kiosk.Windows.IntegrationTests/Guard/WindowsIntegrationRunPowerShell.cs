@@ -8,7 +8,35 @@ namespace GameClub.Kiosk.Windows.IntegrationTests.Guard;
 
 internal static class WindowsIntegrationRunPowerShell
 {
+    internal readonly struct PowerShellRunResult
+    {
+        public PowerShellRunResult(int exitCode, string stdOut, string stdErr)
+        {
+            ExitCode = exitCode;
+            StdOut = stdOut;
+            StdErr = stdErr;
+        }
+
+        public int ExitCode { get; }
+
+        public string StdOut { get; }
+
+        public string StdErr { get; }
+    }
+
     internal static string Run(string script, bool tolerateNonZeroExit = false)
+    {
+        var result = RunResult(script);
+        if (result.ExitCode != 0 && !tolerateNonZeroExit)
+        {
+            throw new InvalidOperationException(
+                $"PowerShell exit {result.ExitCode}. stdout: {result.StdOut}. stderr: {result.StdErr}. script: {script}");
+        }
+
+        return result.StdOut;
+    }
+
+    internal static PowerShellRunResult RunResult(string script)
     {
         var encoded = Convert.ToBase64String(
             Encoding.Unicode.GetBytes("$ProgressPreference='SilentlyContinue'; " + script));
@@ -40,20 +68,27 @@ internal static class WindowsIntegrationRunPowerShell
         };
         proc.BeginOutputReadLine();
         proc.BeginErrorReadLine();
-        proc.WaitForExit(60_000);
+        if (!proc.WaitForExit(60_000))
+        {
+            try
+            {
+                proc.Kill();
+            }
+            catch
+            {
+                // best effort
+            }
+
+            throw new TimeoutException($"PowerShell timed out after 60s. script: {script}");
+        }
+
         var errText = stderr.ToString();
         if (!string.IsNullOrWhiteSpace(errText))
         {
             Console.WriteLine($"RunPowerShell stderr exit={proc.ExitCode}: {errText}");
         }
 
-        if (proc.ExitCode != 0 && !tolerateNonZeroExit)
-        {
-            throw new InvalidOperationException(
-                $"PowerShell exit {proc.ExitCode}. stderr: {errText}. script: {script}");
-        }
-
-        return stdout.ToString();
+        return new PowerShellRunResult(proc.ExitCode, stdout.ToString(), errText);
     }
 }
 #endif

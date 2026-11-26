@@ -44,6 +44,12 @@ public sealed class Pr51R14oMutantBehaviorTests
         Assert.Equal(15_500, alloc.PayableToman);
         Assert.NotEqual(20_000, alloc.PayableToman);
         Assert.Equal(0, alloc.RoundingToman);
+        var walletTender = alloc.Tenders.Single(t => t.Method == PaymentMethod.Wallet);
+        var cashTender = alloc.Tenders.Single(t => t.Method == PaymentMethod.Cash);
+        Assert.Equal(500, walletTender.AmountToman);
+        Assert.Equal(15_000, cashTender.AmountToman);
+        Assert.Equal(500, walletTender.RealDrawnToman);
+        Assert.Equal(9_500, alloc.RemainingWallets.Single(w => w.MemberId == "m").RealCreditToman);
     }
 
     private static readonly Tender[] OwnerUnderTenderMixed =
@@ -66,6 +72,6 @@ public sealed class Pr51R14oMutantBehaviorTests
         Assert.Equal(15_500, alloc.PayableToman);
         Assert.NotEqual(20_000, alloc.PayableToman);
         Assert.Equal(0, alloc.RoundingToman);
-        Assert.DoesNotContain(alloc.Errors, e => e.Message.Contains("20000", StringComparison.Ordinal));
+        Assert.DoesNotContain(alloc.Errors, e => e.Message.IndexOf("20000", StringComparison.Ordinal) >= 0);
     }
 }
