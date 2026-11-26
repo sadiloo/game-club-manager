@@ -21,31 +21,48 @@ public sealed class SignedSessionLease
     public string SignatureBase64 { get; init; } = "";
 }
 
+public sealed class KioskInternetAppliedReport
+{
+    public Guid Epoch { get; init; }
+    public long Version { get; init; }
+    public bool On { get; init; }
+    public DateTime? AppliedAtUtc { get; init; }
+    public string? Error { get; init; }
+}
+
+public sealed class InternetCommandPayload
+{
+    public string StationId { get; init; } = "";
+    public Guid Epoch { get; init; }
+    public long Version { get; init; }
+    public bool On { get; init; }
+    public DateTime IssuedAtUtc { get; init; }
+    public Guid? SessionId { get; init; }
+}
+
+public sealed class SignedInternetCommand
+{
+    public InternetCommandPayload Payload { get; init; } = new();
+    public string SignatureBase64 { get; init; } = "";
+}
+
 public sealed class KioskHeartbeatRequest
 {
     public Guid? SessionId { get; init; }
     public long ClientMonotonicMs { get; init; }
+    public KioskInternetAppliedReport? InternetApplied { get; init; }
 }
 
 public sealed class KioskHeartbeatAck
 {
     public DateTime ServerUtc { get; init; }
-
     public DateTime? LastAcceptedCheckpointUtc { get; init; }
-
     public string SessionStatus { get; init; } = "";
-
     public SignedSessionLease? Lease { get; init; }
-
     public KioskDisplayDto? Display { get; init; }
-
     public bool ManualSettle { get; init; }
-
     public DateTime? DeadPcDeadlineUtc { get; init; }
-
-    public int CredentialsVersion { get; init; }
-
-    public int KioskFreeUseIdleMinutes { get; init; }
+    public SignedInternetCommand? Internet { get; init; }
 }
 
 public sealed class KioskDisplayDto

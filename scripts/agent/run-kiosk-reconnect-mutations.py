@@ -10,8 +10,6 @@ OUT = os.environ.get("MUTOUT_DIR", "/tmp/kiosk-reconnect-mut")
 os.makedirs(OUT, exist_ok=True)
 env = dict(os.environ)
 env["PATH"] = os.environ.get("HOME", "") + "/.dotnet:/usr/local/bin:" + os.environ.get("PATH", "")
-env["PYTHONIOENCODING"] = "utf-8"
-SUBPROCESS_ENCODING = "utf-8"
 
 LC = "src/GameClub.Kiosk.Core/Runtime/KioskHubLifecycle.cs"
 RT = "src/GameClub.Kiosk.Core/Runtime/KioskRuntime.cs"
@@ -146,21 +144,13 @@ def norm_newlines(text):
 
 
 def read_src(path):
-    with open(path, newline="", encoding=SUBPROCESS_ENCODING) as f:
+    with open(path, newline="") as f:
         return f.read()
 
 
 def write_src(path, text):
-    with open(path, "w", newline="", encoding=SUBPROCESS_ENCODING) as f:
+    with open(path, "w", newline="") as f:
         f.write(text)
-
-
-def combined_output(proc):
-    if proc is None:
-        return ""
-    stdout = proc.stdout if proc.stdout is not None else ""
-    stderr = proc.stderr if proc.stderr is not None else ""
-    return stdout + stderr
 
 
 def count_pattern_in_src(src, item):
@@ -206,6 +196,25 @@ def ws_apply(text, pattern, replacement, regex=False):
     return text_n.replace(pattern_n, replacement_n, 1)
 
 
+def trx_failure_messages(trx_path):
+    if not os.path.isfile(trx_path):
+        return []
+    try:
+        import xml.etree.ElementTree as ET
+
+        root = ET.parse(trx_path).getroot()
+        ns = {"t": "http://microsoft.com/schemas/VisualStudio/TeamTest/2010"}
+        messages = []
+        for result in root.findall(".//t:UnitTestResult[@outcome='Failed']", ns):
+            name = result.get("testName") or result.get("name") or "unknown"
+            msg_el = result.find(".//t:Message", ns)
+            msg = (msg_el.text or "").strip() if msg_el is not None else ""
+            messages.append(f"{name}: {msg}")
+        return messages
+    except Exception as ex:
+        return [f"trx_parse_error: {ex}"]
+
+
 def run_host_tests(test_filter):
     b_ = subprocess.run(
         ["dotnet", "build", HOST_PROJ, "-c", "Release", "-f", "net48", *BUILD_WARN_OFF],
@@ -213,12 +222,10 @@ def run_host_tests(test_filter):
         env=env,
         capture_output=True,
         text=True,
-        encoding=SUBPROCESS_ENCODING,
-        errors="replace",
     )
     if b_.returncode != 0:
-        return "BUILD_FAIL", combined_output(b_), []
-    t = None
+        return "BUILD_FAIL", b_.stdout + b_.stderr, []
+    trx_path = os.path.join(OUT, f"baseline-{test_filter.replace('.', '-')}.trx")
     try:
         t = subprocess.run(
             [
@@ -232,21 +239,21 @@ def run_host_tests(test_filter):
                 "--no-build",
                 "--filter",
                 f"FullyQualifiedName~{test_filter}",
+                "--results-directory",
+                OUT,
+                "--logger",
+                f"trx;LogFileName={os.path.basename(trx_path)}",
                 *BUILD_WARN_OFF,
             ],
             cwd=ROOT,
             env=env,
             capture_output=True,
             text=True,
-            encoding=SUBPROCESS_ENCODING,
-            errors="replace",
             timeout=600,
         )
     except subprocess.TimeoutExpired as te:
         return "TIMEOUT", (te.stdout or "") + (te.stderr or ""), []
-    if t is None:
-        return "RUN_FAILED", "host test subprocess did not start (no output).", []
-    out = combined_output(t)
+    out = t.stdout + t.stderr
     if (
         t.returncode == 77
         or "platform not supported" in out.lower()
@@ -272,11 +279,9 @@ def run_core_tests(test_filter=None):
         env=env,
         capture_output=True,
         text=True,
-        encoding=SUBPROCESS_ENCODING,
-        errors="replace",
     )
     if b_.returncode != 0:
-        return "BUILD_FAIL", combined_output(b_), []
+        return "BUILD_FAIL", b_.stdout + b_.stderr, []
     args = [
         "dotnet",
         "test",
@@ -290,7 +295,6 @@ def run_core_tests(test_filter=None):
     ]
     if test_filter:
         args.extend(["--filter", f"FullyQualifiedName~{test_filter}"])
-    t = None
     try:
         t = subprocess.run(
             args,
@@ -298,15 +302,11 @@ def run_core_tests(test_filter=None):
             env=env,
             capture_output=True,
             text=True,
-            encoding=SUBPROCESS_ENCODING,
-            errors="replace",
             timeout=600,
         )
     except subprocess.TimeoutExpired as te:
         return "TIMEOUT", (te.stdout or "") + (te.stderr or ""), []
-    if t is None:
-        return "RUN_FAILED", "core test subprocess did not start (no output).", []
-    out = combined_output(t)
+    out = t.stdout + t.stderr
     if "test run aborted" in out.lower():
         return "RUN_ABORTED", out, []
     failed = sorted(set(re.findall(r"^\s+Failed (\S+)", out, re.M)))
@@ -322,8 +322,7 @@ failed_names = []
 
 
 def write_mutations_json():
-    with open(os.path.join(OUT, "mutations-r1d.json"), "w", encoding=SUBPROCESS_ENCODING) as f:
-        f.write(json.dumps(res, indent=2))
+    open(os.path.join(OUT, "mutations-r1d.json"), "w").write(json.dumps(res, indent=2))
 
 
 print_host_mutant_pattern_table()
@@ -334,6 +333,8 @@ if host_only:
     res["baseline"] = {"scope": "host", "status": baseline_status, "failed_tests": baseline_failed}
     if baseline_status != "PASS" or baseline_failed:
         print("BASELINE_FAILED", baseline_status, baseline_failed, file=sys.stderr, flush=True)
+        for line in trx_failure_messages(os.path.join(OUT, "baseline-KioskHostStatusTimerTests.trx")):
+            print("BASELINE_TRX", line, file=sys.stderr, flush=True)
         write_mutations_json()
         sys.exit(1)
 else:
@@ -345,68 +346,55 @@ else:
         write_mutations_json()
         sys.exit(1)
 
-try:
-    for item in M:
-        name, path = item[0], item[1]
-        tag = item[4] if len(item) > 4 else "core"
-        targeted = item[5] if len(item) > 5 else None
-        if host_only and tag != "host-d5":
-            continue
-        if not host_only and tag in ("host-d5", "wpf-host"):
-            res[name] = "HOST_WINDOWS_ONLY"
+for item in M:
+    name, path = item[0], item[1]
+    tag = item[4] if len(item) > 4 else "core"
+    targeted = item[5] if len(item) > 5 else None
+    if host_only and tag != "host-d5":
+        continue
+    if not host_only and tag in ("host-d5", "wpf-host"):
+        res[name] = "HOST_WINDOWS_ONLY"
+        print(name, res[name], flush=True)
+        continue
+    if tag == "equivalent":
+        res[name] = "EQUIVALENT"
+        print(name, res[name], flush=True)
+        continue
+    p = os.path.join(ROOT, path)
+    src = read_src(p)
+    regex = name in REGEX_MUTANTS
+    if len(item) >= 3 and isinstance(item[2], list):
+        pairs = item[2]
+        mutated = norm_newlines(src)
+        ok = True
+        for x, y in pairs:
+            xn, yn = norm_newlines(x), norm_newlines(y)
+            if xn not in mutated:
+                ok = False
+                break
+            mutated = mutated.replace(xn, yn)
+        if not ok:
+            res[name] = "PATTERN_NOT_FOUND"
+            failed_names.append(name)
             print(name, res[name], flush=True)
             continue
-        if tag == "equivalent":
-            res[name] = "EQUIVALENT"
+    else:
+        pattern = item[2]
+        mutated = ws_apply(src, pattern, item[3], regex=regex)
+        if mutated is None:
+            res[name] = "PATTERN_NOT_FOUND"
+            failed_names.append(name)
             print(name, res[name], flush=True)
             continue
-        p = os.path.join(ROOT, path)
-        src = read_src(p)
-        regex = name in REGEX_MUTANTS
-        if len(item) >= 3 and isinstance(item[2], list):
-            pairs = item[2]
-            mutated = norm_newlines(src)
-            ok = True
-            for x, y in pairs:
-                xn, yn = norm_newlines(x), norm_newlines(y)
-                if xn not in mutated:
-                    ok = False
-                    break
-                mutated = mutated.replace(xn, yn)
-            if not ok:
-                res[name] = "PATTERN_NOT_FOUND"
-                failed_names.append(name)
-                print(name, res[name], flush=True)
-                continue
-        else:
-            pattern = item[2]
-            mutated = ws_apply(src, pattern, item[3], regex=regex)
-            if mutated is None:
-                res[name] = "PATTERN_NOT_FOUND"
-                failed_names.append(name)
-                print(name, res[name], flush=True)
-                continue
-        write_src(p, mutated)
-        try:
-            if tag == "wpf-host":
-                res[name] = "WPF_HOST_NOT_BUILDABLE_ON_LINUX"
-                continue
-            if tag == "host-d5":
-                filt = targeted or "KioskHostStatusTimerTests"
-                status, out, failed_tests = run_host_tests(filt)
-                if status == "FAIL" and (not targeted or any(targeted in f for f in failed_tests)):
-                    res[name] = {"result": "KILLED", "failed_tests": failed_tests}
-                elif status == "PASS":
-                    res[name] = "SURVIVES"
-                    failed_names.append(name)
-                else:
-                    res[name] = status
-                    failed_names.append(name)
-                print(name, res[name], flush=True)
-                continue
-
-            status, out, failed_tests = run_core_tests(targeted)
-            if status == "FAIL":
+    write_src(p, mutated)
+    try:
+        if tag == "wpf-host":
+            res[name] = "WPF_HOST_NOT_BUILDABLE_ON_LINUX"
+            continue
+        if tag == "host-d5":
+            filt = targeted or "KioskHostStatusTimerTests"
+            status, out, failed_tests = run_host_tests(filt)
+            if status == "FAIL" and (not targeted or any(targeted in f for f in failed_tests)):
                 res[name] = {"result": "KILLED", "failed_tests": failed_tests}
             elif status == "PASS":
                 res[name] = "SURVIVES"
@@ -415,10 +403,22 @@ try:
                 res[name] = status
                 failed_names.append(name)
             print(name, res[name], flush=True)
-        finally:
-            write_src(p, src)
-finally:
-    write_mutations_json()
+            continue
+
+        status, out, failed_tests = run_core_tests(targeted)
+        if status == "FAIL":
+            res[name] = {"result": "KILLED", "failed_tests": failed_tests}
+        elif status == "PASS":
+            res[name] = "SURVIVES"
+            failed_names.append(name)
+        else:
+            res[name] = status
+            failed_names.append(name)
+        print(name, res[name], flush=True)
+    finally:
+        write_src(p, src)
+
+write_mutations_json()
 
 if host_only and failed_names:
     print("HOST_MUTATION_SURVIVORS", sorted(set(failed_names)), file=sys.stderr)

@@ -23,6 +23,8 @@ public partial class MainWindow : Window
             DisplayBalance,
             DisplayElapsed,
             DisplayFreeBand,
+            InternetOffLockNotice,
+            InternetOffPlayingNotice,
             LockPanel,
             LauncherPanel,
             PlayingPanel,

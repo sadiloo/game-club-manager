@@ -17,7 +17,7 @@ public sealed class B2BurntAfterGraceTests
         string groupId = PilotSeed.PcNormalGroupId)
     {
         return SessionPricer.Price(
-            new Session("b2", [new PlaySegment("a", start, end, "pc-1", groupId, PlayMode.Offline, 1, StationKind.Pc)]),
+            new Session("b2", [new PlaySegment("a", start, end, "pc-1", groupId, PlayMode.Online, 1, StationKind.Pc)]),
             PilotSeed.CreateCard());
     }
 

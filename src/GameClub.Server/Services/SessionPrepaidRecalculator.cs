@@ -4,13 +4,14 @@ using GameClub.Server.Time;
 
 namespace GameClub.Server.Services;
 
-public static class ConsolePrepaidRecalculator
+public static class SessionPrepaidRecalculator
 {
     public static void RecalcAmountPrepaid(
         PlaySessionEntity session,
         PlaySegmentEntity openSegment,
         BranchRatesSnapshot snapshot,
-        DateTime nowUtc)
+        DateTime nowUtc,
+        DateTime? billEndUtc = null)
     {
         if (session.PrepaidKind != PrepaidSessionKind.Amount
             || session.PrepaidAmountBudgetToman is not long budget)
@@ -18,15 +19,23 @@ public static class ConsolePrepaidRecalculator
             return;
         }
 
-        var now = TimeMapping.ToTehran(nowUtc);
+        var endCap = billEndUtc ?? nowUtc;
+        var now = TimeMapping.ToTehran(endCap);
         var billingSegments = new List<PlaySegment>();
         foreach (var seg in session.Segments.OrderBy(s => s.StartUtc))
         {
-            var end = seg.EndUtc ?? nowUtc;
+            var rawEnd = seg.EndUtc ?? endCap;
+            var segEnd = TrimPcSegmentEnd(seg, rawEnd, endCap);
+            var segStart = TrimPcSegmentStart(seg, segEnd, endCap);
+            if (segEnd <= segStart)
+            {
+                continue;
+            }
+
             billingSegments.Add(new PlaySegment(
                 seg.SegmentKey,
-                TimeMapping.ToTehran(seg.StartUtc),
-                TimeMapping.ToTehran(end),
+                TimeMapping.ToTehran(segStart),
+                TimeMapping.ToTehran(segEnd),
                 seg.StationId,
                 seg.GroupId,
                 seg.Mode,
@@ -44,7 +53,7 @@ public static class ConsolePrepaidRecalculator
             pauses = session.Pauses
                 .Select(p => new PauseInterval(
                     TimeMapping.ToTehran(p.StartUtc),
-                    TimeMapping.ToTehran(p.EndUtc ?? nowUtc)))
+                    TimeMapping.ToTehran(p.EndUtc ?? endCap)))
                 .ToList();
         }
 
@@ -88,5 +97,25 @@ public static class ConsolePrepaidRecalculator
         {
             session.PrepaidEndAlertSent = false;
         }
+    }
+
+    internal static DateTime TrimPcSegmentStart(PlaySegmentEntity seg, DateTime segEnd, DateTime billEndUtc)
+    {
+        if (seg.Kind != StationKind.Pc)
+        {
+            return seg.StartUtc;
+        }
+
+        return seg.StartUtc < billEndUtc ? seg.StartUtc : billEndUtc;
+    }
+
+    internal static DateTime TrimPcSegmentEnd(PlaySegmentEntity seg, DateTime rawEnd, DateTime billEndUtc)
+    {
+        if (seg.Kind != StationKind.Pc)
+        {
+            return rawEnd;
+        }
+
+        return rawEnd < billEndUtc ? rawEnd : billEndUtc;
     }
 }

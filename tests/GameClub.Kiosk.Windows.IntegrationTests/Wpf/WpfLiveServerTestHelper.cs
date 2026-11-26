@@ -22,38 +22,6 @@ internal static class WpfLiveServerTestHelper
         return url!.TrimEnd('/');
     }
 
-    public static async Task EnsurePcNormalRate80000Async()
-    {
-        await using var conn = new NpgsqlConnection(ResolveConnectionString());
-        await conn.OpenAsync();
-        using (var cmd = new NpgsqlCommand(
-            """
-            UPDATE rate_lines SET "HourlyToman" = 80000
-            WHERE "GroupId" = 'pc-normal' AND "IsSpecialBand" = false AND "PlayMode" = 'Offline' AND "PlayerCount" = 1
-            """,
-            conn))
-        {
-            var rateRows = await cmd.ExecuteNonQueryAsync();
-            if (rateRows != 1)
-            {
-                throw new InvalidOperationException(
-                    $"Expected exactly one pc-normal offline rate line update (IsSpecialBand = false), but {rateRows} row(s) were affected.");
-            }
-        }
-
-        using (var cmd = new NpgsqlCommand(
-            """UPDATE branch_rounding SET "PcSpecialBandSurchargeToman" = 0""",
-            conn))
-        {
-            var roundingRows = await cmd.ExecuteNonQueryAsync();
-            if (roundingRows < 1)
-            {
-                throw new InvalidOperationException(
-                    $"Expected at least one branch_rounding row update for PcSpecialBandSurchargeToman, but {roundingRows} row(s) were affected.");
-            }
-        }
-    }
-
     public static async Task<Guid> LookupCustomerIdByLoginAsync(string loginName)
     {
         await using var conn = new NpgsqlConnection(ResolveConnectionString());
@@ -113,7 +81,6 @@ internal static class WpfLiveServerTestHelper
         var api = new HttpClient { BaseAddress = new Uri(baseUrl + "/") };
         api.DefaultRequestHeaders.Add("X-Api-Key", apiKey);
 
-        await EnsurePcNormalRate80000Async();
         var stationId = "PC-WPF-" + Guid.NewGuid().ToString("N").Substring(0, 8);
         var register = await api.PostAsJsonAsync("/api/stations", new { id = stationId, name = stationId, groupId = "pc-normal" });
         register.EnsureSuccessStatusCode();

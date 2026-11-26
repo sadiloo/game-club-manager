@@ -110,7 +110,7 @@ public static class SessionGameSupport
                 previousNight = openSegment.GameNightHourlyRateToman;
                 var now = clock.UtcNow.UtcDateTime;
                 openSegment.EndUtc = now;
-                var nextKey = ((char)('a' + session.Segments.Count)).ToString();
+                var nextKey = SegmentKeySupport.Allocate(session.Segments.Count);
                 var newSeg = new PlaySegmentEntity
                 {
                     SegmentKey = nextKey,
@@ -131,7 +131,7 @@ public static class SessionGameSupport
             {
                 var now = clock.UtcNow.UtcDateTime;
                 openSegment.EndUtc = now;
-                var nextKey = ((char)('a' + session.Segments.Count)).ToString();
+                var nextKey = SegmentKeySupport.Allocate(session.Segments.Count);
                 var newSeg = new PlaySegmentEntity
                 {
                     SegmentKey = nextKey,
@@ -159,7 +159,7 @@ public static class SessionGameSupport
                 throw new ApiException(StatusCodes.Status409Conflict, ex.Code, ex.Message);
             }
 
-            ConsolePrepaidRecalculator.RecalcAmountPrepaid(session, openSegment, snapshot, clock.UtcNow.UtcDateTime);
+            SessionPrepaidRecalculator.RecalcAmountPrepaid(session, openSegment, snapshot, clock.UtcNow.UtcDateTime);
 
             await audit.AppendAsync(
                 "session.game",

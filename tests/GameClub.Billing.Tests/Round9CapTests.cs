@@ -25,7 +25,7 @@ public sealed class Round9CapTests
     {
         var d0 = T.At(2026, 6, 2, 10, 0);
         var charge = SessionPricer.Price(
-            new Session("x", [new PlaySegment("a", d0, d0.AddMinutes(2), "st", PilotSeed.PcNormalGroupId, PlayMode.Offline, 1)]),
+            new Session("x", [new PlaySegment("a", d0, d0.AddMinutes(2), "st", PilotSeed.PcNormalGroupId, PlayMode.Online, 1)]),
             PilotSeed.CreateCard(),
             policy: G(1));
         var code = new DiscountCode("C41", 41, 11_485, d0.AddSeconds(36), null, null, null);
@@ -85,7 +85,7 @@ public sealed class Round9CapTests
     {
         var s = T.At(2026, 6, 2, 23, 25);
         var charge = SessionPricer.Price(
-            new Session("x", [new PlaySegment("a", s, s.AddMinutes(34), "st", PilotSeed.PcVipGroupId, PlayMode.Offline, 1)]),
+            new Session("x", [new PlaySegment("a", s, s.AddMinutes(34), "st", PilotSeed.PcVipGroupId, PlayMode.Online, 1)]),
             PilotSeed.CreateCard(),
             policy: G(1));
         var r = CustomerPlay.Settle(
@@ -114,7 +114,7 @@ public sealed class Round9CapTests
     {
         var s = T.At(2026, 6, 2, 10, 0);
         var charge = SessionPricer.Price(
-            new Session("x", [new PlaySegment("a", s, s.AddMinutes(34), "st", PilotSeed.PcVipGroupId, PlayMode.Offline, 1)]),
+            new Session("x", [new PlaySegment("a", s, s.AddMinutes(34), "st", PilotSeed.PcVipGroupId, PlayMode.Online, 1)]),
             PilotSeed.CreateCard(),
             policy: G(1));
         var r = CustomerPlay.Settle(
