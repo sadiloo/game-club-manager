@@ -2,6 +2,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using GameClub.Billing;
 using GameClub.Server.Data;
+using GameClub.Server.Data.Entities;
 using GameClub.Server.Operator;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -44,6 +45,37 @@ public sealed class InpageFormsPr51R14mK8ZeroTotalCounterPinTests(GameClubWebApp
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         var invoice = await db.Invoices.SingleAsync(i => i.SessionId == sessionId);
         Assert.Equal(0, invoice.CollectibleToman);
-        Assert.Empty(invoice.PaymentLines);
+        var lineCount = await db.PaymentLines.CountAsync(p => p.InvoiceId == invoice.Id);
+        Assert.Equal(0, lineCount);
+    }
+
+    [Fact]
+    public async Task k8_mutant_one_cash_line_fails_zero_payment_line_pin()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var op = await factory.CreateOperatorClientAsync();
+        var api = factory.CreateClientWithKey();
+        await S3TestHelpers.RegisterPc(api, "PC-R14M-K8-MUT", PilotSeed.PcNormalGroupId);
+        factory.Clock.SetTehran(2026, 6, 9, 14, 0);
+        var sessionId = await S3TestHelpers.StartSession(api, "PC-R14M-K8-MUT");
+        factory.Clock.SetTehran(2026, 6, 9, 14, 0, 40);
+        (await api.PostAsync($"/api/sessions/{sessionId}/stop", null)).EnsureSuccessStatusCode();
+        (await op.PostAsJsonAsync(
+            $"/api/operator/sessions/{sessionId}/bill/confirm",
+            new { previewCollectibleToman = 0L, payments = Array.Empty<object>() })).EnsureSuccessStatusCode();
+
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var invoice = await db.Invoices.SingleAsync(i => i.SessionId == sessionId);
+        db.PaymentLines.Add(new PaymentLineEntity
+        {
+            InvoiceId = invoice.Id,
+            Method = PaymentMethod.Cash,
+            AmountToman = 1,
+        });
+        await db.SaveChangesAsync();
+
+        var lineCount = await db.PaymentLines.CountAsync(p => p.InvoiceId == invoice.Id);
+        Assert.False(lineCount == 0, "K8 pin must fail when session invoice has a cash payment line");
     }
 }

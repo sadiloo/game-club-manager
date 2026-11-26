@@ -97,6 +97,55 @@ const headLayer = fs.readFileSync(
   path.join(here, "../../../src/GameClub.Server/wwwroot/operator/cp-layer.js"),
   "utf8",
 );
+const pickOnlyApp = "/* r14n pick-only pin: cp-layer only */";
+
+async function runCpPickNoFollowingForm(layerSource, { expectHistoryClean = true } = {}) {
+  const { window, document, history, runInApp } = loadOperatorApp("http://localhost/operator/", {
+    trackKeydown: false,
+    layerSource,
+    appSource: pickOnlyApp,
+  });
+  history.pushState({ page: "start" }, "", "/start/");
+  history.pushState({ page: "operator" }, "", "/operator/");
+  assertOnOperator(window);
+  const len0 = history.length;
+  void window.cpPick({ title: "R14n pick-only", items: [{ id: "x", title: "pick" }] });
+  await waitCpVisible(document);
+  document.querySelector(".cp-pick-row")?.click();
+  await waitCpHidden(document);
+  await waitFor(
+    () =>
+      runInApp(
+        expectHistoryClean
+          ? "window.cpLayerIsSettled() && window.cpLayer._historyPopWaiters.length === 0 && !(history.state && history.state.cpDialog)"
+          : "window.cpLayerIsSettled() && window.cpLayer._historyPopWaiters.length === 0",
+      ),
+    expectHistoryClean ? "pick-only clear cpDialog" : "pick-only layer settled",
+  );
+  const lenAfterPick = history.length;
+  const hasCpDialog = !!(history.state && history.state.cpDialog);
+  history.back();
+  await waitFor(() => history.state?.page === "operator", "pick-only back to operator");
+  return { len0, lenAfterPick, hasCpDialog, backOk: history.state?.page === "operator" };
+}
+
+const headAllHandoff = headLayer.replace(
+  'session._finish(item, opts.handoffToNextLayer ? "handoff" : undefined)',
+  'session._finish(item, "handoff")',
+);
+
+const pickOnlyClean = await runCpPickNoFollowingForm(headLayer);
+if (pickOnlyClean.hasCpDialog) {
+  throw new Error("R14n: pick without following form must not leave cpDialog state after pick");
+}
+if (!pickOnlyClean.backOk) {
+  throw new Error("R14n: pick without following form must allow one back to operator history");
+}
+const pickOnlyMutant = await runCpPickNoFollowingForm(headAllHandoff, { expectHistoryClean: false });
+if (!pickOnlyMutant.hasCpDialog && pickOnlyMutant.backOk) {
+  throw new Error("R14n: head with pick-always-handoff must fail pick-only history pin");
+}
+
 const oldLayer = fs.readFileSync(path.join(here, "fixtures/cp-layer-pre-r14d-popstate.mjs"), "utf8");
 const hb1BusyPopstateGuardNeedle = "if (active && (active.busy || active._submitInFlight)) {";
 
@@ -306,7 +355,7 @@ for (const delay of [0, 30, 100]) {
 }
 
 const cancelFinish = headLayer.match(
-  /reason === "submit-success" \|\| reason === "cancel"[\s\S]*?(?=} else if \(reason)/,
+  /if \(reason === "submit-success" \|\| reason === "cancel"\) \{[\s\S]*?\n      \} else if \(reason === "handoff"\)/,
 );
 if (!cancelFinish?.[0]?.includes("popHistoryIfNeeded")) {
   throw new Error("N2: user cancel must call popHistoryIfNeeded");
@@ -315,8 +364,14 @@ if (cancelFinish?.[0]?.includes("releaseCpHistoryWithoutBack")) {
   throw new Error("N2: user cancel must not use releaseCpHistoryWithoutBack");
 }
 
-const n2ReplaceCancelPopLayer = headLayer.replace(
-  /if \(reason === "submit-success" \|\| reason === "cancel"\) \{[\s\S]*?\n      \} else if \(reason && reason !== "history"\)/,
+const releaseCpHistoryStub = `function releaseCpHistoryWithoutBack() {
+  cpLayer._historyPushed = false;
+  try { if (history.state && history.state.cpDialog) history.replaceState(null, "", window.location.href); } catch (_) {}
+  return Promise.resolve();
+}`;
+
+const n2ReplaceCancelPopLayer = `${releaseCpHistoryStub}\n${headLayer.replace(
+  /if \(reason === "submit-success" \|\| reason === "cancel"\) \{[\s\S]*?\n      \} else if \(reason === "handoff"\)/,
   `if (reason === "submit-success") {
         cpLayer._submitClosing = true;
         historyPop = popHistoryIfNeeded().finally(() => {
@@ -324,8 +379,8 @@ const n2ReplaceCancelPopLayer = headLayer.replace(
         });
       } else if (reason === "cancel") {
         historyPop = releaseCpHistoryWithoutBack();
-      } else if (reason && reason !== "history")`,
-);
+      } else if (reason === "handoff")`,
+)}`;
 
 let n2CancelMutantFailed = false;
 for (const delay of [0]) {
@@ -347,11 +402,13 @@ if (!cancelFinish?.[0]?.includes("popHistoryIfNeeded")) {
   throw new Error("N2: submit-success/cancel must call popHistoryIfNeeded");
 }
 
-const n2ReplaceSubmitPopLayer = headLayer.replaceAll(
+const n2ReplaceSubmitPopLayer = `${releaseCpHistoryStub}\n${headLayer.replaceAll(
   "historyPop = popHistoryIfNeeded()",
   "historyPop = releaseCpHistoryWithoutBack()",
+)}`;
+const n2MutantFinish = n2ReplaceSubmitPopLayer.match(
+  /if \(reason === "submit-success" \|\| reason === "cancel"\) \{[\s\S]*?\n      \} else if \(reason === "handoff"\)/,
 );
-const n2MutantFinish = n2ReplaceSubmitPopLayer.match(/reason === "submit-success"[\s\S]*?(?=} else if \(reason)/);
 if (!n2MutantFinish?.[0]?.includes("releaseCpHistoryWithoutBack")) {
   throw new Error("N2 mutant fixture must swap popHistoryIfNeeded for releaseCpHistoryWithoutBack");
 }
@@ -402,9 +459,6 @@ async function runHandoffHistoryPin(layerSource, { expectClean = true, exit = "c
   if (expectClean && !handoffOk) {
     throw new Error(`R14m: after handoff expected history.length ${len0 + 1}, got ${lenHandoff}`);
   }
-  if (!expectClean && handoffOk) {
-    throw new Error(`R14m mutant: expected broken handoff len > ${len0}, got ${lenHandoff}`);
-  }
   if (exit === "cancel") {
     await dismissCorrectionCancel(document, runInApp, history, len0);
   } else {
@@ -419,18 +473,23 @@ async function runHandoffHistoryPin(layerSource, { expectClean = true, exit = "c
       `R14m: after dismiss expected len ${lenHandoff} and base operator state, got len=${lenEnd} state=${JSON.stringify(history.state)}`,
     );
   }
-  if (!expectClean && dismissOk && handoffOk) {
-    throw new Error("R14m mutant: dismiss should leave dead history entry");
+  if (!expectClean) {
+    return { handoffOk, dismissOk };
   }
   assertOnOperator(window);
+  return { handoffOk: true, dismissOk: true };
 }
 
 await runHandoffHistoryPin(headLayer, { expectClean: true });
-for (const layer of [ce15efbLayer, mutL1Layer, mutL2Layer]) {
-  try {
-    await runHandoffHistoryPin(layer, { expectClean: false });
-  } catch (e) {
-    if (!e?.message?.startsWith("R14m mutant:")) throw e;
+
+for (const [label, layer] of [
+  ["ce15efb", ce15efbLayer],
+  ["mut-L1", mutL1Layer],
+  ["mut-L2", mutL2Layer],
+]) {
+  const r = await runHandoffHistoryPin(layer, { expectClean: false });
+  if (r.handoffOk && r.dismissOk) {
+    throw new Error(`R14n: ${label} unexpectedly satisfies clean handoff history pin`);
   }
 }
 

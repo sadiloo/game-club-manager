@@ -18,6 +18,8 @@ namespace GameClub.Server.Tests;
 public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory) : IAsyncLifetime
 {
     private const string PanelOrigin = "http://panel.test";
+
+    private static readonly string SeededBlankHref = $"{PanelOrigin}/blank";
     private readonly HttpClient _api = factory.CreateClientWithKey();
     private IPlaywright? _playwright;
     private IBrowser? _browser;
@@ -288,8 +290,10 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
 
         var page = await LoginAsync();
         await page.EvaluateAsync("() => refreshManualSettle()");
-        await page.FillAsync("#manualSettleList input[type=datetime-local]", "2026-06-03T15:30");
-        await page.GetByRole(AriaRole.Button, new PageGetByRoleOptions { Name = "Bill to end time" }).ClickAsync();
+        await page.WaitForSelectorAsync("#manualSettleList li");
+        var settleRow = page.Locator("#manualSettleList li", new() { HasText = "PC-MS-E" });
+        await settleRow.Locator("input[type=datetime-local]").FillAsync("2026-06-03T15:30");
+        await settleRow.GetByRole(AriaRole.Button, new() { Name = "Bill to end time" }).ClickAsync();
         await page.WaitForSelectorAsync("#bill:not(.hidden)");
         var detail = await WaitForBillTextAsync(
             async () => (await page.TextContentAsync("#billDetail"))!.Replace(",", "").Replace(" ", ""),
@@ -2337,12 +2341,16 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
         await AssertPlaywrightOnOperatorAsync(page);
         await page.GoBackAsync();
         var hrefAfterBack = await page.EvaluateAsync<string>("() => location.href");
-        Assert.DoesNotContain("about:blank", hrefAfterBack, StringComparison.Ordinal);
+        Assert.Equal(SeededBlankHref, hrefAfterBack);
+        Assert.Equal("blank", await page.EvaluateAsync<string>("() => history.state?.page ?? ''"));
     }
 
-    private async Task<List<R14mCpCorrectionExit>> CollectFailedHandoffHistoryPinsAsync(string cpLayerJs)
+    private sealed record HandoffHistoryPinOutcome(List<R14mCpCorrectionExit> Kills, List<string> NonAssertionErrors);
+
+    private async Task<HandoffHistoryPinOutcome> CollectFailedHandoffHistoryPinsAsync(string cpLayerJs)
     {
         var failed = new List<R14mCpCorrectionExit>();
+        var errors = new List<string>();
         foreach (var exit in Enum.GetValues<R14mCpCorrectionExit>())
         {
             await SeedWalletCorrectionStationAsync();
@@ -2384,51 +2392,208 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
 
                 await page.GoBackAsync();
                 var hrefAfterBack = await page.EvaluateAsync<string>("() => location.href");
-                if (hrefAfterBack.Contains("about:blank", StringComparison.Ordinal))
-                {
-                    failed.Add(exit);
-                    continue;
-                }
-
-                if (hrefAfterBack.Contains("/operator/", StringComparison.Ordinal)
-                    && await ReadHistoryStateIsNullAsync(page))
+                if (!string.Equals(hrefAfterBack, SeededBlankHref, StringComparison.Ordinal))
                 {
                     failed.Add(exit);
                 }
             }
-            catch
+            catch (Exception ex) when (ex.GetType().FullName?.StartsWith("Xunit.Sdk.", StringComparison.Ordinal) == true)
             {
                 failed.Add(exit);
             }
+            catch (Exception ex)
+            {
+                errors.Add($"{exit}: {ex.GetType().Name}: {ex.Message}");
+            }
         }
 
-        return failed;
+        return new HandoffHistoryPinOutcome(failed, errors);
     }
 
     [Fact]
     public async Task r14m_mutant_ce15efb_handoff_history_pins_fail()
     {
         var layer = await ReadCpLayerFromGitCommitAsync(R14mBaseCe15efb);
-        var failed = await CollectFailedHandoffHistoryPinsAsync(layer);
-        Assert.Equal(6, failed.Count);
+        var outcome = await CollectFailedHandoffHistoryPinsAsync(layer);
+        Assert.Empty(outcome.NonAssertionErrors);
+        Assert.Equal(6, outcome.Kills.Count);
     }
 
     [Fact]
     public async Task r14m_mutant_L2_handoff_history_pins_fail()
     {
         var layer = await File.ReadAllTextAsync(R14mMutL2Path);
-        var failed = await CollectFailedHandoffHistoryPinsAsync(layer);
-        Assert.Contains(R14mCpCorrectionExit.Submit, failed);
-        Assert.Contains(R14mCpCorrectionExit.Cancel, failed);
-        Assert.Contains(R14mCpCorrectionExit.Back, failed);
-        Assert.True(failed.Count >= 3, $"mut-L2 failed exits: {string.Join(", ", failed)}");
+        var outcome = await CollectFailedHandoffHistoryPinsAsync(layer);
+        Assert.Empty(outcome.NonAssertionErrors);
+        Assert.Contains(R14mCpCorrectionExit.Submit, outcome.Kills);
+        Assert.Contains(R14mCpCorrectionExit.Cancel, outcome.Kills);
+        Assert.Contains(R14mCpCorrectionExit.Back, outcome.Kills);
+        Assert.True(outcome.Kills.Count >= 3, $"mut-L2 failed exits: {string.Join(", ", outcome.Kills)}");
     }
 
     [Fact]
     public async Task r14m_mutant_L1_handoff_history_pins_fail()
     {
         var layer = await File.ReadAllTextAsync(R14mMutL1Path);
-        var failed = await CollectFailedHandoffHistoryPinsAsync(layer);
-        Assert.Equal(6, failed.Count);
+        var outcome = await CollectFailedHandoffHistoryPinsAsync(layer);
+        Assert.Empty(outcome.NonAssertionErrors);
+        Assert.Equal(6, outcome.Kills.Count);
+    }
+
+    private const string R14nBase004f4b1 = "004f4b1919094a4862e16ea8fe723edd9420fcf2";
+
+    private static readonly string R14n004f4b1CpLayerPath = Path.GetFullPath(Path.Combine(
+        AppContext.BaseDirectory, "..", "..", "..", "Scripts", "fixtures", "r14n-004f4b1-cp-layer.js"));
+
+    private async Task<IPage> NewConsoleGamePickerPageAsync(string? cpLayerOverride)
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var api = factory.CreateClientWithKey();
+        var op = await LoginOperatorClientAsync();
+        await S3TestHelpers.RegisterConsole(api, op, "PS5-R14N-PICK", 1);
+        factory.Clock.SetTehran(2026, 6, 10, 11, 0);
+        var page = await LoginWithCpLayerOverrideAsync(cpLayerOverride);
+        await page.RouteAsync("**/api/operator/game-titles/selectable**", route =>
+            route.FulfillAsync(new() { Status = 200, ContentType = "application/json", Body = "[]" }));
+        await page.RouteAsync("**/api/operator/stations/**/start", route =>
+            route.FulfillAsync(new() { Status = 200, ContentType = "application/json", Body = "{}" }));
+        await SeedMultiOperatorHistoryAsync(page);
+        await page.EvaluateAsync("() => refreshGrid()");
+        return page;
+    }
+
+    private static async Task AssertPickerPickThenBackReachesBlankAsync(IPage page)
+    {
+        var len0 = await ReadHistoryLengthAsync(page);
+        await page.ClickAsync(".tile[data-station-id='PS5-R14N-PICK']");
+        await page.WaitForSelectorAsync("#cpLayer:not(.hidden)");
+        Assert.Equal(len0 + 1, await ReadHistoryLengthAsync(page));
+        await page.ClickAsync("#cpLayer .cp-pick-row >> nth=0");
+        await page.Locator("#cpLayer").WaitForAsync(new() { State = WaitForSelectorState.Hidden, Timeout = 15000 });
+        await AssertPlaywrightOnOperatorAsync(page);
+        var lenAfterPick = await ReadHistoryLengthAsync(page);
+        Assert.Equal(len0 + 1, lenAfterPick);
+        Assert.False(await ReadHistoryStateIsNullAsync(page));
+        await page.GoBackAsync();
+        Assert.Equal(SeededBlankHref, await page.EvaluateAsync<string>("() => location.href"));
+    }
+
+    [Fact]
+    public async Task r14n_chromium_ss14_game_picker_no_form_back_reaches_blank()
+    {
+        var page = await NewConsoleGamePickerPageAsync(null);
+        await AssertPickerPickThenBackReachesBlankAsync(page);
+    }
+
+    [Fact]
+    public async Task r14n_chromium_wallet_pick_missing_row_back_reaches_blank()
+    {
+        await SeedWalletCorrectionStationAsync();
+        var page = await LoginWithCpLayerOverrideAsync(null);
+        await SeedMultiOperatorHistoryAsync(page);
+        await page.EvaluateAsync(
+            """
+            () => {
+              const orig = window.cpPick;
+              window.cpPick = async (opts) => {
+                const picked = await orig(opts);
+                if (!picked) return picked;
+                return { id: '00000000-0000-0000-0000-000000000099', title: picked.title };
+              };
+            }
+            """);
+        var len0 = await ReadHistoryLengthAsync(page);
+        await page.EvaluateAsync("() => refreshGrid()");
+        await page.ClickAsync(".tile[data-station-id='PS5-R14L-HIST']");
+        await page.WaitForSelectorAsync("#walletCorrectBtn:not([disabled])");
+        await page.ClickAsync("#walletCorrectBtn");
+        await page.WaitForSelectorAsync("#cpLayer:not(.hidden)");
+        await page.ClickAsync("#cpLayer .cp-pick-row >> nth=0");
+        await page.Locator("#cpLayer").WaitForAsync(new() { State = WaitForSelectorState.Hidden, Timeout = 15000 });
+        await AssertPlaywrightOnOperatorAsync(page);
+        Assert.Equal(len0 + 1, await ReadHistoryLengthAsync(page));
+        await page.GoBackAsync();
+        Assert.Equal(SeededBlankHref, await page.EvaluateAsync<string>("() => location.href"));
+    }
+
+    [Fact]
+    public async Task r14n_mutant_004f4b1_wallet_missing_row_back_fails_pin()
+    {
+        var layer = await File.ReadAllTextAsync(R14n004f4b1CpLayerPath);
+        await SeedWalletCorrectionStationAsync();
+        var page = await LoginWithCpLayerOverrideAsync(layer);
+        await SeedMultiOperatorHistoryAsync(page);
+        await page.EvaluateAsync(
+            """
+            () => {
+              const orig = window.cpPick;
+              window.cpPick = async (opts) => {
+                const picked = await orig(opts);
+                if (!picked) return picked;
+                return { id: '00000000-0000-0000-0000-000000000099', title: picked.title };
+              };
+            }
+            """);
+        await page.EvaluateAsync("() => refreshGrid()");
+        await page.ClickAsync(".tile[data-station-id='PS5-R14L-HIST']");
+        await page.WaitForSelectorAsync("#walletCorrectBtn:not([disabled])");
+        await page.ClickAsync("#walletCorrectBtn");
+        await page.WaitForSelectorAsync("#cpLayer:not(.hidden)");
+        await page.ClickAsync("#cpLayer .cp-pick-row >> nth=0");
+        await page.Locator("#cpLayer").WaitForAsync(new() { State = WaitForSelectorState.Hidden, Timeout = 15000 });
+        await page.GoBackAsync();
+        var href = await page.EvaluateAsync<string>("() => location.href");
+        Assert.Contains("/operator/", href, StringComparison.Ordinal);
+        Assert.NotEqual(SeededBlankHref, href);
+    }
+
+    [Fact]
+    public async Task r14n_mutant_004f4b1_game_picker_handoff_back_fails_pin()
+    {
+        var layer = await File.ReadAllTextAsync(R14n004f4b1CpLayerPath);
+        var page = await NewConsoleGamePickerPageAsync(layer);
+        var len0 = await ReadHistoryLengthAsync(page);
+        await page.ClickAsync(".tile[data-station-id='PS5-R14N-PICK']");
+        await page.WaitForSelectorAsync("#cpLayer:not(.hidden)");
+        await page.ClickAsync("#cpLayer .cp-pick-row >> nth=0");
+        await page.Locator("#cpLayer").WaitForAsync(new() { State = WaitForSelectorState.Hidden, Timeout = 15000 });
+        await page.GoBackAsync();
+        var href = await page.EvaluateAsync<string>("() => location.href");
+        Assert.Contains("/operator/", href, StringComparison.Ordinal);
+        Assert.NotEqual(SeededBlankHref, href);
+        Assert.True(await ReadHistoryLengthAsync(page) >= len0 + 1);
+    }
+
+    [Fact]
+    public async Task r14n_n3_customer_create_without_context_shows_session_hint()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        var page = await LoginAsync();
+        await page.EvaluateAsync("() => { document.querySelector('#customerPanel details').open = true; }");
+        await page.FillAsync("#customerName", "r14n-n3");
+        await page.FillAsync("#customerMobile", "0912" + Guid.NewGuid().ToString("N")[..7]);
+        await page.ClickAsync("#customerCreateBtn");
+        var err = await page.TextContentAsync("#error");
+        Assert.Contains("ابتدا یک جلسه", err, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task r14n_f2_manual_settle_bill_collectible_matches_server_clock()
+    {
+        await S3TestHelpers.ResetAsync(factory);
+        await S3TestHelpers.RegisterPc(_api, "PC-R14N-F2", PilotSeed.PcNormalGroupId);
+        factory.Clock.SetTehran(2026, 6, 3, 14, 0);
+        var sessionId = await S3TestHelpers.StartSession(_api, "PC-R14N-F2");
+        factory.Clock.SetTehran(2026, 6, 3, 15, 0);
+        await S3TestHelpers.CheckpointAsync(_api, sessionId, S3TestHelpers.T(2026, 6, 3, 15, 0));
+        await S3TestHelpers.CheckpointAsync(_api, sessionId, S3TestHelpers.T(2026, 6, 3, 14, 30));
+        factory.Clock.SetTehran(2026, 6, 3, 15, 30);
+        var op = await LoginOperatorClientAsync();
+        var settle = await op.PostAsJsonAsync(
+            $"/api/operator/sessions/{sessionId}/manual-settle",
+            new { endAt = S3TestHelpers.T(2026, 6, 3, 15, 30) });
+        settle.EnsureSuccessStatusCode();
+        var preview = await settle.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(120_000, preview!.GetProperty("collectibleToman").GetInt64());
     }
 }

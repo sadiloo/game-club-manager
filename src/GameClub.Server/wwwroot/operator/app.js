@@ -1137,6 +1137,7 @@ async function walletCorrectTopUp() {
     body: "شارژی را که می‌خواهید اصلاح کنید انتخاب کنید.",
     items: pickItems,
     emptyText: "شارژ قابل اصلاحی نیست.",
+    handoffToNextLayer: true,
   });
   if (!picked) {
     resetWalletCorrectForm();
@@ -1144,6 +1145,9 @@ async function walletCorrectTopUp() {
   }
   const row = picked.row || list.find((x) => x.topUpGroupId === picked.id);
   if (!row) {
+    if (typeof cpAbandonHandoffHistory === "function") {
+      await cpAbandonHandoffHistory();
+    }
     resetWalletCorrectForm();
     return;
   }

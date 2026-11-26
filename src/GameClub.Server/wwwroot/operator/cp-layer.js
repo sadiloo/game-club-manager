@@ -46,18 +46,6 @@
     }
   }
 
-  function releaseCpHistoryWithoutBack() {
-    cpLayer._historyPushed = false;
-    cpLayer._closingViaHistory = false;
-    cpLayer._popstateClosing = false;
-    try {
-      if (history.state && history.state.cpDialog) {
-        history.replaceState(null, "", window.location.href);
-      }
-    } catch (_) {}
-    return Promise.resolve();
-  }
-
   /** Busy popstate: browser may pop cpDialog before we clear _historyPushed (R14l off-by-one). */
   function noteBrowserConsumedCpHistoryEntry() {
     try {
@@ -487,8 +475,6 @@
         cpLayer._handoffKeepHistory = cpLayer._historyPushed && !!(history.state && history.state.cpDialog);
         cpLayer._historyPushed = false;
         historyPop = Promise.resolve();
-      } else if (reason && reason !== "history") {
-        historyPop = popHistoryIfNeeded();
       } else {
         historyPop = popHistoryIfNeeded();
       }
@@ -1160,7 +1146,7 @@
                 sub.textContent = item.subtitle;
                 btn.appendChild(sub);
               }
-              btn.onclick = () => session._finish(item, "handoff");
+              btn.onclick = () => session._finish(item, opts.handoffToNextLayer ? "handoff" : undefined);
               host.appendChild(btn);
             }
           }
@@ -1224,7 +1210,18 @@
   window.cpForm = cpForm;
   window.cpPrompt = cpPrompt;
   window.cpConfirm = cpConfirm;
+  function cpAbandonHandoffHistory() {
+    const keep = cpLayer._handoffKeepHistory;
+    cpLayer._handoffKeepHistory = false;
+    if (keep && history.state && history.state.cpDialog) {
+      cpLayer._historyPushed = true;
+      return popHistoryIfNeeded();
+    }
+    return Promise.resolve();
+  }
+
   window.cpPick = cpPick;
   window.cpAlert = cpAlert;
   window.cpToast = cpToast;
+  window.cpAbandonHandoffHistory = cpAbandonHandoffHistory;
 })();
