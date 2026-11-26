@@ -2239,4 +2239,196 @@ public sealed class OperatorPanelE2eTests(GameClubWebApplicationFactory factory)
         var onOperator = href.Contains("/operator/", StringComparison.Ordinal);
         Assert.False(onOperator && posts == 1, "2148bec cp-layer.js must break stay-on-operator + single-POST pin");
     }
+
+    private const string R14mBaseCe15efb = "ce15efbd1318c0b395f539a25538a360c1470c17";
+
+    private static readonly string R14mMutL1Path = Path.GetFullPath(Path.Combine(
+        AppContext.BaseDirectory, "..", "..", "..", "Scripts", "fixtures", "r14m-mut-L1.js"));
+
+    private static readonly string R14mMutL2Path = Path.GetFullPath(Path.Combine(
+        AppContext.BaseDirectory, "..", "..", "..", "Scripts", "fixtures", "r14m-mut-L2.js"));
+
+    public enum R14mCpCorrectionExit
+    {
+        Submit,
+        Cancel,
+        Back,
+        CloseX,
+        Scrim,
+        Escape,
+    }
+
+    private static async Task<int> ReadHistoryLengthAsync(IPage page) =>
+        await page.EvaluateAsync<int>("() => history.length");
+
+    private static async Task<bool> ReadHistoryStateIsNullAsync(IPage page) =>
+        await page.EvaluateAsync<bool>("() => history.state === null");
+
+    private static async Task SetupCorrectSubmitRouteAsync(IPage page)
+    {
+        await page.RouteAsync(
+            url => url.Contains("/wallet/top-ups/", StringComparison.Ordinal) && url.Contains("/correct", StringComparison.Ordinal),
+            route => route.FulfillAsync(new() { Status = 200, ContentType = "application/json", Body = "{}" }));
+    }
+
+    private static async Task DismissWalletCorrectionFormAsync(IPage page, R14mCpCorrectionExit exit)
+    {
+        switch (exit)
+        {
+            case R14mCpCorrectionExit.Submit:
+                await page.ClickAsync("#cpLayer [data-cp-role='submit']");
+                break;
+            case R14mCpCorrectionExit.Cancel:
+                await page.ClickAsync("#cpLayer [data-cp-role='cancel']");
+                break;
+            case R14mCpCorrectionExit.Back:
+                await page.GoBackAsync();
+                break;
+            case R14mCpCorrectionExit.CloseX:
+                await page.ClickAsync("#cpLayer .cp-close");
+                break;
+            case R14mCpCorrectionExit.Scrim:
+                await page.ClickAsync("#cpLayer .cp-scrim", new() { Position = new Position { X = 1, Y = 1 } });
+                break;
+            case R14mCpCorrectionExit.Escape:
+                await page.Keyboard.PressAsync("Escape");
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(exit), exit, null);
+        }
+
+        await page.Locator("#cpLayer").WaitForAsync(new() { State = WaitForSelectorState.Hidden, Timeout = 15000 });
+    }
+
+    private async Task<IPage> NewWalletCorrectionHistoryPageAsync(string? cpLayerOverride)
+    {
+        await SeedWalletCorrectionStationAsync();
+        var page = await LoginWithCpLayerOverrideAsync(cpLayerOverride);
+        await SetupCorrectSubmitRouteAsync(page);
+        await SeedMultiOperatorHistoryAsync(page);
+        return page;
+    }
+
+    [Theory]
+    [InlineData(R14mCpCorrectionExit.Submit)]
+    [InlineData(R14mCpCorrectionExit.Cancel)]
+    [InlineData(R14mCpCorrectionExit.Back)]
+    [InlineData(R14mCpCorrectionExit.CloseX)]
+    [InlineData(R14mCpCorrectionExit.Scrim)]
+    [InlineData(R14mCpCorrectionExit.Escape)]
+    public async Task r14m_chromium_handoff_correction_history_pin(R14mCpCorrectionExit exit)
+    {
+        var page = await NewWalletCorrectionHistoryPageAsync(null);
+        var len0 = await ReadHistoryLengthAsync(page);
+        await OpenWalletCorrectionFormAsync(page);
+        var lenOpen = await ReadHistoryLengthAsync(page);
+        Assert.Equal(len0 + 1, lenOpen);
+        if (exit == R14mCpCorrectionExit.Submit)
+        {
+            await page.FillAsync("#cpLayer [data-cp-field='newAmountToman']", "90000");
+            await page.FillAsync("#cpLayer [data-cp-field='newGiftToman']", "0");
+            await page.FillAsync("#cpLayer [data-cp-field='description']", "r14m submit");
+        }
+
+        await DismissWalletCorrectionFormAsync(page, exit);
+        var lenClosed = await ReadHistoryLengthAsync(page);
+        Assert.Equal(lenOpen, lenClosed);
+        Assert.False(await ReadHistoryStateIsNullAsync(page));
+        await AssertPlaywrightOnOperatorAsync(page);
+        await page.GoBackAsync();
+        var hrefAfterBack = await page.EvaluateAsync<string>("() => location.href");
+        Assert.DoesNotContain("about:blank", hrefAfterBack, StringComparison.Ordinal);
+    }
+
+    private async Task<List<R14mCpCorrectionExit>> CollectFailedHandoffHistoryPinsAsync(string cpLayerJs)
+    {
+        var failed = new List<R14mCpCorrectionExit>();
+        foreach (var exit in Enum.GetValues<R14mCpCorrectionExit>())
+        {
+            await SeedWalletCorrectionStationAsync();
+            var page = await LoginWithCpLayerOverrideAsync(cpLayerJs);
+            await SetupCorrectSubmitRouteAsync(page);
+            await SeedMultiOperatorHistoryAsync(page);
+            try
+            {
+                var len0 = await ReadHistoryLengthAsync(page);
+                await OpenWalletCorrectionFormAsync(page);
+                if (exit == R14mCpCorrectionExit.Submit)
+                {
+                    await page.FillAsync("#cpLayer [data-cp-field='newAmountToman']", "1");
+                    await page.FillAsync("#cpLayer [data-cp-field='newGiftToman']", "0");
+                    await page.FillAsync("#cpLayer [data-cp-field='description']", "mut");
+                }
+
+                var lenOpen = await ReadHistoryLengthAsync(page);
+                if (lenOpen != len0 + 1)
+                {
+                    failed.Add(exit);
+                    continue;
+                }
+
+                await DismissWalletCorrectionFormAsync(page, exit);
+                var lenClosed = await ReadHistoryLengthAsync(page);
+                if (lenClosed != lenOpen || await ReadHistoryStateIsNullAsync(page))
+                {
+                    failed.Add(exit);
+                    continue;
+                }
+
+                var hrefAfterExit = await page.EvaluateAsync<string>("() => location.href");
+                if (!hrefAfterExit.Contains("/operator/", StringComparison.Ordinal))
+                {
+                    failed.Add(exit);
+                    continue;
+                }
+
+                await page.GoBackAsync();
+                var hrefAfterBack = await page.EvaluateAsync<string>("() => location.href");
+                if (hrefAfterBack.Contains("about:blank", StringComparison.Ordinal))
+                {
+                    failed.Add(exit);
+                    continue;
+                }
+
+                if (hrefAfterBack.Contains("/operator/", StringComparison.Ordinal)
+                    && await ReadHistoryStateIsNullAsync(page))
+                {
+                    failed.Add(exit);
+                }
+            }
+            catch
+            {
+                failed.Add(exit);
+            }
+        }
+
+        return failed;
+    }
+
+    [Fact]
+    public async Task r14m_mutant_ce15efb_handoff_history_pins_fail()
+    {
+        var layer = await ReadCpLayerFromGitCommitAsync(R14mBaseCe15efb);
+        var failed = await CollectFailedHandoffHistoryPinsAsync(layer);
+        Assert.Equal(6, failed.Count);
+    }
+
+    [Fact]
+    public async Task r14m_mutant_L2_handoff_history_pins_fail()
+    {
+        var layer = await File.ReadAllTextAsync(R14mMutL2Path);
+        var failed = await CollectFailedHandoffHistoryPinsAsync(layer);
+        Assert.Contains(R14mCpCorrectionExit.Submit, failed);
+        Assert.Contains(R14mCpCorrectionExit.Cancel, failed);
+        Assert.Contains(R14mCpCorrectionExit.Back, failed);
+        Assert.True(failed.Count >= 3, $"mut-L2 failed exits: {string.Join(", ", failed)}");
+    }
+
+    [Fact]
+    public async Task r14m_mutant_L1_handoff_history_pins_fail()
+    {
+        var layer = await File.ReadAllTextAsync(R14mMutL1Path);
+        var failed = await CollectFailedHandoffHistoryPinsAsync(layer);
+        Assert.Equal(6, failed.Count);
+    }
 }

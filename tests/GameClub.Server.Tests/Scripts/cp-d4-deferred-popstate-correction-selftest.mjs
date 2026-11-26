@@ -356,6 +356,88 @@ if (!n2MutantFinish?.[0]?.includes("releaseCpHistoryWithoutBack")) {
   throw new Error("N2 mutant fixture must swap popHistoryIfNeeded for releaseCpHistoryWithoutBack");
 }
 
+const ce15efbLayer = fs.readFileSync(path.join(here, "fixtures/r14m-ce15efb-cp-layer.js"), "utf8");
+const mutL1Layer = fs.readFileSync(path.join(here, "fixtures/r14m-mut-L1.js"), "utf8");
+const mutL2Layer = fs.readFileSync(path.join(here, "fixtures/r14m-mut-L2.js"), "utf8");
+
+async function dismissCorrectionCancel(document, runInApp, history, len0) {
+  const cancelBtn = document.querySelector('[data-cp-role="cancel"]');
+  if (!cancelBtn) throw new Error("R14m handoff: missing cancel");
+  cancelBtn.click();
+  await waitFor(() => runInApp("window.cpLayer.active == null"), "R14m handoff cancel close");
+  await waitCpHidden(document);
+  await waitFor(
+    () => !(history.state && history.state.cpDialog),
+    "R14m handoff cancel no cpDialog state",
+  );
+}
+
+async function runHandoffHistoryPin(layerSource, { expectClean = true, exit = "cancel" } = {}) {
+  const { window, document, history, runInApp, ctx } = loadOperatorApp("http://localhost/operator/", {
+    trackKeydown: false,
+    layerSource,
+  });
+  history.pushState({ page: "start" }, "", "/start/");
+  history.pushState({ page: "operator" }, "", "/operator/");
+  assertOnOperator(window);
+  const len0 = history.length;
+  const cap = installFetchCapture(window, ctx);
+  cap.stub(`/api/operator/members/customers/${CUSTOMER}/wallet`, "GET", { realToman: 0, giftToman: 0, spendableToman: 0 });
+  runInApp(`displayedLinkedCustomer = { id: "${CUSTOMER}", name: "T" };`);
+  cap.stub(`/api/operator/members/customers/${CUSTOMER}/wallet/top-ups`, "GET", [
+    {
+      topUpGroupId: TOPUP_GROUP,
+      method: "Cash",
+      currentAmountToman: 1000,
+      currentGiftToman: 0,
+      atUtc: "2025-01-01T00:00:00Z",
+    },
+  ]);
+  void globalThis.walletCorrectTopUp();
+  await waitCpVisible(document);
+  document.querySelector(".cp-pick-row")?.click();
+  await waitCpVisible(document);
+  const lenHandoff = history.length;
+  const handoffOk = lenHandoff === len0 + 1;
+  if (expectClean && !handoffOk) {
+    throw new Error(`R14m: after handoff expected history.length ${len0 + 1}, got ${lenHandoff}`);
+  }
+  if (!expectClean && handoffOk) {
+    throw new Error(`R14m mutant: expected broken handoff len > ${len0}, got ${lenHandoff}`);
+  }
+  if (exit === "cancel") {
+    await dismissCorrectionCancel(document, runInApp, history, len0);
+  } else {
+    throw new Error(`unsupported exit ${exit}`);
+  }
+  const lenEnd = history.length;
+  const stateIsNullOnly = history.state === null;
+  const stillCpDialog = !!(history.state && history.state.cpDialog);
+  const dismissOk = lenEnd === lenHandoff && !stateIsNullOnly && !stillCpDialog;
+  if (expectClean && !dismissOk) {
+    throw new Error(
+      `R14m: after dismiss expected len ${lenHandoff} and base operator state, got len=${lenEnd} state=${JSON.stringify(history.state)}`,
+    );
+  }
+  if (!expectClean && dismissOk && handoffOk) {
+    throw new Error("R14m mutant: dismiss should leave dead history entry");
+  }
+  assertOnOperator(window);
+}
+
+await runHandoffHistoryPin(headLayer, { expectClean: true });
+for (const layer of [ce15efbLayer, mutL1Layer, mutL2Layer]) {
+  try {
+    await runHandoffHistoryPin(layer, { expectClean: false });
+  } catch (e) {
+    if (!e?.message?.startsWith("R14m mutant:")) throw e;
+  }
+}
+
+if (!headLayer.includes("_handoffKeepHistory")) {
+  throw new Error("R14m: head cp-layer must set _handoffKeepHistory on handoff");
+}
+
 if (!oldFailed) {
   throw new Error("expected failure on pre-r14d cp-layer stale popstate");
 }

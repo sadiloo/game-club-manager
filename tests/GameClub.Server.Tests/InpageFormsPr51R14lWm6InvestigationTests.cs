@@ -6,12 +6,12 @@ using static GameClub.Server.Operator.CatalogSeed;
 
 namespace GameClub.Server.Tests;
 
-/// <summary>R14l item (4): WM6 investigation only — documents behaviour, does not change product.</summary>
+/// <summary>R14m: WM6 closed — walletMinBillToman=0 with ApplyToWallet ON (investigation only, no product change).</summary>
 [Collection("server")]
 public sealed class InpageFormsPr51R14lWm6InvestigationTests(GameClubWebApplicationFactory factory)
 {
     [Fact]
-    public async Task wm6_wallet_min_bill_off_zero_mixed_8000_observed_numbers()
+    public async Task wm6_wallet_min_zero_apply_to_wallet_on_mixed_8000_observed_numbers()
     {
         await S3TestHelpers.ResetAsync(factory);
         var manager = await factory.CreateOperatorClientAsync("manager", "1234");

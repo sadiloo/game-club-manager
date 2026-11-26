@@ -13,6 +13,7 @@
     _popstateClosing: false,
     _historyPopWaiters: [],
     _submitClosing: false,
+    _handoffKeepHistory: false,
   };
 
   function isPhone() {
@@ -483,9 +484,11 @@
           cpLayer._submitClosing = false;
         });
       } else if (reason === "handoff") {
-        historyPop = releaseCpHistoryWithoutBack();
+        cpLayer._handoffKeepHistory = cpLayer._historyPushed && !!(history.state && history.state.cpDialog);
+        cpLayer._historyPushed = false;
+        historyPop = Promise.resolve();
       } else if (reason && reason !== "history") {
-        historyPop = releaseCpHistoryWithoutBack();
+        historyPop = popHistoryIfNeeded();
       } else {
         historyPop = popHistoryIfNeeded();
       }
@@ -696,7 +699,16 @@
     if (cpLayer._closingViaHistory && !cpLayer._historyPopWaiters.length) {
       cpLayer._closingViaHistory = false;
     }
-    pushHistory(session.id);
+    if (cpLayer._handoffKeepHistory && history.state && history.state.cpDialog) {
+      cpLayer._handoffKeepHistory = false;
+      try {
+        history.replaceState({ cpDialog: session.id }, "", window.location.href);
+      } catch (_) {}
+      cpLayer._historyPushed = true;
+    } else {
+      cpLayer._handoffKeepHistory = false;
+      pushHistory(session.id);
+    }
     session._detachKeydown();
     const fieldCount = session.spec.fields?.length ?? 0;
     session._keydownHandler = (e) => {
