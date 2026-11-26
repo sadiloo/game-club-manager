@@ -206,6 +206,25 @@ def ws_apply(text, pattern, replacement, regex=False):
     return text_n.replace(pattern_n, replacement_n, 1)
 
 
+def trx_failure_messages(trx_path):
+    if not os.path.isfile(trx_path):
+        return []
+    try:
+        import xml.etree.ElementTree as ET
+
+        root = ET.parse(trx_path).getroot()
+        ns = {"t": "http://microsoft.com/schemas/VisualStudio/TeamTest/2010"}
+        messages = []
+        for result in root.findall(".//t:UnitTestResult[@outcome='Failed']", ns):
+            name = result.get("testName") or result.get("name") or "unknown"
+            msg_el = result.find(".//t:Message", ns)
+            msg = (msg_el.text or "").strip() if msg_el is not None else ""
+            messages.append(f"{name}: {msg}")
+        return messages
+    except Exception as ex:
+        return [f"trx_parse_error: {ex}"]
+
+
 def run_host_tests(test_filter):
     b_ = subprocess.run(
         ["dotnet", "build", HOST_PROJ, "-c", "Release", "-f", "net48", *BUILD_WARN_OFF],
@@ -218,6 +237,7 @@ def run_host_tests(test_filter):
     )
     if b_.returncode != 0:
         return "BUILD_FAIL", combined_output(b_), []
+    trx_path = os.path.join(OUT, f"baseline-{test_filter.replace('.', '-')}.trx")
     t = None
     try:
         t = subprocess.run(
@@ -232,6 +252,10 @@ def run_host_tests(test_filter):
                 "--no-build",
                 "--filter",
                 f"FullyQualifiedName~{test_filter}",
+                "--results-directory",
+                OUT,
+                "--logger",
+                f"trx;LogFileName={os.path.basename(trx_path)}",
                 *BUILD_WARN_OFF,
             ],
             cwd=ROOT,
@@ -334,6 +358,8 @@ if host_only:
     res["baseline"] = {"scope": "host", "status": baseline_status, "failed_tests": baseline_failed}
     if baseline_status != "PASS" or baseline_failed:
         print("BASELINE_FAILED", baseline_status, baseline_failed, file=sys.stderr, flush=True)
+        for line in trx_failure_messages(os.path.join(OUT, "baseline-KioskHostStatusTimerTests.trx")):
+            print("BASELINE_TRX", line, file=sys.stderr, flush=True)
         write_mutations_json()
         sys.exit(1)
 else:

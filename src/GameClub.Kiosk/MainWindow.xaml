@@ -16,6 +16,9 @@
                            Panel.ZIndex="5"/>
 
   <StackPanel x:Name="LockPanel" Grid.Row="1" VerticalAlignment="Center" HorizontalAlignment="Center" Width="420">
+    <Border x:Name="InternetOffLockNotice" Visibility="Collapsed" Background="#E0EEF1" CornerRadius="12" Padding="8,12" Margin="0,0,0,16">
+      <TextBlock Text="اینترنت قطع است" Foreground="#00708A" FontSize="14" FontWeight="Medium" HorizontalAlignment="Center"/>
+    </Border>
     <TextBlock Text="Checkpoint PC Kiosk" Foreground="{DynamicResource Kiosk.TextBrush}" FontSize="28" HorizontalAlignment="Center" />
     <TextBlock x:Name="StatusText" FlowDirection="RightToLeft" Foreground="{DynamicResource Kiosk.MutedBrush}" FontSize="16" Margin="0,12,0,16" TextWrapping="Wrap" TextAlignment="Center" />
     <PasswordBox x:Name="AdminUrlPasswordBox" Height="32" Margin="0,8" ToolTip="Admin password to unlock server URL"/>
@@ -52,6 +55,9 @@
   </Grid>
 
   <StackPanel x:Name="PlayingPanel" Grid.Row="1" VerticalAlignment="Top" HorizontalAlignment="Right" Visibility="Collapsed" Width="320" Margin="24">
+    <Border x:Name="InternetOffPlayingNotice" Visibility="Collapsed" Background="#E0EEF1" CornerRadius="12" Padding="8,12" Margin="0,0,0,12">
+      <TextBlock Text="اینترنت قطع است" Foreground="#00708A" FontSize="14" FontWeight="Medium" TextAlignment="Right"/>
+    </Border>
     <TextBlock x:Name="DisplayBalance" Foreground="{DynamicResource Kiosk.TextBrush}" FontSize="20" TextAlignment="Right"/>
     <TextBlock x:Name="DisplayElapsed" Foreground="{DynamicResource Kiosk.MutedBrush}" FontSize="16" TextAlignment="Right"/>
     <TextBlock x:Name="DisplayFreeBand" Foreground="{DynamicResource Kiosk.FreeBrush}" FontSize="14" Margin="0,12" TextWrapping="Wrap" TextAlignment="Right"/>

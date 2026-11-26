@@ -28,26 +28,73 @@ jobs:
       GAMECLUB_API_KEY: ci-test-key
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: powershell parse check
+        shell: pwsh
+        run: ./scripts/ci/ps-parse-check.ps1
+      - name: ci integration entry smoke
+        shell: pwsh
+        run: ./scripts/ci/ps-entry-smoke.ps1
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.403
       - uses: actions/setup-node@v4
         with:
-          node-version: 22.x
-          cache: npm
-          cache-dependency-path: tests/GameClub.Server.Tests/Scripts/package-lock.json
-      - name: npm ci (server Scripts selftests)
+          node-version: "22"
+      - name: install server test script dependencies
         working-directory: tests/GameClub.Server.Tests/Scripts
-        run: npm ci --no-fund --no-audit
+        run: npm ci
       - name: test net10
-        run: dotnet test GameClub.slnx -c Release -f net10.0 --nologo -m:1
+        run: |
+          set +e
+          set -o pipefail
+          dotnet test GameClub.linux.slnf -c Release -f net10.0 --nologo -m:1 --filter "Category!=LiveCheckpointServer&Category!=PcInternetFirewall" 2>&1 | tee /tmp/linux-net10-test.log
+          rc=${PIPESTATUS[0]}
+          shell_line=$(grep -E 'GameClub\.Shell\.Tests\.dll' /tmp/linux-net10-test.log | grep -E 'Failed:|Passed!' | tail -1 || true)
+          if [ -n "$shell_line" ]; then
+            passed=$(echo "$shell_line" | sed -n 's/.*Passed: *\([0-9]*\).*/\1/p')
+            failed=$(echo "$shell_line" | sed -n 's/.*Failed: *\([0-9]*\).*/\1/p')
+            total=$(echo "$shell_line" | sed -n 's/.*Total: *\([0-9]*\).*/\1/p')
+            echo "GAMECLUB_SHELL_TESTS_COUNT passed=${passed:-?} failed=${failed:-?} total=${total:-?}"
+          else
+            echo "GAMECLUB_SHELL_TESTS_COUNT missing"
+            rc=1
+          fi
+          exit $rc
+      - name: pc internet off verification unit tests
+        run: |
+          set -euo pipefail
+          dotnet test tests/GameClub.Kiosk.Core.Tests/GameClub.Kiosk.Core.Tests.csproj -c Release -f net10.0 --nologo \
+            --filter "Category=PcInternetFirewall" \
+            --logger "console;verbosity=normal"
+      - name: build GameClub.Server.TestHost for live kiosk tests
+        run: dotnet build tests/GameClub.Server.TestHost/GameClub.Server.TestHost.csproj -c Release --nologo
       - name: kiosk owned-server G2 and re-pair oracle
         if: always()
-        timeout-minutes: 25
+        timeout-minutes: 30
         run: |
+          set -euo pipefail
+          dotnet build tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj -c Release -f net10.0 --nologo
+          G2_FILTER='FullyQualifiedName~live_server_two_outages_bill_matches_main_g2_oracle'
+          G2_LISTED=$(dotnet test tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj \
+            -c Release -f net10.0 --no-build --nologo --list-tests --filter "$G2_FILTER" | grep -c 'live_server_two_outages_bill_matches_main_g2_oracle' || true)
+          if [ "$G2_LISTED" -lt 1 ]; then
+            echo "UBUNTU_G2_TEST_COUNT 0 listed — G2 oracle did not run"
+            exit 1
+          fi
           dotnet test tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj \
             -c Release -f net10.0 --no-build --nologo \
             --filter "FullyQualifiedName~live_server_two_outages_bill_matches_main_g2_oracle|FullyQualifiedName~live_server_re_pair_new_device_key_heartbeats_resume" \
+            --logger "console;verbosity=normal"
+          echo "UBUNTU_G2_TEST_COUNT 1 passed"
+      - name: pc special band live rate card oracle
+        run: |
+          set -euo pipefail
+          dotnet build tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj -c Release -f net10.0 --nologo
+          dotnet test tests/GameClub.Kiosk.Windows.IntegrationTests/GameClub.Kiosk.Windows.IntegrationTests.csproj \
+            -c Release -f net10.0 --no-build --nologo \
+            --filter "FullyQualifiedName~PcSpecialBandLiveRateCardOracleTests" \
             --logger "console;verbosity=normal"
       - name: post-test orphan postgres writers
         if: always()
@@ -64,13 +111,19 @@ jobs:
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
+      - name: powershell parse check
+        shell: pwsh
+        run: ./scripts/ci/ps-parse-check.ps1
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.403
       - name: build net48 kiosk and guard
         run: dotnet build src/GameClub.Kiosk/GameClub.Kiosk.csproj -c Release -f net48 --nologo && dotnet build src/GameClub.Kiosk.Guard/GameClub.Kiosk.Guard.csproj -c Release -f net48 --nologo
+      - name: shell windowshell exclusion inventory
+        shell: pwsh
+        run: ./scripts/windows/shell-windowshell-inventory.ps1 -Role Excluded
       - name: test every target framework except server and windows kiosk integration
-        run: dotnet test GameClub.slnx -c Release --nologo --filter "FullyQualifiedName!~GameClub.Server.Tests&FullyQualifiedName!~GameClub.Kiosk.Windows.IntegrationTests" --results-directory artifacts/windows-ci --logger "trx;LogFileName=windows-ci.trx"
+        run: dotnet test GameClub.slnx -c Release --nologo --filter "FullyQualifiedName!~GameClub.Server.Tests&FullyQualifiedName!~GameClub.Kiosk.Windows.IntegrationTests&FullyQualifiedName!~GameClub.Shell.Windows.IntegrationTests" --results-directory artifacts/windows-ci --logger "trx;LogFileName=windows-ci.trx"
       - name: kiosk trust paths and ACL (L-3)
         shell: pwsh
         run: |
@@ -85,7 +138,9 @@ jobs:
 
   windows-kiosk-integration:
     name: windows-2022 kiosk integration
-    timeout-minutes: 40
+    # Job budget: run 44785725466 measured 43m47s with firewall phase cut at 780s; +5 min for full 1080s phase
+    # ≈49 min; +10% headroom => 54 min.
+    timeout-minutes: 54
     runs-on: windows-2022
     env:
       GAMECLUB_DATABASE: Host=localhost;Port=5432;Database=gameclub_test;Username=postgres;Password=postgres;SSL Mode=Disable
@@ -97,6 +152,9 @@ jobs:
       WPF_STABILITY_RUNS: "20"
     steps:
       - uses: actions/checkout@v4
+      - name: powershell parse check
+        shell: pwsh
+        run: ./scripts/ci/ps-parse-check.ps1
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.403
@@ -120,11 +178,24 @@ jobs:
           $exists = & $psql -h 127.0.0.1 -U postgres -c "SELECT 1 FROM pg_database WHERE datname='gameclub_test'" -tA 2>$null
           if (-not $exists) { & $psql -h 127.0.0.1 -U postgres -c "CREATE DATABASE gameclub_test;" }
       - name: windows kiosk integration
-        timeout-minutes: 22
+        # Run 44740272933: main kiosk phase ~12 min; 2× headroom so a hang fails visibly.
+        timeout-minutes: 25
         shell: pwsh
         run: ./scripts/windows/ci-integration.ps1
+      - name: pc internet firewall integration
+        if: ${{ success() || failure() }}
+        # REF runs 601s and 695s complete phases; cap 1080s + ~90s teardown needs 22 min step budget.
+        timeout-minutes: 22
+        shell: pwsh
+        run: ./scripts/windows/ci-integration.ps1 -PcInternetFirewallOnly
+      - name: reset kiosk ci firewall and probe egress
+        if: always()
+        timeout-minutes: 3
+        shell: pwsh
+        run: ./scripts/windows/ci-firewall-restore.ps1 -Restore -Evidence
       - name: kiosk host reconnect mutations (net48 D7 and status tick)
         if: always()
+        timeout-minutes: 15
         shell: pwsh
         env:
           MUTOUT_DIR: artifacts/kiosk-reconnect-mut
@@ -145,11 +216,17 @@ jobs:
         env:
           WPF_STABILITY_RUNS: "20"
         run: ./scripts/windows/ci-integration-wpf-stability.ps1
-      - name: reset kiosk ci firewall and probe egress
+      - name: upload wpf stability logs
         if: always()
-        timeout-minutes: 3
-        shell: pwsh
-        run: ./scripts/windows/ci-firewall-restore.ps1 -Restore -Evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: kiosk-wpf-stability-logs
+          if-no-files-found: warn
+          path: |
+            artifacts/kiosk-windows-logs/wpf-stability-server-out.log
+            artifacts/kiosk-windows-logs/wpf-stability-server-err.log
+            artifacts/kiosk-windows-logs/wpf-stability-*.log
+            artifacts/kiosk-windows-logs/live-checkpoint-*.log
       - name: print live-server-registry log
         if: always()
         shell: pwsh
@@ -174,6 +251,8 @@ jobs:
           path: |
             artifacts/kiosk-windows-server.trx
             artifacts/kiosk-windows-guard.trx
+            artifacts/kiosk-windows-pc-internet-firewall.trx
+            artifacts/kiosk-windows-pc-internet-firewall-console.log
             artifacts/watchdog.log
             artifacts/evidence/**
             artifacts/kiosk-windows-logs/**
@@ -243,3 +322,47 @@ jobs:
             artifacts/installer/acceptance-logs/**
             artifacts/installer/ci-acceptance-manifest.json
             artifacts/installer/third-party-cache/**
+
+  windows-shell:
+    name: windows-2022 shell
+    timeout-minutes: 45
+    runs-on: windows-2022
+    env:
+      GAMECLUB_DATABASE: Host=localhost;Port=5432;Database=gameclub_test;Username=postgres;Password=postgres;SSL Mode=Disable
+      GAMECLUB_TEST_DATABASE: Host=localhost;Port=5432;Database=gameclub_test;Username=postgres;Password=postgres;SSL Mode=Disable
+      GAMECLUB_API_KEY: ci-test-key
+      OperatorSessionSecret: ci-operator-secret-r11
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.403
+      - name: install and start postgresql
+        shell: pwsh
+        run: |
+          choco install postgresql16 --params '/Password:postgres' -y --no-progress
+          $env:PGPASSWORD = 'postgres'
+          $pgIsReady = 'C:\Program Files\PostgreSQL\16\bin\pg_isready.exe'
+          $psql = 'C:\Program Files\PostgreSQL\16\bin\psql.exe'
+          $deadline = (Get-Date).AddMinutes(5)
+          while ((Get-Date) -lt $deadline) {
+            & $pgIsReady -U postgres 2>$null
+            if ($LASTEXITCODE -eq 0) { break }
+            Start-Sleep -Seconds 3
+          }
+          if ($LASTEXITCODE -ne 0) { throw 'postgresql service not ready' }
+          $exists = & $psql -h 127.0.0.1 -U postgres -c "SELECT 1 FROM pg_database WHERE datname='gameclub_test'" -tA 2>$null
+          if (-not $exists) { & $psql -h 127.0.0.1 -U postgres -c "CREATE DATABASE gameclub_test;" }
+      - name: windows shell integration
+        shell: pwsh
+        run: ./scripts/windows/ci-shell.ps1
+      - name: upload shell integration artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shell-windows-integration
+          if-no-files-found: warn
+          path: |
+            artifacts/shell-windows.trx
+            artifacts/window.json
+            artifacts/shell-windows-logs/**

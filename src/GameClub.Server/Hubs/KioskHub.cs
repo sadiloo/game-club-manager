@@ -13,6 +13,6 @@ public sealed class KioskHub(KioskCheckpointCoordinator coordinator) : Hub
             throw new HubException("device_auth");
         }
 
-        return await coordinator.OnHeartbeatAsync(deviceId, request.SessionId, request.ClientMonotonicMs, Context.ConnectionAborted);
+        return await coordinator.OnHeartbeatAsync(deviceId, request, Context.ConnectionAborted);
     }
 }

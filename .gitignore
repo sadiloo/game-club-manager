@@ -6,3 +6,4 @@ TestResults/
 .idea/
 qa/
 node_modules/
+artifacts/

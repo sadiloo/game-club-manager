@@ -121,7 +121,7 @@ public sealed class Pr4Review1IntegrationTests(GameClubWebApplicationFactory fac
         {
             roundingStepToman = 5000L,
             roundingDirection = "Up",
-            lines = new[] { new { groupId = PilotSeed.PcNormalGroupId, playMode = "Offline", playerCount = (int?)1, isSpecialBand = false, hourlyToman = 120_000L } },
+            lines = new[] { new { groupId = PilotSeed.PcNormalGroupId, playMode = "Online", playerCount = (int?)null, isSpecialBand = false, hourlyToman = 120_000L } },
         });
         factory.Clock.SetTehran(2026, 6, 3, 15, 0);
         await _client.PostAsJsonAsync($"/api/sessions/{id}/checkpoints", new { });

@@ -11,6 +11,7 @@ using GameClub.Server.Operator;
 using GameClub.Server.Services;
 using GameClub.Server.Time;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 
 namespace GameClub.Server.Kiosk;
 
@@ -207,7 +208,8 @@ public sealed class KioskLeaseService(
     AppDbContext db,
     RateConfigService rates,
     OperatorMemberContext members,
-    SessionBilling billing)
+    SessionBilling billing,
+    IOptions<KioskOptions> kioskOptions)
 {
     public async Task<SignedSessionLease?> BuildLeaseAsync(PlaySessionEntity session, CancellationToken ct)
     {
@@ -219,6 +221,8 @@ public sealed class KioskLeaseService(
         var lastCheckpoint = session.LastCheckpointUtc ?? session.StartedAtUtc;
         DateTime authorizedUntil;
         var walletDigest = session.CustomerId?.ToString() ?? "guest";
+        string? leaseTraceRateSource = null;
+        string? leaseTraceBand = null;
         if (session.CustomerId is null)
         {
             authorizedUntil = session.PrepaidKind != PrepaidSessionKind.None && session.PrepaidBookedActiveSeconds is long booked
@@ -265,6 +269,18 @@ public sealed class KioskLeaseService(
             {
                 authorizedUntil = lastCheckpoint.AddMinutes(Math.Max(1, Math.Max(0, moneyMinutes)));
             }
+
+            leaseTraceRateSource = estimate.Source.ToString();
+            leaseTraceBand = snapshot.Card.BandAt(groupId, TehranTime.TimeOfDay(at))?.Id;
+        }
+
+        if (kioskOptions.Value.LeaseBuildTrace)
+        {
+            var traceGroupId = session.Station?.GroupId ?? PilotSeed.PcNormalGroupId;
+            Console.WriteLine(
+                $"LEASE_BUILD sessionId={session.Id} mode={session.Mode} groupId={traceGroupId} "
+                + $"rateSource={leaseTraceRateSource ?? "none"} band={leaseTraceBand ?? "none"} "
+                + $"authorizedUntilUtc={authorizedUntil:O}");
         }
 
         var catalogVersion = await db.GameCatalogEntries.Select(e => (long?)e.CatalogVersion).MaxAsync(ct) ?? 0;
@@ -528,9 +544,23 @@ public sealed class KioskCheckpointCoordinator(
     KioskLeaseService leases,
     KioskDisplayService display,
     KioskCredentialService kioskCredentials,
-    KioskOperatorLockService operatorLock)
+    KioskOperatorLockService operatorLock,
+    StationInternetStateService internetStates,
+    IKioskLeaseSigner leaseSigner,
+    AuditService audit)
 {
-    public async Task<KioskHeartbeatAck> OnHeartbeatAsync(Guid deviceId, Guid? sessionId, long clientMonotonicMs, CancellationToken ct)
+    public Task<KioskHeartbeatAck> OnHeartbeatAsync(Guid deviceId, KioskHeartbeatRequest request, CancellationToken ct)
+        => OnHeartbeatAsync(deviceId, request.SessionId, request.ClientMonotonicMs, request.InternetApplied, ct);
+
+    public Task<KioskHeartbeatAck> OnHeartbeatAsync(Guid deviceId, Guid? sessionId, long clientMonotonicMs, CancellationToken ct)
+        => OnHeartbeatAsync(deviceId, sessionId, clientMonotonicMs, null, ct);
+
+    public async Task<KioskHeartbeatAck> OnHeartbeatAsync(
+        Guid deviceId,
+        Guid? sessionId,
+        long clientMonotonicMs,
+        KioskInternetAppliedReport? internetApplied,
+        CancellationToken ct)
     {
         var idleMinutes = await operatorLock.GetIdleMinutesAsync(ct);
         var device = await db.KioskDevices.FirstAsync(d => d.Id == deviceId, ct);
@@ -543,6 +573,40 @@ public sealed class KioskCheckpointCoordinator(
             ClientMonotonicMs = clientMonotonicMs,
         });
         await db.SaveChangesAsync(ct);
+
+        if (internetApplied is not null)
+        {
+            var prev = await db.StationInternetStates.AsNoTracking()
+                .FirstOrDefaultAsync(s => s.StationId == device.StationId, ct);
+            var prevVersion = prev?.AppliedVersion;
+            var boundSession = prev?.SessionId;
+            var sessionMismatch = boundSession is Guid bound
+                && sessionId is Guid heartbeatSession
+                && heartbeatSession != bound;
+            var applied = !sessionMismatch
+                && await internetStates.ApplyReportAsync(
+                    device.StationId,
+                    internetApplied.Epoch,
+                    internetApplied.Version,
+                    internetApplied.On,
+                    internetApplied.AppliedAtUtc,
+                    internetApplied.Error,
+                    ct);
+            if (applied && prevVersion != internetApplied.Version)
+            {
+                var action = string.IsNullOrEmpty(internetApplied.Error) ? "internet.applied" : "internet.apply_failed";
+                await audit.AppendAsync(action, new
+                {
+                    stationId = device.StationId,
+                    version = internetApplied.Version,
+                    on = internetApplied.On,
+                    appliedAtUtc = internetApplied.AppliedAtUtc,
+                    error = internetApplied.Error,
+                }, ct);
+            }
+
+            await db.SaveChangesAsync(ct);
+        }
 
         PlaySessionEntity? session = null;
         if (sessionId is Guid sid)
@@ -627,6 +691,22 @@ public sealed class KioskCheckpointCoordinator(
         var manualSettle = session?.Status == SessionStatus.ManualSettle;
         DateTime? deadLine = session?.LastCheckpointUtc?.Add(DeadPcMonitor.Timeout);
         var credentialsVersion = await kioskCredentials.GetCredentialsVersionAsync(ct);
+        SignedInternetCommand? internet = null;
+        var state = await db.StationInternetStates.AsNoTracking()
+            .FirstOrDefaultAsync(s => s.StationId == device.StationId, ct);
+        if (state is not null)
+        {
+            internet = leaseSigner.SignInternet(new InternetCommandPayload
+            {
+                StationId = device.StationId,
+                Epoch = state.Epoch,
+                Version = state.DesiredVersion,
+                On = state.DesiredOn,
+                IssuedAtUtc = state.DesiredAtUtc,
+                SessionId = state.SessionId,
+            });
+        }
+
         return new KioskHeartbeatAck
         {
             ServerUtc = clock.UtcNow.UtcDateTime,
@@ -638,6 +718,7 @@ public sealed class KioskCheckpointCoordinator(
             DeadPcDeadlineUtc = deadLine,
             CredentialsVersion = credentialsVersion,
             KioskFreeUseIdleMinutes = idleMinutes,
+            Internet = internet,
         };
     }
 }
@@ -701,7 +782,7 @@ public sealed class KioskSessionService(
 
             var snapshot = await rates.LoadAsync(ct);
             var at = TimeMapping.ToTehran(clock.UtcNow.UtcDateTime);
-            var quote = RateResolver.Resolve(snapshot.Card, SpecialDayCalendar.Empty, at, station.GroupId, PlayMode.Offline, 1);
+            var quote = RateResolver.Resolve(snapshot.Card, SpecialDayCalendar.Empty, at, station.GroupId, PlayMode.Online, 1);
             var oneMinute = MoneyMath.ChargeForMinutes(quote.HourlyRateToman, BillingPolicy.Default.GranularityMinutes, BillingPolicy.Default.Remainder);
             if (a < oneMinute)
             {
@@ -712,7 +793,7 @@ public sealed class KioskSessionService(
         PlaySessionEntity? session = null;
         try
         {
-            session = await sessions.StartAsync(station.Id, 1, PlayMode.Offline, null, null, ct);
+            session = await sessions.StartAsync(station.Id, 1, PlayMode.Online, null, null, ct);
             session = await db.Sessions.Include(s => s.Segments).Include(s => s.Station)!.ThenInclude(st => st!.Group)
                 .FirstAsync(s => s.Id == session.Id, ct);
             if (prepaidKind == PrepaidSessionKind.Duration && minutes is int mins)
@@ -802,7 +883,7 @@ public sealed class KioskSessionService(
                             throw await inject(ct);
                         }
 
-                        session = await sessions.StartAsync(sid, 1, PlayMode.Offline, null, null, ct);
+                        session = await sessions.StartAsync(sid, 1, PlayMode.Online, null, null, ct);
                         await customers.LinkSessionAsync(session.Id, customerId, ct);
                     }
                     catch (DbUpdateException ex) when (PostgresErrors.IsActiveSessionUniqueViolation(ex))

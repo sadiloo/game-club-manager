@@ -66,7 +66,7 @@ public class Round5Tests
         var policy = new BillingPolicy(5, PartialUnitMode.Ceiling, RateRemainderMode.Nearest);
         var start = T.At(2026, 6, 2, 10, 0);
         var played = SessionPricer.Price(new Session("s", [
-            new PlaySegment("a", start, start.AddMinutes(8), "pc-1", PilotSeed.PcNormalGroupId, PlayMode.Offline, 1, StationKind.Pc),
+            new PlaySegment("a", start, start.AddMinutes(8), "pc-1", PilotSeed.PcNormalGroupId, PlayMode.Online, 1, StationKind.Pc),
         ]), PilotSeed.CreateCard(), policy: policy);
         var account = new CustomerAccount("m", WalletSettings.Shared, new WalletPocket(5_000, 0), new WalletPocket(0, 0));
         var play = CustomerPlay.Settle(played, account, billing: policy);
@@ -81,10 +81,10 @@ public class Round5Tests
     {
         var policy = new BillingPolicy(5, PartialUnitMode.Ceiling, RateRemainderMode.Nearest);
         var start = T.At(2026, 6, 2, 10, 0);
-        var plan = PrepaidPlanner.ForAmount(start, 0, "a", "pc-1", PilotSeed.PcNormalGroupId, PlayMode.Offline, 1, PilotSeed.CreateCard(), policy: policy);
+        var plan = PrepaidPlanner.ForAmount(start, 0, "a", "pc-1", PilotSeed.PcNormalGroupId, PlayMode.Online, 1, PilotSeed.CreateCard(), policy: policy);
         Assert.Null(plan.Grace);
         var played = SessionPricer.Price(new Session("s", [
-            new PlaySegment("a", start, start.AddMinutes(5), "pc-1", PilotSeed.PcNormalGroupId, PlayMode.Offline, 1, StationKind.Pc),
+            new PlaySegment("a", start, start.AddMinutes(5), "pc-1", PilotSeed.PcNormalGroupId, PlayMode.Online, 1, StationKind.Pc),
         ]), PilotSeed.CreateCard(), policy: policy);
         var settled = AccountSettlement.Settle(played, new PcAccount("m", 0), billing: policy);
         Assert.Null(settled.Grace);
@@ -114,13 +114,13 @@ public class Round5Tests
             [new Station("pc-1", "PC", PilotSeed.PcNormalGroupId)]);
         var start = T.At(2026, 6, 2, 10, 0);
         var conflict = new Session("c", [
-            new PlaySegment("a", start, start.AddMinutes(10), "pc-1", PilotSeed.PcNormalGroupId, PlayMode.Offline, 1, StationKind.Console),
+            new PlaySegment("a", start, start.AddMinutes(10), "pc-1", PilotSeed.PcNormalGroupId, PlayMode.Online, 1, StationKind.Console),
         ], [new PauseInterval(start.AddMinutes(1), start.AddMinutes(2))]);
         var error = Assert.Throws<BillingException>(() => SessionPricer.Price(conflict, PilotSeed.CreateCard(), stations: stations));
         Assert.Equal(BillingErrors.InvalidSession, error.Code);
 
         var zero = new Session("z", [
-            new PlaySegment("a", start, start.AddMinutes(10), "pc-1", PilotSeed.PcNormalGroupId, PlayMode.Offline, 1, StationKind.Pc),
+            new PlaySegment("a", start, start.AddMinutes(10), "pc-1", PilotSeed.PcNormalGroupId, PlayMode.Online, 1, StationKind.Pc),
         ], [new PauseInterval(start.AddMinutes(2), start.AddMinutes(2))]);
         var priced = SessionPricer.Price(zero, PilotSeed.CreateCard(), stations: stations);
         Assert.Equal(10, priced.TotalBilledMinutes);
@@ -130,7 +130,10 @@ public class Round5Tests
         => new("m", WalletSettings.Shared with { ApplyDiscountsToPc = true }, new WalletPocket(1_000_000, 0), new WalletPocket(0, 0));
 
     private static SessionCharge Play(RateCard card, string group, DateTimeOffset start, DateTimeOffset end)
-        => SessionPricer.Price(new Session("s", [
-            new PlaySegment("a", start, end, "st", group, PlayMode.Offline, 1, StationKind.Pc),
+    {
+        var mode = group is PilotSeed.PcNormalGroupId or PilotSeed.PcVipGroupId ? PlayMode.Online : PlayMode.Offline;
+        return SessionPricer.Price(new Session("s", [
+            new PlaySegment("a", start, end, "st", group, mode, 1, StationKind.Pc),
         ]), card);
+    }
 }

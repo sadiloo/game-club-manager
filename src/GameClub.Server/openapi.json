@@ -593,11 +593,6 @@
               "$ref": "#/components/schemas/RateLineUpdate"
             },
             "nullable": true
-          },
-          "pcSpecialBandSurchargeToman": {
-            "type": "integer",
-            "format": "int64",
-            "nullable": true
           }
         },
         "additionalProperties": false

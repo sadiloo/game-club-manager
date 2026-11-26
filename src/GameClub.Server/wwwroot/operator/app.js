@@ -641,6 +641,64 @@ document.getElementById("customerCreateBtn").onclick = async () => {
 
 document.getElementById("customerClearBtn").onclick = () => clearCustomerLink().catch(() => {});
 
+function formatTehranHmFromUtc(iso) {
+  if (!iso) return "";
+  try {
+    return new Date(iso).toLocaleTimeString("fa-IR", {
+      timeZone: "Asia/Tehran",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  } catch {
+    return "";
+  }
+}
+
+function formatTehranDateFromUtc(iso) {
+  if (!iso) return "";
+  try {
+    return new Date(iso).toLocaleDateString("fa-IR", { timeZone: "Asia/Tehran" });
+  } catch {
+    return "";
+  }
+}
+
+function formatBackupLabel(iso) {
+  if (!iso) return { text: "آخرین پشتیبان: هنوز ثبت نشده", warn: false };
+  const d = new Date(iso);
+  const now = new Date();
+  const ageHours = (now.getTime() - d.getTime()) / 3600000;
+  const warn = ageHours >= 48;
+  const hm = formatTehranHmFromUtc(iso);
+  const tehranToday = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Tehran" })).toDateString();
+  const tehranDay = new Date(d.toLocaleString("en-US", { timeZone: "Asia/Tehran" })).toDateString();
+  const y = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Tehran" }));
+  y.setDate(y.getDate() - 1);
+  const tehranYesterday = y.toDateString();
+  let when = hm;
+  if (tehranDay === tehranYesterday) when = `دیروز ${hm}`;
+  else if (tehranDay !== tehranToday) when = `${formatTehranDateFromUtc(iso)} ${hm}`;
+  return { text: `آخرین پشتیبان: ${when}`, warn };
+}
+
+async function refreshServerStatusChip() {
+  const chip = document.getElementById("serverStatusChip");
+  if (!chip) return;
+  try {
+    const st = await api("/api/operator/server-status");
+    const badgeClass = st.dbOk === false ? "status-badge danger" : "status-badge";
+    const badgeText = st.dbOk === false
+      ? "سرور پاسخ نمی‌دهد"
+      : st.startedAtUtc
+        ? `سرور روشن از ${formatTehranHmFromUtc(st.startedAtUtc)}`
+        : "سرور روشن";
+  const backup = formatBackupLabel(st.lastBackupUtc);
+    chip.innerHTML = `<span class="${badgeClass}">${badgeText}</span><span class="backup-line${backup.warn ? " warn" : ""}">${backup.text}</span>`;
+  } catch {
+    chip.textContent = "";
+  }
+}
+
 document.getElementById("loginBtn").onclick = async () => {
   try {
     const user = await api("/api/operator/auth/login", {
@@ -663,6 +721,8 @@ document.getElementById("loginBtn").onclick = async () => {
     await refreshPendingWalletTopups();
     await refreshShiftState();
     await refreshCafeSettingsUi();
+    await refreshServerStatusChip();
+    setInterval(refreshServerStatusChip, 60000);
     const pollMs =
       typeof window !== "undefined" && window.__operatorPollIntervalMs != null
         ? window.__operatorPollIntervalMs
@@ -794,7 +854,13 @@ async function refreshGrid() {
     } else if (t.status === "FreeUse") {
       el.appendChild(document.createTextNode("رایگان"));
     } else {
-      el.appendChild(document.createTextNode(t.status));
+      const statusLabel =
+        (t.groupKind === "Pc" || t.groupKind === "1" || (t.groupId || "").startsWith("pc")) &&
+        t.status === "Playing" &&
+        !t.kioskConnected
+          ? "قطع از سرور"
+          : t.status;
+      el.appendChild(document.createTextNode(statusLabel));
     }
     if (t.amountToman != null) {
       el.appendChild(document.createElement("br"));
@@ -802,6 +868,9 @@ async function refreshGrid() {
     }
     if (typeof ss14RenderTileGameBadge === "function") {
       ss14RenderTileGameBadge(el, t);
+    }
+    if (typeof pcInternetRenderTileChips === "function") {
+      pcInternetRenderTileChips(el, t);
     }
     if (t.sessionId && (t.status === "Playing" || t.status === "Paused")) {
       const icon = document.createElement("button");
@@ -1113,6 +1182,9 @@ async function onTileClick(t) {
   }
   if (typeof ss14FilterPlayerCountSelect === "function") {
     ss14FilterPlayerCountSelect(t);
+  }
+  if (typeof pcInternetRefreshSessionUi === "function") {
+    pcInternetRefreshSessionUi(t);
   }
 }
 
@@ -1987,6 +2059,9 @@ async function refreshCafeSettingsUi() {
   if (typeof ss14RefreshManagerGameUi === "function") {
     ss14RefreshManagerGameUi(isMgr);
   }
+  if (typeof pcInternetRefreshManagerRatesUi === "function") {
+    pcInternetRefreshManagerRatesUi(isMgr);
+  }
 }
 
 // --- SS-14 game tariff ---
@@ -2704,3 +2779,222 @@ if (mgrFreeIdleInput) {
   mgrFreeIdleInput.addEventListener("input", () => kioskOpShowMgrFreeIdleErr(""));
 }
 // --- end K-OP ---
+// --- PC internet (operator panel) ---
+function pcInternetFormatToman(n) {
+  if (n == null) return "—";
+  const digits = "۰۱۲۳۴۵۶۷۸۹";
+  return String(n)
+    .replace(/\B(?=(\d{3})+(?!\d))/g, "٬")
+    .replace(/[0-9]/g, (d) => digits[d]);
+}
+
+const PC_INTERNET_ERROR_MESSAGES = {
+  firewall_not_configured: "فایروال این PC تنظیم نشده است",
+  firewall_service_stopped: "سرویس فایروال ویندوز خاموش است",
+  verify_mismatch: "تغییر فایروال تأیید نشد",
+  powershell_error: "اجرای دستور فایروال خطا داد",
+  rejected_signature: "امضای دستور معتبر نبود",
+  rejected_station: "دستور برای این PC نبود",
+  rejected_stale: "دستور قدیمی بود و رد شد",
+};
+
+function pcInternetErrorMessage(code) {
+  if (!code) return "";
+  const base = String(code).includes(":") ? String(code).split(":").pop() : code;
+  return PC_INTERNET_ERROR_MESSAGES[base] || "خطای ناشناخته";
+}
+
+function pcInternetRenderTileChips(el, t) {
+  const gk = t.groupKind ?? "";
+  const isPc = gk === "Pc" || gk === "1" || (t.groupId || "").startsWith("pc");
+  if (!isPc) return;
+  if (!t.sessionId && t.internetPending && t.internetDesiredOn) {
+    el.appendChild(pcInternetChip("وصل اینترنت در صف"));
+    return;
+  }
+  if (t.status === "Playing" || t.status === "Paused") {
+    if (t.internetOn === false) el.appendChild(pcInternetChip("اینترنت قطع"));
+    const status = [];
+    if (t.internetError) status.push({ p: 8, text: "اعمال نشد" });
+    if (!t.kioskConnected && t.internetPending) status.push({ p: 7, text: "دستور در صف" });
+    else if (t.internetPending) status.push({ p: 5, text: "در حال اعمال…" });
+    if (!t.kioskConnected) status.push({ p: 6, text: "قطع از سرور" });
+    status.sort((a, b) => b.p - a.p);
+    const seen = new Set();
+    for (const s of status) {
+      if (seen.has(s.text)) continue;
+      seen.add(s.text);
+      el.appendChild(pcInternetChip(s.text));
+      if (seen.size >= 2) break;
+    }
+  }
+}
+
+function pcInternetChip(text) {
+  const span = document.createElement("span");
+  span.className = "pc-inet-chip";
+  span.textContent = text;
+  return span;
+}
+
+function pcInternetRefreshSessionUi(tile) {
+  const btn = document.getElementById("pcInternetToggleBtn");
+  const hint = document.getElementById("pcInternetHint");
+  if (!btn || !hint) return;
+  const gk = tile?.groupKind ?? "";
+  const isPc = gk === "Pc" || gk === "1" || (tile?.groupId || "").startsWith("pc");
+  const playing = tile && (tile.status === "Playing" || tile.status === "Paused");
+  const hideSection =
+    !isPc || !playing || tile.status === "Waiting for payment" || tile.status === "Manual settle";
+  btn.classList.toggle("hidden", hideSection);
+  hint.classList.toggle("hidden", hideSection);
+  if (hideSection) {
+    btn.onclick = null;
+    hint.textContent = "";
+    return;
+  }
+  const wantOn = tile.internetOn !== true;
+  btn.textContent = wantOn ? "وصل اینترنت" : "قطع اینترنت";
+  let hintText = "";
+  if (!tile.offlineRateAvailable) hintText = "نرخ آفلاین این گروه وارد نشده است.";
+  else if (tile.snapshotOfflineRatesMissing) hintText = "این جلسه قبل از ثبت نرخ آفلاین شروع شده است.";
+  else if (tile.internetError)
+    hintText = `PC نتوانست اینترنت را تغییر دهد: ${pcInternetErrorMessage(tile.internetError)}`;
+  else if (!tile.kioskConnected && tile.internetPending)
+    hintText =
+      "دستور در صف است و وقتی PC وصل شد اعمال می‌شود. نرخ از لحظهٔ زدن کلید عوض شده است.";
+  else if (!tile.kioskConnected) hintText = "این PC به سرور وصل نیست";
+  hint.textContent = hintText;
+  btn.disabled = !tile.internetToggleAllowed;
+  btn.onclick = async () => {
+    const ok = await pcInternetConfirmToggle(tile, wantOn);
+    if (!ok) return;
+    const commandId = newCommandId();
+    const version = tile.rowVersion ?? 0;
+    try {
+      await api(`/api/operator/sessions/${tile.sessionId}/internet`, {
+        method: "POST",
+        body: JSON.stringify({
+          on: wantOn,
+          expectedVersion: version,
+          commandId,
+        }),
+      });
+      await refreshGrid();
+      const fresh = lastGridTiles.find((x) => x.id === tile.id);
+      if (fresh && selectedTile?.id === tile.id) {
+        selectedTile = fresh;
+        pcInternetRefreshSessionUi(fresh);
+      }
+    } catch (e) {
+      if (e?.code === "stale_version") {
+        await refreshGrid();
+        const fresh = lastGridTiles.find((x) => x.id === tile.id);
+        if (fresh) {
+          selectedTile = fresh;
+          pcInternetRefreshSessionUi(fresh);
+        }
+      }
+    }
+  };
+}
+
+async function pcInternetConfirmToggle(tile, turnOn) {
+  const modeWord = turnOn ? "آنلاین" : "آفلاین";
+  const bandWord = tile.nextBand === "night" ? "شب" : "روز";
+  const title = `${turnOn ? "وصل" : "قطع"} اینترنت ${tile.id}؟`;
+  const rate = pcInternetFormatToman(tile.nextHourlyToman);
+  let body = `از همین لحظه نرخ می‌شود ${rate} تومان در ساعت (${modeWord} ${bandWord}).`;
+  if (!tile.kioskConnected) body += "\n\nاین PC الان به سرور وصل نیست؛ دستور در صف می‌ماند.";
+  return Promise.resolve(window.confirm(`${title}\n\n${body}`));
+}
+
+function pcInternetRefreshManagerRatesUi(isMgr) {
+  document.getElementById("mgrPcRatesBtn")?.classList.toggle("hidden", !isMgr);
+  if (!isMgr) {
+    document.getElementById("pcRatesPanel")?.classList.add("hidden");
+  }
+}
+
+function pcEnsurePcRatesPanel() {
+  const panel = document.getElementById("pcRatesPanel");
+  if (!panel) return null;
+  document.getElementById("mgrPcRatesBtn")?.addEventListener("click", () => {
+    panel.classList.toggle("hidden");
+    pcLoadPcRates().catch(() => {});
+  });
+  return panel;
+}
+
+async function pcLoadPcRates() {
+  const host = document.getElementById("pcRatesTables");
+  const err = document.getElementById("pcRatesError");
+  if (!host) return;
+  err.textContent = "";
+  host.replaceChildren();
+  let groups;
+  try {
+    groups = await api("/api/operator/pc-rates");
+  } catch (e) {
+    err.textContent = String(e.message || e);
+    return;
+  }
+  for (const g of groups) {
+    const wrap = document.createElement("div");
+    wrap.className = "pc-rates-group";
+    wrap.innerHTML = `<h4>${g.name || g.groupId}</h4>
+      <label>آنلاین روز <input data-g="${g.groupId}" data-f="onlineDay" value="${g.onlineDay ?? ""}"/></label>
+      <label>آنلاین شب <input data-g="${g.groupId}" data-f="onlineNight" value="${g.onlineNight ?? ""}"/></label>
+      <label>آفلاین روز <input data-g="${g.groupId}" data-f="offlineDay" value="${g.offlineDay ?? ""}"/></label>
+      <label>آفلاین شب <input data-g="${g.groupId}" data-f="offlineNight" value="${g.offlineNight ?? ""}"/></label>
+      <button type="button">ذخیره</button>`;
+    wrap.querySelector("button").onclick = () => pcSavePcRates(g.groupId, wrap, err);
+    host.appendChild(wrap);
+  }
+}
+
+async function pcSavePcRates(groupId, wrap, errEl) {
+  const read = (f) => {
+    const el = wrap.querySelector(`input[data-f="${f}"]`);
+    const t = (el?.value || "").trim();
+    if (t === "") return null;
+    const n = ss14ParseTomanInput(t);
+    if (n == null) return null;
+    return n;
+  };
+  const readOffline = (f) => {
+    const el = wrap.querySelector(`input[data-f="${f}"]`);
+    const t = (el?.value || "").trim();
+    if (t === "") return { empty: true, value: null };
+    const n = ss14ParseTomanInput(t);
+    if (n == null) return { empty: false, value: undefined };
+    return { empty: false, value: n };
+  };
+  const onlineDay = read("onlineDay");
+  const onlineNight = read("onlineNight");
+  const offlineDay = readOffline("offlineDay");
+  const offlineNight = readOffline("offlineNight");
+  if (onlineDay == null || onlineNight == null) {
+    errEl.textContent = "عدد معتبر وارد کنید.";
+    return;
+  }
+  if (offlineDay.value === undefined || offlineNight.value === undefined) {
+    errEl.textContent = "عدد معتبر وارد کنید.";
+    return;
+  }
+  const body = { onlineDay, onlineNight, offlineDay: offlineDay.value, offlineNight: offlineNight.value };
+  if ((body.offlineDay == null) !== (body.offlineNight == null)) {
+    errEl.textContent = "نرخ آفلاین روز و شب را با هم وارد کنید.";
+    return;
+  }
+  errEl.textContent = "";
+  try {
+    await api(`/api/operator/pc-rates/${encodeURIComponent(groupId)}`, { method: "PUT", body: JSON.stringify(body) });
+    document.getElementById("pcRatesSaveMsg").textContent =
+      "ذخیره شد. جلسه‌های در حال بازی با نرخ شروع خودشان ادامه می‌دهند.";
+  } catch (e) {
+    errEl.textContent = String(e.message || e);
+  }
+}
+
+document.addEventListener("DOMContentLoaded", () => pcEnsurePcRatesPanel());
