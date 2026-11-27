@@ -38,12 +38,12 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
     {
         if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
         {
-            Assert.Fail("Windows-only Guard internet integration.");
+            FirewallTestConsoleDiagnostics.FailAssertion("Windows-only Guard internet integration.");
         }
 
         if (!new WindowsPrincipal(WindowsIdentity.GetCurrent()).IsInRole(WindowsBuiltInRole.Administrator))
         {
-            Assert.Fail("Administrator elevation required for Guard internet integration.");
+            FirewallTestConsoleDiagnostics.FailAssertion("Administrator elevation required for Guard internet integration.");
         }
     }
 
@@ -668,7 +668,7 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
                     out var totalBytesAvail,
                     out _))
             {
-                Assert.Fail($"PeekNamedPipe failed, win32={Marshal.GetLastWin32Error()}");
+                FirewallTestConsoleDiagnostics.FailAssertion($"PeekNamedPipe failed, win32={Marshal.GetLastWin32Error()}");
             }
 
             Assert.Equal(0u, totalBytesAvail);
@@ -688,7 +688,7 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
             if (await Task.WhenAny(readTask, Task.Delay(remaining)) != readTask)
             {
                 var partial = Encoding.UTF8.GetString(buffer.ToArray());
-                Assert.Fail(
+                FirewallTestConsoleDiagnostics.FailAssertion(
                     $"timed out waiting for response newline after {wait.TotalSeconds:0}s; bytes so far ({buffer.Length}): {partial}");
             }
 
@@ -711,7 +711,7 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
         }
 
         var tail = Encoding.UTF8.GetString(buffer.ToArray());
-        Assert.Fail(
+        FirewallTestConsoleDiagnostics.FailAssertion(
             $"timed out waiting for response newline after {wait.TotalSeconds:0}s; bytes so far ({buffer.Length}): {tail}");
         throw new InvalidOperationException("unreachable");
     }
@@ -789,7 +789,7 @@ public sealed class WindowsPcInternetPipeReconcileIntegrationTests
             await Task.Delay(50);
         }
 
-        Assert.Fail($"status still reconciling after {budget.TotalSeconds:0}s");
+        FirewallTestConsoleDiagnostics.FailAssertion($"status still reconciling after {budget.TotalSeconds:0}s");
     }
 
     private static void StopInternetPipeServer(CancellationTokenSource cts, Thread pipeThread, TimeSpan? joinBudget = null)

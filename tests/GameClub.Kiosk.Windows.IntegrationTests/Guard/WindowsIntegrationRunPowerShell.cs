@@ -29,6 +29,8 @@ internal static class WindowsIntegrationRunPowerShell
         var result = RunResult(script);
         if (result.ExitCode != 0 && !tolerateNonZeroExit)
         {
+            Console.WriteLine(
+                $"FW_PS_FAIL exitCode={result.ExitCode} stdout={result.StdOut} stderr={result.StdErr} script={script}");
             throw new InvalidOperationException(
                 $"PowerShell exit {result.ExitCode}. stdout: {result.StdOut}. stderr: {result.StdErr}. script: {script}");
         }

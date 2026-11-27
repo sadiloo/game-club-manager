@@ -136,7 +136,7 @@ internal static class GuardWatchdogTimelineReader
             await Task.Delay(pollMs);
         }
 
-        Assert.Fail(
+        FirewallTestConsoleDiagnostics.FailAssertion(
             $"Timed out after {(int)budget.TotalSeconds}s waiting for watchdog marker containing: {marker}");
     }
 

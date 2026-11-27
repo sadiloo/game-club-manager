@@ -5,6 +5,19 @@ namespace GameClub.Server.Tests;
 /// <summary>Guards operator-facing ApiException literals stay Persian (kiosk semantic keys exempt in Kiosk/).</summary>
 public sealed class InpageFormsApiExceptionPersianSweepTests
 {
+    internal static bool IsBuildArtifactRelativePath(string relative)
+    {
+        var rel = relative.Replace('\\', '/');
+        if (rel.StartsWith("obj/", StringComparison.Ordinal)
+            || rel.StartsWith("bin/", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        return rel.IndexOf("/obj/", StringComparison.Ordinal) >= 0
+            || rel.IndexOf("/bin/", StringComparison.Ordinal) >= 0;
+    }
+
     private static IEnumerable<string> OperatorReachableSources()
     {
         var root = Path.GetFullPath(Path.Combine(
@@ -15,8 +28,7 @@ public sealed class InpageFormsApiExceptionPersianSweepTests
         {
             var rel = Path.GetRelativePath(root, file).Replace('\\', '/');
             if (rel.StartsWith("Kiosk/", StringComparison.Ordinal)
-                || rel.Contains("/obj/", StringComparison.Ordinal)
-                || rel.Contains("/bin/", StringComparison.Ordinal))
+                || IsBuildArtifactRelativePath(rel))
             {
                 continue;
             }

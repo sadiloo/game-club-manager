@@ -71,7 +71,14 @@ public sealed class Pr51R14oMutantBehaviorTests
         Assert.False(alloc.IsValid);
         Assert.Equal(15_500, alloc.PayableToman);
         Assert.NotEqual(20_000, alloc.PayableToman);
+        Assert.NotEqual(19_500, alloc.PayableToman);
         Assert.Equal(0, alloc.RoundingToman);
-        Assert.DoesNotContain(alloc.Errors, e => e.Message.IndexOf("20000", StringComparison.Ordinal) >= 0);
+        Assert.All(alloc.Tenders, t => Assert.NotEqual(20_000, t.AmountToman));
+        Assert.All(alloc.Tenders, t => Assert.NotEqual(19_500, t.AmountToman));
+        Assert.All(alloc.Errors, e =>
+        {
+            Assert.Equal(PaymentErrors.SumMismatch, e.Code);
+            Assert.Equal("Counter tenders 14500 toman against rounded remainder 15000.", e.Message);
+        });
     }
 }

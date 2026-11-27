@@ -65,7 +65,7 @@ internal static class InternetPipeOwnerDiagnostics
                     p.Dispose();
                 }
 
-                Assert.Fail(
+                FirewallTestConsoleDiagnostics.FailAssertion(
                     $"PIPE_OWNER fixture preflight: unexpected {name} still running (pids={pidList}); "
                     + $"last_owner={owner?.ServerPid} name={owner?.ServerName}");
             }
@@ -75,7 +75,7 @@ internal static class InternetPipeOwnerDiagnostics
             && owner.ServerName is not null
             && owner.ServerName.IndexOf("GameClub.Kiosk.Guard", StringComparison.OrdinalIgnoreCase) >= 0)
         {
-            Assert.Fail(
+            FirewallTestConsoleDiagnostics.FailAssertion(
                 $"PIPE_OWNER fixture preflight: pipe {GuardInternetClient.PipeName} owned by Guard pid={owner.ServerPid} "
                 + $"cmd={owner.ServerCommandLine}");
         }

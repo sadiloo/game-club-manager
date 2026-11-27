@@ -33,12 +33,12 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
     {
         if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
         {
-            Assert.Fail("Windows-only Guard internet integration.");
+            FirewallTestConsoleDiagnostics.FailAssertion("Windows-only Guard internet integration.");
         }
 
         if (!new WindowsPrincipal(WindowsIdentity.GetCurrent()).IsInRole(WindowsBuiltInRole.Administrator))
         {
-            Assert.Fail("Administrator elevation required for Guard internet integration.");
+            FirewallTestConsoleDiagnostics.FailAssertion("Administrator elevation required for Guard internet integration.");
         }
     }
 
@@ -87,9 +87,9 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
         + "Set-NetFirewallProfile -Name Domain -DefaultOutboundAction NotConfigured -ErrorAction Stop; "
         + "Set-NetFirewallProfile -Name Private -DefaultOutboundAction NotConfigured -ErrorAction Stop; "
         + "Set-NetFirewallProfile -Name Public -DefaultOutboundAction NotConfigured -ErrorAction Stop; "
-        + "$rule = Get-NetFirewallRule -Group 'Checkpoint Internet Off' -ErrorAction Stop | Select-Object -First 1; "
-        + "if ($null -eq $rule) { throw [System.InvalidOperationException]::new('Checkpoint Internet Off rule group empty before rule remove') }; "
-        + "Remove-NetFirewallRule -InputObject $rule -ErrorAction Stop; "
+        + "$ruleName = (Get-NetFirewallRule -Group 'Checkpoint Internet Off' -ErrorAction Stop | Select-Object -First 1 -ExpandProperty Name); "
+        + "if ([string]::IsNullOrWhiteSpace($ruleName)) { throw [System.InvalidOperationException]::new('Checkpoint Internet Off rule group empty before rule remove') }; "
+        + "Remove-NetFirewallRule -Name $ruleName -ErrorAction Stop; "
         + "exit 0 } catch { "
         + "Write-Output ('TAMPER_PS_EXIT_DIAGNOSTIC exit_code=1'); "
         + "Write-Output ('EXCEPTION_TYPE=' + $_.Exception.GetType().FullName); "
@@ -104,9 +104,12 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
         var preState = WindowsIntegrationRunPowerShell.RunResult(TamperPreStateCaptureScript);
         if (preState.ExitCode != 0)
         {
-            Assert.Fail(
+            FirewallTestConsoleDiagnostics.Fail(
+                phase,
                 $"phase={phase}: pre-tamper firewall state capture failed. "
-                + $"exitCode={preState.ExitCode} stdout={preState.StdOut} stderr={preState.StdErr}");
+                + $"exitCode={preState.ExitCode} stdout={preState.StdOut} stderr={preState.StdErr}",
+                preState: preState,
+                preStateScript: TamperPreStateCaptureScript);
         }
 
         var tamper = WindowsIntegrationRunPowerShell.RunResult(TamperOpenEgressScript);
@@ -115,10 +118,15 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
             return;
         }
 
-        Assert.Fail(
+        FirewallTestConsoleDiagnostics.Fail(
+            phase,
             $"phase={phase}: egress tamper failed (single run). "
             + $"exitCode={tamper.ExitCode} stdout={tamper.StdOut} stderr={tamper.StdErr} "
-            + $"preTamperState={preState.StdOut}");
+            + $"preTamperState={preState.StdOut}",
+            tamper: tamper,
+            tamperScript: TamperOpenEgressScript,
+            preState: preState,
+            preStateScript: TamperPreStateCaptureScript);
     }
 
     [Fact(Timeout = 60_000)]
@@ -152,7 +160,9 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
                 await Task.Delay(500);
             }
 
-            Assert.Fail("Corrupt internet guard config must not block kiosk shell launch (shell gate / MarkReady).");
+            FirewallTestConsoleDiagnostics.FailAssertion(
+                nameof(internet_corrupt_guard_config_still_launches_shell_within_shell_gate),
+                "Corrupt internet guard config must not block kiosk shell launch (shell gate / MarkReady).");
         }
         finally
         {
@@ -303,7 +313,9 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
                 }
             }
 
-            Assert.Fail("Guard restart must re-assert OFF rules before serving pipe (egress still blocked within 10s).");
+            FirewallTestConsoleDiagnostics.FailAssertion(
+                nameof(internet_off_guard_process_restart_reasserts_before_pipe_ready),
+                "Guard restart must re-assert OFF rules before serving pipe (egress still blocked within 10s).");
         }
         finally
         {
@@ -370,7 +382,66 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
                 }
             }
 
-            Assert.Fail("Drift watchdog must restore OFF rules within 15s when harness interval is 3s.");
+            FirewallTestConsoleDiagnostics.FailAssertion(
+                nameof(internet_off_drift_restores_deleted_rule_within_harness_interval),
+                "Drift watchdog must restore OFF rules within 15s when harness interval is 3s.");
+        }
+        finally
+        {
+            InternetPipeServerTestTeardown.Stop(cts, pipeThread);
+            applier.RunResetScript();
+            TryDelete(InternetGuardPaths.StatePath);
+            Environment.SetEnvironmentVariable("CHECKPOINT_INTERNET_DRIFT_INTERVAL_MS", prior);
+        }
+    }
+
+    /// <summary>Rule deleted before pipe watchdog starts (no concurrent drift during tamper).</summary>
+    [Fact(Timeout = 90_000)]
+    public async Task internet_off_drift_restores_rule_deleted_before_pipe_watchdog_start()
+    {
+        RequireWindowsAdmin();
+        var prior = Environment.GetEnvironmentVariable("CHECKPOINT_INTERNET_DRIFT_INTERVAL_MS");
+        Environment.SetEnvironmentVariable("CHECKPOINT_INTERNET_DRIFT_INTERVAL_MS", "3000");
+        using var rsa = RSA.Create(2048);
+        var pub = ExportPublicKeyPem(rsa);
+        var config = BuildConfig(pub);
+        var applier = new InternetFirewallApplier();
+        CancellationTokenSource cts = null;
+        Thread pipeThread = null;
+        try
+        {
+            Assert.Equal("applied", applier.ApplyWithStoreEcho(config, on: false));
+            var offPayload = new InternetCommandPayload
+            {
+                StationId = config.StationId,
+                Epoch = Guid.NewGuid(),
+                Version = 1,
+                On = false,
+                IssuedAtUtc = DateTime.UtcNow,
+            };
+            InternetVerifiedStateFile.Save(InternetGuardPaths.StatePath, offPayload);
+
+            TamperOpenEgressOrFail(nameof(internet_off_drift_restores_rule_deleted_before_pipe_watchdog_start));
+            Assert.True(TryTcp("1.1.1.1", 443, 2_000), "Profile tamper must temporarily allow egress.");
+
+            cts = new CancellationTokenSource();
+            var server = new InternetPipeServer(config);
+            pipeThread = new Thread(() => server.Run(cts.Token)) { IsBackground = true, Name = "TestInternetPipe" };
+            pipeThread.Start();
+
+            var deadline = DateTime.UtcNow.AddSeconds(15);
+            while (DateTime.UtcNow < deadline)
+            {
+                await Task.Delay(500);
+                if (!TryTcp("1.1.1.1", 443, 500))
+                {
+                    return;
+                }
+            }
+
+            FirewallTestConsoleDiagnostics.FailAssertion(
+                nameof(internet_off_drift_restores_rule_deleted_before_pipe_watchdog_start),
+                "Drift watchdog must restore OFF rules within 15s when harness interval is 3s.");
         }
         finally
         {
@@ -442,7 +513,8 @@ public sealed class WindowsPcInternetGuardPersistenceIntegrationTests
         if (!int.TryParse(Environment.GetEnvironmentVariable("GAMECLUB_SERVER_PID"), out var serverPid)
             || string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("GAMECLUB_SERVER_DLL")))
         {
-            Assert.Fail("GAMECLUB_SERVER_PID and GAMECLUB_SERVER_DLL must be set on windows-2022 integration.");
+            FirewallTestConsoleDiagnostics.FailAssertion(
+                "GAMECLUB_SERVER_PID and GAMECLUB_SERVER_DLL must be set on windows-2022 integration.");
         }
 
         var applier = new InternetFirewallApplier();

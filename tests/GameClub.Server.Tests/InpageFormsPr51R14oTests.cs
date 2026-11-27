@@ -96,7 +96,7 @@ public sealed class InpageFormsPr51R14oTests(GameClubWebApplicationFactory facto
     }
 
     [Fact]
-    public async Task r14o_zero_bill_guest_wallet_preview_400_wallet_requires_member()
+    public async Task r14o_zero_bill_guest_wallet_preview_confirm_400_wallet_requires_member()
     {
         await S3TestHelpers.ResetAsync(factory);
         var op = await factory.CreateOperatorClientAsync();
@@ -106,14 +106,41 @@ public sealed class InpageFormsPr51R14oTests(GameClubWebApplicationFactory facto
         var sessionId = await S3TestHelpers.StartSession(api, "PC-R14O-ZERO-G");
         factory.Clock.SetTehran(2026, 6, 11, 14, 0, 40);
         (await api.PostAsync($"/api/sessions/{sessionId}/stop", null)).EnsureSuccessStatusCode();
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var before = await SnapshotGuestBillingStateAsync(db, sessionId);
         var payments = new[] { new { method = "Wallet", amountToman = 1_000L } };
-        var preview = await op.PostAsJsonAsync($"/api/operator/sessions/{sessionId}/bill/preview", new { payments });
+        var previewPath = $"/api/operator/sessions/{sessionId}/bill/preview";
+        var confirmPath = $"/api/operator/sessions/{sessionId}/bill/confirm";
+        var preview = await op.PostAsJsonAsync(previewPath, new { payments });
         Assert.Equal(HttpStatusCode.BadRequest, preview.StatusCode);
-        var body = (await preview.Content.ReadFromJsonAsync<JsonElement>())!;
-        Assert.Equal("wallet_requires_member", body.GetProperty("code").GetString());
-        Assert.Equal(0, await factory.Services.CreateScope().ServiceProvider.GetRequiredService<AppDbContext>()
-            .Invoices.CountAsync(i => i.SessionId == sessionId));
+        var previewBody = (await preview.Content.ReadFromJsonAsync<JsonElement>())!;
+        Assert.Equal("wallet_requires_member", previewBody.GetProperty("code").GetString());
+        var confirm = await op.PostAsJsonAsync(confirmPath, new { previewCollectibleToman = 0L, payments });
+        Assert.Equal(HttpStatusCode.BadRequest, confirm.StatusCode);
+        var confirmBody = (await confirm.Content.ReadFromJsonAsync<JsonElement>())!;
+        Assert.Equal("wallet_requires_member", confirmBody.GetProperty("code").GetString());
+        var after = await SnapshotGuestBillingStateAsync(db, sessionId);
+        Assert.Equal(before, after);
     }
+
+    private static async Task<GuestBillingSnapshot> SnapshotGuestBillingStateAsync(AppDbContext db, Guid sessionId)
+    {
+        var invoiceIds = await db.Invoices.AsNoTracking().Where(i => i.SessionId == sessionId).Select(i => i.Id).ToListAsync();
+        return new GuestBillingSnapshot(
+            invoiceIds.Count,
+            await db.PaymentLines.AsNoTracking().CountAsync(p => invoiceIds.Contains(p.InvoiceId)),
+            await db.WalletLedger.AsNoTracking().CountAsync(w => w.InvoiceId != null && invoiceIds.Contains(w.InvoiceId!.Value)),
+            await db.Sessions.AsNoTracking().Where(s => s.Id == sessionId).Select(s => s.Status).SingleAsync(),
+            await db.Sessions.AsNoTracking().Where(s => s.Id == sessionId).Select(s => s.CustomerId).SingleAsync());
+    }
+
+    private readonly record struct GuestBillingSnapshot(
+        int InvoiceCount,
+        int PaymentLineCount,
+        int WalletLedgerCount,
+        SessionStatus SessionStatus,
+        Guid? CustomerId);
 
     [Fact]
     public async Task r14o_zero_bill_cash_preview_confirm_same_400_payable_zero()

@@ -29,12 +29,12 @@ public sealed class WindowsPcInternetFirewallIntegrationTests
     {
         if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
         {
-            Assert.Fail("Windows-only firewall integration.");
+            FirewallTestConsoleDiagnostics.FailAssertion("Windows-only firewall integration.");
         }
 
         if (!new WindowsPrincipal(WindowsIdentity.GetCurrent()).IsInRole(WindowsBuiltInRole.Administrator))
         {
-            Assert.Fail("Administrator elevation required for firewall integration.");
+            FirewallTestConsoleDiagnostics.FailAssertion("Administrator elevation required for firewall integration.");
         }
     }
 

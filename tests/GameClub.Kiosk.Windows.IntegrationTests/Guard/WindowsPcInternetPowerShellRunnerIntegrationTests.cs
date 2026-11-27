@@ -20,7 +20,7 @@ public sealed class WindowsPcInternetPowerShellRunnerIntegrationTests
     {
         if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
         {
-            Assert.Fail("Windows-only Guard internet integration.");
+            FirewallTestConsoleDiagnostics.FailAssertion("Windows-only Guard internet integration.");
         }
 
         using var pipeDiag = InternetPipeOwnerDiagnostics.BeginTestScope(nameof(internet_powershell_runner_times_out_hung_child_and_kills_process_tree));
@@ -68,7 +68,8 @@ Start-Sleep -Seconds 600
                     try
                     {
                         using var stillAlive = Process.GetProcessById(pid);
-                        Assert.Fail($"pid {pid} should be gone when Run returns after timeout kill");
+                        FirewallTestConsoleDiagnostics.FailAssertion(
+                            $"pid {pid} should be gone when Run returns after timeout kill");
                     }
                     catch (ArgumentException)
                     {
